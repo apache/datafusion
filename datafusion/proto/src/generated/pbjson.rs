@@ -22914,7 +22914,6 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Atan => "Atan",
             Self::Ceil => "Ceil",
             Self::Cos => "Cos",
             Self::Exp => "Exp",
@@ -22929,14 +22928,9 @@ impl serde::Serialize for ScalarFunction {
             Self::ConcatWithSeparator => "ConcatWithSeparator",
             Self::InitCap => "InitCap",
             Self::Random => "Random",
-            Self::Translate => "Translate",
             Self::Coalesce => "Coalesce",
             Self::Power => "Power",
-            Self::Atan2 => "Atan2",
             Self::Cbrt => "Cbrt",
-            Self::Acosh => "Acosh",
-            Self::Asinh => "Asinh",
-            Self::Atanh => "Atanh",
             Self::Sinh => "Sinh",
             Self::Cosh => "Cosh",
             Self::Pi => "Pi",
@@ -22948,8 +22942,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Cot => "Cot",
             Self::Nanvl => "Nanvl",
             Self::Iszero => "Iszero",
-            Self::SubstrIndex => "SubstrIndex",
-            Self::FindInSet => "FindInSet",
             Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
@@ -22963,7 +22955,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Atan",
             "Ceil",
             "Cos",
             "Exp",
@@ -22978,14 +22969,9 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ConcatWithSeparator",
             "InitCap",
             "Random",
-            "Translate",
             "Coalesce",
             "Power",
-            "Atan2",
             "Cbrt",
-            "Acosh",
-            "Asinh",
-            "Atanh",
             "Sinh",
             "Cosh",
             "Pi",
@@ -22997,8 +22983,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cot",
             "Nanvl",
             "Iszero",
-            "SubstrIndex",
-            "FindInSet",
             "EndsWith",
         ];
 
@@ -23041,7 +23025,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Atan" => Ok(ScalarFunction::Atan),
                     "Ceil" => Ok(ScalarFunction::Ceil),
                     "Cos" => Ok(ScalarFunction::Cos),
                     "Exp" => Ok(ScalarFunction::Exp),
@@ -23056,14 +23039,9 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
                     "InitCap" => Ok(ScalarFunction::InitCap),
                     "Random" => Ok(ScalarFunction::Random),
-                    "Translate" => Ok(ScalarFunction::Translate),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
                     "Power" => Ok(ScalarFunction::Power),
-                    "Atan2" => Ok(ScalarFunction::Atan2),
                     "Cbrt" => Ok(ScalarFunction::Cbrt),
-                    "Acosh" => Ok(ScalarFunction::Acosh),
-                    "Asinh" => Ok(ScalarFunction::Asinh),
-                    "Atanh" => Ok(ScalarFunction::Atanh),
                     "Sinh" => Ok(ScalarFunction::Sinh),
                     "Cosh" => Ok(ScalarFunction::Cosh),
                     "Pi" => Ok(ScalarFunction::Pi),
@@ -23075,8 +23053,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cot" => Ok(ScalarFunction::Cot),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
                     "Iszero" => Ok(ScalarFunction::Iszero),
-                    "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
-                    "FindInSet" => Ok(ScalarFunction::FindInSet),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }

@@ -2843,7 +2843,7 @@ pub enum ScalarFunction {
     Unknown = 0,
     ///   1 was Acos
     ///   2 was Asin
-    Atan = 3,
+    /// 3 was Atan
     /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
@@ -2900,23 +2900,23 @@ pub enum ScalarFunction {
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
-    Translate = 60,
+    /// 60 was Translate
     /// Trim = 61;
     /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
     /// 66 was FromUnixtime
-    Atan2 = 67,
+    /// 67 Atan2
     /// 68 was DateBin
     /// 69 was ArrowTypeof
     /// 70 was CurrentDate
     /// 71 was CurrentTime
     /// 72 was Uuid
     Cbrt = 73,
-    Acosh = 74,
-    Asinh = 75,
-    Atanh = 76,
+    /// 74 Acosh
+    /// 75 was Asinh
+    /// 76 was Atanh
     Sinh = 77,
     Cosh = 78,
     /// Tanh = 79;
@@ -2964,8 +2964,8 @@ pub enum ScalarFunction {
     /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
     /// 125 was Levenshtein
-    SubstrIndex = 126,
-    FindInSet = 127,
+    /// 126 was SubstrIndex
+    /// 127 was FindInSet
     /// 128 was ArraySort
     /// 129 was ArrayDistinct
     /// 130 was ArrayResize
@@ -2987,7 +2987,6 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Atan => "Atan",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
@@ -3002,14 +3001,9 @@ impl ScalarFunction {
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Acosh => "Acosh",
-            ScalarFunction::Asinh => "Asinh",
-            ScalarFunction::Atanh => "Atanh",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
@@ -3021,8 +3015,6 @@ impl ScalarFunction {
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::SubstrIndex => "SubstrIndex",
-            ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3030,7 +3022,6 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Atan" => Some(Self::Atan),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
@@ -3045,14 +3036,9 @@ impl ScalarFunction {
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
             "Random" => Some(Self::Random),
-            "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Atan2" => Some(Self::Atan2),
             "Cbrt" => Some(Self::Cbrt),
-            "Acosh" => Some(Self::Acosh),
-            "Asinh" => Some(Self::Asinh),
-            "Atanh" => Some(Self::Atanh),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
@@ -3064,8 +3050,6 @@ impl ScalarFunction {
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "SubstrIndex" => Some(Self::SubstrIndex),
-            "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }

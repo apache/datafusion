@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
-    datatypes::{DataType, Int32Type, Int64Type, Schema},
+    datatypes::{DataType, Schema},
 };
 use arrow_array::Array;
 
@@ -83,26 +83,6 @@ pub fn create_physical_expr(
         monotonicity,
         fun.signature().type_signature.supports_zero_argument(),
     )))
-}
-
-#[cfg(feature = "unicode_expressions")]
-macro_rules! invoke_if_unicode_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        use crate::unicode_expressions;
-        unicode_expressions::$FUNC::<$T>
-    }};
-}
-
-#[cfg(not(feature = "unicode_expressions"))]
-macro_rules! invoke_if_unicode_expressions_feature_flag {
-  ($FUNC:ident, $T:tt, $NAME:expr) => {
-    |_: &[ArrayRef]| -> Result<ArrayRef> {
-      internal_err!(
-        "function {} requires compilation with feature flag: unicode_expressions.",
-        $NAME
-      )
-    }
-  };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -199,10 +179,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
-        BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
-        BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),
-        BuiltinScalarFunction::Atanh => Arc::new(math_expressions::atanh),
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
         BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
@@ -241,9 +217,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
         }
-        BuiltinScalarFunction::Atan2 => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::atan2)(args))
-        }
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
         }
@@ -276,71 +249,6 @@ pub fn create_physical_fun(
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function ends_with")
-            }
-        }),
-        BuiltinScalarFunction::Translate => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    translate,
-                    i32,
-                    "translate"
-                );
-                make_scalar_function_inner(func)(args)
-            }
-            DataType::LargeUtf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    translate,
-                    i64,
-                    "translate"
-                );
-                make_scalar_function_inner(func)(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function translate")
-            }
-        }),
-        BuiltinScalarFunction::SubstrIndex => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        substr_index,
-                        i32,
-                        "substr_index"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                DataType::LargeUtf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        substr_index,
-                        i64,
-                        "substr_index"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                other => {
-                    exec_err!("Unsupported data type {other:?} for function substr_index")
-                }
-            })
-        }
-        BuiltinScalarFunction::FindInSet => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    find_in_set,
-                    Int32Type,
-                    "find_in_set"
-                );
-                make_scalar_function_inner(func)(args)
-            }
-            DataType::LargeUtf8 => {
-                let func = invoke_if_unicode_expressions_feature_flag!(
-                    find_in_set,
-                    Int64Type,
-                    "find_in_set"
-                );
-                make_scalar_function_inner(func)(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function find_in_set")
             }
         }),
     })
@@ -631,66 +539,7 @@ mod tests {
             Boolean,
             BooleanArray
         );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Translate,
-            &[lit("12345"), lit("143"), lit("ax"),],
-            Ok(Some("a2x5")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Translate,
-            &[lit(ScalarValue::Utf8(None)), lit("143"), lit("ax"),],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Translate,
-            &[lit("12345"), lit(ScalarValue::Utf8(None)), lit("ax"),],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Translate,
-            &[lit("12345"), lit("143"), lit(ScalarValue::Utf8(None)),],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Translate,
-            &[lit("é2íñ5"), lit("éñí"), lit("óü"),],
-            Ok(Some("ó2ü5")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(not(feature = "unicode_expressions"))]
-        test_function!(
-            Translate,
-            &[
-                lit("12345"),
-                lit("143"),
-                lit("ax"),
-            ],
-            internal_err!(
-                "function translate requires compilation with feature flag: unicode_expressions."
-            ),
-            &str,
-            Utf8,
-            StringArray
-        );
+
         Ok(())
     }
 

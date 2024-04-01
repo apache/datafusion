@@ -544,7 +544,7 @@ enum ScalarFunction {
   unknown = 0;
   //  1 was Acos
   //  2 was Asin
-  Atan = 3;
+  // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
   Cos = 6;
@@ -601,23 +601,23 @@ enum ScalarFunction {
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
   // 59 was Now
-  Translate = 60;
+  // 60 was Translate
   // Trim = 61;
   // Upper = 62;
   Coalesce = 63;
   Power = 64;
   // 65 was StructFun
   // 66 was FromUnixtime
-  Atan2 = 67;
+  // 67 Atan2
   // 68 was DateBin
   // 69 was ArrowTypeof
   // 70 was CurrentDate
   // 71 was CurrentTime
   // 72 was Uuid
   Cbrt = 73;
-  Acosh = 74;
-  Asinh = 75;
-  Atanh = 76;
+  // 74 Acosh
+  // 75 was Asinh
+  // 76 was Atanh
   Sinh = 77;
   Cosh = 78;
   // Tanh = 79;
@@ -665,8 +665,8 @@ enum ScalarFunction {
   // 123 is ArrayExcept
   // 124 was ArrayPopFront
   // 125 was Levenshtein
-  SubstrIndex = 126;
-  FindInSet = 127;
+  // 126 was SubstrIndex
+  // 127 was FindInSet
   // 128 was ArraySort
   // 129 was ArrayDistinct
   // 130 was ArrayResize

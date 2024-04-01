@@ -68,6 +68,9 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
+/// Creates a scalar function implementation for the given function.
+/// * `inner` - the function to be executed
+/// * `hints` - hints to be used when expanding scalars to arrays
 pub(super) fn make_scalar_function<F>(
     inner: F,
     hints: Vec<Hint>,

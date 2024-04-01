@@ -37,15 +37,14 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, asinh, atan, atan2, atanh, cbrt, ceil, coalesce, concat_expr, concat_ws_expr,
-    cos, cosh, cot, degrees, ends_with, exp,
+    cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, log,
+    factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, substr_index,
-    translate, trunc, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
-    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
-    GroupingSet,
+    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, trunc,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -429,12 +428,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
-            ScalarFunction::Asinh => Self::Asinh,
-            ScalarFunction::Acosh => Self::Acosh,
-            ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Degrees => Self::Degrees,
@@ -452,15 +447,11 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
-            ScalarFunction::SubstrIndex => Self::SubstrIndex,
-            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -1322,22 +1313,12 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Asinh => {
-                    Ok(asinh(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Acosh => {
-                    Ok(acosh(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atanh => {
-                    Ok(atanh(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Degrees => {
                     Ok(degrees(parse_expr(&args[0], registry, codec)?))
@@ -1379,11 +1360,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Translate => Ok(translate(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::Coalesce => {
                     Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
@@ -1396,10 +1372,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Atan2 => Ok(atan2(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,
@@ -1408,15 +1380,6 @@ pub fn parse_expr(
                 ScalarFunction::Iszero => {
                     Ok(iszero(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::SubstrIndex => Ok(substr_index(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::FindInSet => Ok(find_in_set(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {

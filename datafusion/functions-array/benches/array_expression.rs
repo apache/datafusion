@@ -18,12 +18,10 @@
 #[macro_use]
 extern crate criterion;
 extern crate arrow;
-extern crate datafusion;
 
-mod data_utils;
 use crate::criterion::Criterion;
-use datafusion::functions_array::expr_fn::{array_replace_all, make_array};
 use datafusion_expr::lit;
+use datafusion_functions_array::expr_fn::{array_replace_all, make_array};
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking

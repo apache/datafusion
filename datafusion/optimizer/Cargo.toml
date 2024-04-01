@@ -34,9 +34,8 @@ path = "src/lib.rs"
 
 [features]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
-default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
+default = ["crypto_expressions", "regex_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
-unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
 arrow = { workspace = true }

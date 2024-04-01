@@ -37,16 +37,6 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// atan
-    Atan,
-    /// atan2
-    Atan2,
-    /// acosh
-    Acosh,
-    /// asinh
-    Asinh,
-    /// atanh
-    Atanh,
     /// cbrt
     Cbrt,
     /// ceil
@@ -107,12 +97,6 @@ pub enum BuiltinScalarFunction {
     InitCap,
     /// random
     Random,
-    /// translate
-    Translate,
-    /// substr_index
-    SubstrIndex,
-    /// find_in_set
-    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -165,11 +149,6 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Atan => Volatility::Immutable,
-            BuiltinScalarFunction::Atan2 => Volatility::Immutable,
-            BuiltinScalarFunction::Acosh => Volatility::Immutable,
-            BuiltinScalarFunction::Asinh => Volatility::Immutable,
-            BuiltinScalarFunction::Atanh => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
@@ -198,9 +177,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
-            BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
-            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -237,15 +213,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
-            BuiltinScalarFunction::SubstrIndex => {
-                utf8_to_str_type(&input_expr_types[0], "substr_index")
-            }
-            BuiltinScalarFunction::FindInSet => {
-                utf8_to_int_type(&input_expr_types[0], "find_in_set")
-            }
-            BuiltinScalarFunction::Translate => {
-                utf8_to_str_type(&input_expr_types[0], "translate")
-            }
 
             BuiltinScalarFunction::Factorial
             | BuiltinScalarFunction::Gcd
@@ -253,11 +220,6 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::Power => match &input_expr_types[0] {
                 Int64 => Ok(Int64),
-                _ => Ok(Float64),
-            },
-
-            BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
-                Float32 => Ok(Float32),
                 _ => Ok(Float64),
             },
 
@@ -273,11 +235,7 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::Iszero => Ok(Boolean),
 
-            BuiltinScalarFunction::Atan
-            | BuiltinScalarFunction::Acosh
-            | BuiltinScalarFunction::Asinh
-            | BuiltinScalarFunction::Atanh
-            | BuiltinScalarFunction::Ceil
+            BuiltinScalarFunction::Ceil
             | BuiltinScalarFunction::Cos
             | BuiltinScalarFunction::Cosh
             | BuiltinScalarFunction::Degrees
@@ -326,22 +284,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-
-            BuiltinScalarFunction::SubstrIndex => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::FindInSet => Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
-                self.volatility(),
-            ),
-
-            BuiltinScalarFunction::Translate => {
-                Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
-            }
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Power => Signature::one_of(
@@ -366,10 +308,7 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Atan2 => Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
-                self.volatility(),
-            ),
+
             BuiltinScalarFunction::Log => Signature::one_of(
                 vec![
                     Exact(vec![Float32]),
@@ -389,11 +328,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::Atan
-            | BuiltinScalarFunction::Acosh
-            | BuiltinScalarFunction::Asinh
-            | BuiltinScalarFunction::Atanh
-            | BuiltinScalarFunction::Cbrt
+            BuiltinScalarFunction::Cbrt
             | BuiltinScalarFunction::Ceil
             | BuiltinScalarFunction::Cos
             | BuiltinScalarFunction::Cosh
@@ -426,11 +361,7 @@ impl BuiltinScalarFunction {
     pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
         if matches!(
             &self,
-            BuiltinScalarFunction::Atan
-                | BuiltinScalarFunction::Acosh
-                | BuiltinScalarFunction::Asinh
-                | BuiltinScalarFunction::Atanh
-                | BuiltinScalarFunction::Ceil
+            BuiltinScalarFunction::Ceil
                 | BuiltinScalarFunction::Degrees
                 | BuiltinScalarFunction::Exp
                 | BuiltinScalarFunction::Factorial
@@ -455,11 +386,6 @@ impl BuiltinScalarFunction {
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Acosh => &["acosh"],
-            BuiltinScalarFunction::Asinh => &["asinh"],
-            BuiltinScalarFunction::Atan => &["atan"],
-            BuiltinScalarFunction::Atanh => &["atanh"],
-            BuiltinScalarFunction::Atan2 => &["atan2"],
             BuiltinScalarFunction::Cbrt => &["cbrt"],
             BuiltinScalarFunction::Ceil => &["ceil"],
             BuiltinScalarFunction::Cos => &["cos"],
@@ -492,9 +418,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::Translate => &["translate"],
-            BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
-            BuiltinScalarFunction::FindInSet => &["find_in_set"],
         }
     }
 }
@@ -558,9 +481,6 @@ macro_rules! get_optimal_return_type {
 
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
-
-// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
-get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 #[cfg(test)]
 mod tests {
