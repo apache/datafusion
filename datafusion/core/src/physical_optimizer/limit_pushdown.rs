@@ -34,7 +34,6 @@ use datafusion_common::Result;
 
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::limit;
 
 #[allow(missing_docs)]
 pub struct LimitPushdown {}
@@ -45,7 +44,11 @@ impl LimitPushdown {
         Self {}
     }
 }
-
+impl Default for LimitPushdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl PhysicalOptimizerRule for LimitPushdown {
     fn optimize(
         &self,
@@ -79,18 +82,18 @@ fn push_down_limit(
             let new_input = coalesce_partition_batch.input().as_any();
             if let Some(coalesce_batch) = new_input.downcast_ref::<CoalesceBatchesExec>()
             {
-                return Ok(Transformed::yes(generate_new_limit_pattern(
+                Ok(Transformed::yes(generate_new_limit_pattern(
                     global_limit,
                     coalesce_batch,
-                )));
+                )))
             } else {
-                return Ok(Transformed::no(plan));
+                Ok(Transformed::no(plan))
             }
         } else {
-            return Ok(Transformed::no(plan));
+            Ok(Transformed::no(plan))
         }
     } else {
-        return Ok(Transformed::no(plan));
+        Ok(Transformed::no(plan))
     }
 }
 // generate corresponding pattern
