@@ -26,7 +26,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use super::to_timestamp::ToTimestampSecondsFunc;
 
 #[derive(Debug)]
-pub(super) struct ToUnixtimeFunc {
+pub struct ToUnixtimeFunc {
     signature: Signature,
 }
 

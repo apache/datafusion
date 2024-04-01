@@ -45,7 +45,7 @@ use datafusion_expr::{
 };
 
 #[derive(Debug)]
-pub(super) struct DateTruncFunc {
+pub struct DateTruncFunc {
     signature: Signature,
     aliases: Vec<String>,
 }

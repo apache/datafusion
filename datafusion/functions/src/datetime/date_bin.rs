@@ -40,7 +40,7 @@ use datafusion_expr::{
 };
 
 #[derive(Debug)]
-pub(super) struct DateBinFunc {
+pub struct DateBinFunc {
     signature: Signature,
 }
 

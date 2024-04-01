@@ -26,7 +26,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct CurrentTimeFunc {
+pub struct CurrentTimeFunc {
     signature: Signature,
 }
 

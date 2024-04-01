@@ -23,7 +23,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct SHA384Func {
+pub struct SHA384Func {
     signature: Signature,
 }
 impl SHA384Func {

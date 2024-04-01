@@ -38,7 +38,7 @@ use datafusion_expr::{
 };
 
 #[derive(Debug)]
-pub(super) struct DatePartFunc {
+pub struct DatePartFunc {
     signature: Signature,
     aliases: Vec<String>,
 }

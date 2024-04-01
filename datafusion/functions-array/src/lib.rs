@@ -28,12 +28,12 @@
 #[macro_use]
 pub mod macros;
 
-mod array_has;
-mod concat;
+pub mod array_has;
+pub mod concat;
 mod kernels;
-mod make_array;
+pub mod make_array;
 mod rewrite;
-mod udf;
+pub mod udf;
 mod utils;
 
 use datafusion_common::Result;

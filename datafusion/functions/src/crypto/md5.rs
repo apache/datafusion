@@ -23,7 +23,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct Md5Func {
+pub struct Md5Func {
     signature: Signature,
 }
 impl Md5Func {

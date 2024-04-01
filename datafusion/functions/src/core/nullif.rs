@@ -27,7 +27,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct NullIfFunc {
+pub struct NullIfFunc {
     signature: Signature,
 }
 

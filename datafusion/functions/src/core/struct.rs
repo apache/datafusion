@@ -61,7 +61,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 #[derive(Debug)]
-pub(super) struct StructFunc {
+pub struct StructFunc {
     signature: Signature,
 }
 

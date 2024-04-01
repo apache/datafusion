@@ -37,7 +37,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct EncodeFunc {
+pub struct EncodeFunc {
     signature: Signature,
 }
 
@@ -91,7 +91,7 @@ impl ScalarUDFImpl for EncodeFunc {
 }
 
 #[derive(Debug)]
-pub(super) struct DecodeFunc {
+pub struct DecodeFunc {
     signature: Signature,
 }
 

@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 #[derive(Debug)]
-pub(super) struct RegexpReplaceFunc {
+pub struct RegexpReplaceFunc {
     signature: Signature,
 }
 impl RegexpReplaceFunc {

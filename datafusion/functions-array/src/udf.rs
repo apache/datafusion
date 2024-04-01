@@ -40,7 +40,7 @@ make_udf_function!(ArrayToString,
     array_to_string_udf // internal function name
 );
 #[derive(Debug)]
-pub(super) struct ArrayToString {
+pub struct ArrayToString {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -98,7 +98,7 @@ make_udf_function!(StringToArray,
     string_to_array_udf // internal function name
 );
 #[derive(Debug)]
-pub(super) struct StringToArray {
+pub struct StringToArray {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -174,7 +174,7 @@ make_udf_function!(
     range_udf
 );
 #[derive(Debug)]
-pub(super) struct Range {
+pub struct Range {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -244,7 +244,7 @@ make_udf_function!(
     gen_series_udf
 );
 #[derive(Debug)]
-pub(super) struct GenSeries {
+pub struct GenSeries {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -315,7 +315,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayDims {
+pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -372,7 +372,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArraySort {
+pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -445,7 +445,7 @@ impl Cardinality {
 }
 
 #[derive(Debug)]
-pub(super) struct Cardinality {
+pub struct Cardinality {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -490,7 +490,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayNdims {
+pub struct ArrayNdims {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -544,7 +544,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayEmpty {
+pub struct ArrayEmpty {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -597,7 +597,7 @@ make_udf_function!(
     array_repeat_udf // internal function name
 );
 #[derive(Debug)]
-pub(super) struct ArrayRepeat {
+pub struct ArrayRepeat {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -650,7 +650,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayLength {
+pub struct ArrayLength {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -704,7 +704,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct Flatten {
+pub struct Flatten {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -772,7 +772,7 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayDistinct {
+pub struct ArrayDistinct {
     signature: Signature,
     aliases: Vec<String>,
 }

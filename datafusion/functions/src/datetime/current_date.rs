@@ -26,7 +26,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct CurrentDateFunc {
+pub struct CurrentDateFunc {
     signature: Signature,
     aliases: Vec<String>,
 }

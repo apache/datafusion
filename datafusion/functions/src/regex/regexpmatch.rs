@@ -33,7 +33,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct RegexpMatchFunc {
+pub struct RegexpMatchFunc {
     signature: Signature,
 }
 impl RegexpMatchFunc {

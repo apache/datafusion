@@ -25,7 +25,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct FromUnixtimeFunc {
+pub struct FromUnixtimeFunc {
     signature: Signature,
 }
 

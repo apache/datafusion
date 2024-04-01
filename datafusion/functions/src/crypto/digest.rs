@@ -25,7 +25,7 @@ use datafusion_expr::{
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct DigestFunc {
+pub struct DigestFunc {
     signature: Signature,
 }
 impl DigestFunc {

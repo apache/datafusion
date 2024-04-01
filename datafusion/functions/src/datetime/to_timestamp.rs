@@ -30,27 +30,27 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use crate::datetime::common::*;
 
 #[derive(Debug)]
-pub(super) struct ToTimestampFunc {
+pub struct ToTimestampFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampSecondsFunc {
+pub struct ToTimestampSecondsFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampMillisFunc {
+pub struct ToTimestampMillisFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampMicrosFunc {
+pub struct ToTimestampMicrosFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampNanosFunc {
+pub struct ToTimestampNanosFunc {
     signature: Signature,
 }
 

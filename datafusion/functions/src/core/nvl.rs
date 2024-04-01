@@ -23,7 +23,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct NVLFunc {
+pub struct NVLFunc {
     signature: Signature,
     aliases: Vec<String>,
 }

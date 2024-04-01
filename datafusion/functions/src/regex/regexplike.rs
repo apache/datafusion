@@ -32,7 +32,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct RegexpLikeFunc {
+pub struct RegexpLikeFunc {
     signature: Signature,
 }
 impl RegexpLikeFunc {

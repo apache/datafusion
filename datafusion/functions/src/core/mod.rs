@@ -17,12 +17,12 @@
 
 //! "core" DataFusion functions
 
-mod arrowtypeof;
-mod getfield;
-mod nullif;
-mod nvl;
-mod nvl2;
-mod r#struct;
+pub mod arrowtypeof;
+pub mod getfield;
+pub mod nullif;
+pub mod nvl;
+pub mod nvl2;
+pub mod r#struct;
 
 // create UDFs
 make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
