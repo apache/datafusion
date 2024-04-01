@@ -464,6 +464,17 @@ impl CrossJoinStream {
         if self.right_row_index < self.right_batch.num_rows() {
             // Right batch has some unpaired rows, continue with the next row.
             let result_batch = self.build_batch()?;
+            // Update the metrics.
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(result_batch.num_rows());
+            // Increment the left batch index. If it reaches the end, reset it to 0 and increment the right row index.
+            self.left_batch_index = if self.left_batch_index == self.left_data.len() - 1 {
+                self.right_row_index += 1;
+                0
+            } else {
+                self.left_batch_index + 1
+            };
+
             Ok(StatefulStreamResult::Ready(Some(result_batch)))
         } else {
             self.state = CrossJoinStreamState::FetchProbeBatch;
@@ -472,15 +483,7 @@ impl CrossJoinStream {
     }
 
     /// This function constructs a new `RecordBatch` by joining the left and right batches
-    /// based on the current indices. It also updates the metrics.
-    ///
-    /// # Arguments
-    /// * `self.left_data` - Array of `RecordBatch`es from the left side to be joined.
-    /// * `self.right_batch` - The current `RecordBatch` from the right side to be joined.
-    /// * `self.left_batch_index` - Index of the current left batch being processed.
-    /// * `self.right_row_index` - Index of the current row in the right batch to be joined.
-    /// * `join_metrics` - Metrics container to track performance of the join operation.
-
+    /// based on the current indices.
     fn build_batch(&mut self) -> Result<RecordBatch> {
         let join_timer = self.join_metrics.join_time.timer();
         // Create copies of the indexed right-side row for joining.
@@ -505,17 +508,7 @@ impl CrossJoinStream {
                 .with_row_count(Some(self.left_data[self.left_batch_index].num_rows())),
         )?;
         join_timer.done();
-        // Update the metrics.
-        self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(result.num_rows());
 
-        // Increment the left batch index. If it reaches the end, reset it to 0 and increment the right row index.
-        self.left_batch_index = if self.left_batch_index == self.left_data.len() - 1 {
-            self.right_row_index += 1;
-            0
-        } else {
-            self.left_batch_index + 1
-        };
         Ok(result)
     }
 }
