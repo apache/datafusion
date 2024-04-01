@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{Scalar, StringArray};
 use arrow::datatypes::DataType;
-use arrow_array::{Scalar, StringArray};
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{exec_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::field_util::GetFieldAccessSchema;

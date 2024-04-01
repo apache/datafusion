@@ -1225,6 +1225,28 @@ pub struct IntervalMonthDayNanoValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionField {
+    #[prost(int32, tag = "1")]
+    pub field_id: i32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<Field>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionValue {
+    /// Note that a null union value must have one or more fields, so we
+    /// encode a null UnionValue as one with value_id == 128
+    #[prost(int32, tag = "1")]
+    pub value_id: i32,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+    #[prost(message, repeated, tag = "3")]
+    pub fields: ::prost::alloc::vec::Vec<UnionField>,
+    #[prost(enumeration = "UnionMode", tag = "4")]
+    pub mode: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarFixedSizeBinary {
     #[prost(bytes = "vec", tag = "1")]
     pub values: ::prost::alloc::vec::Vec<u8>,
@@ -1236,7 +1258,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1320,6 +1342,8 @@ pub mod scalar_value {
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "34")]
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
+        #[prost(message, tag = "42")]
+        UnionValue(::prost::alloc::boxed::Box<super::UnionValue>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2092,6 +2116,8 @@ pub struct PhysicalScalarUdfNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "4")]
     pub return_type: ::core::option::Option<ArrowType>,
 }
@@ -2817,17 +2843,17 @@ pub enum ScalarFunction {
     Unknown = 0,
     ///   1 was Acos
     ///   2 was Asin
-    Atan = 3,
-    Ascii = 4,
+    /// 3 was Atan
+    /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
-    Ln = 10,
+    /// 10 was Ln
     Log = 11,
-    Log10 = 12,
-    Log2 = 13,
+    /// 12 was Log10
+    /// 13 was Log2
     Round = 14,
     Signum = 15,
     Sin = 16,
@@ -2836,61 +2862,61 @@ pub enum ScalarFunction {
     Trunc = 19,
     /// 20 was Array
     /// RegexpMatch = 21;
-    BitLength = 22,
-    Btrim = 23,
-    CharacterLength = 24,
-    Chr = 25,
+    /// 22 was BitLength
+    /// 23 was Btrim
+    /// 24 was CharacterLength
+    /// 25 was Chr
     Concat = 26,
     ConcatWithSeparator = 27,
     /// 28 was DatePart
     /// 29 was DateTrunc
     InitCap = 30,
-    Left = 31,
-    Lpad = 32,
-    Lower = 33,
-    Ltrim = 34,
+    /// 31 was Left
+    /// 32 was Lpad
+    /// 33 was Lower
+    /// 34 was Ltrim
     /// 35 was MD5
     ///   36 was NullIf
-    OctetLength = 37,
+    /// 37 was OctetLength
     Random = 38,
     /// 39 was RegexpReplace
-    Repeat = 40,
-    Replace = 41,
-    Reverse = 42,
-    Right = 43,
-    Rpad = 44,
-    Rtrim = 45,
+    /// 40 was Repeat
+    /// 41 was Replace
+    /// 42 was Reverse
+    /// 43 was Right
+    /// 44 was Rpad
+    /// 45 was Rtrim
     /// 46 was SHA224
     /// 47 was SHA256
     /// 48 was SHA384
     /// 49 was SHA512
-    SplitPart = 50,
-    StartsWith = 51,
-    Strpos = 52,
-    Substr = 53,
-    ToHex = 54,
+    /// 50 was SplitPart
+    /// StartsWith = 51;
+    /// 52 was Strpos
+    /// 53 was Substr
+    /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
-    Translate = 60,
-    Trim = 61,
-    Upper = 62,
+    /// 60 was Translate
+    /// Trim = 61;
+    /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
     /// 66 was FromUnixtime
-    Atan2 = 67,
+    /// 67 Atan2
     /// 68 was DateBin
     /// 69 was ArrowTypeof
     /// 70 was CurrentDate
     /// 71 was CurrentTime
-    Uuid = 72,
+    /// 72 was Uuid
     Cbrt = 73,
-    Acosh = 74,
-    Asinh = 75,
-    Atanh = 76,
+    /// 74 Acosh
+    /// 75 was Asinh
+    /// 76 was Atanh
     Sinh = 77,
     Cosh = 78,
     /// Tanh = 79;
@@ -2906,52 +2932,52 @@ pub enum ScalarFunction {
     /// 89 was ArrayRepeat
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
-    ArrayPosition = 92,
-    ArrayPositions = 93,
+    /// 92 was ArrayPosition
+    /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
-    ArrayRemove = 95,
-    ArrayReplace = 96,
+    /// 95 was ArrayRemove
+    /// 96 was ArrayReplace
     /// 97 was ArrayToString
     /// 98 was Cardinality
-    ArrayElement = 99,
-    ArraySlice = 100,
+    /// 99 was ArrayElement
+    /// 100 was ArraySlice
     Cot = 103,
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
-    ArrayRemoveN = 107,
-    ArrayReplaceN = 108,
-    ArrayRemoveAll = 109,
-    ArrayReplaceAll = 110,
+    /// 107 was ArrayRemoveN
+    /// 108 was ArrayReplaceN
+    /// 109 was ArrayRemoveAll
+    /// 110 was ArrayReplaceAll
     Nanvl = 111,
     /// 112 was Flatten
     /// 113 was IsNan
     Iszero = 114,
     /// 115 was ArrayEmpty
-    ArrayPopBack = 116,
+    /// 116 was ArrayPopBack
     /// 117 was StringToArray
     /// 118 was ToTimestampNanos
-    ArrayIntersect = 119,
-    ArrayUnion = 120,
-    OverLay = 121,
-    /// / 122 is Range
-    ArrayExcept = 123,
-    ArrayPopFront = 124,
-    Levenshtein = 125,
-    SubstrIndex = 126,
-    FindInSet = 127,
-    /// / 128 was ArraySort
-    /// / 129 was ArrayDistinct
-    ArrayResize = 130,
-    EndsWith = 131,
-    /// / 132 was InStr
-    MakeDate = 133,
-    ArrayReverse = 134,
-    /// / 135 is RegexpLike
+    /// 119 was ArrayIntersect
+    /// 120 was ArrayUnion
+    /// 121 was OverLay
+    /// 122 is Range
+    /// 123 is ArrayExcept
+    /// 124 was ArrayPopFront
+    /// 125 was Levenshtein
+    /// 126 was SubstrIndex
+    /// 127 was FindInSet
+    /// 128 was ArraySort
+    /// 129 was ArrayDistinct
+    /// 130 was ArrayResize
     ///
-    /// / 137 was ToDate
-    /// / 138 was ToUnixtime
-    ToChar = 136,
+    /// 132 was InStr
+    /// 133 was MakeDate
+    /// 134 was ArrayReverse
+    /// 135 is RegexpLike
+    /// 136 was ToChar
+    /// 137 was ToDate
+    /// 138 was ToUnixtime
+    EndsWith = 131,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2961,56 +2987,23 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Atan => "Atan",
-            ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
-            ScalarFunction::Ln => "Ln",
             ScalarFunction::Log => "Log",
-            ScalarFunction::Log10 => "Log10",
-            ScalarFunction::Log2 => "Log2",
             ScalarFunction::Round => "Round",
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::BitLength => "BitLength",
-            ScalarFunction::Btrim => "Btrim",
-            ScalarFunction::CharacterLength => "CharacterLength",
-            ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
-            ScalarFunction::Left => "Left",
-            ScalarFunction::Lpad => "Lpad",
-            ScalarFunction::Lower => "Lower",
-            ScalarFunction::Ltrim => "Ltrim",
-            ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Repeat => "Repeat",
-            ScalarFunction::Replace => "Replace",
-            ScalarFunction::Reverse => "Reverse",
-            ScalarFunction::Right => "Right",
-            ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::Rtrim => "Rtrim",
-            ScalarFunction::SplitPart => "SplitPart",
-            ScalarFunction::StartsWith => "StartsWith",
-            ScalarFunction::Strpos => "Strpos",
-            ScalarFunction::Substr => "Substr",
-            ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::Translate => "Translate",
-            ScalarFunction::Trim => "Trim",
-            ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Acosh => "Acosh",
-            ScalarFunction::Asinh => "Asinh",
-            ScalarFunction::Atanh => "Atanh",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
@@ -3019,89 +3012,33 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayPosition => "ArrayPosition",
-            ScalarFunction::ArrayPositions => "ArrayPositions",
-            ScalarFunction::ArrayRemove => "ArrayRemove",
-            ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::ArrayElement => "ArrayElement",
-            ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
-            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
-            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
-            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayPopBack => "ArrayPopBack",
-            ScalarFunction::ArrayIntersect => "ArrayIntersect",
-            ScalarFunction::ArrayUnion => "ArrayUnion",
-            ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::ArrayExcept => "ArrayExcept",
-            ScalarFunction::ArrayPopFront => "ArrayPopFront",
-            ScalarFunction::Levenshtein => "Levenshtein",
-            ScalarFunction::SubstrIndex => "SubstrIndex",
-            ScalarFunction::FindInSet => "FindInSet",
-            ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::MakeDate => "MakeDate",
-            ScalarFunction::ArrayReverse => "ArrayReverse",
-            ScalarFunction::ToChar => "ToChar",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Atan" => Some(Self::Atan),
-            "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
-            "Ln" => Some(Self::Ln),
             "Log" => Some(Self::Log),
-            "Log10" => Some(Self::Log10),
-            "Log2" => Some(Self::Log2),
             "Round" => Some(Self::Round),
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
-            "BitLength" => Some(Self::BitLength),
-            "Btrim" => Some(Self::Btrim),
-            "CharacterLength" => Some(Self::CharacterLength),
-            "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
-            "Left" => Some(Self::Left),
-            "Lpad" => Some(Self::Lpad),
-            "Lower" => Some(Self::Lower),
-            "Ltrim" => Some(Self::Ltrim),
-            "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
-            "Repeat" => Some(Self::Repeat),
-            "Replace" => Some(Self::Replace),
-            "Reverse" => Some(Self::Reverse),
-            "Right" => Some(Self::Right),
-            "Rpad" => Some(Self::Rpad),
-            "Rtrim" => Some(Self::Rtrim),
-            "SplitPart" => Some(Self::SplitPart),
-            "StartsWith" => Some(Self::StartsWith),
-            "Strpos" => Some(Self::Strpos),
-            "Substr" => Some(Self::Substr),
-            "ToHex" => Some(Self::ToHex),
-            "Translate" => Some(Self::Translate),
-            "Trim" => Some(Self::Trim),
-            "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Atan2" => Some(Self::Atan2),
-            "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
-            "Acosh" => Some(Self::Acosh),
-            "Asinh" => Some(Self::Asinh),
-            "Atanh" => Some(Self::Atanh),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
@@ -3110,33 +3047,10 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayPosition" => Some(Self::ArrayPosition),
-            "ArrayPositions" => Some(Self::ArrayPositions),
-            "ArrayRemove" => Some(Self::ArrayRemove),
-            "ArrayReplace" => Some(Self::ArrayReplace),
-            "ArrayElement" => Some(Self::ArrayElement),
-            "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
-            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
-            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
-            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
-            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "ArrayPopBack" => Some(Self::ArrayPopBack),
-            "ArrayIntersect" => Some(Self::ArrayIntersect),
-            "ArrayUnion" => Some(Self::ArrayUnion),
-            "OverLay" => Some(Self::OverLay),
-            "ArrayExcept" => Some(Self::ArrayExcept),
-            "ArrayPopFront" => Some(Self::ArrayPopFront),
-            "Levenshtein" => Some(Self::Levenshtein),
-            "SubstrIndex" => Some(Self::SubstrIndex),
-            "FindInSet" => Some(Self::FindInSet),
-            "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
-            "MakeDate" => Some(Self::MakeDate),
-            "ArrayReverse" => Some(Self::ArrayReverse),
-            "ToChar" => Some(Self::ToChar),
             _ => None,
         }
     }

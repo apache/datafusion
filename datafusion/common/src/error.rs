@@ -63,7 +63,7 @@ pub enum DataFusionError {
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     SQL(ParserError, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
@@ -101,7 +101,7 @@ pub enum DataFusionError {
     /// This error can be returned in cases such as when schema inference is not
     /// possible and when column names are not unique.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
     SchemaError(SchemaError, Box<Option<String>>),
     /// Error during execution of the query.
@@ -601,6 +601,7 @@ pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_datafusion_err as _plan_datafusion_err;
 pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 

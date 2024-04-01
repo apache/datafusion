@@ -135,10 +135,9 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(column3) from unnest_table;
 
-## Unnest multiple columns
+## Multiple unnest functions in selection
 query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
 select unnest(column1), unnest(column2) from unnest_table;
-
 
 ## Unnest scalar in select list
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
@@ -253,6 +252,70 @@ select * from unnest([1,2,(select sum(column3) from unnest_table)]);
 1
 2
 10
+
+## Unnest is the sub-expression of other expression
+query II
+select unnest(column1) as a, column3 from unnest_table;
+----
+1 1
+2 1
+3 1
+4 2
+5 2
+6 3
+12 NULL
+
+query BI
+select unnest(column1) is not null, column3 from unnest_table;
+----
+true 1
+true 1
+true 1
+true 2
+true 2
+true 3
+true NULL
+
+query II
+select -unnest(column1) as a, column3 from unnest_table;
+----
+-1 1
+-2 1
+-3 1
+-4 2
+-5 2
+-6 3
+-12 NULL
+
+query II
+select unnest(array_remove(column1, 3)) as a, column3 from unnest_table;
+----
+1 1
+2 1
+4 2
+5 2
+6 3
+12 NULL
+
+query II
+select unnest(array_remove(column1, 3)) as c1, column3 from unnest_table order by c1 desc, column3;
+----
+12 NULL
+6 3
+5 2
+4 2
+2 1
+1 1
+
+query II
+select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
+----
+0 1
+1 1
+3 2
+4 2
+5 3
+11 NULL
 
 statement ok
 drop table unnest_table;

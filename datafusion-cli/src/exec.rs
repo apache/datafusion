@@ -22,6 +22,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 
+use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
@@ -40,6 +41,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
+use datafusion_common::FileType;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -163,21 +165,24 @@ pub async fn exec_from_repl(
                 }
             }
             Ok(line) => {
-                rl.add_history_entry(line.trim_end())?;
-                tokio::select! {
-                    res = exec_and_print(ctx, print_options, line) => match res {
-                        Ok(_) => {}
-                        Err(err) => eprintln!("{err}"),
-                    },
-                    _ = signal::ctrl_c() => {
-                        println!("^C");
-                        continue
-                    },
+                let lines = split_from_semicolon(line);
+                for line in lines {
+                    rl.add_history_entry(line.trim_end())?;
+                    tokio::select! {
+                        res = exec_and_print(ctx, print_options, line) => match res {
+                            Ok(_) => {}
+                            Err(err) => eprintln!("{err}"),
+                        },
+                        _ = signal::ctrl_c() => {
+                            println!("^C");
+                            continue
+                        },
+                    }
+                    // dialect might have changed
+                    rl.helper_mut().unwrap().set_dialect(
+                        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+                    );
                 }
-                // dialect might have changed
-                rl.helper_mut().unwrap().set_dialect(
-                    &ctx.task_ctx().session_config().options().sql_parser.dialect,
-                );
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
@@ -257,15 +262,23 @@ async fn create_plan(
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
-        register_object_store_and_config_extensions(ctx, &cmd.location, &cmd.options)
-            .await?;
+        register_object_store_and_config_extensions(
+            ctx,
+            &cmd.location,
+            &cmd.options,
+            None,
+        )
+        .await?;
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
+        let format: FileType = (&copy_to.format_options).into();
+
         register_object_store_and_config_extensions(
             ctx,
             &copy_to.output_url,
             &copy_to.options,
+            Some(format),
         )
         .await?;
     }
@@ -303,6 +316,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     ctx: &SessionContext,
     location: &String,
     options: &HashMap<String, String>,
+    format: Option<FileType>,
 ) -> Result<()> {
     // Parse the location URL to extract the scheme and other components
     let table_path = ListingTableUrl::parse(location)?;
@@ -318,6 +332,9 @@ pub(crate) async fn register_object_store_and_config_extensions(
 
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.state().default_table_options().clone();
+    if let Some(format) = format {
+        table_options.set_file_format(format);
+    }
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
@@ -347,6 +364,7 @@ mod tests {
                 &ctx,
                 &cmd.location,
                 &cmd.options,
+                None,
             )
             .await?;
         } else {
@@ -367,10 +385,12 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Copy(cmd) = &plan {
+            let format: FileType = (&cmd.format_options).into();
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.output_url,
                 &cmd.options,
+                Some(format),
             )
             .await?;
         } else {
@@ -399,6 +419,7 @@ mod tests {
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",
+            "cos://bucket/path/file.parquet",
             "gcs://bucket/path/file.parquet",
         ];
         let mut ctx = SessionContext::new();
@@ -412,7 +433,7 @@ mod tests {
             )
         })?;
         for location in locations {
-            let sql = format!("copy (values (1,2)) to '{}';", location);
+            let sql = format!("copy (values (1,2)) to '{}' STORED AS PARQUET;", location);
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail
@@ -438,8 +459,8 @@ mod tests {
         let location = "s3://bucket/path/file.parquet";
 
         // Missing region, use object_store defaults
-        let sql = format!("COPY (values (1,2)) TO '{location}'
-            (format parquet, 'aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}')");
+        let sql = format!("COPY (values (1,2)) TO '{location}' STORED AS PARQUET
+            OPTIONS ('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}')");
         copy_to_table_test(location, &sql).await?;
 
         Ok(())
@@ -476,6 +497,21 @@ mod tests {
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
             OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_cos() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let endpoint = "fake_endpoint";
+        let location = "cos://bucket/path/file.parquet";
+
+        // Should be OK
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.cos.endpoint' '{endpoint}') LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         Ok(())

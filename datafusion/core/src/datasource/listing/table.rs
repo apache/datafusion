@@ -118,7 +118,7 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+    fn infer_file_type(path: &str) -> Result<(FileType, String)> {
         let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
@@ -139,20 +139,7 @@ impl ListingTableConfig {
             .get_ext_with_compression(file_compression_type.to_owned())
             .map_err(|_| DataFusionError::Internal(err_msg))?;
 
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::ARROW => Arc::new(ArrowFormat),
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::CSV => Arc::new(
-                CsvFormat::default().with_file_compression_type(file_compression_type),
-            ),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-        };
-
-        Ok((file_format, ext))
+        Ok((file_type, ext))
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -173,10 +160,27 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) =
-            ListingTableConfig::infer_format(file.location.as_ref())?;
+        let (file_type, file_extension) =
+            ListingTableConfig::infer_file_type(file.location.as_ref())?;
 
-        let listing_options = ListingOptions::new(format)
+        let mut table_options = state.default_table_options();
+        table_options.set_file_format(file_type.clone());
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => {
+                Arc::new(CsvFormat::default().with_options(table_options.csv))
+            }
+            #[cfg(feature = "parquet")]
+            FileType::PARQUET => {
+                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+            }
+            FileType::AVRO => Arc::new(AvroFormat),
+            FileType::JSON => {
+                Arc::new(JsonFormat::default().with_options(table_options.json))
+            }
+            FileType::ARROW => Arc::new(ArrowFormat),
+        };
+
+        let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions());
 

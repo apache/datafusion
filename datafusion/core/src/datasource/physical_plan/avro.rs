@@ -99,6 +99,10 @@ impl DisplayAs for AvroExec {
 }
 
 impl ExecutionPlan for AvroExec {
+    fn name(&self) -> &'static str {
+        "AvroExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

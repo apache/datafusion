@@ -167,6 +167,11 @@
 //! overview of how DataFusion is organized and then link to other
 //! sections of the docs with more details -->
 //!
+//! You can find a formal description of DataFusion's architecture in our
+//! [SIGMOD 2024 Paper].
+//!
+//! [SIGMOD 2024 Paper]: https://github.com/apache/arrow-datafusion/files/14789704/DataFusion_Query_Engine___SIGMOD_2024-FINAL.pdf
+//!
 //! ## Overview  Presentations
 //!
 //! The following presentations offer high level overviews of the

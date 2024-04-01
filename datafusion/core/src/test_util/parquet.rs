@@ -165,7 +165,7 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
-        let parquet_options = ctx.state().default_table_options().parquet.clone();
+        let parquet_options = ctx.copied_table_options().parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();

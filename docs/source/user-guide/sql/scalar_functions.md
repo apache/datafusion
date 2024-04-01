@@ -731,12 +731,15 @@ btrim(str[, trim_str])
   Can be a constant, column, or function, and any combination of string operators.
 - **trim_str**: String expression to trim from the beginning and end of the input string.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  _Default is whitespace characters_.
+  _Default is whitespace characters._
 
 **Related functions**:
 [ltrim](#ltrim),
-[rtrim](#rtrim),
-[trim](#trim)
+[rtrim](#rtrim)
+
+#### Aliases
+
+- trim
 
 ### `char_length`
 
@@ -919,26 +922,25 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Removes leading spaces from a string.
+Trims the specified trim string from the beginning of a string.
+If no trim string is provided, all whitespace is removed from the start
+of the input string.
 
 ```
-ltrim(str)
+ltrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[rtrim](#rtrim),
-[trim](#trim)
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+[rtrim](#rtrim)
 
 ### `octet_length`
 
@@ -1040,21 +1042,25 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Removes trailing spaces from a string.
+Trims the specified trim string from the end of a string.
+If no trim string is provided, all whitespace is removed from the end
+of the input string.
 
 ```
-rtrim(str)
+rtrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[ltrim](#ltrim),
-[trim](#trim)
+[ltrim](#ltrim)
 
 ### `split_part`
 
@@ -1154,21 +1160,7 @@ to_hex(int)
 
 ### `trim`
 
-Removes leading and trailing spaces from a string.
-
-```
-trim(str)
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-**Related functions**:
-[btrim](#btrim),
-[ltrim](#ltrim),
-[rtrim](#rtrim)
+_Alias of [btrim](#btrim)._
 
 ### `upper`
 
@@ -1624,34 +1616,19 @@ _Alias of [date_part](#date_part)._
 ### `extract`
 
 Returns a sub-field from a time value as an integer.
-Similar to `date_part`, but with different arguments.
 
 ```
 extract(field FROM source)
 ```
 
-#### Arguments
+Equivalent to calling `date_part('field', source)`. For example, these are equivalent:
 
-- **field**: Part or field of the date to return.
-  The following date fields are supported:
+```sql
+extract(day FROM '2024-04-13'::date)
+date_part('day', '2024-04-13'::date)
+```
 
-  - year
-  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
-  - month
-  - week _(week of the year)_
-  - day _(day of the month)_
-  - hour
-  - minute
-  - second
-  - millisecond
-  - microsecond
-  - nanosecond
-  - dow _(day of the week)_
-  - doy _(day of the year)_
-  - epoch _(seconds since Unix epoch)_
-
-- **source**: Source time expression to operate on.
-  Can be a constant, column, or function.
+See [date_part](#date_part).
 
 ### `make_date`
 
@@ -1954,10 +1931,12 @@ from_unixtime(expression)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_fill](#array_fill)
 - [array_indexof](#array_indexof)
+- [array_intersect](#array_intersect)
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
@@ -1969,6 +1948,7 @@ from_unixtime(expression)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_repeat](#array_repeat)
+- [array_resize](#array_resize)
 - [array_remove](#array_remove)
 - [array_remove_n](#array_remove_n)
 - [array_remove_all](#array_remove_all)
@@ -1990,11 +1970,13 @@ from_unixtime(expression)
 - [list_dims](#list_dims)
 - [list_distinct](#list_distinct)
 - [list_element](#list_element)
+- [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
+- [list_intersect](#list_intersect)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
@@ -2006,6 +1988,7 @@ from_unixtime(expression)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_repeat](#list_repeat)
+- [list_resize](#list_resize)
 - [list_remove](#list_remove)
 - [list_remove_n](#list_remove_n)
 - [list_remove_all](#list_remove_all)
@@ -2014,6 +1997,7 @@ from_unixtime(expression)
 - [list_replace_all](#list_replace_all)
 - [list_slice](#list_slice)
 - [list_to_string](#list_to_string)
+- [list_union](#list_union)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [string_to_array](#string_to_array)
@@ -2081,6 +2065,36 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_resize`
+
+Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+
+```
+array_resize(array, size, value)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **size**: New size of given array.
+- **value**: Defines new elements' value or empty if value is not set.
+
+#### Example
+
+```
+❯ select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```
+
+#### Aliases
+
+- list_resize
 
 ### `array_cat`
 
@@ -2306,6 +2320,44 @@ flatten(array)
 ### `array_indexof`
 
 _Alias of [array_position](#array_position)._
+
+### `array_intersect`
+
+Returns an array of elements in the intersection of array1 and array2.
+
+```
+array_intersect(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
++----------------------------------------------------+
+| [3, 4]                                             |
++----------------------------------------------------+
+❯ select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
++----------------------------------------------------+
+| []                                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_intersect
 
 ### `array_join`
 
@@ -2958,6 +3010,11 @@ empty(array)
 +------------------+
 ```
 
+#### Aliases
+
+- array_empty,
+- list_empty
+
 ### `generate_series`
 
 Similar to the range function, but it includes the upper bound.
@@ -2987,10 +3044,6 @@ generate_series(start, stop, step)
 
 _Alias of [array_append](#array_append)._
 
-### `list_sort`
-
-_Alias of [array_sort](#array_sort)._
-
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -3003,9 +3056,21 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distinct`
+
+_Alias of [array_dims](#array_distinct)._
+
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
+
+### `list_except`
+
+_Alias of [array_element](#array_except)._
 
 ### `list_extract`
 
@@ -3026,6 +3091,10 @@ _Alias of [array_has_any](#array_has_any)._
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
+
+### `list_intersect`
+
+_Alias of [array_position](#array_intersect)._
 
 ### `list_join`
 
@@ -3071,6 +3140,10 @@ _Alias of [array_prepend](#array_prepend)._
 
 _Alias of [array_repeat](#array_repeat)._
 
+### `list_resize`
+
+_Alias of [array_resize](#array_resize)._
+
 ### `list_remove`
 
 _Alias of [array_remove](#array_remove)._
@@ -3103,9 +3176,17 @@ _Alias of [array_reverse](#array_reverse)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_union`
+
+_Alias of [array_union](#array_union)._
 
 ### `make_array`
 
@@ -3114,6 +3195,10 @@ Returns an Arrow array using the specified input expressions.
 ```
 make_array(expression1[, ..., expression_n])
 ```
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
 
 #### Arguments
 
@@ -3227,11 +3312,12 @@ are not allowed
 ## Struct Functions
 
 - [struct](#struct)
+- [named_struct](#named_struct)
 
 ### `struct`
 
-Returns an Arrow struct using the specified input expressions.
-Fields in the returned struct use the `cN` naming convention.
+Returns an Arrow struct using the specified input expressions optionally named.
+Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
 
 ```
@@ -3239,7 +3325,7 @@ struct(expression1[, ..., expression_n])
 ```
 
 For example, this query converts two columns `a` and `b` to a single column with
-a struct type of fields `c0` and `c1`:
+a struct type of fields `field_a` and `c1`:
 
 ```
 select * from t;
@@ -3250,18 +3336,55 @@ select * from t;
 | 3 | 4 |
 +---+---+
 
-select struct(a, b) from t;
-+-----------------+
-| struct(t.a,t.b) |
-+-----------------+
-| {c0: 1, c1: 2}  |
-| {c0: 3, c1: 4}  |
-+-----------------+
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
 ```
 
 #### Arguments
 
 - **expression_n**: Expression to include in the output struct.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed .
+
+### `named_struct`
+
+Returns an Arrow struct using the specified name and input expressions pairs.
+
+```
+named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
+```
+
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `field_b`:
+
+```
+select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+select named_struct('field_a', a, 'field_b', b) from t;
++-------------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("field_b"),t.b) |
++-------------------------------------------------------+
+| {field_a: 1, field_b: 2}                              |
+| {field_a: 3, field_b: 4}                              |
++-------------------------------------------------------+
+```
+
+#### Arguments
+
+- **expression_n_name**: Name of the column field.
+  Must be a constant string.
+- **expression_n_input**: Expression to include in the output struct.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
 

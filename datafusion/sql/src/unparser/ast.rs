@@ -159,6 +159,9 @@ impl SelectBuilder {
         new.projection = value;
         new
     }
+    pub fn already_projected(&self) -> bool {
+        !self.projection.is_empty()
+    }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
         let new = self;
         new.into = value;

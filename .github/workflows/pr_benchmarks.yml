@@ -1,0 +1,101 @@
+# Runs the benchmark command on the PR and
+# on the branch, posting the results as a comment back the PR
+name: Benchmarks
+
+on:
+  issue_comment:
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/benchmark')
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+        run: echo "$GITHUB_CONTEXT"
+
+      - name: Checkout PR changes
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+
+      - name: Setup test data
+        # Workaround for `the input device is not a TTY`, appropriated from https://github.com/actions/runner/issues/241
+        shell: 'script -q -e -c "bash -e {0}"'
+        run: |
+          cd benchmarks
+          mkdir data
+          
+          # Setup the TPC-H data sets for scale factors 1 and 10
+          ./bench.sh data tpch
+          ./bench.sh data tpch10
+
+      - name: Generate unique result names
+        run: |
+          echo "HEAD_LONG_SHA=$(git log -1 --format='%H')" >> "$GITHUB_ENV" 
+          echo "HEAD_SHORT_SHA=$(git log -1 --format='%h' --abbrev=7)" >> "$GITHUB_ENV" 
+          echo "BASE_SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_ENV"
+
+      - name: Benchmark PR changes
+        env:
+          RESULTS_NAME: ${{ env.HEAD_SHORT_SHA }}
+        run: |
+          cd benchmarks
+
+          ./bench.sh run tpch
+          ./bench.sh run tpch_mem
+          ./bench.sh run tpch10
+          
+          # For some reason this step doesn't seem to propagate the env var down into the script
+          if [ -d "results/HEAD" ]; then
+            echo "Moving results into ${{ env.HEAD_SHORT_SHA }}"
+            mv results/HEAD results/${{ env.HEAD_SHORT_SHA }}
+          fi
+
+      - name: Checkout base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: false
+
+      - name: Benchmark baseline and generate comparison message
+        env:
+          RESULTS_NAME: ${{ env.BASE_SHORT_SHA }}
+        run: |
+          cd benchmarks
+
+          ./bench.sh run tpch
+          ./bench.sh run tpch_mem
+          ./bench.sh run tpch10
+          
+          echo ${{ github.event.issue.number }} > pr
+          
+          pip3 install rich
+          cat > message.md <<EOF
+          # Benchmark results
+          
+          <details>
+          <summary>Benchmarks comparing ${{ github.sha }} (main) and ${{ env.HEAD_LONG_SHA }} (PR)</summary>
+
+          \`\`\`
+          $(./bench.sh compare ${{ env.BASE_SHORT_SHA }} ${{ env.HEAD_SHORT_SHA }})
+          \`\`\`
+
+          </details>
+          EOF
+          
+          cat message.md
+
+      - name: Upload benchmark comparison message
+        uses: actions/upload-artifact@v4
+        with:
+          name: message
+          path: benchmarks/message.md
+
+      - name: Upload PR number
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr
+          path: benchmarks/pr

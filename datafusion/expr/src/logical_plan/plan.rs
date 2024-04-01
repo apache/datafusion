@@ -54,6 +54,7 @@ use datafusion_common::{
 };
 
 // backwards compatibility
+use crate::display::PgJsonVisitor;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -217,56 +218,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Get all meaningful schemas of a plan and its children plan.
-    #[deprecated(since = "20.0.0")]
-    pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
-        match self {
-            // return self and children schemas
-            LogicalPlan::Window(_)
-            | LogicalPlan::Projection(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_) => {
-                let mut schemas = vec![self.schema()];
-                self.inputs().iter().for_each(|input| {
-                    schemas.push(input.schema());
-                });
-                schemas
-            }
-            // just return self.schema()
-            LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::TableScan(_) => {
-                vec![self.schema()]
-            }
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // return only the schema of the static term
-                static_term.all_schemas()
-            }
-            // return children schemas
-            LogicalPlan::Limit(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Prepare(_) => {
-                self.inputs().iter().map(|p| p.schema()).collect()
-            }
-            // return empty
-            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
-        }
-    }
-
     /// Returns the (fixed) output schema for explain plans
     pub fn explain_schema() -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
@@ -284,9 +235,17 @@ impl LogicalPlan {
         ])
     }
 
-    /// returns all expressions (non-recursively) in the current
-    /// logical plan node. This does not include expressions in any
-    /// children
+    /// Returns all expressions (non-recursively) evaluated by the current
+    /// logical plan node. This does not include expressions in any children
+    ///
+    /// The returned expressions do not necessarily represent or even
+    /// contributed to the output schema of this node. For example,
+    /// `LogicalPlan::Filter` returns the filter expression even though the
+    /// output of a Filter has the same columns as the input.
+    ///
+    /// The expressions do contain all the columns that are used by this plan,
+    /// so if there are columns not referenced by these expressions then
+    /// DataFusion's optimizer attempts to optimize them away.
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
@@ -1344,6 +1303,26 @@ impl LogicalPlan {
         Wrapper(self)
     }
 
+    /// Return a displayable structure that produces plan in postgresql JSON format.
+    ///
+    /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
+    pub fn display_pg_json(&self) -> impl Display + '_ {
+        // Boilerplate structure to wrap LogicalPlan with something
+        // that that can be formatted
+        struct Wrapper<'a>(&'a LogicalPlan);
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                let mut visitor = PgJsonVisitor::new(f);
+                visitor.with_schema(true);
+                match self.0.visit(&mut visitor) {
+                    Ok(_) => Ok(()),
+                    Err(_) => Err(fmt::Error),
+                }
+            }
+        }
+        Wrapper(self)
+    }
+
     /// Return a `format`able structure that produces lines meant for
     /// graphical display using the `DOT` language. This format can be
     /// visualized using software from
@@ -2031,7 +2010,8 @@ impl Window {
         let fields = input.schema().fields();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
+        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
+        window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2357,7 +2337,7 @@ impl DistinctOn {
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
         let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&select_expr, &input)?,
+            exprlist_to_fields(select_expr.as_slice(), &input)?,
             input.schema().metadata().clone(),
         )?;
 
@@ -2409,7 +2389,7 @@ impl DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
@@ -2436,7 +2416,7 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+        let mut fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2446,7 +2426,7 @@ impl Aggregate {
                 .collect::<Vec<_>>();
         }
 
-        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+        fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
         let schema =
             DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
@@ -2822,6 +2802,67 @@ digraph {
         Ok(())
     }
 
+    #[test]
+    fn test_display_pg_json() -> Result<()> {
+        let plan = display_plan()?;
+
+        let expected_pg_json = r#"[
+  {
+    "Plan": {
+      "Expressions": [
+        "employee_csv.id"
+      ],
+      "Node Type": "Projection",
+      "Output": [
+        "id"
+      ],
+      "Plans": [
+        {
+          "Condition": "employee_csv.state IN (<subquery>)",
+          "Node Type": "Filter",
+          "Output": [
+            "id",
+            "state"
+          ],
+          "Plans": [
+            {
+              "Node Type": "Subquery",
+              "Output": [
+                "state"
+              ],
+              "Plans": [
+                {
+                  "Node Type": "TableScan",
+                  "Output": [
+                    "state"
+                  ],
+                  "Plans": [],
+                  "Relation Name": "employee_csv"
+                }
+              ]
+            },
+            {
+              "Node Type": "TableScan",
+              "Output": [
+                "id",
+                "state"
+              ],
+              "Plans": [],
+              "Relation Name": "employee_csv"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]"#;
+
+        let pg_json = format!("{}", plan.display_pg_json());
+
+        assert_eq!(expected_pg_json, pg_json);
+        Ok(())
+    }
+
     /// Tests for the Visitor trait and walking logical plan nodes
     #[derive(Debug, Default)]
     struct OkVisitor {
@@ -3078,14 +3119,6 @@ digraph {
         empty_schema: DFSchemaRef,
     }
 
-    impl NoChildExtension {
-        fn empty() -> Self {
-            Self {
-                empty_schema: Arc::new(DFSchema::empty()),
-            }
-        }
-    }
-
     impl UserDefinedLogicalNode for NoChildExtension {
         fn as_any(&self) -> &dyn std::any::Any {
             unimplemented!()
@@ -3126,18 +3159,6 @@ digraph {
         fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
             unimplemented!()
         }
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_extension_all_schemas() {
-        let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(NoChildExtension::empty()),
-        });
-
-        let schemas = plan.all_schemas();
-        assert_eq!(1, schemas.len());
-        assert_eq!(0, schemas[0].fields().len());
     }
 
     #[test]
