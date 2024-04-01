@@ -1469,11 +1469,11 @@ impl SessionState {
 
         match new_self.register_udaf(Arc::new(first_value)) {
             Ok(Some(existing_udaf)) => {
-                debug!("Overwrite existing UDF: {}", existing_udaf.name());
+                debug!("Overwrite existing UDAF: {}", existing_udaf.name());
             }
             Ok(None) => {}
             Err(err) => {
-                panic!("Failed to register UDF: {}", err);
+                panic!("Failed to register UDAF: {}", err);
             }
         }
 
