@@ -73,21 +73,22 @@ pub struct PrintOptions {
     pub color: bool,
 }
 
-fn get_timing_info_str(
+// Returns the query execution details formatted
+fn get_execution_details_formatted(
     row_count: usize,
     maxrows: MaxRows,
     query_start_time: Instant,
 ) -> String {
-    let row_word = if row_count == 1 { "row" } else { "rows" };
     let nrows_shown_msg = match maxrows {
-        MaxRows::Limited(nrows) if nrows < row_count => format!(" ({} shown)", nrows),
+        MaxRows::Limited(nrows) if nrows < row_count => {
+            format!("(First {nrows} displayed. Use --maxrows to adjust)")
+        }
         _ => String::new(),
     };
 
     format!(
-        "{} {} in set{}. Query took {:.3} seconds.\n",
+        "{} row(s) fetched. {}\nElapsed {:.3} seconds.\n",
         row_count,
-        row_word,
         nrows_shown_msg,
         query_start_time.elapsed().as_secs_f64()
     )
@@ -107,7 +108,7 @@ impl PrintOptions {
             .print_batches(&mut writer, batches, self.maxrows, true)?;
 
         let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let timing_info = get_timing_info_str(
+        let formatted_exec_details = get_execution_details_formatted(
             row_count,
             if self.format == PrintFormat::Table {
                 self.maxrows
@@ -118,7 +119,7 @@ impl PrintOptions {
         );
 
         if !self.quiet {
-            writeln!(writer, "{timing_info}")?;
+            writeln!(writer, "{formatted_exec_details}")?;
         }
 
         Ok(())
@@ -154,11 +155,14 @@ impl PrintOptions {
             with_header = false;
         }
 
-        let timing_info =
-            get_timing_info_str(row_count, MaxRows::Unlimited, query_start_time);
+        let formatted_exec_details = get_execution_details_formatted(
+            row_count,
+            MaxRows::Unlimited,
+            query_start_time,
+        );
 
         if !self.quiet {
-            writeln!(writer, "{timing_info}")?;
+            writeln!(writer, "{formatted_exec_details}")?;
         }
 
         Ok(())

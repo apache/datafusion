@@ -43,6 +43,7 @@ default = [
     "regex_expressions",
     "crypto_expressions",
     "string_expressions",
+    "unicode_expressions",
 ]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
@@ -51,7 +52,9 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = []
+string_expressions = ["uuid"]
+# enable unicode functions
+unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
 [lib]
 name = "datafusion_functions"
@@ -69,13 +72,15 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
+hashbrown = { version = "0.14", features = ["raw"], optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
 regex = { version = "1.8", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
-uuid = { version = "1.7", features = ["v4"] }
+unicode-segmentation = { version = "^1.7.1", optional = true }
+uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -86,15 +91,24 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 [[bench]]
 harness = false
 name = "to_timestamp"
+required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
 name = "regx"
+required-features = ["regex_expressions"]
 
 [[bench]]
 harness = false
 name = "make_date"
+required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
 name = "to_char"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "substr_index"
+required-features = ["unicode_expressions"]

@@ -27,7 +27,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::string::common::*;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub(super) struct SplitPartFunc {
@@ -117,8 +117,8 @@ mod tests {
     use datafusion_common::{exec_err, Result};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    use crate::string::common::test::test_function;
     use crate::string::split_part::SplitPartFunc;
+    use crate::utils::test::test_function;
 
     #[test]
     fn test_functions() -> Result<()> {

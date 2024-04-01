@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::kernels::length::length;
 use std::any::Any;
 
+use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::string::common::*;
+use crate::utils::utf8_to_int_type;
 
 #[derive(Debug)]
 pub(super) struct OctetLengthFunc {
@@ -86,14 +86,17 @@ impl ScalarUDFImpl for OctetLengthFunc {
 
 #[cfg(test)]
 mod tests {
-    use crate::string::common::test::test_function;
-    use crate::string::octet_length::OctetLengthFunc;
+    use std::sync::Arc;
+
     use arrow::array::{Array, Int32Array, StringArray};
     use arrow::datatypes::DataType::Int32;
+
     use datafusion_common::ScalarValue;
     use datafusion_common::{exec_err, Result};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-    use std::sync::Arc;
+
+    use crate::string::octet_length::OctetLengthFunc;
+    use crate::utils::test::test_function;
 
     #[test]
     fn test_functions() -> Result<()> {

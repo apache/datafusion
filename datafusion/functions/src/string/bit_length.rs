@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::kernels::length::bit_length;
 use std::any::Any;
 
+use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::string::common::*;
+use crate::utils::utf8_to_int_type;
 
 #[derive(Debug)]
 pub(super) struct BitLengthFunc {

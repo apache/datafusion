@@ -262,6 +262,10 @@ impl DisplayAs for SortMergeJoinExec {
 }
 
 impl ExecutionPlan for SortMergeJoinExec {
+    fn name(&self) -> &'static str {
+        "SortMergeJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

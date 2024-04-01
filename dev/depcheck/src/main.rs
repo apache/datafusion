@@ -15,18 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate cargo;
+
+use cargo::CargoResult;
 /// Check for circular dependencies between DataFusion crates
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
 use cargo::util::config::Config;
-#[test]
-fn test_deps() -> Result<(), Box<dyn std::error::Error>> {
+
+/// Verifies that there are no circular dependencies between DataFusion crates
+/// (which prevents publishing on crates.io) by parsing the Cargo.toml files and
+/// checking the dependency graph.
+///
+/// See https://github.com/apache/arrow-datafusion/issues/9278 for more details
+fn main() -> CargoResult<()> {
     let config = Config::default()?;
+    // This is the path for the depcheck binary
     let path = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let dir = Path::new(&path);
-    let root_cargo_toml = dir.join("Cargo.toml");
+    let root_cargo_toml = Path::new(&path)
+        // dev directory
+        .parent()
+        .expect("Can not find dev directory")
+        // project root directory
+        .parent()
+        .expect("Can not find project root directory")
+        .join("Cargo.toml");
+
+    println!(
+        "Checking for circular dependencies in {}",
+        root_cargo_toml.display()
+    );
     let workspace = cargo::core::Workspace::new(&root_cargo_toml, &config)?;
     let (_, resolve) = cargo::ops::resolve_ws(&workspace)?;
 
@@ -50,7 +70,7 @@ fn test_deps() -> Result<(), Box<dyn std::error::Error>> {
             check_circular_deps(root_package, dep, &package_deps, &mut seen);
         }
     }
-
+    println!("No circular dependencies found");
     Ok(())
 }
 
