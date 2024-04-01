@@ -176,7 +176,14 @@ impl Unparser<'_> {
             }) => {
                 not_impl_err!("Unsupported expression: {expr:?}")
             }
-            Expr::Like(Like {
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive: _,
+            })
+            | Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
@@ -263,16 +270,29 @@ impl Unparser<'_> {
             Expr::IsTrue(expr) => {
                 Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
             }
+            Expr::IsNotTrue(expr) => {
+                Ok(ast::Expr::IsNotTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsFalse(expr) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
             }
+            Expr::IsNotUnknown(expr) => {
+                Ok(ast::Expr::IsNotUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::Not(expr) => {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Not,
+                    expr: Box::new(sql_parser_expr),
+                })
+            }
+            Expr::Negative(expr) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(AstExpr::UnaryOp {
+                    op: UnaryOperator::Minus,
                     expr: Box::new(sql_parser_expr),
                 })
             }
@@ -729,6 +749,16 @@ mod tests {
                 r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
+                Expr::SimilarTo(Like {
+                    negated: false,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
                 r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
             ),
@@ -784,6 +814,10 @@ mod tests {
                 r#"(("a" + "b") > 4) IS TRUE"#,
             ),
             (
+                (col("a") + col("b")).gt(lit(4)).is_not_true(),
+                r#"(("a" + "b") > 4) IS NOT TRUE"#,
+            ),
+            (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
                 r#"(("a" + "b") > 4) IS FALSE"#,
             ),
@@ -791,11 +825,16 @@ mod tests {
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
+                r#"(("a" + "b") > 4) IS NOT UNKNOWN"#,
+            ),
             (not(col("a")), r#"NOT "a""#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
                 r#"("a" BETWEEN 1 AND 7)"#,
             ),
+            (Expr::Negative(Box::new(col("a"))), r#"-"a""#),
         ];
 
         for (expr, expected) in tests {
