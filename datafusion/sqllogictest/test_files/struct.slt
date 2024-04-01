@@ -85,10 +85,10 @@ query TT
 explain select struct(a, b, c) from values;
 ----
 logical_plan
-Projection: named_struct(Utf8("c0"), values.a, Utf8("c1"), values.b, Utf8("c2"), values.c)
+Projection: struct(values.a, values.b, values.c)
 --TableScan: values projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[named_struct(c0, a@0, c1, b@1, c2, c@2) as named_struct(Utf8("c0"),values.a,Utf8("c1"),values.b,Utf8("c2"),values.c)]
+ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
