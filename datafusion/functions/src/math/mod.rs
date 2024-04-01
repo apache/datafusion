@@ -18,13 +18,11 @@
 //! "math" DataFusion functions
 
 mod abs;
-mod atan2;
 mod nans;
 
 // Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
-make_udf_function!(atan2::Atan2, ATAN2, atan2);
 
 make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
 make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
@@ -39,6 +37,7 @@ make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
 make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh, Some(vec![Some(true)]));
 make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh, Some(vec![Some(true)]));
 make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
+make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
