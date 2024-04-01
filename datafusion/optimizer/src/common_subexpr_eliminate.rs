@@ -38,15 +38,10 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::{col, Expr, ExprSchemable};
 
 /// A map from expression's identifier to tuple including
-///
-/// key == Identifier created with only the current node (& subtree)
-///
-/// values:
 /// - the expression itself (cloned)
 /// - counter
 /// - DataType of this expression.
-/// - symbol used as the identifier in the alias
-type ExprSet = HashMap<Identifier, (Expr, usize, DataType, Identifier)>;
+type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 
 /// Identifier for each subexpression.
 ///
@@ -283,9 +278,9 @@ impl CommonSubexprEliminate {
 
             for id in affected_id {
                 match expr_set.get(&id) {
-                    Some((expr, _, _, symbol)) => {
+                    Some((expr, _, _)) => {
                         // todo: check `nullable`
-                        agg_exprs.push(expr.clone().alias(symbol.as_str()));
+                        agg_exprs.push(expr.clone().alias(&id));
                     }
                     _ => {
                         return internal_err!("expr_set invalid state");
@@ -460,11 +455,11 @@ fn build_common_expr_project_plan(
 
     for id in affected_id {
         match expr_set.get(&id) {
-            Some((expr, _, data_type, symbol)) => {
+            Some((expr, _, data_type)) => {
                 // todo: check `nullable`
                 let field = DFField::new_unqualified(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
-                project_exprs.push(expr.clone().alias(symbol.as_str()));
+                project_exprs.push(expr.clone().alias(&id));
             }
             _ => {
                 return internal_err!("expr_set invalid state");
@@ -655,16 +650,16 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
                 .push(VisitRecord::ExprItem(curr_expr_identifier));
             return Ok(TreeNodeRecursion::Continue);
         }
-        let curr_expr_identifier = Self::expr_identifier(expr);
-        let desc = format!("{curr_expr_identifier}{sub_expr_identifier}");
+        let mut desc = Self::expr_identifier(expr);
+        desc.push_str(&sub_expr_identifier);
 
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
 
         let data_type = expr.get_type(&self.input_schema)?;
 
         self.expr_set
-            .entry(curr_expr_identifier)
-            .or_insert_with(|| (expr.clone(), 0, data_type, desc))
+            .entry(desc)
+            .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
         Ok(TreeNodeRecursion::Continue)
     }
@@ -718,7 +713,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
         // lookup previously visited expression
         match self.expr_set.get(curr_id) {
-            Some((_, counter, _, symbol)) => {
+            Some((_, counter, _)) => {
                 // if has a commonly used (a.k.a. 1+ use) expr
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
@@ -728,7 +723,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     // `projection_push_down` optimizer use "expr name" to eliminate useless
                     // projections.
                     Ok(Transformed::new(
-                        col(symbol).alias(expr_name),
+                        col(curr_id).alias(expr_name),
                         true,
                         TreeNodeRecursion::Jump,
                     ))
@@ -1031,24 +1026,18 @@ mod test {
         let expr_set_1 = [
             (
                 "c+a".to_string(),
-                (col("c") + col("a"), 1, DataType::UInt32, "c+a".to_string()),
+                (col("c") + col("a"), 1, DataType::UInt32),
             ),
             (
                 "b+a".to_string(),
-                (col("b") + col("a"), 1, DataType::UInt32, "b+a".to_string()),
+                (col("b") + col("a"), 1, DataType::UInt32),
             ),
         ]
         .into_iter()
         .collect();
         let expr_set_2 = [
-            (
-                "c+a".to_string(),
-                (col("c+a"), 1, DataType::UInt32, "c+a".to_string()),
-            ),
-            (
-                "b+a".to_string(),
-                (col("b+a"), 1, DataType::UInt32, "b+a".to_string()),
-            ),
+            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
+            ("b+a".to_string(), (col("b+a"), 1, DataType::UInt32)),
         ]
         .into_iter()
         .collect();
@@ -1080,21 +1069,11 @@ mod test {
         let expr_set_1 = [
             (
                 "test1.c+test1.a".to_string(),
-                (
-                    col("test1.c") + col("test1.a"),
-                    1,
-                    DataType::UInt32,
-                    "test1.c+test1.a".to_string(),
-                ),
+                (col("test1.c") + col("test1.a"), 1, DataType::UInt32),
             ),
             (
                 "test1.b+test1.a".to_string(),
-                (
-                    col("test1.b") + col("test1.a"),
-                    1,
-                    DataType::UInt32,
-                    "test1.b+test1.a".to_string(),
-                ),
+                (col("test1.b") + col("test1.a"), 1, DataType::UInt32),
             ),
         ]
         .into_iter()
@@ -1102,21 +1081,11 @@ mod test {
         let expr_set_2 = [
             (
                 "test1.c+test1.a".to_string(),
-                (
-                    col("test1.c+test1.a"),
-                    1,
-                    DataType::UInt32,
-                    "test1.c+test1.a".to_string(),
-                ),
+                (col("test1.c+test1.a"), 1, DataType::UInt32),
             ),
             (
                 "test1.b+test1.a".to_string(),
-                (
-                    col("test1.b+test1.a"),
-                    1,
-                    DataType::UInt32,
-                    "test1.b+test1.a".to_string(),
-                ),
+                (col("test1.b+test1.a"), 1, DataType::UInt32),
             ),
         ]
         .into_iter()
