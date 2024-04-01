@@ -199,7 +199,7 @@ impl DFSchema {
     }
 
     /// Check if the schema have some fields with the same name
-    fn check_names(&self) -> Result<()> {
+    pub fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
         let mut unqualified_names = BTreeSet::new();
 
