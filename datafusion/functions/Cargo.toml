@@ -107,3 +107,8 @@ required-features = ["datetime_expressions"]
 harness = false
 name = "to_char"
 required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "substr_index"
+required-features = ["unicode_expressions"]
