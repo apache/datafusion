@@ -225,7 +225,7 @@ where
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
-/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator};
+/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::AccumulatorArgs};
 /// # use arrow::datatypes::Schema;
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
@@ -252,7 +252,7 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _arg: &DataType, _sort_exprs: &[Expr], _schema: &Schema, _ignore_nulls: bool, _requirement_satisfied: bool) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
 ///        Ok(vec![DataType::Float64, DataType::UInt32])
 ///    }
