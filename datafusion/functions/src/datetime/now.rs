@@ -30,6 +30,12 @@ pub struct NowFunc {
     signature: Signature,
 }
 
+impl Default for NowFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NowFunc {
     pub fn new() -> Self {
         Self {

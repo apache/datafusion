@@ -35,6 +35,12 @@ use std::sync::Arc;
 pub struct RegexpLikeFunc {
     signature: Signature,
 }
+impl Default for RegexpLikeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RegexpLikeFunc {
     pub fn new() -> Self {
         use DataType::*;

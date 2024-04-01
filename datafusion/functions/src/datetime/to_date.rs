@@ -30,6 +30,12 @@ pub struct ToDateFunc {
     signature: Signature,
 }
 
+impl Default for ToDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToDateFunc {
     pub fn new() -> Self {
         Self {

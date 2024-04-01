@@ -59,6 +59,12 @@ pub struct ArrayHas {
     aliases: Vec<String>,
 }
 
+impl Default for ArrayHas {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayHas {
     pub fn new() -> Self {
         Self {
@@ -126,6 +132,12 @@ pub struct ArrayHasAll {
     aliases: Vec<String>,
 }
 
+impl Default for ArrayHasAll {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayHasAll {
     pub fn new() -> Self {
         Self {
@@ -181,6 +193,12 @@ impl ScalarUDFImpl for ArrayHasAll {
 pub struct ArrayHasAny {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHasAny {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHasAny {

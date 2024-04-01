@@ -50,6 +50,12 @@ static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
     DataType::LargeUtf8,
 ];
 
+impl Default for NullIfFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {

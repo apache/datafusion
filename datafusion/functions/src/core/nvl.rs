@@ -47,6 +47,12 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::LargeUtf8,
 ];
 
+impl Default for NVLFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NVLFunc {
     pub fn new() -> Self {
         Self {

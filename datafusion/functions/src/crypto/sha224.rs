@@ -26,6 +26,12 @@ use std::any::Any;
 pub struct SHA224Func {
     signature: Signature,
 }
+impl Default for SHA224Func {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SHA224Func {
     pub fn new() -> Self {
         use DataType::*;

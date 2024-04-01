@@ -40,6 +40,12 @@ pub struct ToCharFunc {
     aliases: Vec<String>,
 }
 
+impl Default for ToCharFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToCharFunc {
     pub fn new() -> Self {
         Self {

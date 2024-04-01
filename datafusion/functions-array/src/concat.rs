@@ -50,6 +50,12 @@ pub struct ArrayAppend {
     aliases: Vec<String>,
 }
 
+impl Default for ArrayAppend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayAppend {
     pub fn new() -> Self {
         Self {
@@ -104,6 +110,12 @@ pub struct ArrayPrepend {
     aliases: Vec<String>,
 }
 
+impl Default for ArrayPrepend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
@@ -155,6 +167,12 @@ make_udf_function!(
 pub struct ArrayConcat {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayConcat {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayConcat {

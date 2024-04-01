@@ -58,6 +58,12 @@ pub struct StructFunc {
     signature: Signature,
 }
 
+impl Default for StructFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StructFunc {
     pub fn new() -> Self {
         Self {

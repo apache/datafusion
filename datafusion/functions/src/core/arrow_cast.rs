@@ -55,6 +55,12 @@ pub struct ArrowCastFunc {
     signature: Signature,
 }
 
+impl Default for ArrowCastFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrowCastFunc {
     pub fn new() -> Self {
         Self {

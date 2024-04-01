@@ -30,6 +30,12 @@ pub struct ToUnixtimeFunc {
     signature: Signature,
 }
 
+impl Default for ToUnixtimeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToUnixtimeFunc {
     pub fn new() -> Self {
         Self {

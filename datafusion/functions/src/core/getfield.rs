@@ -29,6 +29,12 @@ pub struct GetFieldFunc {
     signature: Signature,
 }
 
+impl Default for GetFieldFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GetFieldFunc {
     pub fn new() -> Self {
         Self {

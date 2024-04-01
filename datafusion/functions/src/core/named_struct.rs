@@ -78,6 +78,12 @@ pub struct NamedStructFunc {
     signature: Signature,
 }
 
+impl Default for NamedStructFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NamedStructFunc {
     pub fn new() -> Self {
         Self {

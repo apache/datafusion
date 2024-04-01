@@ -34,6 +34,12 @@ pub struct MakeDateFunc {
     signature: Signature,
 }
 
+impl Default for MakeDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MakeDateFunc {
     pub fn new() -> Self {
         Self {

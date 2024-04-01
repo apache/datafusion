@@ -44,6 +44,12 @@ pub struct DateBinFunc {
     signature: Signature,
 }
 
+impl Default for DateBinFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DateBinFunc {
     pub fn new() -> Self {
         let base_sig = |array_type: TimeUnit| {

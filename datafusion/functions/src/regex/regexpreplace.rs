@@ -41,6 +41,12 @@ use std::sync::OnceLock;
 pub struct RegexpReplaceFunc {
     signature: Signature,
 }
+impl Default for RegexpReplaceFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
         use DataType::*;

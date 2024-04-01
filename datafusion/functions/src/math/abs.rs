@@ -108,6 +108,12 @@ pub struct AbsFunc {
     signature: Signature,
 }
 
+impl Default for AbsFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AbsFunc {
     pub fn new() -> Self {
         Self {

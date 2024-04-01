@@ -36,6 +36,12 @@ use std::sync::Arc;
 pub struct RegexpMatchFunc {
     signature: Signature,
 }
+impl Default for RegexpMatchFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RegexpMatchFunc {
     pub fn new() -> Self {
         use DataType::*;

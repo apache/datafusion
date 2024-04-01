@@ -54,11 +54,23 @@ pub struct ToTimestampNanosFunc {
     signature: Signature,
 }
 
+impl Default for ToTimestampFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToTimestampFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for ToTimestampSecondsFunc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -70,6 +82,12 @@ impl ToTimestampSecondsFunc {
     }
 }
 
+impl Default for ToTimestampMillisFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToTimestampMillisFunc {
     pub fn new() -> Self {
         Self {
@@ -78,11 +96,23 @@ impl ToTimestampMillisFunc {
     }
 }
 
+impl Default for ToTimestampMicrosFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToTimestampMicrosFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for ToTimestampNanosFunc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

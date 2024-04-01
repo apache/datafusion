@@ -31,6 +31,12 @@ pub struct CurrentDateFunc {
     aliases: Vec<String>,
 }
 
+impl Default for CurrentDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CurrentDateFunc {
     pub fn new() -> Self {
         Self {

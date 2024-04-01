@@ -50,6 +50,12 @@ pub struct DateTruncFunc {
     aliases: Vec<String>,
 }
 
+impl Default for DateTruncFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DateTruncFunc {
     pub fn new() -> Self {
         Self {

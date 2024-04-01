@@ -26,6 +26,12 @@ use std::any::Any;
 pub struct Md5Func {
     signature: Signature,
 }
+impl Default for Md5Func {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Md5Func {
     pub fn new() -> Self {
         use DataType::*;

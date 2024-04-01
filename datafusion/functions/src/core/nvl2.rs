@@ -27,6 +27,12 @@ pub struct NVL2Func {
     signature: Signature,
 }
 
+impl Default for NVL2Func {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NVL2Func {
     pub fn new() -> Self {
         Self {

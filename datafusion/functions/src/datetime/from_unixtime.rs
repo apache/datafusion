@@ -29,6 +29,12 @@ pub struct FromUnixtimeFunc {
     signature: Signature,
 }
 
+impl Default for FromUnixtimeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FromUnixtimeFunc {
     pub fn new() -> Self {
         Self {

@@ -32,6 +32,12 @@ pub struct IsNanFunc {
     signature: Signature,
 }
 
+impl Default for IsNanFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IsNanFunc {
     pub fn new() -> Self {
         use DataType::*;

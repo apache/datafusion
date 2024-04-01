@@ -26,6 +26,12 @@ pub struct ArrowTypeOfFunc {
     signature: Signature,
 }
 
+impl Default for ArrowTypeOfFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrowTypeOfFunc {
     pub fn new() -> Self {
         Self {

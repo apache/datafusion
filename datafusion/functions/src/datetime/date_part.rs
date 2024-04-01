@@ -44,6 +44,12 @@ pub struct DatePartFunc {
     aliases: Vec<String>,
 }
 
+impl Default for DatePartFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DatePartFunc {
     pub fn new() -> Self {
         Self {

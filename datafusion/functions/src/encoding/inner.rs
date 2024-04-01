@@ -41,6 +41,12 @@ pub struct EncodeFunc {
     signature: Signature,
 }
 
+impl Default for EncodeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EncodeFunc {
     pub fn new() -> Self {
         use DataType::*;
@@ -93,6 +99,12 @@ impl ScalarUDFImpl for EncodeFunc {
 #[derive(Debug)]
 pub struct DecodeFunc {
     signature: Signature,
+}
+
+impl Default for DecodeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DecodeFunc {

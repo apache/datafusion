@@ -30,6 +30,12 @@ pub struct CurrentTimeFunc {
     signature: Signature,
 }
 
+impl Default for CurrentTimeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CurrentTimeFunc {
     pub fn new() -> Self {
         Self {
