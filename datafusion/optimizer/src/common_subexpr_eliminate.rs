@@ -43,6 +43,32 @@ use datafusion_expr::{col, Expr, ExprSchemable};
 /// - DataType of this expression.
 type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 
+/// An ordered map of Identifiers assigned by `ExprIdentifierVisitor` in an
+/// initial expression  walk.
+///
+/// Used by `CommonSubexprRewriter`, which rewrites the expressions to remove
+/// common subexpressions.
+///
+/// Elements in this array are created on the walk down the expression tree
+/// during `f_down`. Thus element 0 is the root of the expression tree. The
+/// tuple contains:
+/// - series_number.
+///     - Incremented during `f_up`, start from 1.
+///     - Thus, items with higher idx have the lower series_number.
+/// - [`Identifier`]
+///     - Identifier of the expression. If empty (`""`), expr should not be considered for common elimination.
+///
+/// # Example
+/// An expression like `(a + b)` would have the following `IdArray`:
+/// ```text
+/// [
+///   (3, "a + b"),
+///   (2, "a"),
+///   (1, "b")
+/// ]
+/// ```
+type IdArray = Vec<(usize, Identifier)>;
+
 /// Identifier for each subexpression.
 ///
 /// Note that the current implementation uses the `Display` of an expression
@@ -66,16 +92,21 @@ impl CommonSubexprEliminate {
     fn rewrite_exprs_list(
         &self,
         exprs_list: &[&[Expr]],
+        arrays_list: &[&[Vec<(usize, String)>]],
         expr_set: &ExprSet,
         affected_id: &mut BTreeSet<Identifier>,
     ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
             .iter()
-            .map(|exprs| {
+            .zip(arrays_list.iter())
+            .map(|(exprs, arrays)| {
                 exprs
                     .iter()
                     .cloned()
-                    .map(|expr| replace_common_expr(expr, expr_set, affected_id))
+                    .zip(arrays.iter())
+                    .map(|(expr, id_array)| {
+                        replace_common_expr(expr, id_array, expr_set, affected_id)
+                    })
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()
@@ -84,6 +115,7 @@ impl CommonSubexprEliminate {
     fn rewrite_expr(
         &self,
         exprs_list: &[&[Expr]],
+        arrays_list: &[&[Vec<(usize, String)>]],
         input: &LogicalPlan,
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
@@ -91,7 +123,7 @@ impl CommonSubexprEliminate {
         let mut affected_id = BTreeSet::<Identifier>::new();
 
         let rewrite_exprs =
-            self.rewrite_exprs_list(exprs_list, expr_set, &mut affected_id)?;
+            self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
 
         let mut new_input = self
             .try_optimize(input, config)?
@@ -113,10 +145,10 @@ impl CommonSubexprEliminate {
         let mut expr_set = ExprSet::new();
 
         // Visit expr list and build expr identifier to occuring count map (`expr_set`).
-        populate_expr_set(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[expr], input, &expr_set, config)?;
+            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
         // Since projection expr changes, schema changes also. Use try_new method.
         Projection::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))
@@ -131,13 +163,22 @@ impl CommonSubexprEliminate {
         let mut expr_set = ExprSet::new();
         let predicate = &filter.predicate;
         let input_schema = Arc::clone(filter.input.schema());
+        let mut id_array = vec![];
+        expr_to_identifier(
+            predicate,
+            &mut expr_set,
+            &mut id_array,
+            input_schema,
+            ExprMask::Normal,
+        )?;
 
-        // populate expr_set
-        expr_to_identifier(predicate, &mut expr_set, input_schema, ExprMask::Normal)?;
-
-        // rewrite
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[&[predicate.clone()]], &filter.input, &expr_set, config)?;
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &[&[predicate.clone()]],
+            &[&[id_array]],
+            &filter.input,
+            &expr_set,
+            config,
+        )?;
 
         if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
             Ok(LogicalPlan::Filter(Filter::try_new(
@@ -155,6 +196,7 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let mut window_exprs = vec![];
+        let mut arrays_per_window = vec![];
         let mut expr_set = ExprSet::new();
 
         // Get all window expressions inside the consecutive window operators.
@@ -174,23 +216,30 @@ impl CommonSubexprEliminate {
             plan = input.as_ref().clone();
 
             let input_schema = Arc::clone(input.schema());
-            populate_expr_set(
-                &window_expr,
-                input_schema,
-                &mut expr_set,
-                ExprMask::Normal,
-            )?;
+            let arrays =
+                to_arrays(&window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
             window_exprs.push(window_expr);
+            arrays_per_window.push(arrays);
         }
 
         let mut window_exprs = window_exprs
             .iter()
             .map(|expr| expr.as_slice())
             .collect::<Vec<_>>();
+        let arrays_per_window = arrays_per_window
+            .iter()
+            .map(|arrays| arrays.as_slice())
+            .collect::<Vec<_>>();
 
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&window_exprs, &plan, &expr_set, config)?;
+        assert_eq!(window_exprs.len(), arrays_per_window.len());
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &window_exprs,
+            &arrays_per_window,
+            &plan,
+            &expr_set,
+            config,
+        )?;
         assert_eq!(window_exprs.len(), new_expr.len());
 
         // Construct consecutive window operator, with their corresponding new window expressions.
@@ -229,19 +278,24 @@ impl CommonSubexprEliminate {
         } = aggregate;
         let mut expr_set = ExprSet::new();
 
-        // build expr_set, with groupby and aggr
+        // rewrite inputs
         let input_schema = Arc::clone(input.schema());
-        populate_expr_set(
+        let group_arrays = to_arrays(
             group_expr,
             Arc::clone(&input_schema),
             &mut expr_set,
             ExprMask::Normal,
         )?;
-        populate_expr_set(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        let aggr_arrays =
+            to_arrays(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
-        // rewrite inputs
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[group_expr, aggr_expr], input, &expr_set, config)?;
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &[group_expr, aggr_expr],
+            &[&group_arrays, &aggr_arrays],
+            input,
+            &expr_set,
+            config,
+        )?;
         // note the reversed pop order.
         let new_aggr_expr = pop_expr(&mut new_expr)?;
         let new_group_expr = pop_expr(&mut new_expr)?;
@@ -249,16 +303,19 @@ impl CommonSubexprEliminate {
         // create potential projection on top
         let mut expr_set = ExprSet::new();
         let new_input_schema = Arc::clone(new_input.schema());
-        populate_expr_set(
+        let aggr_arrays = to_arrays(
             &new_aggr_expr,
             new_input_schema.clone(),
             &mut expr_set,
             ExprMask::NormalAndAggregates,
         )?;
-
         let mut affected_id = BTreeSet::<Identifier>::new();
-        let mut rewritten =
-            self.rewrite_exprs_list(&[&new_aggr_expr], &expr_set, &mut affected_id)?;
+        let mut rewritten = self.rewrite_exprs_list(
+            &[&new_aggr_expr],
+            &[&aggr_arrays],
+            &expr_set,
+            &mut affected_id,
+        )?;
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
@@ -334,10 +391,10 @@ impl CommonSubexprEliminate {
         let mut expr_set = ExprSet::new();
 
         let input_schema = Arc::clone(input.schema());
-        populate_expr_set(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[expr], input, &expr_set, config)?;
+            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
         Ok(LogicalPlan::Sort(Sort {
             expr: pop_expr(&mut new_expr)?,
@@ -431,17 +488,26 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
         .ok_or_else(|| DataFusionError::Internal("Failed to pop expression".to_string()))
 }
 
-fn populate_expr_set(
+fn to_arrays(
     expr: &[Expr],
     input_schema: DFSchemaRef,
     expr_set: &mut ExprSet,
     expr_mask: ExprMask,
-) -> Result<()> {
-    expr.iter().try_for_each(|e| {
-        expr_to_identifier(e, expr_set, Arc::clone(&input_schema), expr_mask)?;
+) -> Result<Vec<Vec<(usize, String)>>> {
+    expr.iter()
+        .map(|e| {
+            let mut id_array = vec![];
+            expr_to_identifier(
+                e,
+                expr_set,
+                &mut id_array,
+                Arc::clone(&input_schema),
+                expr_mask,
+            )?;
 
-        Ok(())
-    })
+            Ok(id_array)
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
@@ -575,6 +641,8 @@ impl ExprMask {
 struct ExprIdentifierVisitor<'a> {
     // param
     expr_set: &'a mut ExprSet,
+    /// series number (usize) and identifier.
+    id_array: &'a mut IdArray,
     /// input schema for the node that we're optimizing, so we can determine the correct datatype
     /// for each subexpression
     input_schema: DFSchemaRef,
@@ -582,6 +650,8 @@ struct ExprIdentifierVisitor<'a> {
     visit_stack: Vec<VisitRecord>,
     /// increased in fn_down, start from 0.
     node_count: usize,
+    /// increased in fn_up, start from 1.
+    series_number: usize,
     /// which expression should be skipped?
     expr_mask: ExprMask,
 }
@@ -625,6 +695,9 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
+        // put placeholder, sets the proper array length
+        self.id_array.push((0, "".to_string()));
+
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         if expr.short_circuits() || is_volatile_expression(expr)? {
@@ -641,18 +714,22 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
-        let (_idx, sub_expr_identifier) = self.pop_enter_mark();
+        self.series_number += 1;
+
+        let (idx, sub_expr_identifier) = self.pop_enter_mark();
 
         // skip exprs should not be recognize.
         if self.expr_mask.ignores(expr) {
             let curr_expr_identifier = Self::expr_identifier(expr);
             self.visit_stack
                 .push(VisitRecord::ExprItem(curr_expr_identifier));
+            self.id_array[idx].0 = self.series_number; // leave Identifer as empty "", since will not use as common expr
             return Ok(TreeNodeRecursion::Continue);
         }
         let mut desc = Self::expr_identifier(expr);
         desc.push_str(&sub_expr_identifier);
 
+        self.id_array[idx] = (self.series_number, desc.clone());
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
 
         let data_type = expr.get_type(&self.input_schema)?;
@@ -669,14 +746,17 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 fn expr_to_identifier(
     expr: &Expr,
     expr_set: &mut ExprSet,
+    id_array: &mut Vec<(usize, Identifier)>,
     input_schema: DFSchemaRef,
     expr_mask: ExprMask,
 ) -> Result<()> {
     expr.visit(&mut ExprIdentifierVisitor {
         expr_set,
+        id_array,
         input_schema,
         visit_stack: vec![],
         node_count: 0,
+        series_number: 0,
         expr_mask,
     })?;
 
@@ -688,14 +768,16 @@ fn expr_to_identifier(
 /// evaluate result of replaced expression.
 struct CommonSubexprRewriter<'a> {
     expr_set: &'a ExprSet,
+    id_array: &'a IdArray,
     /// Which identifier is replaced.
     affected_id: &'a mut BTreeSet<Identifier>,
-}
 
-impl CommonSubexprRewriter<'_> {
-    fn expr_identifier(expr: &Expr) -> Identifier {
-        format!("{expr}")
-    }
+    /// the max series number we have rewritten. Other expression nodes
+    /// with smaller series number is already replaced and shouldn't
+    /// do anything with them.
+    max_series_number: usize,
+    /// current node's information's index in `id_array`.
+    curr_index: usize,
 }
 
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
@@ -709,7 +791,20 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
-        let curr_id = &Self::expr_identifier(&expr);
+        let (series_number, curr_id) = &self.id_array[self.curr_index];
+
+        // halting conditions
+        if self.curr_index >= self.id_array.len()
+            || self.max_series_number > *series_number
+        {
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
+        }
+
+        // skip `Expr`s without identifier (empty identifier).
+        if curr_id.is_empty() {
+            self.curr_index += 1; // incr idx for id_array, when not jumping
+            return Ok(Transformed::no(expr));
+        }
 
         // lookup previously visited expression
         match self.expr_set.get(curr_id) {
@@ -717,6 +812,27 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                 // if has a commonly used (a.k.a. 1+ use) expr
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
+
+                    // This expr tree is finished.
+                    if self.curr_index >= self.id_array.len() {
+                        return Ok(Transformed::new(
+                            expr,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
+
+                    // incr idx for id_array, when not jumping
+                    self.curr_index += 1;
+
+                    // series_number was the inverse number ordering (when doing f_up)
+                    self.max_series_number = *series_number;
+                    // step index to skip all sub-node (which has smaller series number).
+                    while self.curr_index < self.id_array.len()
+                        && *series_number > self.id_array[self.curr_index].0
+                    {
+                        self.curr_index += 1;
+                    }
 
                     let expr_name = expr.display_name()?;
                     // Alias this `Column` expr to it original "expr name",
@@ -728,22 +844,27 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                         TreeNodeRecursion::Jump,
                     ))
                 } else {
+                    self.curr_index += 1;
                     Ok(Transformed::no(expr))
                 }
             }
-            None => Ok(Transformed::no(expr)),
+            _ => internal_err!("expr_set invalid state"),
         }
     }
 }
 
 fn replace_common_expr(
     expr: Expr,
+    id_array: &IdArray,
     expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
+        id_array,
         affected_id,
+        max_series_number: 0,
+        curr_index: 0,
     })
     .data()
 }
@@ -777,6 +898,73 @@ mod test {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(expected, formatted_plan);
+    }
+
+    #[test]
+    fn id_array_visitor() -> Result<()> {
+        let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
+
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int64, false),
+                DFField::new_unqualified("c", DataType::Int64, false),
+            ],
+            Default::default(),
+        )?);
+
+        // skip aggregates
+        let mut id_array = vec![];
+        expr_to_identifier(
+            &expr,
+            &mut HashMap::new(),
+            &mut id_array,
+            Arc::clone(&schema),
+            ExprMask::Normal,
+        )?;
+
+        let expected = vec![
+            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (4, ""),
+            (3, "a + Int32(1)Int32(1)a"),
+            (1, ""),
+            (2, ""),
+            (6, ""),
+            (5, ""),
+            (8, "")
+        ]
+        .into_iter()
+        .map(|(number, id)| (number, id.into()))
+        .collect::<Vec<_>>();
+        assert_eq!(expected, id_array);
+
+        // include aggregates
+        let mut id_array = vec![];
+        expr_to_identifier(
+            &expr,
+            &mut HashMap::new(),
+            &mut id_array,
+            Arc::clone(&schema),
+            ExprMask::NormalAndAggregates,
+        )?;
+
+        let expected = vec![
+            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (4, "SUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (3, "a + Int32(1)Int32(1)a"),
+            (1, ""),
+            (2, ""),
+            (6, "AVG(c)c"),
+            (5, ""),
+            (8, "")
+        ]
+        .into_iter()
+        .map(|(number, id)| (number, id.into()))
+        .collect::<Vec<_>>();
+        assert_eq!(expected, id_array);
+
+        Ok(())
     }
 
     #[test]
