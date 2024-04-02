@@ -27,7 +27,7 @@ use crate::string::common::handle;
 use crate::utils::utf8_to_str_type;
 
 #[derive(Debug)]
-pub(super) struct LowerFunc {
+pub struct LowerFunc {
     signature: Signature,
 }
 

@@ -40,7 +40,7 @@ pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct StartsWithFunc {
+pub struct StartsWithFunc {
     signature: Signature,
 }
 impl StartsWithFunc {

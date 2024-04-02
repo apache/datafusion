@@ -22,8 +22,14 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct ArrowTypeOfFunc {
+pub struct ArrowTypeOfFunc {
     signature: Signature,
+}
+
+impl Default for ArrowTypeOfFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrowTypeOfFunc {

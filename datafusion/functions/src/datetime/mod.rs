@@ -21,19 +21,19 @@ use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
 
-mod common;
-mod current_date;
-mod current_time;
-mod date_bin;
-mod date_part;
-mod date_trunc;
-mod from_unixtime;
-mod make_date;
-mod now;
-mod to_char;
-mod to_date;
-mod to_timestamp;
-mod to_unixtime;
+pub mod common;
+pub mod current_date;
+pub mod current_time;
+pub mod date_bin;
+pub mod date_part;
+pub mod date_trunc;
+pub mod from_unixtime;
+pub mod make_date;
+pub mod now;
+pub mod to_char;
+pub mod to_date;
+pub mod to_timestamp;
+pub mod to_unixtime;
 
 // create UDFs
 make_udf_function!(current_date::CurrentDateFunc, CURRENT_DATE, current_date);

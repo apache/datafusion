@@ -40,8 +40,14 @@ use datafusion_expr::{
 };
 
 #[derive(Debug)]
-pub(super) struct DateBinFunc {
+pub struct DateBinFunc {
     signature: Signature,
+}
+
+impl Default for DateBinFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DateBinFunc {
