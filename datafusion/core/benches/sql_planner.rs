@@ -26,6 +26,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use std::sync::Arc;
+use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
 use test_utils::TableDef;
 use tokio::runtime::Runtime;
@@ -72,15 +73,19 @@ fn create_context() -> SessionContext {
         .unwrap();
     ctx.register_table("t1000", create_table_provider("d", 1000))
         .unwrap();
+    ctx
+}
 
-    tpch_schemas().iter().for_each(|TableDef { name, schema }| {
+/// Register the table definitions as a MemTable with the context and return the
+/// context
+fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
+    defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![]).unwrap()),
         )
         .unwrap();
     });
-
     ctx
 }
 
@@ -139,6 +144,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    // --- TPC-H ---
+
+    let tpch_ctx = register_defs(SessionContext::new(), tpch_schemas());
+
     let tpch_queries = [
         "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
         "q14", // "q15", q15 has multiple SQL statements which is not supported
@@ -146,25 +155,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     ];
 
     for q in tpch_queries {
-        let sql = std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
-            .unwrap();
+        let sql =
+            std::fs::read_to_string(format!("../../benchmarks/queries/{q}.sql")).unwrap();
         c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
-            b.iter(|| physical_plan(&ctx, &sql))
+            b.iter(|| physical_plan(&tpch_ctx, &sql))
         });
     }
 
     let all_tpch_sql_queries = tpch_queries
         .iter()
         .map(|q| {
-            std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
-                .unwrap()
+            std::fs::read_to_string(format!("../../benchmarks/queries/{q}.sql")).unwrap()
         })
         .collect::<Vec<_>>();
 
     c.bench_function("physical_plan_tpch_all", |b| {
         b.iter(|| {
             for sql in &all_tpch_sql_queries {
-                physical_plan(&ctx, sql)
+                physical_plan(&tpch_ctx, sql)
             }
         })
     });
@@ -172,7 +180,43 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("logical_plan_tpch_all", |b| {
         b.iter(|| {
             for sql in &all_tpch_sql_queries {
-                logical_plan(&ctx, sql)
+                logical_plan(&tpch_ctx, sql)
+            }
+        })
+    });
+
+    // --- TPC-DS ---
+
+    let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
+
+    // 10, 35: Physical plan does not support logical expression Exists(<subquery>)
+    // 45: Physical plan does not support logical expression (<subquery>)
+    // 41: Optimizing disjunctions not supported
+    let ignored = [10, 35, 41, 45];
+
+    let raw_tpcds_sql_queries = (1..100)
+        .filter(|q| !ignored.contains(q))
+        .map(|q| std::fs::read_to_string(format!("./tests/tpc-ds/{q}.sql")).unwrap())
+        .collect::<Vec<_>>();
+
+    // some queries have multiple statements
+    let all_tpcds_sql_queries = raw_tpcds_sql_queries
+        .iter()
+        .flat_map(|sql| sql.split(';').filter(|s| !s.trim().is_empty()))
+        .collect::<Vec<_>>();
+
+    c.bench_function("physical_plan_tpcds_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpcds_sql_queries {
+                physical_plan(&tpcds_ctx, sql)
+            }
+        })
+    });
+
+    c.bench_function("logical_plan_tpcds_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpcds_sql_queries {
+                logical_plan(&tpcds_ctx, sql)
             }
         })
     });
