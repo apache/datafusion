@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
-use arrow::util::pretty::print_batches;
 use arrow_array::{ArrayRef, Int32Array, PrimitiveArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::SessionContext;

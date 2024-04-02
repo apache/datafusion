@@ -251,7 +251,7 @@ impl ExecutionPlan for CrossJoinExec {
             right: stream,
             join_metrics,
             batch_size,
-            results: RecordBatch::new_empty(self.schema().clone()),
+            results: vec![],
             left_batch_index: 0,
             right_row_index: 0,
             state: CrossJoinStreamState::WaitBuildSide,
@@ -330,7 +330,7 @@ struct CrossJoinStream {
     /// Maximum output batch size
     batch_size: usize,
     /// Output buffer
-    results: RecordBatch,
+    results: Vec<RecordBatch>,
     /// State information
     state: CrossJoinStreamState,
     /// Left data
@@ -407,12 +407,14 @@ impl CrossJoinStream {
                     handle_state!(self.result_ready())
                 }
                 CrossJoinStreamState::Completed => {
-                    if self.results.num_rows() == 0 {
+                    if self.results.iter().all(|rb| rb.num_rows() == 0) {
                         Poll::Ready(None)
                     } else {
                         let result = self.results.clone();
-                        self.results = RecordBatch::new_empty(self.schema.clone());
-                        Poll::Ready(Some(Ok(result)))
+                        self.results = vec![];
+                        Poll::Ready(Some(Ok(
+                            concat_batches(&self.schema, &result).unwrap()
+                        )))
                     }
                 }
             };
@@ -492,8 +494,7 @@ impl CrossJoinStream {
             } else {
                 self.left_batch_index + 1
             };
-            self.results =
-                concat_batches(&self.schema, &[self.results.clone(), result_batch])?;
+            self.results.push(result_batch);
             self.state = CrossJoinStreamState::ResultReady;
             Ok(StatefulStreamResult::Continue)
         } else {
@@ -505,14 +506,18 @@ impl CrossJoinStream {
     /// If there is non-paired rows in the probe batch, the function process them.
     /// If not, it directs the state to fetching probe side.
     fn result_ready(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        if self.results.num_rows() >= self.batch_size {
+        let total_rows = self.results.iter().fold(0, |acc, res| acc + res.num_rows());
+        if total_rows >= self.batch_size {
             // Update the metrics.
             self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(self.results.num_rows());
+            self.join_metrics.output_rows.add(total_rows);
 
             let output = self.results.clone();
-            self.results = RecordBatch::new_empty(self.schema().clone());
-            Ok(StatefulStreamResult::Ready(Some(output)))
+            self.results = vec![];
+            self.state = CrossJoinStreamState::GenerateResult;
+            Ok(StatefulStreamResult::Ready(Some(
+                concat_batches(&self.schema, &output).unwrap(),
+            )))
         } else {
             self.state = CrossJoinStreamState::GenerateResult;
             Ok(StatefulStreamResult::Continue)
