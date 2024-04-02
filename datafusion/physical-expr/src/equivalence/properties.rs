@@ -2209,43 +2209,87 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
-        let mut properties = EquivalenceProperties::new(schema.clone())
-            .with_reorder(
-                ["a", "b", "c"]
-                    .into_iter()
-                    .map(|c| {
-                        col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
-                            expr,
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: true,
-                            },
-                        })
+        let base_properties = EquivalenceProperties::new(schema.clone()).with_reorder(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|c| {
+                    col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
+                        expr,
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: true,
+                        },
                     })
-                    .collect::<Result<Vec<_>>>()?,
-            )
-            // b is constant, so it should be removed from the sort order
-            .add_constants(Some(col("b", schema.as_ref())?));
-
-        // If c is a monotonic expression of a, then order by (c, a) is equivalent to order by (a)
-        properties.add_equal_conditions(
-            &(Arc::new(CastExpr::new(
-                col("c", schema.as_ref())?,
-                DataType::Date32,
-                None,
-            )) as Arc<dyn PhysicalExpr>),
-            &col("a", schema.as_ref())?,
+                })
+                .collect::<Result<Vec<_>>>()?,
         );
 
-        let sort = &[PhysicalSortExpr {
-            expr: col("c", schema.as_ref())?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-        }];
+        struct TestCase {
+            name: &'static str,
+            constants: Vec<Arc<dyn PhysicalExpr>>,
+            equal_conditions: Vec<[Arc<dyn PhysicalExpr>; 2]>,
+            sort_columns: &'static [&'static str],
+            should_satisfy_ordering: bool,
+        }
 
-        assert!(properties.ordering_satisfy(sort));
+        let cases = vec![
+            TestCase {
+                name: "(date, ticker, time) -> (time)",
+                // b is constant, so it should be removed from the sort order
+                constants: vec![col("b", schema.as_ref())?],
+                equal_conditions: vec![[
+                    Arc::new(CastExpr::new(
+                        col("c", schema.as_ref())?,
+                        DataType::Date32,
+                        None,
+                    )),
+                    col("a", schema.as_ref())?,
+                ]],
+                sort_columns: &["c"],
+                should_satisfy_ordering: true,
+            },
+            TestCase {
+                name: "not ordered because (ticker) is not constant",
+                // b is not constant anymore
+                constants: vec![],
+                // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
+                equal_conditions: vec![[
+                    Arc::new(CastExpr::new(
+                        col("c", schema.as_ref())?,
+                        DataType::Date32,
+                        None,
+                    )),
+                    col("a", schema.as_ref())?,
+                ]],
+                sort_columns: &["c"],
+                should_satisfy_ordering: false,
+            },
+        ];
+
+        for case in cases {
+            let mut properties = base_properties.clone().add_constants(case.constants);
+            for [left, right] in &case.equal_conditions {
+                properties.add_equal_conditions(left, right)
+            }
+
+            let sort = case
+                .sort_columns
+                .iter()
+                .map(|&name| {
+                    col(name, &schema).map(|col| PhysicalSortExpr {
+                        expr: col,
+                        options: SortOptions::default(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            assert_eq!(
+                properties.ordering_satisfy(&sort),
+                case.should_satisfy_ordering,
+                "failed test '{}'",
+                case.name
+            );
+        }
 
         Ok(())
     }
