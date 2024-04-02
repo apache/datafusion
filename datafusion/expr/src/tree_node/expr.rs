@@ -170,11 +170,10 @@ impl TreeNode for Expr {
             }),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 map_until_stop_and_collect!(
-                    left,
-                    |left| transform_box(left, &mut f),
+                    transform_box(left, &mut f),
                     right,
-                    |right| transform_box(right, &mut f)
-                )
+                    transform_box(right, &mut f)
+                )?
                 .update_data(|(new_left, new_right)| {
                     Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
                 })
@@ -186,11 +185,10 @@ impl TreeNode for Expr {
                 escape_char,
                 case_insensitive,
             }) => map_until_stop_and_collect!(
-                expr,
-                |expr| transform_box(expr, &mut f),
+                transform_box(expr, &mut f),
                 pattern,
-                |pattern| transform_box(pattern, &mut f)
-            )
+                transform_box(pattern, &mut f)
+            )?
             .update_data(|(new_expr, new_pattern)| {
                 Expr::Like(Like::new(
                     negated,
@@ -207,11 +205,10 @@ impl TreeNode for Expr {
                 escape_char,
                 case_insensitive,
             }) => map_until_stop_and_collect!(
-                expr,
-                |expr| transform_box(expr, &mut f),
+                transform_box(expr, &mut f),
                 pattern,
-                |pattern| transform_box(pattern, &mut f)
-            )
+                transform_box(pattern, &mut f)
+            )?
             .update_data(|(new_expr, new_pattern)| {
                 Expr::SimilarTo(Like::new(
                     negated,
@@ -251,13 +248,12 @@ impl TreeNode for Expr {
                 low,
                 high,
             }) => map_until_stop_and_collect!(
-                expr,
-                |expr| transform_box(expr, &mut f),
+                transform_box(expr, &mut f),
                 low,
-                |low| transform_box(low, &mut f),
+                transform_box(low, &mut f),
                 high,
-                |high| transform_box(high, &mut f)
-            )
+                transform_box(high, &mut f)
+            )?
             .update_data(|(new_expr, new_low, new_high)| {
                 Expr::Between(Between::new(new_expr, negated, new_low, new_high))
             }),
@@ -266,22 +262,20 @@ impl TreeNode for Expr {
                 when_then_expr,
                 else_expr,
             }) => map_until_stop_and_collect!(
-                expr,
-                |expr| transform_option_box(expr, &mut f),
+                transform_option_box(expr, &mut f),
                 when_then_expr,
-                |when_then_expr: Vec<(Box<Expr>, Box<Expr>)>| when_then_expr
+                when_then_expr
                     .into_iter()
                     .map_until_stop_and_collect(|(when, then)| {
-                        Ok(map_until_stop_and_collect!(
-                            when,
-                            |when| transform_box(when, &mut f),
+                        map_until_stop_and_collect!(
+                            transform_box(when, &mut f),
                             then,
-                            |then| transform_box(then, &mut f)
-                        ))
+                            transform_box(then, &mut f)
+                        )
                     }),
                 else_expr,
-                |else_expr| transform_option_box(else_expr, &mut f)
-            )
+                transform_option_box(else_expr, &mut f)
+            )?
             .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                 Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
             }),
@@ -316,13 +310,12 @@ impl TreeNode for Expr {
                 window_frame,
                 null_treatment,
             }) => map_until_stop_and_collect!(
-                args,
-                |args| transform_vec(args, &mut f),
+                transform_vec(args, &mut f),
                 partition_by,
-                |partition_by| transform_vec(partition_by, &mut f),
+                transform_vec(partition_by, &mut f),
                 order_by,
-                |order_by| transform_vec(order_by, &mut f)
-            )
+                transform_vec(order_by, &mut f)
+            )?
             .update_data(|(new_args, new_partition_by, new_order_by)| {
                 Expr::WindowFunction(WindowFunction::new(
                     fun,
@@ -341,13 +334,12 @@ impl TreeNode for Expr {
                 order_by,
                 null_treatment,
             }) => map_until_stop_and_collect!(
-                args,
-                |args| transform_vec(args, &mut f),
+                transform_vec(args, &mut f),
                 filter,
-                |filter| transform_option_box(filter, &mut f),
+                transform_option_box(filter, &mut f),
                 order_by,
-                |order_by| transform_option_vec(order_by, &mut f)
-            )
+                transform_option_vec(order_by, &mut f)
+            )?
             .map_data(
                 |(new_args, new_filter, new_order_by)| match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => {
@@ -391,11 +383,10 @@ impl TreeNode for Expr {
                 list,
                 negated,
             }) => map_until_stop_and_collect!(
-                expr,
-                |expr| transform_box(expr, &mut f),
+                transform_box(expr, &mut f),
                 list,
-                |list| transform_vec(list, &mut f)
-            )
+                transform_vec(list, &mut f)
+            )?
             .update_data(|(new_expr, new_list)| {
                 Expr::InList(InList::new(new_expr, new_list, negated))
             }),

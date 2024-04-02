@@ -568,27 +568,28 @@ impl<I: Iterator> TransformedIterator for I {
 
 /// Transformation helper to process sequence of tree node containing expressions.
 /// This macro is very similar to [TransformedIterator::map_until_stop_and_collect] to
-/// process nodes that are siblings, but it accepts a sequence of pairs of an expression
-/// and a transformation.
+/// process nodes that are siblings, but it accepts an initial transformation and a
+/// sequence of pairs of an expression and its transformation.
 #[macro_export]
 macro_rules! map_until_stop_and_collect {
-    ($($EXPR:expr, $F:expr),*) => {{
-        let mut tnr = TreeNodeRecursion::Continue;
-        let mut transformed = false;
-        let data = (
-            $(
-                if tnr == TreeNodeRecursion::Continue || tnr == TreeNodeRecursion::Jump {
-                    $F($EXPR).map(|result| {
-                        tnr = result.tnr;
-                        transformed |= result.transformed;
-                        result.data
-                    })?
-                } else {
-                    $EXPR
-                },
-            )*
-        );
-        Transformed::new(data, transformed, tnr)
+    ($TRANSFORMED_EXPR_0:expr, $($EXPR:expr, $TRANSFORMED_EXPR:expr),*) => {{
+        $TRANSFORMED_EXPR_0.and_then(|Transformed { data: data0, mut transformed, mut tnr }| {
+            let data = (
+                data0,
+                $(
+                    if tnr == TreeNodeRecursion::Continue || tnr == TreeNodeRecursion::Jump {
+                        $TRANSFORMED_EXPR.map(|result| {
+                            tnr = result.tnr;
+                            transformed |= result.transformed;
+                            result.data
+                        })?
+                    } else {
+                        $EXPR
+                    },
+                )*
+            );
+            Ok(Transformed::new(data, transformed, tnr))
+        })
     }}
 }
 
