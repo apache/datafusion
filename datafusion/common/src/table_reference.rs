@@ -131,7 +131,7 @@ impl TableReference {
     /// As described on [`TableReference`] this does *NO* parsing at
     /// all, so "Foo.Bar" stays as a reference to the table named
     /// "Foo.Bar" (rather than "foo"."bar")
-    pub fn bare(table: &str) -> TableReference {
+    pub fn bare(table: impl Into<Arc<str>>) -> TableReference {
         TableReference::Bare {
             table: table.into(),
         }
@@ -140,7 +140,10 @@ impl TableReference {
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
     /// As described on [`TableReference`] this does *NO* parsing at all.
-    pub fn partial(schema: &str, table: &str) -> TableReference {
+    pub fn partial(
+        schema: impl Into<Arc<str>>,
+        table: impl Into<Arc<str>>,
+    ) -> TableReference {
         TableReference::Partial {
             schema: schema.into(),
             table: table.into(),
@@ -150,7 +153,11 @@ impl TableReference {
     /// Convenience method for creating a [`TableReference::Full`]
     ///
     /// As described on [`TableReference`] this does *NO* parsing at all.
-    pub fn full(catalog: &str, schema: &str, table: &str) -> TableReference {
+    pub fn full(
+        catalog: impl Into<Arc<str>>,
+        schema: impl Into<Arc<str>>,
+        table: impl Into<Arc<str>>,
+    ) -> TableReference {
         TableReference::Full {
             catalog: catalog.into(),
             schema: schema.into(),
