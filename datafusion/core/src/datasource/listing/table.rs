@@ -62,7 +62,7 @@ use datafusion_physical_expr::{
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectStore;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -499,7 +499,7 @@ impl ListingOptions {
         // only use 10 files for inference
         // This can fail to detect inconsistent partition keys
         // A DFS traversal approach of the store can help here
-        let files: Vec<ObjectMeta> = table_path
+        let files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
             .take(10)
@@ -514,7 +514,7 @@ impl ListingOptions {
             table_path
                 .strip_prefix(&file.location)
                 .unwrap()
-                .collect::<Vec<_>>()
+                .collect_vec()
         });
 
         let partition_keys = stripped_path_parts
@@ -525,9 +525,9 @@ impl ListingOptions {
                     .skip(1) // get parent only; skip the file itself
                     .rev()
                     .map(|s| s.split('=').take(1).collect())
-                    .collect::<Vec<_>>()
+                    .collect_vec()
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
 
         partition_keys.into_iter().all_equal_value().map_err(|v| {
             if let Some(diff) = v {

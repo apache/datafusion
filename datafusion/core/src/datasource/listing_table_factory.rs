@@ -134,7 +134,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
-            .with_table_partition_cols(table_partition_cols.clone())
+            .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone());
 
         options.validate_partitions(state, &table_path).await?;
@@ -143,7 +143,6 @@ impl TableProviderFactory for ListingTableFactory {
             None => options.infer_schema(state, &table_path).await?,
             Some(s) => s,
         };
-
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
