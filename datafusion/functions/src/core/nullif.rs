@@ -27,7 +27,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct NullIfFunc {
+pub struct NullIfFunc {
     signature: Signature,
 }
 
@@ -49,6 +49,12 @@ static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
     DataType::Utf8,
     DataType::LargeUtf8,
 ];
+
+impl Default for NullIfFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NullIfFunc {
     pub fn new() -> Self {

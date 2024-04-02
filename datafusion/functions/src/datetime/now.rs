@@ -26,8 +26,14 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct NowFunc {
+pub struct NowFunc {
     signature: Signature,
+}
+
+impl Default for NowFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NowFunc {

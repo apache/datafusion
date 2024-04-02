@@ -26,8 +26,14 @@ use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct ToDateFunc {
+pub struct ToDateFunc {
     signature: Signature,
+}
+
+impl Default for ToDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToDateFunc {

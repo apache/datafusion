@@ -74,8 +74,14 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 #[derive(Debug)]
-pub(super) struct NamedStructFunc {
+pub struct NamedStructFunc {
     signature: Signature,
+}
+
+impl Default for NamedStructFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NamedStructFunc {

@@ -28,7 +28,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
-pub(super) struct ReverseFunc {
+pub struct ReverseFunc {
     signature: Signature,
 }
 

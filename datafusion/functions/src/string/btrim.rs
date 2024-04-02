@@ -35,7 +35,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct BTrimFunc {
+pub struct BTrimFunc {
     signature: Signature,
     aliases: Vec<String>,
 }
