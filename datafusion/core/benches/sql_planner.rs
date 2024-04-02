@@ -22,11 +22,12 @@ extern crate datafusion;
 
 mod data_utils;
 use crate::criterion::Criterion;
-use crate::data_utils::tpch_schemas;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use std::sync::Arc;
+use test_utils::tpch::tpch_schemas;
+use test_utils::TableDef;
 use tokio::runtime::Runtime;
 
 /// Create a logical plan from the specified sql
@@ -72,7 +73,7 @@ fn create_context() -> SessionContext {
     ctx.register_table("t1000", create_table_provider("d", 1000))
         .unwrap();
 
-    tpch_schemas().iter().for_each(|(name, schema)| {
+    tpch_schemas().iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![]).unwrap()),
