@@ -7113,21 +7113,31 @@ For example: <code class="docutils literal notranslate"><span class="pre">c0</sp
 </div>
 <p>For example, this query converts two columns <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> to a single column with
 a struct type of fields <code class="docutils literal notranslate"><span class="pre">field_a</span></code> and <code class="docutils literal notranslate"><span class="pre">c1</span></code>:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">select</span> <span class="o">*</span> <span class="kn">from</span> <span class="nn">t</span><span class="p">;</span>
-<span class="o">+---+---+</span>
-<span class="o">|</span> <span class="n">a</span> <span class="o">|</span> <span class="n">b</span> <span class="o">|</span>
-<span class="o">+---+---+</span>
-<span class="o">|</span> <span class="mi">1</span> <span class="o">|</span> <span class="mi">2</span> <span class="o">|</span>
-<span class="o">|</span> <span class="mi">3</span> <span class="o">|</span> <span class="mi">4</span> <span class="o">|</span>
-<span class="o">+---+---+</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
 
-<span class="n">select</span> <span class="n">struct</span><span class="p">(</span><span class="n">a</span> <span class="k">as</span> <span class="n">field_a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">t</span><span class="p">;</span>
-<span class="o">+--------------------------------------------------+</span>
-<span class="o">|</span> <span class="n">named_struct</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;field_a&quot;</span><span class="p">),</span><span class="n">t</span><span class="o">.</span><span class="n">a</span><span class="p">,</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;c1&quot;</span><span class="p">),</span><span class="n">t</span><span class="o">.</span><span class="n">b</span><span class="p">)</span> <span class="o">|</span>
-<span class="o">+--------------------------------------------------+</span>
-<span class="o">|</span> <span class="p">{</span><span class="n">field_a</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">c1</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>                              <span class="o">|</span>
-<span class="o">|</span> <span class="p">{</span><span class="n">field_a</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span> <span class="n">c1</span><span class="p">:</span> <span class="mi">4</span><span class="p">}</span>                              <span class="o">|</span>
-<span class="o">+--------------------------------------------------+</span>
+-- use default names `c0`, `c1`
+❯ select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+
+-- name the first field `field_a`
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8(&quot;field_a&quot;),t.a,Utf8(&quot;c1&quot;),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
 </pre></div>
 </div>
 <section id="id207">
