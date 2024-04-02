@@ -71,6 +71,9 @@ struct ExternalSorterMetrics {
 
     /// total spilled bytes during the execution of the operator
     spilled_bytes: Count,
+
+    /// total spilled rows during the execution of the operator
+    spilled_rows: Count,
 }
 
 impl ExternalSorterMetrics {
@@ -79,6 +82,7 @@ impl ExternalSorterMetrics {
             baseline: BaselineMetrics::new(metrics, partition),
             spill_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
+            spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
         }
     }
 }
@@ -231,13 +235,13 @@ struct ExternalSorter {
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
     /// If the in size of buffered memory batches is below this size,
-    /// the data will be concated and sorted in place rather than
+    /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
 }
 
 impl ExternalSorter {
-    // TOOD: make a builder or some other nicer API to avoid the
+    // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -371,13 +375,18 @@ impl ExternalSorter {
         self.metrics.spilled_bytes.value()
     }
 
+    /// How many rows have been spilled to disk?
+    fn spilled_rows(&self) -> usize {
+        self.metrics.spilled_rows.value()
+    }
+
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
         self.metrics.spill_count.value()
     }
 
     /// Writes any `in_memory_batches` to a spill file and clears
-    /// the batches. The contents of the spil file are sorted.
+    /// the batches. The contents of the spill file are sorted.
     ///
     /// Returns the amount of memory freed.
     async fn spill(&mut self) -> Result<usize> {
@@ -390,13 +399,15 @@ impl ExternalSorter {
 
         self.in_mem_sort().await?;
 
-        let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
+        let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        spill_sorted_batches(batches, spillfile.path(), self.schema.clone()).await?;
+        let spilled_rows =
+            spill_sorted_batches(batches, spill_file.path(), self.schema.clone()).await?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
-        self.spills.push(spillfile);
+        self.metrics.spilled_rows.add(spilled_rows as usize);
+        self.spills.push(spill_file);
         Ok(used)
     }
 
@@ -576,6 +587,7 @@ impl Debug for ExternalSorter {
         f.debug_struct("ExternalSorter")
             .field("memory_used", &self.used())
             .field("spilled_bytes", &self.spilled_bytes())
+            .field("spilled_rows", &self.spilled_rows())
             .field("spill_count", &self.spill_count())
             .finish()
     }
@@ -650,11 +662,14 @@ pub(crate) fn lexsort_to_indices_multi_columns(
     Ok(indices)
 }
 
+/// Spills sorted `in_memory_batches` to disk.
+///
+/// Returns number of the rows spilled to disk.
 async fn spill_sorted_batches(
     batches: Vec<RecordBatch>,
     path: &Path,
     schema: SchemaRef,
-) -> Result<()> {
+) -> Result<u64> {
     let path: PathBuf = path.into();
     let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
     match task.join().await {
@@ -685,7 +700,7 @@ fn write_sorted(
     batches: Vec<RecordBatch>,
     path: PathBuf,
     schema: SchemaRef,
-) -> Result<()> {
+) -> Result<u64> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
     for batch in batches {
         writer.write(&batch)?;
@@ -697,7 +712,7 @@ fn write_sorted(
         writer.num_rows,
         human_readable_size(writer.num_bytes as usize),
     );
-    Ok(())
+    Ok(writer.num_rows)
 }
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
@@ -1062,8 +1077,9 @@ mod tests {
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
-        assert!(metrics.spill_count().unwrap() > 0);
-        assert!(metrics.spilled_bytes().unwrap() > 0);
+        assert_eq!(metrics.spill_count().unwrap(), 4);
+        assert_eq!(metrics.spilled_bytes().unwrap(), 38784);
+        assert_eq!(metrics.spilled_rows().unwrap(), 9600);
 
         let columns = result[0].columns();
 

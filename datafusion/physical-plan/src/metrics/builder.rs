@@ -123,6 +123,15 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    /// Consume self and create a new counter for recording the total spilled rows
+    /// triggered by an operator
+    pub fn spilled_rows(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::SpilledRows(count.clone()));
+        count
+    }
+
     /// Consume self and create a new gauge for reporting current memory usage
     pub fn mem_used(self, partition: usize) -> Gauge {
         let gauge = Gauge::new();
