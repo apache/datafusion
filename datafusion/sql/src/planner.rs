@@ -307,7 +307,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(TableReference::bare(&self.normalizer.normalize(alias.name)))?
+            .alias(TableReference::bare(self.normalizer.normalize(alias.name)))?
             .build()
     }
 
@@ -530,18 +530,18 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(OwnedTableReference::bare(&table))
+            Ok(OwnedTableReference::bare(table))
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(OwnedTableReference::partial(&schema, &table))
+            Ok(OwnedTableReference::partial(schema, table))
         }
         3 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
             let catalog = taker.take(enable_normalization);
-            Ok(OwnedTableReference::full(&catalog, &schema, &table))
+            Ok(OwnedTableReference::full(catalog, schema, table))
         }
         _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
     }
