@@ -345,7 +345,7 @@ impl<'a> From<&'a String> for TableReference {
     }
 }
 
-impl<'a> From<ResolvedTableReference> for TableReference {
+impl From<ResolvedTableReference> for TableReference {
     fn from(resolved: ResolvedTableReference) -> Self {
         Self::Full {
             catalog: resolved.catalog,

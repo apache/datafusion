@@ -165,8 +165,8 @@ impl DFSchema {
     ///
     /// To create a schema from an Arrow schema without a qualifier, use
     /// `DFSchema::try_from`.
-    pub fn try_from_qualified_schema<'a>(
-        qualifier: impl Into<TableReference<'a>>,
+    pub fn try_from_qualified_schema(
+        qualifier: impl Into<TableReference>,
         schema: &Schema,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
@@ -181,8 +181,8 @@ impl DFSchema {
     }
 
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
-    pub fn from_field_specific_qualified_schema<'a>(
-        qualifiers: Vec<Option<impl Into<TableReference<'a>>>>,
+    pub fn from_field_specific_qualified_schema(
+        qualifiers: Vec<Option<impl Into<TableReference>>>,
         schema: &SchemaRef,
     ) -> Result<Self> {
         let owned_qualifiers = qualifiers
