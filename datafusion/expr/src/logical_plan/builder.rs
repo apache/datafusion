@@ -1424,8 +1424,8 @@ pub fn subquery_alias(
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
 /// This is mostly used for testing and documentation.
-pub fn table_scan<'a>(
-    name: Option<impl Into<TableReference<'a>>>,
+pub fn table_scan(
+    name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
@@ -1435,8 +1435,8 @@ pub fn table_scan<'a>(
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
 /// and inlined filters.
 /// This is mostly used for testing and documentation.
-pub fn table_scan_with_filters<'a>(
-    name: Option<impl Into<TableReference<'a>>>,
+pub fn table_scan_with_filters(
+    name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -1911,7 +1911,7 @@ mod tests {
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1941,7 +1941,7 @@ mod tests {
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("state", &name);
                 Ok(())
             }

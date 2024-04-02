@@ -245,22 +245,22 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
         1 => Ok((None, &idents[0])),
         2 => Ok((
             Some(TableReference::Bare {
-                table: (&idents[0]).into(),
+                table: idents[0].clone().into(),
             }),
             &idents[1],
         )),
         3 => Ok((
             Some(TableReference::Partial {
-                schema: (&idents[0]).into(),
-                table: (&idents[1]).into(),
+                schema: idents[0].clone().into(),
+                table: idents[1].clone().into(),
             }),
             &idents[2],
         )),
         4 => Ok((
             Some(TableReference::Full {
-                catalog: (&idents[0]).into(),
-                schema: (&idents[1]).into(),
-                table: (&idents[2]).into(),
+                catalog: idents[0].clone().into(),
+                schema: idents[1].clone().into(),
+                table: idents[2].clone().into(),
             }),
             &idents[3],
         )),
@@ -338,7 +338,7 @@ mod test {
     // where ensure generated search terms are in correct order with correct values
     fn test_generate_schema_search_terms() -> Result<()> {
         type ExpectedItem = (
-            Option<TableReference<'static>>,
+            Option<TableReference>,
             &'static str,
             &'static [&'static str],
         );

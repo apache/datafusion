@@ -994,7 +994,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::bare(name);
+        let name = OwnedTableReference::bare(&name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
