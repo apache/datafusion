@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
+use arrow::util::pretty::print_batches;
 use arrow_array::{ArrayRef, Int32Array, PrimitiveArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::SessionContext;
@@ -122,24 +123,6 @@ fn assert_results(
     {
         assert!(collected.is_empty());
         return Ok(());
-    }
-
-    // Left side batch sizes must be equal to collected batch sizes.
-    let right_row_count = right_data
-        .iter()
-        .map(|batch| batch.num_rows())
-        .sum::<usize>();
-    for _ in 0..right_row_count {
-        let mut non_zero_idx = 0;
-        for collected_batch in collected.iter() {
-            if left_data[non_zero_idx % left_data.len()].num_rows() != 0 {
-                assert_eq!(
-                    collected_batch.num_rows(),
-                    left_data[non_zero_idx % left_data.len()].num_rows()
-                );
-                non_zero_idx += 1;
-            }
-        }
     }
 
     let left_data = concat_batches(&left_data[0].schema(), &left_data)?;

@@ -33,6 +33,7 @@ use crate::{
 };
 use crate::{handle_state, ExecutionPlanProperties};
 
+use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, PrimitiveArray, RecordBatchOptions};
@@ -233,6 +234,8 @@ impl ExecutionPlan for CrossJoinExec {
         let reservation =
             MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
+        let batch_size = context.session_config().batch_size();
+
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 self.left.clone(),
@@ -247,11 +250,13 @@ impl ExecutionPlan for CrossJoinExec {
             left_fut,
             right: stream,
             join_metrics,
+            batch_size,
+            results: RecordBatch::new_empty(self.schema().clone()),
             left_batch_index: 0,
             right_row_index: 0,
             state: CrossJoinStreamState::WaitBuildSide,
             left_data: vec![],
-            right_batch: RecordBatch::new_empty(self.schema.clone()),
+            right_batch: RecordBatch::new_empty(self.right().schema().clone()),
         }))
     }
 
@@ -322,6 +327,10 @@ struct CrossJoinStream {
     right: SendableRecordBatchStream,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
+    /// Maximum output batch size
+    batch_size: usize,
+    /// Output buffer
+    results: RecordBatch,
     /// State information
     state: CrossJoinStreamState,
     /// Left data
@@ -360,6 +369,7 @@ enum CrossJoinStreamState {
     WaitBuildSide,
     FetchProbeBatch,
     GenerateResult,
+    ResultReady,
     Completed,
 }
 
@@ -393,7 +403,18 @@ impl CrossJoinStream {
                 CrossJoinStreamState::GenerateResult => {
                     handle_state!(self.generate_result())
                 }
-                CrossJoinStreamState::Completed => Poll::Ready(None),
+                CrossJoinStreamState::ResultReady => {
+                    handle_state!(self.result_ready())
+                }
+                CrossJoinStreamState::Completed => {
+                    if self.results.num_rows() == 0 {
+                        Poll::Ready(None)
+                    } else {
+                        let result = self.results.clone();
+                        self.results = RecordBatch::new_empty(self.schema.clone());
+                        Poll::Ready(Some(Ok(result)))
+                    }
+                }
             };
         }
     }
@@ -464,9 +485,6 @@ impl CrossJoinStream {
         if self.right_row_index < self.right_batch.num_rows() {
             // Right batch has some unpaired rows, continue with the next row.
             let result_batch = self.build_batch()?;
-            // Update the metrics.
-            self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(result_batch.num_rows());
             // Increment the left batch index. If it reaches the end, reset it to 0 and increment the right row index.
             self.left_batch_index = if self.left_batch_index == self.left_data.len() - 1 {
                 self.right_row_index += 1;
@@ -474,10 +492,29 @@ impl CrossJoinStream {
             } else {
                 self.left_batch_index + 1
             };
-
-            Ok(StatefulStreamResult::Ready(Some(result_batch)))
+            self.results =
+                concat_batches(&self.schema, &[self.results.clone(), result_batch])?;
+            self.state = CrossJoinStreamState::ResultReady;
+            Ok(StatefulStreamResult::Continue)
         } else {
             self.state = CrossJoinStreamState::FetchProbeBatch;
+            Ok(StatefulStreamResult::Continue)
+        }
+    }
+
+    /// If there is non-paired rows in the probe batch, the function process them.
+    /// If not, it directs the state to fetching probe side.
+    fn result_ready(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        if self.results.num_rows() >= self.batch_size {
+            // Update the metrics.
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(self.results.num_rows());
+
+            let output = self.results.clone();
+            self.results = RecordBatch::new_empty(self.schema().clone());
+            Ok(StatefulStreamResult::Ready(Some(output)))
+        } else {
+            self.state = CrossJoinStreamState::GenerateResult;
             Ok(StatefulStreamResult::Continue)
         }
     }
