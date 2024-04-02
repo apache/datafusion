@@ -128,8 +128,6 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let is_partitioned = !table_partition_cols.is_empty();
-
         let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
@@ -139,9 +137,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone());
 
-        if is_partitioned {
-            options.validate_partitions(state, &table_path).await?;
-        }
+        options.validate_partitions(state, &table_path).await?;
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,

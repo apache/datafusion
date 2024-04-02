@@ -450,6 +450,17 @@ impl ListingOptions {
         state: &SessionState,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
+        if self.table_partition_cols.is_empty() {
+            return Ok(());
+        }
+
+        if !table_path.is_collection() {
+            return plan_err!(
+                "Can't create a partitioned table backed by a single file, \
+                perhaps the URL is missing a trailing slash?"
+            );
+        }
+
         let inferred = self.infer_partitions(state, table_path).await?;
 
         // no partitioned files found on disk
@@ -506,10 +517,6 @@ impl ListingOptions {
             .try_collect()
             .await?;
 
-        if files.is_empty() {
-            return Ok(vec![]);
-        }
-
         let stripped_path_parts = files.iter().map(|file| {
             table_path
                 .strip_prefix(&file.location)
@@ -522,25 +529,20 @@ impl ListingOptions {
                 path_parts
                     .into_iter()
                     .rev()
-                    .skip(1) // get parent only; skip the file itself
+                    .skip(1) // get parents only; skip the file itself
                     .rev()
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
             .collect_vec();
 
-        partition_keys.into_iter().all_equal_value().map_err(|v| {
-            if let Some(diff) = v {
-                DataFusionError::Plan(format!(
-                    "Found mixed partition values on disk {:?}",
-                    diff
-                ))
-            } else {
-                DataFusionError::Internal(
-                    "Tried infering partitions using a non-hive partition".to_string(),
-                ) // should be unreachable
+        match partition_keys.into_iter().all_equal_value() {
+            Ok(v) => Ok(v),
+            Err(None) => Ok(vec![]),
+            Err(Some(diff)) => {
+                plan_err!("Found mixed partition values on disk {:?}", diff)
             }
-        })
+        }
     }
 }
 

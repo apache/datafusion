@@ -115,6 +115,13 @@ STORED AS CSV
 LOCATION 'foo.csv'
 OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')
 
+# Partitioned table on a single file
+query error DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash\?
+CREATE EXTERNAL TABLE single_file_partition(c1 int)
+PARTITIONED BY (p2 string, p1 string)
+STORED AS CSV
+LOCATION 'foo.csv';
+
 # Wrong partition order error
 
 statement ok
