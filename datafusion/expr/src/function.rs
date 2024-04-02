@@ -49,7 +49,7 @@ pub struct AccumulatorArgs<'a> {
     pub ignore_nulls: bool,
 
     // ordering arguments
-    /// the expressions of `order by`
+    /// the expressions of `order by`, if no ordering is required, this will be an empty slice
     pub sort_exprs: &'a [Expr],
 }
 
