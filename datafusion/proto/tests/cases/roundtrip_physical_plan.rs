@@ -412,14 +412,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
 
     let return_type = DataType::Int64;
     let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
-    let state_type = vec![DataType::Int64];
 
     let udaf = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
         "example",
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
         return_type,
         accumulator,
-        state_type,
+        vec![Field::new("value", DataType::Int64, true)],
     ));
 
     let ctx = SessionContext::new();

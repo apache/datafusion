@@ -19,7 +19,6 @@
 
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{Expr, GroupsAccumulator};
-use datafusion_physical_expr::expressions::format_state_name;
 use fmt::Debug;
 use std::any::Any;
 use std::fmt;
@@ -105,32 +104,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        let fields = self.fun.state_fields(
+        self.fun.state_fields(
             self.name(),
             self.data_type.clone(),
             self.ordering_fields.clone(),
-        )?;
-
-        if !fields.is_empty() {
-            return Ok(fields);
-        }
-
-        // If fields is empty, we will use the default state fields
-        let fields = self
-            .fun
-            .state_type(&self.data_type)?
-            .iter()
-            .enumerate()
-            .map(|(i, data_type)| {
-                Field::new(
-                    format_state_name(&self.name, &format!("{i}")),
-                    data_type.clone(),
-                    true,
-                )
-            })
-            .collect::<Vec<Field>>();
-
-        Ok(fields)
+        )
     }
 
     fn field(&self) -> Result<Field> {

@@ -761,7 +761,7 @@ mod test {
     };
     use crate::test::assert_analyzed_plan_eq;
 
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
@@ -912,7 +912,6 @@ mod test {
     fn agg_udaf_invalid_input() -> Result<()> {
         let empty = empty();
         let return_type = DataType::Float64;
-        let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -920,7 +919,10 @@ mod test {
             Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
             return_type,
             accumulator,
-            state_type,
+            vec![
+                Field::new("count", DataType::UInt64, true),
+                Field::new("avg", DataType::Float64, true),
+            ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),

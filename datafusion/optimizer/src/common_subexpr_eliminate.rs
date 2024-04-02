@@ -801,7 +801,6 @@ mod test {
 
         let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type = vec![DataType::UInt32];
         let udf_agg = |inner: Expr| {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -809,7 +808,7 @@ mod test {
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
                     accumulator.clone(),
-                    state_type.clone(),
+                    vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
                 false,

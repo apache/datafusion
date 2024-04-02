@@ -32,7 +32,7 @@ use crate::{
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{internal_err, Column, Result};
+use datafusion_common::{Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -702,18 +702,24 @@ pub fn create_udaf(
 ) -> AggregateUDF {
     let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
     let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
+    let state_fields = state_type
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| Field::new(format!("{i}"), t, true))
+        .collect::<Vec<_>>();
     AggregateUDF::from(SimpleAggregateUDF::new(
         name,
         input_type,
         return_type,
         volatility,
         accumulator,
-        state_type,
+        state_fields,
     ))
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
 /// The signature and state type must match the `Accumulator's implementation`.
+/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
 pub fn create_first_value(
     name: &str,
     signature: Signature,
@@ -729,7 +735,7 @@ pub struct SimpleAggregateUDF {
     signature: Signature,
     return_type: DataType,
     accumulator: AccumulatorFactoryFunction,
-    state_type: Vec<DataType>,
+    state_fields: Vec<Field>,
 }
 
 impl Debug for SimpleAggregateUDF {
@@ -751,7 +757,7 @@ impl SimpleAggregateUDF {
         return_type: DataType,
         volatility: Volatility,
         accumulator: AccumulatorFactoryFunction,
-        state_type: Vec<DataType>,
+        state_fields: Vec<Field>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -760,7 +766,7 @@ impl SimpleAggregateUDF {
             signature,
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         }
     }
 
@@ -769,7 +775,7 @@ impl SimpleAggregateUDF {
         signature: Signature,
         return_type: DataType,
         accumulator: AccumulatorFactoryFunction,
-        state_type: Vec<DataType>,
+        state_fields: Vec<Field>,
     ) -> Self {
         let name = name.into();
         Self {
@@ -777,7 +783,7 @@ impl SimpleAggregateUDF {
             signature,
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         }
     }
 }
@@ -806,8 +812,13 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(self.state_type.clone())
+    fn state_fields(
+        &self,
+        _name: &str,
+        _value_type: DataType,
+        _ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        Ok(self.state_fields.clone())
     }
 }
 
@@ -822,7 +833,7 @@ impl Debug for FirstValue {
         f.debug_struct("FirstValue")
             .field("name", &self.name)
             .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
+            .field("accumulator", &"<FUNC>")
             .finish()
     }
 }
@@ -864,10 +875,6 @@ impl AggregateUDFImpl for FirstValue {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(acc_args)
-    }
-
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        internal_err!("FirstValue does not have a state type")
     }
 
     fn state_fields(

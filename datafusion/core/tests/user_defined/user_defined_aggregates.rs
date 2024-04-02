@@ -492,7 +492,7 @@ impl TimeSum {
         // Returns the same type as its input
         let return_type = timestamp_type.clone();
 
-        let state_type = vec![timestamp_type.clone()];
+        let state_fields = vec![Field::new("sum", timestamp_type, true)];
 
         let volatility = Volatility::Immutable;
 
@@ -506,7 +506,7 @@ impl TimeSum {
             return_type,
             volatility,
             accumulator,
-            state_type,
+            state_fields,
         ));
 
         // register the selector as "time_sum"
@@ -592,6 +592,11 @@ impl FirstSelector {
     fn register(ctx: &mut SessionContext) {
         let return_type = Self::output_datatype();
         let state_type = Self::state_datatypes();
+        let state_fields = state_type
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| Field::new(format!("{i}"), t, true))
+            .collect::<Vec<_>>();
 
         // Possible input signatures
         let signatures = vec![TypeSignature::Exact(Self::input_datatypes())];
@@ -608,7 +613,7 @@ impl FirstSelector {
             Signature::one_of(signatures, volatility),
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         ));
 
         // register the selector as "first"
@@ -721,10 +726,6 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");
-    }
-
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::UInt64])
     }
 
     fn groups_accumulator_supported(&self) -> bool {
