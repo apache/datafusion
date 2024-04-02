@@ -66,6 +66,7 @@ enum Scenario {
     Int,
     Int32Range,
     UInt,
+    UInt32Range,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
@@ -455,6 +456,13 @@ fn make_int32_range(start: i32, end: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_uint32_range(start: u32, end: u32) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("u", DataType::UInt32, true)]));
+    let v = vec![start, end];
+    let array = Arc::new(UInt32Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with f64 vector
 ///
 /// Columns are named
@@ -658,6 +666,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_uint_batches(5, 10),
                 make_uint_batches(250, 255),
             ]
+        }
+        Scenario::UInt32Range => {
+            vec![make_uint32_range(0, 10), make_uint32_range(200000, 300000)]
         }
         Scenario::Float64 => {
             vec![
