@@ -18,8 +18,8 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use crate::{
-    Expr, PartitionEvaluator, PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
-    WindowFrame,
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -170,6 +170,13 @@ impl WindowUDF {
         self.inner.return_type(args)
     }
 
+    /// Do the function rewrite
+    ///
+    /// See [`WindowUDFImpl::simplify`] for more details.
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.inner.simplify()
+    }
+
     /// Return a `PartitionEvaluator` for evaluating this window function
     pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
@@ -265,6 +272,27 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    /// Optionally apply per-UDWF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization. The default implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// Example:
+    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    ///
+    /// # Returns
+    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
+    /// if the function cannot be simplified, the arguments *MUST* be returned
+    /// unmodified
+    fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        None
     }
 }
 
