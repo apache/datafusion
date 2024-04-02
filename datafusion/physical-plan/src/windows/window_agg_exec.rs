@@ -172,6 +172,10 @@ impl DisplayAs for WindowAggExec {
 }
 
 impl ExecutionPlan for WindowAggExec {
+    fn name(&self) -> &'static str {
+        "WindowAggExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::plan_err;
+use datafusion_common::{internal_datafusion_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{BuiltinScalarFunction, Expr};
+use datafusion_expr::Expr;
 use sqlparser::ast::Expr as SQLExpr;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -68,9 +68,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Substr,
-            args,
-        )))
+        let fun = self
+            .context_provider
+            .get_function_meta("substr")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'substr' function")
+            })?;
+
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 }

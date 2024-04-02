@@ -2087,7 +2087,7 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
+query error DataFusion error: Execution error: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)
 
 

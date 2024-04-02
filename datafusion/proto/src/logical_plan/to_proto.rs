@@ -45,7 +45,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, OwnedTableReference,
     ScalarValue,
 };
 use datafusion_expr::expr::{
@@ -275,27 +275,20 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     }
 }
 
-impl TryFrom<&DFField> for protobuf::DfField {
-    type Error = Error;
-
-    fn try_from(f: &DFField) -> Result<Self, Self::Error> {
-        Ok(Self {
-            field: Some(f.field().as_ref().try_into()?),
-            qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
-                relation: r.to_string(),
-            }),
-        })
-    }
-}
-
 impl TryFrom<&DFSchema> for protobuf::DfSchema {
     type Error = Error;
 
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
-            .fields()
             .iter()
-            .map(|f| f.try_into())
+            .map(|(qualifier, field)| {
+                Ok(protobuf::DfField {
+                    field: Some(field.as_ref().try_into()?),
+                    qualifier: qualifier.map(|r| protobuf::ColumnRelation {
+                        relation: r.to_string(),
+                    }),
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
@@ -1422,17 +1415,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Cot => Self::Cot,
             BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
-            BuiltinScalarFunction::Atan => Self::Atan,
-            BuiltinScalarFunction::Asinh => Self::Asinh,
-            BuiltinScalarFunction::Acosh => Self::Acosh,
-            BuiltinScalarFunction::Atanh => Self::Atanh,
             BuiltinScalarFunction::Exp => Self::Exp,
             BuiltinScalarFunction::Factorial => Self::Factorial,
             BuiltinScalarFunction::Gcd => Self::Gcd,
             BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
-            BuiltinScalarFunction::Ln => Self::Ln,
-            BuiltinScalarFunction::Log10 => Self::Log10,
             BuiltinScalarFunction::Degrees => Self::Degrees,
             BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
@@ -1440,29 +1427,16 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
             BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
-            BuiltinScalarFunction::Left => Self::Left,
-            BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Reverse => Self::Reverse,
-            BuiltinScalarFunction::Right => Self::Right,
-            BuiltinScalarFunction::Rpad => Self::Rpad,
-            BuiltinScalarFunction::Strpos => Self::Strpos,
-            BuiltinScalarFunction::Substr => Self::Substr,
-            BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
-            BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
             BuiltinScalarFunction::Iszero => Self::Iszero,
-            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
-            BuiltinScalarFunction::FindInSet => Self::FindInSet,
         };
 
         Ok(scalar_function)

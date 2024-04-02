@@ -21,14 +21,13 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-
-use crate::string::common::{make_scalar_function, utf8_to_int_type};
 
 #[derive(Debug)]
 pub(super) struct LevenshteinFunc {

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, OffsetSizeTrait};
 use std::any::Any;
 
+use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result};
@@ -26,6 +26,7 @@ use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::string::common::*;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'

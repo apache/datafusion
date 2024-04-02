@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1215,14 +1215,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "datafusion-execution"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1249,6 +1249,7 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "paste",
+ "serde_json",
  "sqlparser",
  "strum 0.26.2",
  "strum_macros 0.26.2",
@@ -1256,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "base64 0.22.0",
@@ -1267,18 +1268,20 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "hashbrown 0.14.3",
  "hex",
  "itertools",
  "log",
  "md-5",
  "regex",
  "sha2",
+ "unicode-segmentation",
  "uuid",
 ]
 
 [[package]]
 name = "datafusion-functions-array"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1296,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1312,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1340,12 +1343,11 @@ dependencies = [
  "rand",
  "regex",
  "sha2",
- "unicode-segmentation",
 ]
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1374,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "36.0.0"
+version = "37.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
