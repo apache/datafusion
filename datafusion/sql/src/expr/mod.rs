@@ -589,6 +589,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Parses a struct(..) expression
     fn parse_struct(
         &self,
         values: Vec<SQLExpr>,
@@ -599,6 +600,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !fields.is_empty() {
             return not_impl_err!("Struct fields are not supported yet");
         }
+
+        if values
+            .iter()
+            .any(|value| matches!(value, SQLExpr::Named { .. }))
+        {
+            self.create_named_struct(values, input_schema, planner_context)
+        } else {
+            self.create_struct(values, input_schema, planner_context)
+        }
+    }
+
+    // Handles a call to struct(...) where the arguments are named. For example
+    // `struct (v as foo, v2 as bar)` by creating a call to the `named_struct` function
+    fn create_named_struct(
+        &self,
+        values: Vec<SQLExpr>,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
         let args = values
             .into_iter()
             .enumerate()
@@ -639,6 +659,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
             named_struct_func,
+            args,
+        )))
+    }
+
+    // Handles a call to struct(...) where the arguments are not named. For example
+    // `struct (v, v2)` by creating a call to the `struct` function
+    // which will create a struct with fields named `c0`, `c1`, etc.
+    fn create_struct(
+        &self,
+        values: Vec<SQLExpr>,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args = values
+            .into_iter()
+            .map(|value| {
+                self.sql_expr_to_logical_expr(value, input_schema, planner_context)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let struct_func = self
+            .context_provider
+            .get_function_meta("struct")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'struct' function")
+            })?;
+
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            struct_func,
             args,
         )))
     }

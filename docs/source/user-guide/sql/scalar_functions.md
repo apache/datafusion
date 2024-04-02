@@ -3336,6 +3336,16 @@ select * from t;
 | 3 | 4 |
 +---+---+
 
+-- use default names `c0`, `c1`
+❯ select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+
+-- name the first field `field_a`
 select struct(a as field_a, b) from t;
 +--------------------------------------------------+
 | named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
