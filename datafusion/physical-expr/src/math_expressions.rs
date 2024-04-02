@@ -155,11 +155,8 @@ macro_rules! make_function_scalar_inputs_return_type {
     }};
 }
 
-math_unary_function!("sqrt", sqrt);
 math_unary_function!("cbrt", cbrt);
-math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
-math_unary_function!("sinh", sinh);
 math_unary_function!("cosh", cosh);
 math_unary_function!("asin", asin);
 math_unary_function!("acos", acos);
@@ -169,13 +166,11 @@ math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
-math_unary_function!("signum", signum);
 math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
 math_unary_function!("degrees", to_degrees);
-math_unary_function!("radians", to_radians);
 
 /// Factorial SQL function
 pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {

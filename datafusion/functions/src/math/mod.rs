@@ -39,6 +39,12 @@ make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh, Some(vec![Some(true)]));
 make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
 
+make_math_unary_udf!(RadiansFunc, RADIANS, radians, to_radians, None);
+make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, None);
+make_math_unary_udf!(SinFunc, SIN, sin, sin, None);
+make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, None);
+make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, None);
+
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
     (
@@ -66,5 +72,10 @@ export_functions!(
     (asinh, num, "returns inverse hyperbolic sine"),
     (acosh, num, "returns inverse hyperbolic cosine"),
     (atan, num, "returns inverse tangent"),
-    (atan2, y x, "returns inverse tangent of a division given in the argument")
+    (atan2, y x, "returns inverse tangent of a division given in the argument"),
+    (radians, num, "converts degrees to radians"),
+    (signum, num, "sign of the argument (-1, 0, +1)"),
+    (sin, num, "sine"),
+    (sinh, num, "hyperbolic sine"),
+    (sqrt, num, "square root of a number")
 );
