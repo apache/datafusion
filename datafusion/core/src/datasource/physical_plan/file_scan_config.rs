@@ -263,7 +263,7 @@ impl PartitionColumnProjector {
                 partition_values
                     .get(pidx)
                     .ok_or(DataFusionError::Execution(
-                        "Invalid partitioning".to_string(),
+                        "Invalid partitioning found on disk".to_string(),
                     ))?;
 
             let mut partition_value = Cow::Borrowed(p_value);

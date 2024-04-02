@@ -440,9 +440,10 @@ impl ListingOptions {
         self.format.infer_schema(state, &store, &files).await
     }
 
-    /// Infers the partition columns stored in `LOCATION` and comapres
-    /// it with the columns provided in `PARTITIONED BY` to help prevent
+    /// Infers the partition columns stored in `LOCATION` and compares
+    /// them with the columns provided in `PARTITIONED BY` to help prevent
     /// accidental corrupts of partitioned tables.
+    ///
     /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
@@ -451,7 +452,7 @@ impl ListingOptions {
     ) -> Result<()> {
         let inferred = self.infer_partitions(state, table_path).await?;
 
-        // no files found on disk or path is not a partitioned table
+        // no partitioned files found on disk
         if inferred.is_empty() {
             return Ok(());
         }
@@ -486,7 +487,8 @@ impl ListingOptions {
     }
 
     /// Infer the partitioning at the given path on the provided object store.
-    /// TODO: Finish this doc
+    /// For performance reasons, it doesn't read all the files on disk
+    /// and therefore may fail to detect invalid partitioning.
     async fn infer_partitions(
         &self,
         state: &SessionState,
@@ -496,7 +498,7 @@ impl ListingOptions {
 
         // only use 10 files for inference
         // This can fail to detect inconsistent partition keys
-        // A DFS traversal approach can be helpful
+        // A DFS traversal approach of the store can help here
         let files: Vec<ObjectMeta> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
@@ -522,8 +524,7 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parent only; skip the file itself
                     .rev()
-                    .map(|s| s.split_once('='))
-                    .filter_map(|result| result.map(|(col_name, _)| col_name.to_string()))
+                    .map(|s| s.split('=').take(1).collect())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
