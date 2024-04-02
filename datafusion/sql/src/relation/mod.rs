@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -57,7 +55,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .get_table_function_source(&tbl_func_name, args)?;
                     let plan = LogicalPlanBuilder::scan(
                         TableReference::Bare {
-                            table: Arc::new("tmp_table".into()),
+                            table: "tmp_table".into(),
                         },
                         provider,
                         None,

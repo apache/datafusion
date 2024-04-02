@@ -22,11 +22,11 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
-    pub catalog: Arc<String>,
+    pub catalog: Arc<str>,
     /// The schema containing the table
-    pub schema: Arc<String>,
+    pub schema: Arc<str>,
     /// The table name
-    pub table: Arc<String>,
+    pub table: Arc<str>,
 }
 
 impl std::fmt::Display for ResolvedTableReference {
@@ -72,23 +72,23 @@ pub enum TableReference {
     /// An unqualified table reference, e.g. "table"
     Bare {
         /// The table name
-        table: Arc<String>,
+        table: Arc<str>,
     },
     /// A partially resolved table reference, e.g. "schema.table"
     Partial {
         /// The schema containing the table
-        schema: Arc<String>,
+        schema: Arc<str>,
         /// The table name
-        table: Arc<String>,
+        table: Arc<str>,
     },
     /// A fully resolved table reference, e.g. "catalog.schema.table"
     Full {
         /// The catalog (aka database) containing the table
-        catalog: Arc<String>,
+        catalog: Arc<str>,
         /// The schema containing the table
-        schema: Arc<String>,
+        schema: Arc<str>,
         /// The table name
-        table: Arc<String>,
+        table: Arc<str>,
     },
 }
 
@@ -133,7 +133,7 @@ impl TableReference {
     /// "Foo.Bar" (rather than "foo"."bar")
     pub fn bare(table: &str) -> TableReference {
         TableReference::Bare {
-            table: Arc::new(table.into()),
+            table: table.into(),
         }
     }
 
@@ -142,8 +142,8 @@ impl TableReference {
     /// As described on [`TableReference`] this does *NO* parsing at all.
     pub fn partial(schema: &str, table: &str) -> TableReference {
         TableReference::Partial {
-            schema: Arc::new(schema.into()),
-            table: Arc::new(table.into()),
+            schema: schema.into(),
+            table: table.into(),
         }
     }
 
@@ -152,9 +152,9 @@ impl TableReference {
     /// As described on [`TableReference`] this does *NO* parsing at all.
     pub fn full(catalog: &str, schema: &str, table: &str) -> TableReference {
         TableReference::Full {
-            catalog: Arc::new(catalog.into()),
-            schema: Arc::new(schema.into()),
-            table: Arc::new(table.into()),
+            catalog: catalog.into(),
+            schema: schema.into(),
+            table: table.into(),
         }
     }
 
@@ -225,13 +225,13 @@ impl TableReference {
                 table,
             },
             Self::Partial { schema, table } => ResolvedTableReference {
-                catalog: Arc::new(default_catalog.into()),
+                catalog: default_catalog.into(),
                 schema,
                 table,
             },
             Self::Bare { table } => ResolvedTableReference {
-                catalog: Arc::new(default_catalog.into()),
-                schema: Arc::new(default_schema.into()),
+                catalog: default_catalog.into(),
+                schema: default_schema.into(),
                 table,
             },
         }
@@ -291,9 +291,7 @@ impl TableReference {
                 schema: parts.remove(0).into(),
                 table: parts.remove(0).into(),
             },
-            _ => Self::Bare {
-                table: Arc::new(s.into()),
-            },
+            _ => Self::Bare { table: s.into() },
         }
     }
 
@@ -362,29 +360,29 @@ mod tests {
     #[test]
     fn test_table_reference_from_str_normalizes() {
         let expected = TableReference::Full {
-            catalog: Arc::new("catalog".into()),
-            schema: Arc::new("FOO\".bar".into()),
-            table: Arc::new("table".into()),
+            catalog: "catalog".into(),
+            schema: "FOO\".bar".into(),
+            table: "table".into(),
         };
         let actual = TableReference::from("catalog.\"FOO\"\".bar\".TABLE");
         assert_eq!(expected, actual);
 
         let expected = TableReference::Partial {
-            schema: Arc::new("FOO\".bar".into()),
-            table: Arc::new("table".into()),
+            schema: "FOO\".bar".into(),
+            table: "table".into(),
         };
         let actual = TableReference::from("\"FOO\"\".bar\".TABLE");
         assert_eq!(expected, actual);
 
         let expected = TableReference::Bare {
-            table: Arc::new("table".into()),
+            table: "table".into(),
         };
         let actual = TableReference::from("TABLE");
         assert_eq!(expected, actual);
 
         // if fail to parse, take entire input string as identifier
         let expected = TableReference::Bare {
-            table: Arc::new("TABLE()".into()),
+            table: "TABLE()".into(),
         };
         let actual = TableReference::from("TABLE()");
         assert_eq!(expected, actual);

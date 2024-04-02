@@ -344,7 +344,7 @@ impl SessionContext {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         self.register_table(
             TableReference::Bare {
-                table: Arc::new(table_name.into()),
+                table: table_name.into(),
             },
             Arc::new(table),
         )
@@ -1039,9 +1039,7 @@ impl SessionContext {
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
         self.register_table(
-            TableReference::Bare {
-                table: Arc::new(name.into()),
-            },
+            TableReference::Bare { table: name.into() },
             Arc::new(table),
         )?;
         Ok(())

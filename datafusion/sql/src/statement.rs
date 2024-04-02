@@ -1510,8 +1510,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Return true if there is a table provider available for "schema.table"
     fn has_table(&self, schema: &str, table: &str) -> bool {
         let tables_reference = TableReference::Partial {
-            schema: Arc::new(schema.into()),
-            table: Arc::new(table.into()),
+            schema: schema.into(),
+            table: table.into(),
         };
         self.context_provider
             .get_table_source(tables_reference)

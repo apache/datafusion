@@ -19,13 +19,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SchemaReference {
-    Bare {
-        schema: Arc<String>,
-    },
-    Full {
-        schema: Arc<String>,
-        catalog: Arc<String>,
-    },
+    Bare { schema: Arc<str> },
+    Full { schema: Arc<str>, catalog: Arc<str> },
 }
 
 impl SchemaReference {
