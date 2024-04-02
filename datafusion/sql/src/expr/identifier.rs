@@ -338,7 +338,7 @@ mod test {
     // where ensure generated search terms are in correct order with correct values
     fn test_generate_schema_search_terms() -> Result<()> {
         type ExpectedItem = (
-            Option<TableReference<'static>>,
+            Option<TableReference>,
             &'static str,
             &'static [&'static str],
         );

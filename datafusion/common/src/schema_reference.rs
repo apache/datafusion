@@ -15,49 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum SchemaReference<'a> {
-    Bare { schema: Arc<str> },
-    Full { schema: Arc<str>, catalog: Arc<str> },
-    X { phantom: PhantomData<&'a bool> },
+pub enum SchemaReference {
+    Bare {
+        schema: Arc<String>,
+    },
+    Full {
+        schema: Arc<String>,
+        catalog: Arc<String>,
+    },
 }
 
-impl SchemaReference<'_> {
+impl SchemaReference {
     /// Get only the schema name that this references.
     pub fn schema_name(&self) -> &str {
         match self {
             SchemaReference::Bare { schema } => schema,
             SchemaReference::Full { schema, catalog: _ } => schema,
-            _ => todo!(),
         }
     }
 }
 
-pub type OwnedSchemaReference = SchemaReference<'static>;
+pub type OwnedSchemaReference = SchemaReference;
 
-impl std::fmt::Display for SchemaReference<'_> {
+impl std::fmt::Display for SchemaReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bare { schema } => write!(f, "{schema}"),
             Self::Full { schema, catalog } => write!(f, "{catalog}.{schema}"),
-            _ => todo!(),
         }
     }
 }
 
-impl<'a> From<&'a OwnedSchemaReference> for SchemaReference<'a> {
+impl<'a> From<&'a OwnedSchemaReference> for SchemaReference {
     fn from(value: &'a OwnedSchemaReference) -> Self {
-        match value {
-            SchemaReference::Bare { schema } => SchemaReference::Bare {
-                schema: schema.clone(),
-            },
-            SchemaReference::Full { schema, catalog } => SchemaReference::Full {
-                schema: schema.clone(),
-                catalog: catalog.clone(),
-            },
-            _ => todo!(),
-        }
+        value.clone()
     }
 }

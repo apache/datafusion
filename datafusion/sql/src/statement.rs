@@ -396,7 +396,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             TableReference::Full { catalog: _, schema: _, table: _ } => {
                                 Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
                             },
-                            _ => todo!(),
                         }?;
                         Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
                             name,
@@ -1511,8 +1510,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Return true if there is a table provider available for "schema.table"
     fn has_table(&self, schema: &str, table: &str) -> bool {
         let tables_reference = TableReference::Partial {
-            schema: schema.into(),
-            table: table.into(),
+            schema: Arc::new(schema.into()),
+            table: Arc::new(table.into()),
         };
         self.context_provider
             .get_table_source(tables_reference)

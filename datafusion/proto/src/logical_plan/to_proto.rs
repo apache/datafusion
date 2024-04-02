@@ -1488,7 +1488,6 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
                 schema: schema.to_string(),
                 table: table.to_string(),
             }),
-            _ => todo!(),
         };
 
         protobuf::OwnedTableReference {

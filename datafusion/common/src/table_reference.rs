@@ -16,21 +16,20 @@
 // under the License.
 
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 /// A resolved path to a table of the form "catalog.schema.table"
 #[derive(Debug, Clone)]
-pub struct ResolvedTableReference<'a> {
+pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
-    pub catalog: Arc<str>,
+    pub catalog: Arc<String>,
     /// The schema containing the table
-    pub schema: Arc<str>,
+    pub schema: Arc<String>,
     /// The table name
-    pub table: Arc<str>,
-    phantom: PhantomData<&'a bool>,
+    pub table: Arc<String>,
 }
 
-impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
+impl std::fmt::Display for ResolvedTableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
     }
@@ -69,30 +68,27 @@ impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
 /// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
 ///```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum TableReference<'a> {
+pub enum TableReference {
     /// An unqualified table reference, e.g. "table"
     Bare {
         /// The table name
-        table: Arc<str>,
+        table: Arc<String>,
     },
     /// A partially resolved table reference, e.g. "schema.table"
     Partial {
         /// The schema containing the table
-        schema: Arc<str>,
+        schema: Arc<String>,
         /// The table name
-        table: Arc<str>,
+        table: Arc<String>,
     },
     /// A fully resolved table reference, e.g. "catalog.schema.table"
     Full {
         /// The catalog (aka database) containing the table
-        catalog: Arc<str>,
+        catalog: Arc<String>,
         /// The schema containing the table
-        schema: Arc<str>,
+        schema: Arc<String>,
         /// The table name
-        table: Arc<str>,
-    },
-    X {
-        phantom: PhantomData<&'a bool>,
+        table: Arc<String>,
     },
 }
 
@@ -106,9 +102,9 @@ pub enum TableReference<'a> {
 /// let table_reference = TableReference::from("mytable");
 /// let owned_reference = table_reference.to_owned_reference();
 /// ```
-pub type OwnedTableReference = TableReference<'static>;
+pub type OwnedTableReference = TableReference;
 
-impl std::fmt::Display for TableReference<'_> {
+impl std::fmt::Display for TableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TableReference::Bare { table } => write!(f, "{table}"),
@@ -120,14 +116,13 @@ impl std::fmt::Display for TableReference<'_> {
                 schema,
                 table,
             } => write!(f, "{catalog}.{schema}.{table}"),
-            _ => unreachable!(),
         }
     }
 }
 
-impl<'a> TableReference<'a> {
+impl TableReference {
     /// Convenience method for creating a typed none `None`
-    pub fn none() -> Option<TableReference<'a>> {
+    pub fn none() -> Option<TableReference> {
         None
     }
 
@@ -136,30 +131,30 @@ impl<'a> TableReference<'a> {
     /// As described on [`TableReference`] this does *NO* parsing at
     /// all, so "Foo.Bar" stays as a reference to the table named
     /// "Foo.Bar" (rather than "foo"."bar")
-    pub fn bare(table: &str) -> TableReference<'a> {
+    pub fn bare(table: &str) -> TableReference {
         TableReference::Bare {
-            table: table.into(),
+            table: Arc::new(table.into()),
         }
     }
 
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
     /// As described on [`TableReference`] this does *NO* parsing at all.
-    pub fn partial(schema: &str, table: &str) -> TableReference<'a> {
+    pub fn partial(schema: &str, table: &str) -> TableReference {
         TableReference::Partial {
-            schema: schema.into(),
-            table: table.into(),
+            schema: Arc::new(schema.into()),
+            table: Arc::new(table.into()),
         }
     }
 
     /// Convenience method for creating a [`TableReference::Full`]
     ///
     /// As described on [`TableReference`] this does *NO* parsing at all.
-    pub fn full(catalog: &str, schema: &str, table: &str) -> TableReference<'a> {
+    pub fn full(catalog: &str, schema: &str, table: &str) -> TableReference {
         TableReference::Full {
-            catalog: catalog.into(),
-            schema: schema.into(),
-            table: table.into(),
+            catalog: Arc::new(catalog.into()),
+            schema: Arc::new(schema.into()),
+            table: Arc::new(table.into()),
         }
     }
 
@@ -169,7 +164,6 @@ impl<'a> TableReference<'a> {
             Self::Full { table, .. }
             | Self::Partial { table, .. }
             | Self::Bare { table } => table,
-            _ => todo!(),
         }
     }
 
@@ -211,16 +205,15 @@ impl<'a> TableReference<'a> {
                     && other.schema().map_or(true, |s| *s == **schema)
                     && other.catalog().map_or(true, |c| *c == **catalog)
             }
-            _ => todo!(),
         }
     }
 
     /// Given a default catalog and schema, ensure this table reference is fully resolved
     pub fn resolve(
         self,
-        default_catalog: &'a str,
-        default_schema: &'a str,
-    ) -> ResolvedTableReference<'a> {
+        default_catalog: &str,
+        default_schema: &str,
+    ) -> ResolvedTableReference {
         match self {
             Self::Full {
                 catalog,
@@ -230,29 +223,24 @@ impl<'a> TableReference<'a> {
                 catalog,
                 schema,
                 table,
-                phantom: PhantomData,
             },
             Self::Partial { schema, table } => ResolvedTableReference {
-                catalog: default_catalog.into(),
+                catalog: Arc::new(default_catalog.into()),
                 schema,
                 table,
-                phantom: PhantomData,
             },
             Self::Bare { table } => ResolvedTableReference {
-                catalog: default_catalog.into(),
-                schema: default_schema.into(),
+                catalog: Arc::new(default_catalog.into()),
+                schema: Arc::new(default_schema.into()),
                 table,
-                phantom: PhantomData,
             },
-            _ => todo!(),
         }
     }
 
     /// Converts directly into an [`OwnedTableReference`] by cloning
     /// the underlying data.
     pub fn to_owned_reference(&self) -> OwnedTableReference {
-        let res = self.clone();
-        unsafe { std::mem::transmute::<TableReference<'a>, TableReference<'static>>(res) }
+        self.clone()
     }
 
     /// Forms a string where the identifiers are quoted
@@ -282,13 +270,12 @@ impl<'a> TableReference<'a> {
                 quote_identifier(schema),
                 quote_identifier(table)
             ),
-            _ => todo!(),
         }
     }
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
     /// identifier. See docs on [`TableReference`] for more details.
-    pub fn parse_str(s: &'a str) -> Self {
+    pub fn parse_str(s: &str) -> Self {
         let mut parts = parse_identifiers_normalized(s, false);
 
         match parts.len() {
@@ -304,7 +291,9 @@ impl<'a> TableReference<'a> {
                 schema: parts.remove(0).into(),
                 table: parts.remove(0).into(),
             },
-            _ => Self::Bare { table: s.into() },
+            _ => Self::Bare {
+                table: Arc::new(s.into()),
+            },
         }
     }
 
@@ -324,7 +313,6 @@ impl<'a> TableReference<'a> {
                 schema,
                 table,
             } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
-            _ => todo!(),
         }
     }
 }
@@ -336,7 +324,7 @@ impl From<String> for OwnedTableReference {
     }
 }
 
-impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
+impl<'a> From<&'a OwnedTableReference> for TableReference {
     fn from(value: &'a OwnedTableReference) -> Self {
         value.clone()
     }
@@ -345,20 +333,20 @@ impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
 /// Parse a string into a TableReference, normalizing where appropriate
 ///
 /// See full details on [`TableReference::parse_str`]
-impl<'a> From<&'a str> for TableReference<'a> {
+impl<'a> From<&'a str> for TableReference {
     fn from(s: &'a str) -> Self {
         Self::parse_str(s)
     }
 }
 
-impl<'a> From<&'a String> for TableReference<'a> {
+impl<'a> From<&'a String> for TableReference {
     fn from(s: &'a String) -> Self {
         Self::parse_str(s)
     }
 }
 
-impl<'a> From<ResolvedTableReference<'a>> for TableReference<'a> {
-    fn from(resolved: ResolvedTableReference<'a>) -> Self {
+impl<'a> From<ResolvedTableReference> for TableReference {
+    fn from(resolved: ResolvedTableReference) -> Self {
         Self::Full {
             catalog: resolved.catalog,
             schema: resolved.schema,
@@ -367,60 +355,60 @@ impl<'a> From<ResolvedTableReference<'a>> for TableReference<'a> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     #[test]
-//     fn test_table_reference_from_str_normalizes() {
-//         let expected = TableReference::Full {
-//             catalog: Cow::Owned("catalog".to_string()),
-//             schema: Cow::Owned("FOO\".bar".to_string()),
-//             table: Cow::Owned("table".to_string()),
-//         };
-//         let actual = TableReference::from("catalog.\"FOO\"\".bar\".TABLE");
-//         assert_eq!(expected, actual);
+    #[test]
+    fn test_table_reference_from_str_normalizes() {
+        let expected = TableReference::Full {
+            catalog: Arc::new("catalog".into()),
+            schema: Arc::new("FOO\".bar".into()),
+            table: Arc::new("table".into()),
+        };
+        let actual = TableReference::from("catalog.\"FOO\"\".bar\".TABLE");
+        assert_eq!(expected, actual);
 
-//         let expected = TableReference::Partial {
-//             schema: Cow::Owned("FOO\".bar".to_string()),
-//             table: Cow::Owned("table".to_string()),
-//         };
-//         let actual = TableReference::from("\"FOO\"\".bar\".TABLE");
-//         assert_eq!(expected, actual);
+        let expected = TableReference::Partial {
+            schema: Arc::new("FOO\".bar".into()),
+            table: Arc::new("table".into()),
+        };
+        let actual = TableReference::from("\"FOO\"\".bar\".TABLE");
+        assert_eq!(expected, actual);
 
-//         let expected = TableReference::Bare {
-//             table: Cow::Owned("table".to_string()),
-//         };
-//         let actual = TableReference::from("TABLE");
-//         assert_eq!(expected, actual);
+        let expected = TableReference::Bare {
+            table: Arc::new("table".into()),
+        };
+        let actual = TableReference::from("TABLE");
+        assert_eq!(expected, actual);
 
-//         // if fail to parse, take entire input string as identifier
-//         let expected = TableReference::Bare {
-//             table: Cow::Owned("TABLE()".to_string()),
-//         };
-//         let actual = TableReference::from("TABLE()");
-//         assert_eq!(expected, actual);
-//     }
+        // if fail to parse, take entire input string as identifier
+        let expected = TableReference::Bare {
+            table: Arc::new("TABLE()".into()),
+        };
+        let actual = TableReference::from("TABLE()");
+        assert_eq!(expected, actual);
+    }
 
-//     #[test]
-//     fn test_table_reference_to_vector() {
-//         let table_reference = TableReference::parse_str("table");
-//         assert_eq!(vec!["table".to_string()], table_reference.to_vec());
+    #[test]
+    fn test_table_reference_to_vector() {
+        let table_reference = TableReference::parse_str("table");
+        assert_eq!(vec!["table".to_string()], table_reference.to_vec());
 
-//         let table_reference = TableReference::parse_str("schema.table");
-//         assert_eq!(
-//             vec!["schema".to_string(), "table".to_string()],
-//             table_reference.to_vec()
-//         );
+        let table_reference = TableReference::parse_str("schema.table");
+        assert_eq!(
+            vec!["schema".to_string(), "table".to_string()],
+            table_reference.to_vec()
+        );
 
-//         let table_reference = TableReference::parse_str("catalog.schema.table");
-//         assert_eq!(
-//             vec![
-//                 "catalog".to_string(),
-//                 "schema".to_string(),
-//                 "table".to_string()
-//             ],
-//             table_reference.to_vec()
-//         );
-//     }
-// }
+        let table_reference = TableReference::parse_str("catalog.schema.table");
+        assert_eq!(
+            vec![
+                "catalog".to_string(),
+                "schema".to_string(),
+                "table".to_string()
+            ],
+            table_reference.to_vec()
+        );
+    }
+}
