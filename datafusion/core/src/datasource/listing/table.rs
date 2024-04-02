@@ -482,8 +482,7 @@ impl ListingOptions {
             );
         }
 
-        // match prefix to allow creating a tables using
-        // some of the partition keys
+        // match prefix to allow creating tables with partial partitions
         for (idx, col) in table_partition_names.iter().enumerate() {
             if &inferred[idx] != col {
                 return plan_err!(
