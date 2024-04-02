@@ -601,6 +601,7 @@ pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_datafusion_err as _plan_datafusion_err;
 pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
@@ -612,11 +613,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 ) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
@@ -624,11 +621,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 

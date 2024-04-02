@@ -157,6 +157,10 @@ impl DisplayAs for WorkTableExec {
 }
 
 impl ExecutionPlan for WorkTableExec {
+    fn name(&self) -> &'static str {
+        "WorkTableExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -43,7 +43,7 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use crate::logical_expr::{Limit, Values};
-use crate::physical_expr::create_physical_expr;
+use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
@@ -96,6 +96,7 @@ use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
 use datafusion_common::config::FormatOptions;
+use datafusion_physical_expr::LexOrdering;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -958,14 +959,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
                     let input_dfschema = input.as_ref().schema();
-                    let sort_expr = expr
-                        .iter()
-                        .map(|e| create_physical_sort_expr(
-                            e,
-                            input_dfschema,
-                            session_state.execution_props(),
-                        ))
-                        .collect::<Result<Vec<_>>>()?;
+                    let sort_expr = create_physical_sort_exprs(expr, input_dfschema, session_state.execution_props())?;
                     let new_sort = SortExec::new(sort_expr, physical_input)
                         .with_fetch(*fetch);
                     Ok(Arc::new(new_sort))
@@ -1028,10 +1022,9 @@ impl DefaultPhysicalPlanner {
                         // Remove temporary projected columns
                         let join_plan = if added_project {
                             let final_join_result = join_schema
-                                .fields()
                                 .iter()
-                                .map(|field| {
-                                    Expr::Column(field.qualified_column())
+                                .map(|(qualifier, field)| {
+                                    Expr::Column(datafusion_common::Column::from((qualifier, field.as_ref())))
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
@@ -1095,18 +1088,19 @@ impl DefaultPhysicalPlanner {
                             let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices.clone()
                                 .into_iter()
                                 .map(|i| (
-                                    left_df_schema.field(i).clone(),
+                                    left_df_schema.qualified_field(i),
                                     physical_left.schema().field(i).clone(),
                                 ))
                                 .chain(
                                     right_field_indices.clone()
                                         .into_iter()
                                         .map(|i| (
-                                            right_df_schema.field(i).clone(),
+                                            right_df_schema.qualified_field(i),
                                             physical_right.schema().field(i).clone(),
                                         ))
                                 )
                                 .unzip();
+                            let filter_df_fields = filter_df_fields.into_iter().map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone()))).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
@@ -1592,18 +1586,11 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-            let partition_by = partition_by
-                .iter()
-                .map(|e| create_physical_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-            let order_by = order_by
-                .iter()
-                .map(|e| create_physical_sort_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
+            let args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let partition_by =
+                create_physical_exprs(partition_by, logical_schema, execution_props)?;
+            let order_by =
+                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
@@ -1670,10 +1657,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
+            let args =
+                create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
@@ -1683,17 +1668,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
             let order_by = match order_by {
-                Some(e) => Some(
-                    e.iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                logical_input_schema,
-                                execution_props,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
+                Some(e) => Some(create_physical_sort_exprs(
+                    e,
+                    logical_input_schema,
+                    execution_props,
+                )?),
                 None => None,
             };
             let ignore_nulls = null_treatment
@@ -1778,6 +1757,18 @@ pub fn create_physical_sort_expr(
     } else {
         internal_err!("Expects a sort expression")
     }
+}
+
+/// Create vector of physical sort expression from a vector of logical expression
+pub fn create_physical_sort_exprs(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<LexOrdering> {
+    exprs
+        .iter()
+        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<Vec<_>>>()
 }
 
 impl DefaultPhysicalPlanner {
@@ -2021,9 +2012,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{
-        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
-    };
+    use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
@@ -2266,25 +2255,23 @@ mod tests {
             .await;
 
         let expected_error: &str = "Error during planning: \
-        Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-        LogicalPlan schema: DFSchema { fields: [\
-            DFField { qualifier: None, field: Field { \
-                name: \"a\", \
+            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
+            LogicalPlan schema: \
+            DFSchema { inner: Schema { fields: \
+                [Field { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} } }\
-        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
-        ExecutionPlan schema: Schema { fields: [\
-            Field { \
-                name: \"b\", \
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }, field_qualifiers: [None], \
+                functional_dependencies: FunctionalDependencies { deps: [] } }, \
+            ExecutionPlan schema: Schema { fields: \
+                [Field { name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} }\
-        ], metadata: {} }";
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
@@ -2548,8 +2535,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::new_with_metadata(
-                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
+                    DFSchema::from_unqualifed_fields(
+                        vec![Field::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )
                     .unwrap(),
@@ -2625,6 +2612,10 @@ mod tests {
     }
 
     impl ExecutionPlan for NoOpExecutionPlan {
+        fn name(&self) -> &'static str {
+            "NoOpExecutionPlan"
+        }
+
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
             self

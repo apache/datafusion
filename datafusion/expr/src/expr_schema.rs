@@ -28,8 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFField,
-    ExprSchema, Result,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
+    OwnedTableReference, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,10 +46,17 @@ pub trait ExprSchemable {
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField>;
+    fn to_field(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)>;
 
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
+
+    /// given a schema, return the type and nullability of the expr
+    fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
+        -> Result<(DataType, bool)>;
 }
 
 impl ExprSchemable for Expr {
@@ -66,21 +73,20 @@ impl ExprSchemable for Expr {
     /// ## and Float32 results in Float32 type
     ///
     /// ```
-    /// # use arrow::datatypes::DataType;
-    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::DFSchema;
     /// # use datafusion_expr::{col, ExprSchemable};
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
     ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::new_with_metadata(
+    ///   let schema = DFSchema::from_unqualifed_fields(
     ///     vec![
-    ///       DFField::new_unqualified("c1", DataType::Int32, true),
-    ///       DFField::new_unqualified("c2", DataType::Float32, true),
-    ///       ],
+    ///       Field::new("c1", DataType::Int32, true),
+    ///       Field::new("c2", DataType::Float32, true),
+    ///       ].into(),
     ///       HashMap::new(),
-    ///   )
-    ///   .unwrap();
+    ///   ).unwrap();
     ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
@@ -370,32 +376,101 @@ impl ExprSchemable for Expr {
         }
     }
 
+    /// Returns the datatype and nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
+    ///
+    /// # Errors
+    ///
+    /// This function errors when it is not possible to compute its
+    /// datatype or nullability.
+    fn data_type_and_nullable(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<(DataType, bool)> {
+        match self {
+            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
+                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                    None => schema
+                        .data_type_and_nullable(&Column::from_name(name))
+                        .map(|(d, n)| (d.clone(), n)),
+                    Some(dt) => Ok((dt.clone(), expr.nullable(schema)?)),
+                },
+                _ => expr.data_type_and_nullable(schema),
+            },
+            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => {
+                expr.data_type_and_nullable(schema)
+            }
+            Expr::Column(c) => schema
+                .data_type_and_nullable(c)
+                .map(|(d, n)| (d.clone(), n)),
+            Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
+            Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
+            Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
+            Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Exists { .. } => Ok((DataType::Boolean, false)),
+            Expr::ScalarSubquery(subquery) => Ok((
+                subquery.subquery.schema().field(0).data_type().clone(),
+                subquery.subquery.schema().field(0).is_nullable(),
+            )),
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                ref right,
+                ref op,
+            }) => {
+                let left = left.data_type_and_nullable(schema)?;
+                let right = right.data_type_and_nullable(schema)?;
+                Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
+            }
+            _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
+        }
+    }
+
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
-    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField> {
+    fn to_field(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
         match self {
-            Expr::Column(c) => Ok(DFField::new(
-                c.relation.clone(),
-                &c.name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            Expr::Alias(Alias { relation, name, .. }) => Ok(DFField::new(
-                relation.clone(),
-                name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            _ => Ok(DFField::new_unqualified(
-                &self.display_name()?,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
+            Expr::Column(c) => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    c.relation.clone(),
+                    Field::new(&c.name, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
+            Expr::Alias(Alias { relation, name, .. }) => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    relation.clone(),
+                    Field::new(name, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
+            _ => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    None,
+                    Field::new(self.display_name()?, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
         }
     }
 
@@ -473,7 +548,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
+            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
                 .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
@@ -491,8 +566,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
+    use arrow::datatypes::{DataType, Fields, SchemaBuilder};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -617,23 +692,22 @@ mod tests {
                 .unwrap()
         );
 
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("foo", DataType::Int32, true)
-                .with_metadata(meta.clone())],
+        let schema = DFSchema::from_unqualifed_fields(
+            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
+                .into(),
             HashMap::new(),
         )
         .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
     }
 
     #[test]
     fn test_nested_schema_nullability() {
-        let fields = DFField::new(
-            Some(TableReference::Bare {
-                table: "table_name".into(),
-            }),
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("foo", DataType::Int32, true));
+        builder.push(Field::new(
             "parent",
             DataType::Struct(Fields::from(vec![Field::new(
                 "child",
@@ -641,12 +715,17 @@ mod tests {
                 false,
             )])),
             true,
-        );
+        ));
+        let schema = builder.finish();
 
-        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
+        let dfschema = DFSchema::from_field_specific_qualified_schema(
+            vec![Some("table_name"), None],
+            &Arc::new(schema),
+        )
+        .unwrap();
 
         let expr = col("parent").field("child");
-        assert!(expr.nullable(&schema).unwrap());
+        assert!(expr.nullable(&dfschema).unwrap());
     }
 
     #[derive(Debug)]
@@ -703,6 +782,10 @@ mod tests {
 
         fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
             Ok(&self.metadata)
+        }
+
+        fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
+            Ok((self.data_type(col)?, self.nullable(col)?))
         }
     }
 }

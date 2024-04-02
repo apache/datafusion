@@ -2843,17 +2843,17 @@ pub enum ScalarFunction {
     Unknown = 0,
     ///   1 was Acos
     ///   2 was Asin
-    Atan = 3,
-    Ascii = 4,
+    /// 3 was Atan
+    /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
-    Ln = 10,
+    /// 10 was Ln
     Log = 11,
-    Log10 = 12,
-    Log2 = 13,
+    /// 12 was Log10
+    /// 13 was Log2
     Round = 14,
     Signum = 15,
     Sin = 16,
@@ -2862,61 +2862,61 @@ pub enum ScalarFunction {
     Trunc = 19,
     /// 20 was Array
     /// RegexpMatch = 21;
-    BitLength = 22,
-    Btrim = 23,
-    CharacterLength = 24,
-    Chr = 25,
+    /// 22 was BitLength
+    /// 23 was Btrim
+    /// 24 was CharacterLength
+    /// 25 was Chr
     Concat = 26,
     ConcatWithSeparator = 27,
     /// 28 was DatePart
     /// 29 was DateTrunc
     InitCap = 30,
-    Left = 31,
-    Lpad = 32,
-    Lower = 33,
-    Ltrim = 34,
+    /// 31 was Left
+    /// 32 was Lpad
+    /// 33 was Lower
+    /// 34 was Ltrim
     /// 35 was MD5
     ///   36 was NullIf
-    OctetLength = 37,
+    /// 37 was OctetLength
     Random = 38,
     /// 39 was RegexpReplace
-    Repeat = 40,
-    Replace = 41,
-    Reverse = 42,
-    Right = 43,
-    Rpad = 44,
-    Rtrim = 45,
+    /// 40 was Repeat
+    /// 41 was Replace
+    /// 42 was Reverse
+    /// 43 was Right
+    /// 44 was Rpad
+    /// 45 was Rtrim
     /// 46 was SHA224
     /// 47 was SHA256
     /// 48 was SHA384
     /// 49 was SHA512
-    SplitPart = 50,
+    /// 50 was SplitPart
     /// StartsWith = 51;
-    Strpos = 52,
-    Substr = 53,
+    /// 52 was Strpos
+    /// 53 was Substr
     /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
-    Translate = 60,
+    /// 60 was Translate
     /// Trim = 61;
     /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
     /// 66 was FromUnixtime
-    Atan2 = 67,
+    /// 67 Atan2
     /// 68 was DateBin
     /// 69 was ArrowTypeof
     /// 70 was CurrentDate
     /// 71 was CurrentTime
-    Uuid = 72,
+    /// 72 was Uuid
     Cbrt = 73,
-    Acosh = 74,
-    Asinh = 75,
-    Atanh = 76,
+    /// 74 Acosh
+    /// 75 was Asinh
+    /// 76 was Atanh
     Sinh = 77,
     Cosh = 78,
     /// Tanh = 79;
@@ -2959,13 +2959,13 @@ pub enum ScalarFunction {
     /// 118 was ToTimestampNanos
     /// 119 was ArrayIntersect
     /// 120 was ArrayUnion
-    OverLay = 121,
+    /// 121 was OverLay
     /// 122 is Range
     /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
-    Levenshtein = 125,
-    SubstrIndex = 126,
-    FindInSet = 127,
+    /// 125 was Levenshtein
+    /// 126 was SubstrIndex
+    /// 127 was FindInSet
     /// 128 was ArraySort
     /// 129 was ArrayDistinct
     /// 130 was ArrayResize
@@ -2987,52 +2987,23 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Atan => "Atan",
-            ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
-            ScalarFunction::Ln => "Ln",
             ScalarFunction::Log => "Log",
-            ScalarFunction::Log10 => "Log10",
-            ScalarFunction::Log2 => "Log2",
             ScalarFunction::Round => "Round",
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::BitLength => "BitLength",
-            ScalarFunction::Btrim => "Btrim",
-            ScalarFunction::CharacterLength => "CharacterLength",
-            ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
-            ScalarFunction::Left => "Left",
-            ScalarFunction::Lpad => "Lpad",
-            ScalarFunction::Lower => "Lower",
-            ScalarFunction::Ltrim => "Ltrim",
-            ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Repeat => "Repeat",
-            ScalarFunction::Replace => "Replace",
-            ScalarFunction::Reverse => "Reverse",
-            ScalarFunction::Right => "Right",
-            ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::Rtrim => "Rtrim",
-            ScalarFunction::SplitPart => "SplitPart",
-            ScalarFunction::Strpos => "Strpos",
-            ScalarFunction::Substr => "Substr",
-            ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Acosh => "Acosh",
-            ScalarFunction::Asinh => "Asinh",
-            ScalarFunction::Atanh => "Atanh",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
@@ -3044,10 +3015,6 @@ impl ScalarFunction {
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::Levenshtein => "Levenshtein",
-            ScalarFunction::SubstrIndex => "SubstrIndex",
-            ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3055,52 +3022,23 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Atan" => Some(Self::Atan),
-            "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
-            "Ln" => Some(Self::Ln),
             "Log" => Some(Self::Log),
-            "Log10" => Some(Self::Log10),
-            "Log2" => Some(Self::Log2),
             "Round" => Some(Self::Round),
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
-            "BitLength" => Some(Self::BitLength),
-            "Btrim" => Some(Self::Btrim),
-            "CharacterLength" => Some(Self::CharacterLength),
-            "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
-            "Left" => Some(Self::Left),
-            "Lpad" => Some(Self::Lpad),
-            "Lower" => Some(Self::Lower),
-            "Ltrim" => Some(Self::Ltrim),
-            "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
-            "Repeat" => Some(Self::Repeat),
-            "Replace" => Some(Self::Replace),
-            "Reverse" => Some(Self::Reverse),
-            "Right" => Some(Self::Right),
-            "Rpad" => Some(Self::Rpad),
-            "Rtrim" => Some(Self::Rtrim),
-            "SplitPart" => Some(Self::SplitPart),
-            "Strpos" => Some(Self::Strpos),
-            "Substr" => Some(Self::Substr),
-            "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Atan2" => Some(Self::Atan2),
-            "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
-            "Acosh" => Some(Self::Acosh),
-            "Asinh" => Some(Self::Asinh),
-            "Atanh" => Some(Self::Atanh),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
@@ -3112,10 +3050,6 @@ impl ScalarFunction {
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "OverLay" => Some(Self::OverLay),
-            "Levenshtein" => Some(Self::Levenshtein),
-            "SubstrIndex" => Some(Self::SubstrIndex),
-            "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }

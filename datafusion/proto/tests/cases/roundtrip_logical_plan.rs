@@ -19,6 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
+use std::vec;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
@@ -34,7 +35,7 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, FileType, Result, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
@@ -44,8 +45,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction,
-    BuiltinScalarFunction::{Sqrt, Substr},
+    col, create_udaf, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt,
     ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
     ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
@@ -60,6 +60,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
 
+use datafusion::execution::FunctionRegistry;
 use prost::Message;
 
 #[cfg(feature = "json")]
@@ -1412,9 +1413,15 @@ fn roundtrip_schema() {
 fn roundtrip_dfschema() {
     let dfschema = DFSchema::new_with_metadata(
         vec![
-            DFField::new_unqualified("a", DataType::Int64, false),
-            DFField::new(Some("t"), "b", DataType::Decimal128(15, 2), true)
-                .with_metadata(HashMap::from([(String::from("k1"), String::from("v1"))])),
+            (None, Arc::new(Field::new("a", DataType::Int64, false))),
+            (
+                Some("t".into()),
+                Arc::new(
+                    Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                        HashMap::from([(String::from("k1"), String::from("v1"))]),
+                    ),
+                ),
+            ),
         ],
         HashMap::from([
             (String::from("k2"), String::from("v2")),
@@ -1863,17 +1870,28 @@ fn roundtrip_cube() {
 
 #[test]
 fn roundtrip_substr() {
+    let ctx = SessionContext::new();
+
+    let fun = ctx
+        .state()
+        .udf("substr")
+        .map_err(|e| {
+            internal_datafusion_err!("Unable to find expected 'substr' function: {e:?}")
+        })
+        .unwrap();
+
     // substr(string, position)
-    let test_expr =
-        Expr::ScalarFunction(ScalarFunction::new(Substr, vec![col("col"), lit(1_i64)]));
+    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun.clone(),
+        vec![col("col"), lit(1_i64)],
+    ));
 
     // substr(string, position, count)
-    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
-        Substr,
+    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun,
         vec![col("col"), lit(1_i64), lit(1_i64)],
     ));
 
-    let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx.clone());
     roundtrip_expr_test(test_expr_with_count, ctx);
 }

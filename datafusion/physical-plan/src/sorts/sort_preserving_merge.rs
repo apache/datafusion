@@ -144,6 +144,10 @@ impl DisplayAs for SortPreservingMergeExec {
 }
 
 impl ExecutionPlan for SortPreservingMergeExec {
+    fn name(&self) -> &'static str {
+        "SortPreservingMergeExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

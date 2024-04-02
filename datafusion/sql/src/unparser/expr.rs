@@ -24,7 +24,9 @@ use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
-use sqlparser::ast::{self, Function, FunctionArg, Ident};
+use sqlparser::ast::{
+    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
+};
 
 use super::Unparser;
 
@@ -52,21 +54,64 @@ impl Unparser<'_> {
         match expr {
             Expr::InList(InList {
                 expr,
-                list: _,
-                negated: _,
+                list,
+                negated,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let list_expr = list
+                    .iter()
+                    .map(|e| self.expr_to_sql(e))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ast::Expr::InList {
+                    expr: Box::new(self.expr_to_sql(expr)?),
+                    list: list_expr,
+                    negated: *negated,
+                })
             }
-            Expr::ScalarFunction(ScalarFunction { .. }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                let func_name = func_def.name();
+
+                let args = args
+                    .iter()
+                    .map(|e| {
+                        if matches!(e, Expr::Wildcard { qualifier: None }) {
+                            Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
+                        } else {
+                            self.expr_to_sql(e).map(|e| {
+                                FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(ast::Expr::Function(Function {
+                    name: ast::ObjectName(vec![Ident {
+                        value: func_name.to_string(),
+                        quote_style: None,
+                    }]),
+                    args,
+                    filter: None,
+                    null_treatment: None,
+                    over: None,
+                    distinct: false,
+                    special: false,
+                    order_by: vec![],
+                }))
             }
             Expr::Between(Between {
                 expr,
-                negated: _,
-                low: _,
-                high: _,
+                negated,
+                low,
+                high,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_low = self.expr_to_sql(low)?;
+                let sql_high = self.expr_to_sql(high)?;
+                Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(
+                    sql_parser_expr,
+                    *negated,
+                    sql_low,
+                    sql_high,
+                ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -78,10 +123,38 @@ impl Unparser<'_> {
             }
             Expr::Case(Case {
                 expr,
-                when_then_expr: _,
-                else_expr: _,
+                when_then_expr,
+                else_expr,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let conditions = when_then_expr
+                    .iter()
+                    .map(|(w, _)| self.expr_to_sql(w))
+                    .collect::<Result<Vec<_>>>()?;
+                let results = when_then_expr
+                    .iter()
+                    .map(|(_, t)| self.expr_to_sql(t))
+                    .collect::<Result<Vec<_>>>()?;
+                let operand = match expr.as_ref() {
+                    Some(e) => match self.expr_to_sql(e) {
+                        Ok(sql_expr) => Some(Box::new(sql_expr)),
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+                let else_result = match else_expr.as_ref() {
+                    Some(e) => match self.expr_to_sql(e) {
+                        Ok(sql_expr) => Some(Box::new(sql_expr)),
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+
+                Ok(ast::Expr::Case {
+                    operand,
+                    conditions,
+                    results,
+                    else_result,
+                })
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
@@ -103,15 +176,25 @@ impl Unparser<'_> {
             }) => {
                 not_impl_err!("Unsupported expression: {expr:?}")
             }
-            Expr::Like(Like {
-                negated: _,
+            Expr::SimilarTo(Like {
+                negated,
                 expr,
-                pattern: _,
-                escape_char: _,
+                pattern,
+                escape_char,
                 case_insensitive: _,
-            }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
-            }
+            })
+            | Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive: _,
+            }) => Ok(ast::Expr::Like {
+                negated: *negated,
+                expr: Box::new(self.expr_to_sql(expr)?),
+                pattern: Box::new(self.expr_to_sql(pattern)?),
+                escape_char: *escape_char,
+            }),
             Expr::AggregateFunction(agg) => {
                 let func_name = if let AggregateFunctionDefinition::BuiltIn(built_in) =
                     &agg.func_def
@@ -181,6 +264,38 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::IsNotNull(expr) => {
+                Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsTrue(expr) => {
+                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotTrue(expr) => {
+                Ok(ast::Expr::IsNotTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsFalse(expr) => {
+                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsUnknown(expr) => {
+                Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotUnknown(expr) => {
+                Ok(ast::Expr::IsNotUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::Not(expr) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(AstExpr::UnaryOp {
+                    op: UnaryOperator::Not,
+                    expr: Box::new(sql_parser_expr),
+                })
+            }
+            Expr::Negative(expr) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(AstExpr::UnaryOp {
+                    op: UnaryOperator::Minus,
+                    expr: Box::new(sql_parser_expr),
+                })
+            }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }
     }
@@ -213,6 +328,21 @@ impl Unparser<'_> {
             left: Box::new(lhs),
             op,
             right: Box::new(rhs),
+        }
+    }
+
+    pub(super) fn between_op_to_sql(
+        &self,
+        expr: ast::Expr,
+        negated: bool,
+        low: ast::Expr,
+        high: ast::Expr,
+    ) -> ast::Expr {
+        ast::Expr::Between {
+            expr: Box::new(expr),
+            negated,
+            low: Box::new(low),
+            high: Box::new(high),
         }
     }
 
@@ -514,13 +644,53 @@ impl Unparser<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use datafusion_common::TableReference;
-    use datafusion_expr::{col, expr::AggregateFunction, lit};
+    use datafusion_expr::{
+        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
+    };
 
     use crate::unparser::dialect::CustomDialect;
 
     use super::*;
 
+    /// Mocked UDF
+    #[derive(Debug)]
+    struct DummyUDF {
+        signature: Signature,
+    }
+
+    impl DummyUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::variadic_any(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for DummyUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "dummy_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!("DummyUDF::invoke")
+        }
+    }
     // See sql::tests for E2E tests.
 
     #[test]
@@ -536,6 +706,13 @@ mod tests {
                 r#"("a"."b"."c" > 4)"#,
             ),
             (
+                case(col("a"))
+                    .when(lit(1), lit(true))
+                    .when(lit(0), lit(false))
+                    .otherwise(lit(ScalarValue::Null))?,
+                r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
+            ),
+            (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
@@ -548,6 +725,38 @@ mod tests {
                     data_type: DataType::UInt32,
                 }),
                 r#"CAST("a" AS INTEGER UNSIGNED)"#,
+            ),
+            (
+                col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
+                r#""a" IN (1, 2, 3)"#,
+            ),
+            (
+                col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
+                r#""a" NOT IN (1, 2, 3)"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
+                r#"dummy_udf("a", "b")"#,
+            ),
+            (
+                Expr::Like(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
+                Expr::SimilarTo(Like {
+                    negated: false,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
@@ -599,6 +808,33 @@ mod tests {
                 }),
                 "COUNT(DISTINCT *)",
             ),
+            (col("a").is_not_null(), r#""a" IS NOT NULL"#),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_true(),
+                r#"(("a" + "b") > 4) IS TRUE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_true(),
+                r#"(("a" + "b") > 4) IS NOT TRUE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_false(),
+                r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_unknown(),
+                r#"(("a" + "b") > 4) IS UNKNOWN"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
+                r#"(("a" + "b") > 4) IS NOT UNKNOWN"#,
+            ),
+            (not(col("a")), r#"NOT "a""#),
+            (
+                Expr::between(col("a"), lit(1), lit(7)),
+                r#"("a" BETWEEN 1 AND 7)"#,
+            ),
+            (Expr::Negative(Box::new(col("a"))), r#"-"a""#),
         ];
 
         for (expr, expected) in tests {
