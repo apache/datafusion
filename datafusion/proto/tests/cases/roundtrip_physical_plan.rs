@@ -609,14 +609,14 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let fun_def = ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Sin);
+    let fun_def = ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Trunc);
 
     let expr = ScalarFunctionExpr::new(
-        "sin",
+        "trunc",
         fun_def,
         vec![col("a", &schema)?],
         DataType::Float64,
-        None,
+        Some(vec![Some(true)]),
         false,
     );
 

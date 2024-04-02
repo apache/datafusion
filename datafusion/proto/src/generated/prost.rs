@@ -2855,9 +2855,9 @@ pub enum ScalarFunction {
     /// 12 was Log10
     /// 13 was Log2
     Round = 14,
-    Signum = 15,
-    Sin = 16,
-    Sqrt = 17,
+    /// 15 was Signum
+    /// 16 was Sin
+    /// 17 was Sqrt
     /// Tan = 18;
     Trunc = 19,
     /// 20 was Array
@@ -2917,12 +2917,12 @@ pub enum ScalarFunction {
     /// 74 Acosh
     /// 75 was Asinh
     /// 76 was Atanh
-    Sinh = 77,
+    /// 77 was Sinh
     Cosh = 78,
     /// Tanh = 79;
     Pi = 80,
     Degrees = 81,
-    Radians = 82,
+    /// 82 was Radians
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
@@ -2993,9 +2993,6 @@ impl ScalarFunction {
             ScalarFunction::Floor => "Floor",
             ScalarFunction::Log => "Log",
             ScalarFunction::Round => "Round",
-            ScalarFunction::Signum => "Signum",
-            ScalarFunction::Sin => "Sin",
-            ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
@@ -3004,11 +3001,9 @@ impl ScalarFunction {
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
             ScalarFunction::Degrees => "Degrees",
-            ScalarFunction::Radians => "Radians",
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
@@ -3028,9 +3023,6 @@ impl ScalarFunction {
             "Floor" => Some(Self::Floor),
             "Log" => Some(Self::Log),
             "Round" => Some(Self::Round),
-            "Signum" => Some(Self::Signum),
-            "Sin" => Some(Self::Sin),
-            "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
@@ -3039,11 +3031,9 @@ impl ScalarFunction {
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Cbrt" => Some(Self::Cbrt),
-            "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
             "Degrees" => Some(Self::Degrees),
-            "Radians" => Some(Self::Radians),
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
