@@ -43,7 +43,7 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use crate::logical_expr::{Limit, Values};
-use crate::physical_expr::create_physical_expr;
+use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
@@ -96,6 +96,7 @@ use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
 use datafusion_common::config::FormatOptions;
+use datafusion_physical_expr::LexOrdering;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -958,14 +959,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Sort(Sort { expr, input, fetch, .. }) => {
                     let physical_input = self.create_initial_plan(input, session_state).await?;
                     let input_dfschema = input.as_ref().schema();
-                    let sort_expr = expr
-                        .iter()
-                        .map(|e| create_physical_sort_expr(
-                            e,
-                            input_dfschema,
-                            session_state.execution_props(),
-                        ))
-                        .collect::<Result<Vec<_>>>()?;
+                    let sort_expr = create_physical_sort_exprs(expr, input_dfschema, session_state.execution_props())?;
                     let new_sort = SortExec::new(sort_expr, physical_input)
                         .with_fetch(*fetch);
                     Ok(Arc::new(new_sort))
@@ -1592,18 +1586,11 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-            let partition_by = partition_by
-                .iter()
-                .map(|e| create_physical_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-            let order_by = order_by
-                .iter()
-                .map(|e| create_physical_sort_expr(e, logical_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
+            let args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let partition_by =
+                create_physical_exprs(partition_by, logical_schema, execution_props)?;
+            let order_by =
+                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
@@ -1670,10 +1657,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
+            let args =
+                create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
@@ -1683,17 +1668,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
             let order_by = match order_by {
-                Some(e) => Some(
-                    e.iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                logical_input_schema,
-                                execution_props,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
+                Some(e) => Some(create_physical_sort_exprs(
+                    e,
+                    logical_input_schema,
+                    execution_props,
+                )?),
                 None => None,
             };
             let ignore_nulls = null_treatment
@@ -1778,6 +1757,18 @@ pub fn create_physical_sort_expr(
     } else {
         internal_err!("Expects a sort expression")
     }
+}
+
+/// Create vector of physical sort expression from a vector of logical expression
+pub fn create_physical_sort_exprs(
+    exprs: &[Expr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<LexOrdering> {
+    exprs
+        .iter()
+        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<Vec<_>>>()
 }
 
 impl DefaultPhysicalPlanner {

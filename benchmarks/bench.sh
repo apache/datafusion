@@ -314,7 +314,7 @@ run_tpch() {
     fi
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
 
-    RESULTS_FILE="${RESULTS_DIR}/tpch.json"
+    RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --format parquet -o ${RESULTS_FILE}
@@ -329,7 +329,7 @@ run_tpch_mem() {
     fi
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
 
-    RESULTS_FILE="${RESULTS_DIR}/tpch_mem.json"
+    RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory

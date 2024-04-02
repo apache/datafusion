@@ -48,7 +48,7 @@ use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::physical_expr::PhysicalExprRef;
+use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -492,7 +492,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema, extension_codec).unwrap()).collect();
                                 let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
-                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema).unwrap()).collect();
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec).unwrap()).collect();
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
@@ -736,6 +736,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &sym_join.left_sort_exprs,
                     registry,
                     &left_schema,
+                    extension_codec,
                 )?;
                 let left_sort_exprs = if left_sort_exprs.is_empty() {
                     None
@@ -747,6 +748,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &sym_join.right_sort_exprs,
                     registry,
                     &right_schema,
+                    extension_codec,
                 )?;
                 let right_sort_exprs = if right_sort_exprs.is_empty() {
                     None
@@ -1018,14 +1020,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .sort_order
                     .as_ref()
                     .map(|collection| {
-                        collection
-                            .physical_sort_expr_nodes
-                            .iter()
-                            .map(|proto| {
-                                parse_physical_sort_expr(proto, registry, &sink_schema)
-                                    .map(Into::into)
-                            })
-                            .collect::<Result<Vec<_>>>()
+                        parse_physical_sort_exprs(
+                            &collection.physical_sort_expr_nodes,
+                            registry,
+                            &sink_schema,
+                            extension_codec,
+                        )
+                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
                     })
                     .transpose()?;
                 Ok(Arc::new(FileSinkExec::new(
@@ -1049,14 +1050,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .sort_order
                     .as_ref()
                     .map(|collection| {
-                        collection
-                            .physical_sort_expr_nodes
-                            .iter()
-                            .map(|proto| {
-                                parse_physical_sort_expr(proto, registry, &sink_schema)
-                                    .map(Into::into)
-                            })
-                            .collect::<Result<Vec<_>>>()
+                        parse_physical_sort_exprs(
+                            &collection.physical_sort_expr_nodes,
+                            registry,
+                            &sink_schema,
+                            extension_codec,
+                        )
+                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
                     })
                     .transpose()?;
                 Ok(Arc::new(FileSinkExec::new(
@@ -1080,14 +1080,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .sort_order
                     .as_ref()
                     .map(|collection| {
-                        collection
-                            .physical_sort_expr_nodes
-                            .iter()
-                            .map(|proto| {
-                                parse_physical_sort_expr(proto, registry, &sink_schema)
-                                    .map(Into::into)
-                            })
-                            .collect::<Result<Vec<_>>>()
+                        parse_physical_sort_exprs(
+                            &collection.physical_sort_expr_nodes,
+                            registry,
+                            &sink_schema,
+                            extension_codec,
+                        )
+                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
                     })
                     .transpose()?;
                 Ok(Arc::new(FileSinkExec::new(

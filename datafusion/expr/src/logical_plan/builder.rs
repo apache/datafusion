@@ -51,9 +51,9 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -132,14 +132,26 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         // TODO: we need to do a bunch of validation here. Maybe more.
         if is_distinct {
-            return Err(DataFusionError::NotImplemented(
-                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported".to_string(),
-            ));
+            return not_impl_err!(
+                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported"
+            );
         }
+        // Ensure that the static term and the recursive term have the same number of fields
+        let static_fields_len = self.plan.schema().fields().len();
+        let recurive_fields_len = recursive_term.schema().fields().len();
+        if static_fields_len != recurive_fields_len {
+            return plan_err!(
+                "Non-recursive term and recursive term must have the same number of columns ({} != {})",
+                static_fields_len, recurive_fields_len
+            );
+        }
+        // Ensure that the recursive term has the same field types as the static term
+        let coerced_recursive_term =
+            coerce_plan_expr_for_schema(&recursive_term, self.plan.schema())?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
             static_term: Arc::new(self.plan.clone()),
-            recursive_term: Arc::new(recursive_term),
+            recursive_term: Arc::new(coerced_recursive_term),
             is_distinct,
         })))
     }
