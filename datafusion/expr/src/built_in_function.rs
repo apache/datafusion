@@ -69,18 +69,8 @@ pub enum BuiltinScalarFunction {
     Pi,
     /// power
     Power,
-    /// radians
-    Radians,
     /// round
     Round,
-    /// signum
-    Signum,
-    /// sin
-    Sin,
-    /// sinh
-    Sinh,
-    /// sqrt
-    Sqrt,
     /// trunc
     Trunc,
     /// cot
@@ -165,10 +155,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Volatility::Immutable,
             BuiltinScalarFunction::Power => Volatility::Immutable,
             BuiltinScalarFunction::Round => Volatility::Immutable,
-            BuiltinScalarFunction::Signum => Volatility::Immutable,
-            BuiltinScalarFunction::Sin => Volatility::Immutable,
-            BuiltinScalarFunction::Sinh => Volatility::Immutable,
-            BuiltinScalarFunction::Sqrt => Volatility::Immutable,
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
@@ -176,7 +162,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
-            BuiltinScalarFunction::Radians => Volatility::Immutable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -241,12 +226,7 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Degrees
             | BuiltinScalarFunction::Exp
             | BuiltinScalarFunction::Floor
-            | BuiltinScalarFunction::Radians
             | BuiltinScalarFunction::Round
-            | BuiltinScalarFunction::Signum
-            | BuiltinScalarFunction::Sin
-            | BuiltinScalarFunction::Sinh
-            | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Cbrt
             | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Cot => match input_expr_types[0] {
@@ -335,11 +315,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Degrees
             | BuiltinScalarFunction::Exp
             | BuiltinScalarFunction::Floor
-            | BuiltinScalarFunction::Radians
-            | BuiltinScalarFunction::Signum
-            | BuiltinScalarFunction::Sin
-            | BuiltinScalarFunction::Sinh
-            | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
@@ -366,11 +341,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Exp
                 | BuiltinScalarFunction::Factorial
                 | BuiltinScalarFunction::Floor
-                | BuiltinScalarFunction::Radians
                 | BuiltinScalarFunction::Round
-                | BuiltinScalarFunction::Signum
-                | BuiltinScalarFunction::Sinh
-                | BuiltinScalarFunction::Sqrt
                 | BuiltinScalarFunction::Cbrt
                 | BuiltinScalarFunction::Trunc
                 | BuiltinScalarFunction::Pi
@@ -402,13 +373,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Nanvl => &["nanvl"],
             BuiltinScalarFunction::Pi => &["pi"],
             BuiltinScalarFunction::Power => &["power", "pow"],
-            BuiltinScalarFunction::Radians => &["radians"],
             BuiltinScalarFunction::Random => &["random"],
             BuiltinScalarFunction::Round => &["round"],
-            BuiltinScalarFunction::Signum => &["signum"],
-            BuiltinScalarFunction::Sin => &["sin"],
-            BuiltinScalarFunction::Sinh => &["sinh"],
-            BuiltinScalarFunction::Sqrt => &["sqrt"],
             BuiltinScalarFunction::Trunc => &["trunc"],
 
             // conditional functions

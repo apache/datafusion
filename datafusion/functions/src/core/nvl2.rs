@@ -23,8 +23,14 @@ use datafusion_common::{internal_err, plan_datafusion_err, Result};
 use datafusion_expr::{utils, ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct NVL2Func {
+pub struct NVL2Func {
     signature: Signature,
+}
+
+impl Default for NVL2Func {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NVL2Func {

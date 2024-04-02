@@ -29,11 +29,11 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Fields};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
     SchemaReference, TableReference, ToDFSchema,
 };
@@ -988,6 +988,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
+        df_schema.check_names()?;
 
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
@@ -1263,9 +1264,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build updated values for each column, using the previous value if not modified
         let exprs = table_schema
-            .fields()
             .iter()
-            .map(|field| {
+            .map(|(qualifier, field)| {
                 let expr = match assign_map.remove(field.name()) {
                     Some(new_value) => {
                         let mut expr = self.sql_to_expr(
@@ -1292,7 +1292,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 field.name(),
                             ))
                         } else {
-                            datafusion_expr::Expr::Column(field.qualified_column())
+                            datafusion_expr::Expr::Column(Column::from((
+                                qualifier,
+                                field.as_ref(),
+                            )))
                         }
                     }
                 };
@@ -1358,8 +1361,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     Ok(table_schema.field(column_index).clone())
                 })
-                .collect::<Result<Vec<DFField>>>()?;
-            (fields, value_indices)
+                .collect::<Result<Vec<_>>>()?;
+            (Fields::from(fields), value_indices)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way
@@ -1378,7 +1381,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 idx + 1
                             )
                         })?;
-                        let dt = field.field().data_type().clone();
+                        let dt = field.data_type().clone();
                         let _ = prepare_param_data_types.insert(name, dt);
                     }
                 }
@@ -1400,11 +1403,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => {
-                        let source_field = source.schema().field(v);
-                        datafusion_expr::Expr::Column(source_field.qualified_column())
-                            .cast_to(target_field.data_type(), source.schema())?
-                    }
+                    Some(v) => datafusion_expr::Expr::Column(Column::from(
+                        source.schema().qualified_field(v),
+                    ))
+                    .cast_to(target_field.data_type(), source.schema())?,
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
                         .get_column_default(target_field.name())

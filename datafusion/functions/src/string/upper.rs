@@ -24,7 +24,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct UpperFunc {
+pub struct UpperFunc {
     signature: Signature,
 }
 

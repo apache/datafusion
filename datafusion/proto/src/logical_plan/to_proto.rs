@@ -45,7 +45,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, OwnedTableReference,
     ScalarValue,
 };
 use datafusion_expr::expr::{
@@ -275,27 +275,20 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     }
 }
 
-impl TryFrom<&DFField> for protobuf::DfField {
-    type Error = Error;
-
-    fn try_from(f: &DFField) -> Result<Self, Self::Error> {
-        Ok(Self {
-            field: Some(f.field().as_ref().try_into()?),
-            qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
-                relation: r.to_string(),
-            }),
-        })
-    }
-}
-
 impl TryFrom<&DFSchema> for protobuf::DfSchema {
     type Error = Error;
 
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
-            .fields()
             .iter()
-            .map(|f| f.try_into())
+            .map(|(qualifier, field)| {
+                Ok(protobuf::DfField {
+                    field: Some(field.as_ref().try_into()?),
+                    qualifier: qualifier.map(|r| protobuf::ColumnRelation {
+                        relation: r.to_string(),
+                    }),
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
@@ -1415,12 +1408,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Sqrt => Self::Sqrt,
             BuiltinScalarFunction::Cbrt => Self::Cbrt,
-            BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Cot => Self::Cot,
-            BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
             BuiltinScalarFunction::Exp => Self::Exp,
             BuiltinScalarFunction::Factorial => Self::Factorial,
@@ -1428,13 +1418,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Degrees => Self::Degrees,
-            BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
             BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Signum => Self::Signum,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,

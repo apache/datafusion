@@ -30,8 +30,8 @@ use arrow::{
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
@@ -42,9 +42,9 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, trunc,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    nanvl, pi, power, random, round, trunc, AggregateFunction, Between, BinaryExpr,
+    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
+    GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -170,13 +170,24 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
     type Error = Error;
 
     fn try_from(df_schema: &protobuf::DfSchema) -> Result<Self, Self::Error> {
-        let fields = df_schema
-            .columns
-            .iter()
-            .map(|c| c.try_into())
-            .collect::<Result<Vec<DFField>, _>>()?;
+        let df_fields = df_schema.columns.clone();
+        let qualifiers_and_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> =
+            df_fields
+                .iter()
+                .map(|df_field| {
+                    let field: Field = df_field.field.as_ref().required("field")?;
+                    Ok((
+                        df_field
+                            .qualifier
+                            .as_ref()
+                            .map(|q| q.relation.clone().into()),
+                        Arc::new(field),
+                    ))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+
         Ok(DFSchema::new_with_metadata(
-            fields,
+            qualifiers_and_fields,
             df_schema.metadata.clone(),
         )?)
     }
@@ -188,19 +199,6 @@ impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
     fn try_from(df_schema: protobuf::DfSchema) -> Result<Self, Self::Error> {
         let dfschema: DFSchema = (&df_schema).try_into()?;
         Ok(Arc::new(dfschema))
-    }
-}
-
-impl TryFrom<&protobuf::DfField> for DFField {
-    type Error = Error;
-
-    fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field: Field = df_field.field.as_ref().required("field")?;
-
-        Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(q.relation.clone(), field),
-            None => DFField::from(field),
-        })
     }
 }
 
@@ -423,17 +421,13 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Sqrt => Self::Sqrt,
             ScalarFunction::Cbrt => Self::Cbrt,
-            ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Degrees => Self::Degrees,
-            ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Gcd => Self::Gcd,
             ScalarFunction::Lcm => Self::Lcm,
@@ -442,7 +436,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Signum => Self::Signum,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
@@ -1313,18 +1306,12 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Degrees => {
                     Ok(degrees(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Radians => {
-                    Ok(radians(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
@@ -1335,9 +1322,6 @@ pub fn parse_expr(
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Signum => {
-                    Ok(signum(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }

@@ -24,13 +24,13 @@ use std::sync::Arc;
 use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_err, qualified_name, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
@@ -331,8 +331,10 @@ impl CommonSubexprEliminate {
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
                         let id = ExprSet::expr_identifier(&expr_rewritten);
-                        let out_name =
-                            expr_rewritten.to_field(&new_input_schema)?.qualified_name();
+                        let (qualifier, field) =
+                            expr_rewritten.to_field(&new_input_schema)?;
+                        let out_name = qualified_name(qualifier.as_ref(), field.name());
+
                         agg_exprs.push(expr_rewritten.alias(&id));
                         proj_exprs
                             .push(Expr::Column(Column::from_name(id)).alias(out_name));
@@ -469,7 +471,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type, symbol)) => {
                 // todo: check `nullable`
-                let field = DFField::new_unqualified(&id, data_type.clone(), true);
+                let field = Field::new(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(symbol.as_str()));
             }
@@ -479,9 +481,9 @@ fn build_common_expr_project_plan(
         }
     }
 
-    for field in input.schema().fields() {
-        if fields_set.insert(field.qualified_name()) {
-            project_exprs.push(Expr::Column(field.qualified_column()));
+    for (qualifier, field) in input.schema().iter() {
+        if fields_set.insert(qualified_name(qualifier, field.name())) {
+            project_exprs.push(Expr::Column(Column::from((qualifier, field.as_ref()))));
         }
     }
 
@@ -500,9 +502,8 @@ fn build_recover_project_plan(
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
     let col_exprs = schema
-        .fields()
         .iter()
-        .map(|field| Expr::Column(field.qualified_column()))
+        .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field.as_ref()))))
         .collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
@@ -517,10 +518,14 @@ fn extract_expressions(
 ) -> Result<()> {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
-            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+            let (qualifier, field) = e.to_field(schema)?;
+            let col = Column::new(qualifier, field.name());
+            result.push(Expr::Column(col))
         }
     } else {
-        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+        let (qualifier, field) = expr.to_field(schema)?;
+        let col = Column::new(qualifier, field.name());
+        result.push(Expr::Column(col));
     }
 
     Ok(())
@@ -1037,8 +1042,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1104,8 +1109,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1181,12 +1186,13 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("c", DataType::Int32, false),
-            ],
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1199,11 +1205,12 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-            ],
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1215,8 +1222,8 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+        let schema = DFSchema::from_unqualifed_fields(
+            vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;
         extract_expressions(&col("a"), &schema, &mut result)?;

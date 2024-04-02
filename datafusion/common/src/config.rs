@@ -1362,6 +1362,8 @@ impl TableOptions {
     }
 }
 
+/// Options that control how Parquet files are read, including global options
+/// that apply to all columns and optional column-specific overrides
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {
     /// Global Parquet options that propagates to all columns.

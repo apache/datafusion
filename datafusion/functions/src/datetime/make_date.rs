@@ -30,8 +30,14 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct MakeDateFunc {
+pub struct MakeDateFunc {
     signature: Signature,
+}
+
+impl Default for MakeDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MakeDateFunc {

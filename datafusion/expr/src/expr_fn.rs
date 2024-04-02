@@ -534,12 +534,9 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Sqrt, sqrt, num, "square root of a number");
 scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
-scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Cot, cot, num, "cotangent");
-scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
@@ -555,14 +552,12 @@ scalar_expr!(
     "nearest integer greater than or equal to argument"
 );
 scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
-scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
 nary_scalar_expr!(
     Trunc,
     trunc,
     "truncate toward zero, with optional precision"
 );
-scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
 scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
@@ -885,8 +880,8 @@ impl WindowUDFImpl for SimpleWindowUDF {
 /// ```
 /// use datafusion_expr::{col, lit, call_fn};
 ///
-/// // create the expression sin(x) < 0.2
-/// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
+/// // create the expression trunc(x) < 0.2
+/// let expr = call_fn("trunc", vec![col("x")]).unwrap().lt(lit(0.2));
 /// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
@@ -967,23 +962,18 @@ mod test {
 
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Sqrt, sqrt);
         test_unary_scalar_expr!(Cbrt, cbrt);
-        test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Cot, cot);
-        test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_unary_scalar_expr!(Degrees, degrees);
-        test_unary_scalar_expr!(Radians, radians);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_nary_scalar_expr!(Trunc, trunc, num);
         test_nary_scalar_expr!(Trunc, trunc, num, precision);
-        test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);

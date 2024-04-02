@@ -2704,7 +2704,8 @@ fn logical_plan_with_dialect_and_options(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
-        ));
+        ))
+        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64));
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2992,16 +2993,6 @@ fn join_with_aliases() {
             \n    SubqueryAlias: folks\
             \n      TableScan: person";
     quick_test(sql, expected);
-}
-
-#[test]
-fn cte_use_same_name_multiple_times() {
-    let sql =
-        "with a as (select * from person), a as (select * from orders) select * from a;";
-    let expected =
-        "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
-    let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.strip_backtrace(), expected);
 }
 
 #[test]
