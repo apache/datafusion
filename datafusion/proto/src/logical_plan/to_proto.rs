@@ -1408,12 +1408,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Sqrt => Self::Sqrt,
             BuiltinScalarFunction::Cbrt => Self::Cbrt,
-            BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Cot => Self::Cot,
-            BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
             BuiltinScalarFunction::Exp => Self::Exp,
             BuiltinScalarFunction::Factorial => Self::Factorial,
@@ -1421,13 +1418,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Degrees => Self::Degrees,
-            BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
             BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Signum => Self::Signum,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,

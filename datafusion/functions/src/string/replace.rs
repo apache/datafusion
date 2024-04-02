@@ -30,7 +30,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
-pub(super) struct ReplaceFunc {
+pub struct ReplaceFunc {
     signature: Signature,
 }
 

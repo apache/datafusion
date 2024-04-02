@@ -61,7 +61,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct ChrFunc {
+pub struct ChrFunc {
     signature: Signature,
 }
 

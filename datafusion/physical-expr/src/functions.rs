@@ -200,15 +200,10 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Nanvl => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
         }
-        BuiltinScalarFunction::Radians => Arc::new(math_expressions::to_radians),
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
         BuiltinScalarFunction::Round => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::round)(args))
         }
-        BuiltinScalarFunction::Signum => Arc::new(math_expressions::signum),
-        BuiltinScalarFunction::Sin => Arc::new(math_expressions::sin),
-        BuiltinScalarFunction::Sinh => Arc::new(math_expressions::sinh),
-        BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))

@@ -29,7 +29,7 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct RPadFunc {
+pub struct RPadFunc {
     signature: Signature,
 }
 

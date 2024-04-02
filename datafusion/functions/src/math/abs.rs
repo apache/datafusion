@@ -104,8 +104,14 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
     }
 }
 #[derive(Debug)]
-pub(super) struct AbsFunc {
+pub struct AbsFunc {
     signature: Signature,
+}
+
+impl Default for AbsFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AbsFunc {

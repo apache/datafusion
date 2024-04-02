@@ -42,9 +42,9 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, trunc,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    nanvl, pi, power, random, round, trunc, AggregateFunction, Between, BinaryExpr,
+    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
+    GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -421,17 +421,13 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Sqrt => Self::Sqrt,
             ScalarFunction::Cbrt => Self::Cbrt,
-            ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Degrees => Self::Degrees,
-            ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Gcd => Self::Gcd,
             ScalarFunction::Lcm => Self::Lcm,
@@ -440,7 +436,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Signum => Self::Signum,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
@@ -1311,18 +1306,12 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Degrees => {
                     Ok(degrees(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Radians => {
-                    Ok(radians(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
@@ -1333,9 +1322,6 @@ pub fn parse_expr(
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Signum => {
-                    Ok(signum(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }

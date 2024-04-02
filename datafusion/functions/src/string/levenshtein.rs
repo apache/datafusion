@@ -30,7 +30,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct LevenshteinFunc {
+pub struct LevenshteinFunc {
     signature: Signature,
 }
 
