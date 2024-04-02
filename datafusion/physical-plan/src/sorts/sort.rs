@@ -662,6 +662,9 @@ pub(crate) fn lexsort_to_indices_multi_columns(
     Ok(indices)
 }
 
+/// Spills sorted `in_memory_batches` to disk.
+///
+/// Returns number of the rows spilled to disk.
 async fn spill_sorted_batches(
     batches: Vec<RecordBatch>,
     path: &Path,
@@ -1074,9 +1077,9 @@ mod tests {
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
-        assert!(metrics.spill_count().unwrap() > 0);
-        assert!(metrics.spilled_bytes().unwrap() > 0);
-        assert!(metrics.spilled_rows().unwrap() > 0);
+        assert_eq!(metrics.spill_count().unwrap(), 4);
+        assert_eq!(metrics.spilled_bytes().unwrap(), 38784);
+        assert_eq!(metrics.spilled_rows().unwrap(), 9600);
 
         let columns = result[0].columns();
 
