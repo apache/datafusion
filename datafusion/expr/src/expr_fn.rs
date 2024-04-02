@@ -535,9 +535,9 @@ macro_rules! nary_scalar_expr {
 
 // math functions
 scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
-scalar_expr!(Cos, cos, num, "cosine");
-scalar_expr!(Cot, cot, num, "cotangent");
-scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
+scalar_expr!(Cos, cos, num, "cosine of a number");
+scalar_expr!(Cot, cot, num, "cotangent of a number");
+scalar_expr!(Cosh, cosh, num, "hyperbolic cosine of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
     Floor,
