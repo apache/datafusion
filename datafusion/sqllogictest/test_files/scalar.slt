@@ -406,7 +406,7 @@ select round(exp(a), 5), round(exp(e), 5), round(exp(f), 5) from signed_integers
 
 # factorial scalar function
 query III rowsort
-select factorial(0), factorial(10), factorial(15);
+select factorial(0), factorial(10), factorial(20)
 ----
 1 3628800 1307674368000
 
