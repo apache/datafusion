@@ -880,8 +880,8 @@ impl WindowUDFImpl for SimpleWindowUDF {
 /// ```
 /// use datafusion_expr::{col, lit, call_fn};
 ///
-/// // create the expression sin(x) < 0.2
-/// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
+/// // create the expression trunc(x) < 0.2
+/// let expr = call_fn("trunc", vec![col("x")]).unwrap().lt(lit(0.2));
 /// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
