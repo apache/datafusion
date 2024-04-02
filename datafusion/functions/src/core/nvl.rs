@@ -23,7 +23,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct NVLFunc {
+pub struct NVLFunc {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -46,6 +46,12 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Utf8,
     DataType::LargeUtf8,
 ];
+
+impl Default for NVLFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NVLFunc {
     pub fn new() -> Self {

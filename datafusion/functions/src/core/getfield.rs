@@ -25,8 +25,14 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct GetFieldFunc {
+pub struct GetFieldFunc {
     signature: Signature,
+}
+
+impl Default for GetFieldFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GetFieldFunc {

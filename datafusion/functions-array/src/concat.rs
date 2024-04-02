@@ -45,9 +45,15 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayAppend {
+pub struct ArrayAppend {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayAppend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayAppend {
@@ -99,9 +105,15 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayPrepend {
+pub struct ArrayPrepend {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayPrepend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayPrepend {
@@ -152,9 +164,15 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayConcat {
+pub struct ArrayConcat {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayConcat {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayConcat {
