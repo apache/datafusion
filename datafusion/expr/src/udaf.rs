@@ -280,7 +280,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
     ///
-    /// `acc_args`: the arguments to the accumulator. See [`AccumulatorArgs`] for more details.
+    /// acc_args: [`AccumulatorArgs`] contains information about how the
+    /// aggregate function was called.
+    ///
+    /// # Example
+    /// ```
+    /// todo
+    /// ```
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
     /// Return the fields of the intermediate state.
@@ -308,6 +314,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator]` will be called.
+    ///
+    /// # Notes
+    ///
+    /// Even if this function returns true, DataFusion will call
+    /// `Self::accumulator` for certain queries, such as when this aggregate is
+    /// used as a window function or when there are only aggregates (no GROUP BY
+    /// columns) in the plan.
     fn groups_accumulator_supported(&self) -> bool {
         false
     }
