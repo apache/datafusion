@@ -685,26 +685,32 @@ impl TableProvider for ListingTable {
             .await
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(
-            &self
-                .options
-                .table_partition_cols
-                .iter()
-                .map(|x| x.0.clone())
-                .collect::<Vec<_>>(),
-            filter,
-        ) {
-            // if filter can be handled by partiton pruning, it is exact
-            Ok(TableProviderFilterPushDown::Exact)
-        } else {
-            // otherwise, we still might be able to handle the filter with file
-            // level mechanisms such as Parquet row group pruning.
-            Ok(TableProviderFilterPushDown::Inexact)
-        }
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        let support: Vec<_> = filters
+            .iter()
+            .map(|filter| {
+                if expr_applicable_for_cols(
+                    &self
+                        .options
+                        .table_partition_cols
+                        .iter()
+                        .map(|x| x.0.clone())
+                        .collect::<Vec<_>>(),
+                    filter,
+                ) {
+                    // if filter can be handled by partition pruning, it is exact
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    // otherwise, we still might be able to handle the filter with file
+                    // level mechanisms such as Parquet row group pruning.
+                    TableProviderFilterPushDown::Inexact
+                }
+            })
+            .collect();
+        Ok(support)
     }
 
     fn get_table_definition(&self) -> Option<&str> {

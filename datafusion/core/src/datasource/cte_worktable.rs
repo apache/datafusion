@@ -89,11 +89,14 @@ impl TableProvider for CteWorkTable {
         )))
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         // TODO: should we support filter pushdown?
-        Ok(TableProviderFilterPushDown::Unsupported)
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
     }
 }
