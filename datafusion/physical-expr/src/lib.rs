@@ -58,3 +58,5 @@ pub use sort_expr::{
     PhysicalSortRequirement,
 };
 pub use utils::{reverse_order_bys, split_conjunction};
+
+pub use aggregate::first_last::create_first_value_accumulator;

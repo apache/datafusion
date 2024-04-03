@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
-use crate::expressions::format_state_name;
+use crate::expressions::{self, format_state_name};
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
@@ -29,11 +29,13 @@ use crate::{
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::{Accumulator, Expr};
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ pub struct FirstValue {
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
     ignore_nulls: bool,
+    state_fields: Vec<Field>,
 }
 
 impl FirstValue {
@@ -55,6 +58,7 @@ impl FirstValue {
         input_data_type: DataType,
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
+        state_fields: Vec<Field>,
     ) -> Self {
         let requirement_satisfied = ordering_req.is_empty();
         Self {
@@ -65,6 +69,7 @@ impl FirstValue {
             ordering_req,
             requirement_satisfied,
             ignore_nulls: false,
+            state_fields,
         }
     }
 
@@ -149,6 +154,10 @@ impl AggregateExpr for FirstValue {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
+        if !self.state_fields.is_empty() {
+            return Ok(self.state_fields.clone());
+        }
+
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "first_value"),
             self.input_data_type.clone(),
@@ -384,6 +393,50 @@ impl Accumulator for FirstValueAccumulator {
     }
 }
 
+pub fn create_first_value_accumulator(
+    acc_args: AccumulatorArgs,
+) -> Result<Box<dyn Accumulator>> {
+    let mut all_sort_orders = vec![];
+
+    // Construct PhysicalSortExpr objects from Expr objects:
+    let mut sort_exprs = vec![];
+    for expr in acc_args.sort_exprs {
+        if let Expr::Sort(sort) = expr {
+            if let Expr::Column(col) = sort.expr.as_ref() {
+                let name = &col.name;
+                let e = expressions::col(name, acc_args.schema)?;
+                sort_exprs.push(PhysicalSortExpr {
+                    expr: e,
+                    options: SortOptions {
+                        descending: !sort.asc,
+                        nulls_first: sort.nulls_first,
+                    },
+                });
+            }
+        }
+    }
+    if !sort_exprs.is_empty() {
+        all_sort_orders.extend(sort_exprs);
+    }
+
+    let ordering_req = all_sort_orders;
+
+    let ordering_dtypes = ordering_req
+        .iter()
+        .map(|e| e.expr.data_type(acc_args.schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let requirement_satisfied = ordering_req.is_empty();
+
+    FirstValueAccumulator::try_new(
+        acc_args.data_type,
+        &ordering_dtypes,
+        ordering_req,
+        acc_args.ignore_nulls,
+    )
+    .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+}
+
 /// LAST_VALUE aggregate expression
 #[derive(Debug, Clone)]
 pub struct LastValue {
@@ -471,6 +524,7 @@ impl LastValue {
             input_data_type,
             reverse_order_bys(&ordering_req),
             order_by_data_types,
+            vec![],
         )
     }
 }

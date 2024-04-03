@@ -188,7 +188,7 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 }
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
-pub(crate) fn ordering_fields(
+pub fn ordering_fields(
     ordering_req: &[PhysicalSortExpr],
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],

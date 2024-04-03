@@ -577,6 +577,7 @@ impl AggregateFunction {
         distinct: bool,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             func_def: AggregateFunctionDefinition::UDF(udf),
@@ -584,7 +585,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
-            null_treatment: None,
+            null_treatment,
         }
     }
 }

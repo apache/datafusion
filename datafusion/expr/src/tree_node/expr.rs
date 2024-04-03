@@ -379,6 +379,7 @@ impl TreeNode for Expr {
                             false,
                             new_filter,
                             new_order_by,
+                            null_treatment,
                         )))
                     }
                     AggregateFunctionDefinition::Name(_) => {

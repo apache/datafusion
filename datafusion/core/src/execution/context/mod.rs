@@ -69,11 +69,14 @@ use datafusion_common::{
     OwnedTableReference, SchemaReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::{create_first_value, Signature, Volatility};
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     var_provider::is_system_variables,
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_physical_expr::create_first_value_accumulator;
 use datafusion_sql::{
     parser::{CopyToSource, CopyToStatement, DFParser},
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
@@ -82,6 +85,7 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use log::debug;
 use parking_lot::RwLock;
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
@@ -1450,6 +1454,22 @@ impl SessionState {
         #[cfg(feature = "array_expressions")]
         datafusion_functions_array::register_all(&mut new_self)
             .expect("can not register array expressions");
+
+        let first_value = create_first_value(
+            "FIRST_VALUE",
+            Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            Arc::new(create_first_value_accumulator),
+        );
+
+        match new_self.register_udaf(Arc::new(first_value)) {
+            Ok(Some(existing_udaf)) => {
+                debug!("Overwrite existing UDAF: {}", existing_udaf.name());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                panic!("Failed to register UDAF: {}", err);
+            }
+        }
 
         new_self
     }

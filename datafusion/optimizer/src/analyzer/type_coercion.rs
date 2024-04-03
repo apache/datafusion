@@ -366,7 +366,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
-                            fun, new_expr, false, filter, order_by,
+                            fun,
+                            new_expr,
+                            false,
+                            filter,
+                            order_by,
+                            null_treatment,
                         ),
                     )))
                 }
@@ -896,6 +901,7 @@ mod test {
             false,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
@@ -906,7 +912,6 @@ mod test {
     fn agg_udaf_invalid_input() -> Result<()> {
         let empty = empty();
         let return_type = DataType::Float64;
-        let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -914,12 +919,16 @@ mod test {
             Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
             return_type,
             accumulator,
-            state_type,
+            vec![
+                Field::new("count", DataType::UInt64, true),
+                Field::new("avg", DataType::Float64, true),
+            ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
             false,
+            None,
             None,
             None,
         ));
