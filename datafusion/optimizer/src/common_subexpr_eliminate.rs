@@ -716,9 +716,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             Some((_, counter, _, symbol)) => {
                 // if has a commonly used (a.k.a. 1+ use) expr
                 if *counter > 1 {
-                    if !self.affected_id.contains(curr_id) {
-                        self.affected_id.insert(curr_id.clone());
-                    }
+                    self.affected_id.insert(curr_id.clone());
 
                     let expr_name = expr.display_name()?;
                     // Alias this `Column` expr to it original "expr name",
