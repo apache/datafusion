@@ -56,7 +56,12 @@ impl ExprSet {
     fn get(&self, key: &Identifier) -> Option<&(Expr, usize, DataType, Identifier)> {
         self.map.get(key)
     }
-
+    fn remove_get(
+        &mut self,
+        key: &Identifier,
+    ) -> Option<(Expr, usize, DataType, Identifier)> {
+        self.map.remove(key)
+    }
     fn entry(
         &mut self,
         key: Identifier,
@@ -150,16 +155,15 @@ pub struct CommonSubexprEliminate {}
 impl CommonSubexprEliminate {
     fn rewrite_exprs_list(
         &self,
-        exprs_list: &[&[Expr]],
+        exprs_list: Vec<Vec<Expr>>,
         expr_set: &ExprSet,
         affected_id: &mut BTreeSet<Identifier>,
     ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
-            .iter()
+            .into_iter()
             .map(|exprs| {
                 exprs
-                    .iter()
-                    .cloned()
+                    .into_iter()
                     .map(|expr| replace_common_expr(expr, expr_set, affected_id))
                     .collect::<Result<Vec<_>>>()
             })
@@ -168,7 +172,7 @@ impl CommonSubexprEliminate {
 
     fn rewrite_expr(
         &self,
-        exprs_list: &[&[Expr]],
+        exprs_list: Vec<Vec<Expr>>,
         input: &LogicalPlan,
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
@@ -217,16 +221,15 @@ impl CommonSubexprEliminate {
 
             window_exprs.push(window_expr);
         }
-
-        let mut window_exprs = window_exprs
-            .iter()
-            .map(|expr| expr.as_slice())
-            .collect::<Vec<_>>();
+        let prev_len = window_exprs.len();
+        // let mut window_exprs = window_exprs
+        //     .iter()
+        //     .map(|expr| expr.as_slice())
+        //     .collect::<Vec<_>>();
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&window_exprs, &plan, &expr_set, config)?;
-        assert_eq!(window_exprs.len(), new_expr.len());
-
+            self.rewrite_expr(window_exprs.clone(), &plan, &expr_set, config)?;
+        assert_eq!(prev_len, new_expr.len());
         // Construct consecutive window operator, with their corresponding new window expressions.
         plan = new_input;
         while let Some(new_window_expr) = new_expr.pop() {
@@ -273,8 +276,12 @@ impl CommonSubexprEliminate {
         expr_set.populate_expr_set(aggr_expr, input_schema, ExprMask::Normal)?;
 
         // rewrite inputs
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[group_expr, aggr_expr], input, &expr_set, config)?;
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            vec![group_expr.clone(), aggr_expr.clone()],
+            input,
+            &expr_set,
+            config,
+        )?;
         // note the reversed pop order.
         let new_aggr_expr = pop_expr(&mut new_expr)?;
         let new_group_expr = pop_expr(&mut new_expr)?;
@@ -289,17 +296,20 @@ impl CommonSubexprEliminate {
         )?;
 
         let mut affected_id = BTreeSet::<Identifier>::new();
-        let mut rewritten =
-            self.rewrite_exprs_list(&[&new_aggr_expr], &expr_set, &mut affected_id)?;
+        let mut rewritten = self.rewrite_exprs_list(
+            vec![new_aggr_expr.clone()],
+            &expr_set,
+            &mut affected_id,
+        )?;
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
             // Alias aggregation expressions if they have changed
             let new_aggr_expr = new_aggr_expr
-                .iter()
+                .into_iter()
                 .zip(aggr_expr.iter())
                 .map(|(new_expr, old_expr)| {
-                    new_expr.clone().alias_if_changed(old_expr.display_name()?)
+                    new_expr.alias_if_changed(old_expr.display_name()?)
                 })
                 .collect::<Result<Vec<Expr>>>()?;
             // Since group_epxr changes, schema changes also. Use try_new method.
@@ -309,10 +319,10 @@ impl CommonSubexprEliminate {
             let mut agg_exprs = vec![];
 
             for id in affected_id {
-                match expr_set.get(&id) {
+                match expr_set.remove_get(&id) {
                     Some((expr, _, _, symbol)) => {
                         // todo: check `nullable`
-                        agg_exprs.push(expr.clone().alias(symbol.as_str()));
+                        agg_exprs.push(expr.alias(symbol.as_str()));
                     }
                     _ => {
                         return internal_err!("expr_set invalid state");
@@ -372,12 +382,12 @@ impl CommonSubexprEliminate {
         expr_set.populate_expr_set(&expr, input_schema, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[&expr], input, &expr_set, config)?;
+            self.rewrite_expr(vec![expr], input, &expr_set, config)?;
 
         plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input])
     }
 }
-
+struct PlanRewriteInPlace {}
 impl OptimizerRule for CommonSubexprEliminate {
     fn try_optimize(
         &self,
@@ -706,7 +716,9 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             Some((_, counter, _, symbol)) => {
                 // if has a commonly used (a.k.a. 1+ use) expr
                 if *counter > 1 {
-                    self.affected_id.insert(curr_id.clone());
+                    if !self.affected_id.contains(curr_id) {
+                        self.affected_id.insert(curr_id.clone());
+                    }
 
                     let expr_name = expr.display_name()?;
                     // Alias this `Column` expr to it original "expr name",
