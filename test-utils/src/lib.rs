@@ -16,6 +16,7 @@
 // under the License.
 
 //! Common functions used for testing
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int32_array;
 use rand::prelude::StdRng;
@@ -23,6 +24,8 @@ use rand::{Rng, SeedableRng};
 
 mod data_gen;
 mod string_gen;
+pub mod tpcds;
+pub mod tpch;
 
 pub use data_gen::AccessLogGenerator;
 pub use string_gen::StringBatchGenerator;
@@ -104,4 +107,19 @@ pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch
     }
 
     add_empty_batches(batches, &mut rng)
+}
+
+/// Table definition of a name/schema
+pub struct TableDef {
+    pub name: String,
+    pub schema: Schema,
+}
+
+impl TableDef {
+    fn new(name: impl Into<String>, schema: Schema) -> Self {
+        Self {
+            name: name.into(),
+            schema,
+        }
+    }
 }
