@@ -1389,6 +1389,7 @@ pub fn parse_expr(
                 false,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry, codec)?,
+                None,
             )))
         }
 

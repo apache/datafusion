@@ -2026,6 +2026,7 @@ mod tests {
                 DataType::Float64,
                 ordering_req.clone(),
                 vec![DataType::Float64],
+                vec![],
             ))]
         } else {
             vec![Arc::new(LastValue::new(
@@ -2209,6 +2210,7 @@ mod tests {
                 DataType::Float64,
                 sort_expr_reverse.clone(),
                 vec![DataType::Float64],
+                vec![],
             )),
             Arc::new(LastValue::new(
                 col_b.clone(),

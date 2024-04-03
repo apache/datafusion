@@ -367,6 +367,7 @@ pub fn create_aggregate_expr(
                 input_phy_types[0].clone(),
                 ordering_req.to_vec(),
                 ordering_types,
+                vec![],
             )
             .with_ignore_nulls(ignore_nulls),
         ),
