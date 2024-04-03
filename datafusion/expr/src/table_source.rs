@@ -43,7 +43,7 @@ pub enum TableProviderFilterPushDown {
     /// In this case, DataFusion applies an additional `Filter` operation
     /// after the scan to ensure all rows are filtered correctly.
     Inexact,
-    /// The provider **guarantees** that it will omit  **only** tuples which
+    /// The provider **guarantees** that it will omit **only** tuples which
     /// pass the filter.
     ///
     /// In this case, DataFusion will not apply additional filtering.

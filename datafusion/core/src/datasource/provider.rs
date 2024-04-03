@@ -96,7 +96,7 @@ pub trait TableProvider: Sync + Send {
     /// which *all* of the `Expr`s evaluate to `true` must be returned (aka the
     /// expressions are `AND`ed together).
     ///
-    /// To enable filter pushdown you must override of
+    /// To enable filter pushdown you must override
     /// [`Self::supports_filters_pushdown`] as the default implementation does
     /// not and `filters` will be empty.
     ///
@@ -166,7 +166,7 @@ pub trait TableProvider: Sync + Send {
     /// that particular filter during the scan.
     ///
     /// Some TableProviders can evaluate filters more efficiently than the
-    /// `Filter` operator in DataFusion, for example  by using an index.
+    /// `Filter` operator in DataFusion, for example by using an index.
     ///
     /// By default, returns [`Unsupported`] for all filters, meaning no filters
     /// will be provided to [`Self::scan`]. If the TableProvider can implement
