@@ -27,9 +27,10 @@ use std::any::Any;
 /// Indicates how a filter expression is handled by
 /// [`TableProvider::scan`].
 ///
-/// Filter expressions are boolean expressions  used to reduce the number of
+/// Filter expressions are boolean expressions used to reduce the number of
 /// rows that are read from a table. Only rows that evaluate to `true` ("pass
-/// the filter") are returned.
+/// the filter") are returned. Rows that evaluate to `false` or `NULL` are
+/// omitted.
 ///
 /// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html#tymethod.scan
 #[derive(Debug, Clone, PartialEq, Eq)]
