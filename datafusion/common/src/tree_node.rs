@@ -616,7 +616,7 @@ macro_rules! map_until_stop_and_collect {
                     },
                 )*
             );
-            Ok(Transformed::new(data, transformed, tnr))
+            Ok(Transformed::new(all_datas, transformed, tnr))
         })
     }}
 }
