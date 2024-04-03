@@ -532,17 +532,17 @@ impl<T> Transformed<T> {
     }
 }
 
-/// Transformation helper to process sequence of iterable tree nodes that are siblings.
+/// Transformation helper to process a sequence of iterable tree nodes that are siblings.
 pub trait TransformedIterator: Iterator {
     /// Apples `f` to each item in this iterator
-    /// 
+    ///
     /// Visits all items in the iterator unless
     /// `f` returns an error or `f` returns TreeNodeRecursion::stop.
     ///
-    /// # Returns 
-    /// Error if f returns an error 
+    /// # Returns
+    /// Error if `f` returns an error
     ///
-    /// Ok(Transformed) such that: 
+    /// Ok(Transformed) such that:
     /// 1. `transformed` is true if any return from `f` had transformed true
     /// 2. `data` from the last invocation of `f`
     /// 3. `tnr` from the last invocation of `f` or `Continue` if the iterator is empty
@@ -578,19 +578,35 @@ impl<I: Iterator> TransformedIterator for I {
     }
 }
 
-/// Transformation helper to process sequence of tree node containing expressions.
+/// Transformation helper to process a heterogeneous sequence of tree node containing
+/// expressions.
 /// This macro is very similar to [TransformedIterator::map_until_stop_and_collect] to
-/// process nodes that are siblings, but it accepts an initial transformation and a
-/// sequence of pairs of an expression and its transformation.
+/// process nodes that are siblings, but it accepts an initial transformation (`F0`) and
+/// a sequence of pairs. Each pair is made of an expression (`EXPR`) and its
+/// transformation (`F`).
+///
+/// The macro builds up a tuple that contains `Transformed.data` result of `F0` as the
+/// first element and further elements from the sequence of pairs. An element from a pair
+/// is either the value of `EXPR` or the `Transformed.data` result of `F`, depending on
+/// the `Transformed.tnr` result of previous `F`s (`F0` initially).
+///
+/// # Returns
+/// Error if any of the transformations returns an error
+///
+/// Ok(Transformed<(data0, ..., dataN)>) such that:
+/// 1. `transformed` is true if any of the transformations had transformed true
+/// 2. `(data0, ..., dataN)`, where `data0` is the `Transformed.data` from `F0` and
+///     `data1` ... `dataN` are from either `EXPR` or the `Transformed.data` of `F`
+/// 3. `tnr` from `F0` or the last invocation of `F`
 #[macro_export]
 macro_rules! map_until_stop_and_collect {
-    ($TRANSFORMED_EXPR_0:expr, $($EXPR:expr, $TRANSFORMED_EXPR:expr),*) => {{
-        $TRANSFORMED_EXPR_0.and_then(|Transformed { data: data0, mut transformed, mut tnr }| {
-            let data = (
+    ($F0:expr, $($EXPR:expr, $F:expr),*) => {{
+        $F0.and_then(|Transformed { data: data0, mut transformed, mut tnr }| {
+            let all_datas = (
                 data0,
                 $(
                     if tnr == TreeNodeRecursion::Continue || tnr == TreeNodeRecursion::Jump {
-                        $TRANSFORMED_EXPR.map(|result| {
+                        $F.map(|result| {
                             tnr = result.tnr;
                             transformed |= result.transformed;
                             result.data
