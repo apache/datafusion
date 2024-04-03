@@ -28,7 +28,6 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-mod sort_expr;
 pub mod string_expressions;
 pub mod udf;
 pub mod utils;
@@ -49,12 +48,16 @@ pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     PhysicalExprRef,
 };
-pub use planner::{create_physical_expr, create_physical_exprs};
-pub use scalar_function::ScalarFunctionExpr;
-pub use sort_expr::{
+
+pub use datafusion_physical_expr_core::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_core::sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+
+pub use planner::{create_physical_expr, create_physical_exprs};
+pub use scalar_function::ScalarFunctionExpr;
+
 pub use utils::{reverse_order_bys, split_conjunction};
 
 pub use aggregate::first_last::create_first_value_accumulator;
@@ -70,6 +73,3 @@ pub mod sort_properties {
 pub mod tree_node {
     pub use datafusion_physical_expr_core::tree_node::ExprContext;
 }
-
-// For backwards compatibility
-pub use datafusion_physical_expr_core::physical_expr::PhysicalExpr;

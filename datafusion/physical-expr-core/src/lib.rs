@@ -16,23 +16,7 @@
 // under the License.
 
 pub mod physical_expr;
+pub mod sort_expr;
 pub mod sort_properties;
 pub mod tree_node;
 pub mod utils;
-
-mod sort_expr;
-
-// backwards compatibility
-// pub mod execution_props {
-//     pub use datafusion_expr::execution_props::ExecutionProps;
-//     pub use datafusion_expr::var_provider::{VarProvider, VarType};
-// }
-
-// pub use physical_expr::{
-//     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
-//     PhysicalExpr, PhysicalExprRef,
-// };
-// pub use sort_expr::{
-//     LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
-//     PhysicalSortRequirement,
-// };
