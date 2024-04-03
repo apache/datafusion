@@ -211,8 +211,8 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-///
 /// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+///
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -247,7 +247,12 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+///        // Error if IGNORE NULLs and ORDER BY are specified in the query
+//         acc_args.check_ignore_nulls(self.name())?;
+//         acc_args.check_order_by(self.name())?;
+///        unimplemented!()
+///     }
 ///    fn state_fields(&self, _name: &str, value_type: DataType, _ordering_fields: Vec<Field>) -> Result<Vec<Field>> {
 ///        Ok(vec![
 ///             Field::new("value", value_type, true),
@@ -282,12 +287,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// acc_args: [`AccumulatorArgs`] contains information about how the
     /// aggregate function was called.
-    ///
-    /// # Example
-    /// ```
-    /// struct Aggregate {
-    /// }
-    /// ```
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
     /// Return the fields of the intermediate state.

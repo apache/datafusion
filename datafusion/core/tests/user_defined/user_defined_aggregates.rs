@@ -359,7 +359,7 @@ impl AggregateUDFImpl for MyMin {
         acc_args.check_ignore_nulls(self.name())?;
         acc_args.check_order_by(self.name())?;
 
-        // Use AvgAccumulator
+        // Use MinAccumulator
         MinAccumulator::try_new(&DataType::Float64)
             .map(|acc| Box::new(acc) as Box<dyn Accumulator>)
     }
