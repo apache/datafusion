@@ -16,10 +16,9 @@
 // under the License.
 
 use arrow::{
-    array::MutableArrayData,
+    array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
     compute::{and_kleene, is_not_null, SlicesIterator},
 };
-use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
@@ -69,7 +68,7 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::Int32Array;
+    use arrow::array::Int32Array;
     use datafusion_common::cast::{as_boolean_array, as_int32_array};
 
     use super::*;

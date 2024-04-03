@@ -22,8 +22,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 
