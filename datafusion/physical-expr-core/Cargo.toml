@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-physical-expr"
-description = "Physical expression implementation for DataFusion query engine"
+name = "datafusion-physical-expr-core"
+description = "Core physical expression implementation for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
@@ -29,8 +29,10 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "datafusion_physical_expr"
+name = "datafusion_physical_expr_core"
 path = "src/lib.rs"
+
+# TODO: Remove unused features
 
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
@@ -59,7 +61,6 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr-core = { workspace = true }
 half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 hex = { version = "0.4", optional = true }
@@ -78,7 +79,3 @@ criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
-
-[[bench]]
-harness = false
-name = "in_list"
