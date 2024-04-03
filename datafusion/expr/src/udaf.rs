@@ -171,9 +171,11 @@ impl AggregateUDF {
         self.inner.accumulator(acc_args)
     }
 
-    /// Return the fields of the intermediate state used by this aggregator, given
-    /// its state name, value type and ordering fields. See [`AggregateUDFImpl::state_fields`]
-    /// for more details. Supports multi-phase aggregations
+    /// Return the fields used to store the intermediate state for this aggregator, given
+    /// the name of the aggregate, value type and ordering fields. See [`AggregateUDFImpl::state_fields`]
+    /// for more details.
+    ///
+    /// This is used to support multi-phase aggregations
     pub fn state_fields(
         &self,
         name: &str,
@@ -283,13 +285,28 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `acc_args`: the arguments to the accumulator. See [`AccumulatorArgs`] for more details.
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
-    /// Return the fields of the intermediate state.
+    /// Return the fields used to store the intermediate state of this accumulator.
     ///
-    /// name: the name of the state
+    /// # Arguments:
+    /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
+    /// 2. `value_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
+    /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
+    ///     Empty if no ordering expression is provided.
     ///
-    /// value_type: the type of the value, it should be the result of the `return_type`
+    /// # Notes:
     ///
-    /// ordering_fields: the fields used for ordering, empty if no ordering expression is provided
+    /// The default implementation returns a single state field named `name`
+    /// with the same type as `value_type`. This is suitable for aggregates such
+    /// as `SUM` or `MIN` where partial state can be combined by applying the
+    /// same aggregate.
+    ///
+    /// For aggregates such as `AVG` where the partial state is more complex
+    /// (e.g. a COUNT and a SUM), this method is used to define the additional
+    /// fields.
+    ///
+    /// The name of the fields must be unique within the query and thus should
+    /// be derived from `name`. See [`format_state_name`] for a utility function
+    /// to generate a unique name.
     fn state_fields(
         &self,
         name: &str,
