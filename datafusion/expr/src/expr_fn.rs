@@ -712,16 +712,16 @@ pub fn create_udaf(
     ))
 }
 
-/// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Accumulator's implementation`.
-/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-pub fn create_first_value(
-    name: &str,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-) -> AggregateUDF {
-    AggregateUDF::from(FirstValue::new(name, signature, accumulator))
-}
+// /// Creates a new UDAF with a specific signature, state type and return type.
+// /// The signature and state type must match the `Accumulator's implementation`.
+// /// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
+// pub fn create_first_value(
+//     name: &str,
+//     signature: Signature,
+//     accumulator: AccumulatorFactoryFunction,
+// ) -> AggregateUDF {
+//     AggregateUDF::from(FirstValue::new(name, signature, accumulator))
+// }
 
 /// Implements [`AggregateUDFImpl`] for functions that have a single signature and
 /// return type.

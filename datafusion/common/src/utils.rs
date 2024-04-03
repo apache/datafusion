@@ -679,6 +679,11 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
 }
 
+/// Construct state name. State is the intermidiate state of the aggregate function.
+pub fn format_state_name(name: &str, state_name: &str) -> String {
+    format!("{name}[{state_name}]")
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ScalarValue;

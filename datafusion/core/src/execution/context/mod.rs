@@ -70,7 +70,7 @@ use datafusion_common::{
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::{create_first_value, Signature, Volatility};
+use datafusion_expr::{Signature, Volatility};
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     var_provider::is_system_variables,
