@@ -36,4 +36,3 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
-# itertools = { workspace = true, features = ["use_std"] }
