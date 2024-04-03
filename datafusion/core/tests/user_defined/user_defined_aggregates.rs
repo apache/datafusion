@@ -292,33 +292,34 @@ async fn simple_udaf_trait_ignore_nulls() -> Result<()> {
     let ctx = simple_udf_context()?;
     ctx.register_udaf(AggregateUDF::from(MyMin::new()));
 
+    /// Runs a query that errors and returns the error message
+    async fn run_err(ctx: &SessionContext, sql: &str) -> String {
+        ctx.sql(sql)
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap_err()
+            .strip_backtrace()
+            .to_string()
+    }
+
+    /// Run a query that should succeed
+    async fn run_ok(ctx: &SessionContext, sql: &str) {
+        ctx.sql(sql).await.unwrap().collect().await.unwrap();
+    }
+
     // You can pass IGNORE NULLs to the UDAF
-    let err = ctx
-        .sql("SELECT MY_MIN(a) IGNORE NULLS FROM t")
-        .await?
-        .collect()
-        .await
-        .unwrap_err();
     assert_eq!(
-        err.to_string(),
+        run_err(&ctx, "SELECT MY_MIN(a) IGNORE NULLS FROM t").await,
         "This feature is not implemented: IGNORE NULLS not implemented for my_min"
     );
     // RESPECT NULLS should work (the default)
-    ctx.sql("SELECT MY_MIN(a) RESPECT NULLS FROM t")
-        .await?
-        .collect()
-        .await
-        .unwrap();
+    run_ok(&ctx, "SELECT MY_MIN(a) RESPECT NULLS FROM t").await;
 
     // You can pass ORDER BY to the UDAF as well, which should error if it isn't supported
-    let err = ctx
-        .sql("SELECT MY_MIN(a ORDER BY a) FROM t")
-        .await?
-        .collect()
-        .await
-        .unwrap_err();
     assert_eq!(
-        err.to_string(),
+        run_err(&ctx, "SELECT MY_MIN(a ORDER BY a) FROM t").await,
         "This feature is not implemented: ORDER BY not implemented for my_min"
     );
 
