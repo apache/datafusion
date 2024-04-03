@@ -28,11 +28,11 @@ use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, ColumnStatistics, DisplayAs, DisplayFormatType,
-    Distribution, ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
+    execution_mode_from_children, handle_state, ColumnStatistics, DisplayAs,
+    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{handle_state, ExecutionPlanProperties};
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -319,7 +319,7 @@ struct CrossJoinStream {
     schema: Arc<Schema>,
     /// Future for data from left side
     left_fut: OnceFut<JoinLeftData>,
-    /// Right
+    /// Right side stream
     right: SendableRecordBatchStream,
     /// Current value on the left
     left_index: usize,
@@ -341,7 +341,7 @@ impl RecordBatchStream for CrossJoinStream {
 enum CrossJoinStreamState {
     WaitBuildSide,
     FetchProbeBatch,
-    /// It holds the current batch being processed from the right side
+    /// Holds the currently processed right side batch
     BuildBatches(RecordBatch),
 }
 
@@ -431,13 +431,14 @@ impl CrossJoinStream {
         };
         build_timer.done();
 
-        if left_data.num_rows() == 0 {
-            Poll::Ready(Ok(StatefulStreamResult::Ready(None)))
+        let result = if left_data.num_rows() == 0 {
+            StatefulStreamResult::Ready(None)
         } else {
             self.left_data = left_data.clone();
             self.state = CrossJoinStreamState::FetchProbeBatch;
-            Poll::Ready(Ok(StatefulStreamResult::Continue))
-        }
+            StatefulStreamResult::Continue
+        };
+        Poll::Ready(Ok(result))
     }
 
     /// Fetches the probe (right) batch, updates the metrics, and save the batch in the state.
@@ -449,9 +450,7 @@ impl CrossJoinStream {
         self.left_index = 0;
         let right_data = match ready!(self.right.poll_next_unpin(cx)) {
             Some(Ok(right_data)) => right_data,
-            Some(e) => {
-                return Poll::Ready(e.map(|e| StatefulStreamResult::Ready(Some(e))))
-            }
+            Some(Err(e)) => return Poll::Ready(Err(e)),
             None => return Poll::Ready(Ok(StatefulStreamResult::Ready(None))),
         };
         self.join_metrics.input_batches.add(1);
