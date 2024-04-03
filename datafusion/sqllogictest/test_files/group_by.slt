@@ -4485,7 +4485,6 @@ LIMIT 5
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
-
 # Create a table with timestamp data
 statement ok
 CREATE TABLE src_table (
