@@ -20,7 +20,7 @@
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, Result};
 use std::sync::Arc;
 
 /// Scalar function
@@ -86,6 +86,24 @@ impl<'a> AccumulatorArgs<'a> {
             schema,
             ignore_nulls,
             sort_exprs,
+        }
+    }
+
+    /// Return a not yet implemented error if IGNORE NULLs is true
+    pub fn check_ignore_nulls(&self, name: &str) -> Result<()> {
+        if self.ignore_nulls {
+            not_impl_err!("IGNORE NULLS not implemented for {name}")
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Return a not yet implemented error if `ORDER BY` is non empty
+    pub fn check_order_by(&self, name: &str) -> Result<()> {
+        if !self.sort_exprs.is_empty() {
+            not_impl_err!("ORDER BY not implemented for {name}")
+        } else {
+            Ok(())
         }
     }
 }

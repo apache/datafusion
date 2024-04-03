@@ -285,7 +285,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// # Example
     /// ```
-    /// todo
+    /// struct Aggregate {
+    /// }
     /// ```
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
