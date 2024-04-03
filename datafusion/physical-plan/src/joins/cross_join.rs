@@ -38,7 +38,7 @@ use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -254,7 +254,6 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_fut,
             right: stream,
-            right_batch: RecordBatch::new_empty(self.right().schema()),
             left_index: 0,
             join_metrics,
             state: CrossJoinStreamState::WaitBuildSide,
@@ -324,8 +323,6 @@ struct CrossJoinStream {
     right: SendableRecordBatchStream,
     /// Current value on the left
     left_index: usize,
-    /// Current batch being processed from the right side
-    right_batch: RecordBatch,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// State of the stream
@@ -344,7 +341,19 @@ impl RecordBatchStream for CrossJoinStream {
 enum CrossJoinStreamState {
     WaitBuildSide,
     FetchProbeBatch,
-    BuildBatches,
+    /// It holds the current batch being processed from the right side
+    BuildBatches(RecordBatch),
+}
+
+impl CrossJoinStreamState {
+    /// Tries to extract RecordBatch from CrossJoinStreamState enum.
+    /// Returns an error if state is not BuildBatches state.
+    fn try_as_record_batch(&mut self) -> Result<&RecordBatch> {
+        match self {
+            CrossJoinStreamState::BuildBatches(rb) => Ok(rb),
+            _ => internal_err!("Expected RecordBatch in BuildBatches state"),
+        }
+    }
 }
 
 fn build_batch(
@@ -402,7 +411,7 @@ impl CrossJoinStream {
                 CrossJoinStreamState::FetchProbeBatch => {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
-                CrossJoinStreamState::BuildBatches => {
+                CrossJoinStreamState::BuildBatches(_) => {
                     handle_state!(self.build_batches())
                 }
             };
@@ -447,28 +456,23 @@ impl CrossJoinStream {
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());
-        self.right_batch = right_data;
-        self.state = CrossJoinStreamState::BuildBatches;
+
+        self.state = CrossJoinStreamState::BuildBatches(right_data);
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
     /// Joins the the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let right_batch = self.state.try_as_record_batch()?;
         if self.left_index < self.left_data.num_rows() {
             let join_timer = self.join_metrics.join_time.timer();
+            let result =
+                build_batch(self.left_index, right_batch, &self.left_data, &self.schema);
+            join_timer.done();
+            self.join_metrics.input_rows.add(right_batch.num_rows());
 
-            let result = build_batch(
-                self.left_index,
-                &self.right_batch,
-                &self.left_data,
-                &self.schema,
-            );
-            self.join_metrics
-                .input_rows
-                .add(self.right_batch.num_rows());
             if let Ok(ref batch) = result {
-                join_timer.done();
                 self.join_metrics.output_batches.add(1);
                 self.join_metrics.output_rows.add(batch.num_rows());
             }
