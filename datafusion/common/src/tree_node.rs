@@ -534,6 +534,18 @@ impl<T> Transformed<T> {
 
 /// Transformation helper to process sequence of iterable tree nodes that are siblings.
 pub trait TransformedIterator: Iterator {
+    /// Apples `f` to each item in this iterator
+    /// 
+    /// Visits all items in the iterator unless
+    /// `f` returns an error or `f` returns TreeNodeRecursion::stop.
+    ///
+    /// # Returns 
+    /// Error if f returns an error 
+    ///
+    /// Ok(Transformed) such that: 
+    /// 1. `transformed` is true if any return from `f` had transformed true
+    /// 2. `data` from the last invocation of `f`
+    /// 3. `tnr` from the last invocation of `f` or `Continue` if the iterator is empty
     fn map_until_stop_and_collect<
         F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>,
     >(
