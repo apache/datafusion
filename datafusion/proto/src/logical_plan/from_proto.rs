@@ -215,7 +215,7 @@ impl TryFrom<protobuf::TableReference> for TableReference {
     type Error = Error;
 
     fn try_from(value: protobuf::TableReference) -> Result<Self, Self::Error> {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = value
             .table_reference_enum
             .ok_or_else(|| Error::required("table_reference_enum"))?;

@@ -1460,7 +1460,7 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
 
 impl From<TableReference> for protobuf::TableReference {
     fn from(t: TableReference) -> Self {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
             TableReference::Bare { table } => {
                 TableReferenceEnum::Bare(protobuf::BareTableReference {
