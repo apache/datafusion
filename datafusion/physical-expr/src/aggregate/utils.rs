@@ -17,10 +17,11 @@
 
 //! Utilities used in aggregates
 
-use std::any::Any;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalSortExpr};
+pub use datafusion_physical_expr_core::aggregate::utils::down_cast_any_ref;
+
+use crate::PhysicalSortExpr;
 
 use arrow::array::{ArrayRef, ArrowNativeTypeOp};
 use arrow_array::cast::AsArray;
@@ -168,23 +169,6 @@ pub fn adjust_output_array(
         _ => array,
     };
     Ok(array)
-}
-
-/// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`] so
-/// that it can be downcast to a specific implementation.
-///
-/// This method is used when implementing the `PartialEq<dyn Any>`
-/// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
-/// between the trait objects.
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else {
-        any
-    }
 }
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
