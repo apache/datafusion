@@ -221,9 +221,9 @@ pub fn create_physical_fun(
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
-        BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
-            make_scalar_function_inner(string_expressions::concat_ws)(args)
-        }),
+        BuiltinScalarFunction::ConcatWithSeparator => {
+            Arc::new(string_expressions::concat_ws)
+        }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::initcap::<i32>)(args)
