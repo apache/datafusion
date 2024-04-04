@@ -29,7 +29,6 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr};
 
@@ -94,7 +93,7 @@ impl PhysicalExpr for Literal {
     fn get_ordering(
         &self,
         _children: &[SortProperties],
-        _input_schema: Option<&SchemaRef>,
+        _input_schema: &Schema,
     ) -> SortProperties {
         SortProperties::Singleton
     }

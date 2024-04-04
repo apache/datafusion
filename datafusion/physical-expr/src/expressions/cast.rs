@@ -27,7 +27,6 @@ use crate::PhysicalExpr;
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -165,21 +164,20 @@ impl PhysicalExpr for CastExpr {
         self.cast_options.hash(&mut s);
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child.
+    /// A [`CastExpr`] preserves the ordering of its child only if source and
+    /// target types of the cast are in the same dataype family.
     fn get_ordering(
         &self,
         children: &[SortProperties],
-        input_schema: Option<&SchemaRef>,
+        input_schema: &Schema,
     ) -> SortProperties {
-        if let Some(schema) = input_schema {
-            if let Ok(source_datatype) = self.expr.data_type(schema) {
-                if self.cast_type.is_numeric() && source_datatype.is_numeric()
-                    || self.cast_type.is_temporal() && source_datatype.is_temporal()
-                {
-                    return children[0];
-                }
+        if let Ok(source_datatype) = self.expr.data_type(input_schema) {
+            if self.cast_type.is_numeric() && source_datatype.is_numeric()
+                || self.cast_type.is_temporal() && source_datatype.is_temporal()
+            {
+                return children[0];
             }
-        };
+        }
         SortProperties::Unordered
     }
 }

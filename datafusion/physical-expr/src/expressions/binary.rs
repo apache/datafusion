@@ -448,7 +448,7 @@ impl PhysicalExpr for BinaryExpr {
     fn get_ordering(
         &self,
         children: &[SortProperties],
-        _input_schema: Option<&SchemaRef>,
+        _input_schema: &Schema,
     ) -> SortProperties {
         let (left_child, right_child) = (&children[0], &children[1]);
         match self.op() {

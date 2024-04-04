@@ -30,7 +30,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, Result};
 
@@ -312,7 +312,7 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let expr_ordering = self.get_expr_ordering(req.expr.clone(), Some(self.schema()));
+        let expr_ordering = self.get_expr_ordering(req.expr.clone(), self.schema());
         let ExprOrdering { expr, data, .. } = expr_ordering;
         match data {
             SortProperties::Ordered(options) => {
@@ -633,7 +633,7 @@ impl EquivalenceProperties {
                 .into_iter()
                 .filter_map(|relevant_deps| {
                     if let SortProperties::Ordered(options) =
-                        get_expr_ordering(source, &relevant_deps, Some(self.schema()))
+                        get_expr_ordering(source, &relevant_deps, self.schema())
                     {
                         Some((options, relevant_deps))
                     } else {
@@ -772,7 +772,7 @@ impl EquivalenceProperties {
                 .iter()
                 .flat_map(|&idx| {
                     let ExprOrdering { expr, data, .. } = eq_properties
-                        .get_expr_ordering(exprs[idx].clone(), Some(self.schema()));
+                        .get_expr_ordering(exprs[idx].clone(), self.schema());
                     match data {
                         SortProperties::Ordered(options) => {
                             Some((PhysicalSortExpr { expr, options }, idx))
@@ -847,7 +847,7 @@ impl EquivalenceProperties {
     pub fn get_expr_ordering(
         &self,
         expr: Arc<dyn PhysicalExpr>,
-        input_schema: Option<&SchemaRef>,
+        input_schema: &Schema,
     ) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self, input_schema)))
@@ -872,7 +872,7 @@ impl EquivalenceProperties {
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
-    input_schema: Option<&SchemaRef>,
+    input_schema: &Schema,
 ) -> Transformed<ExprOrdering> {
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
@@ -1079,7 +1079,7 @@ fn generate_dependency_orderings(
 fn get_expr_ordering(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
-    input_schema: Option<&SchemaRef>,
+    input_schema: &Schema,
 ) -> SortProperties {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
@@ -1758,13 +1758,15 @@ mod tests {
                 SortProperties::Unordered,
             ),
         ];
+        let schema_ref = Arc::new(schema.clone());
         for (expr, expected) in test_cases {
             let leading_orderings = eq_properties
                 .oeq_class()
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_ordering = eq_properties.get_expr_ordering(expr.clone(), None);
+            let expr_ordering =
+                eq_properties.get_expr_ordering(expr.clone(), &schema_ref);
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_ordering.data
