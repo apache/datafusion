@@ -64,6 +64,9 @@ impl<'a> ColumnarValueRef<'a> {
     }
 }
 
+/// Optimized version of the StringBuilder in Arrow that:
+/// 1. Precalculating the expected length of the result, avoiding reallocations.
+/// 2. Avoids creating / incrementally creating a `NullBufferBuilder`
 struct StringArrayBuilder {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
@@ -74,6 +77,7 @@ impl StringArrayBuilder {
         let mut offsets_buffer = MutableBuffer::with_capacity(
             (item_capacity + 1) * std::mem::size_of::<i32>(),
         );
+        // SAFETY: the first offset value is definitely not going to exceed the bounds.
         unsafe { offsets_buffer.push_unchecked(0_i32) };
         Self {
             offsets_buffer,
@@ -114,6 +118,8 @@ impl StringArrayBuilder {
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
+        // SAFETY: all data that was appended was valid UTF8 and the values
+        // and offsets were created correctly
         let array_data = unsafe { array_builder.build_unchecked() };
         StringArray::from(array_data)
     }
