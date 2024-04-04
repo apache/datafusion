@@ -47,7 +47,7 @@ use crate::utils::scatter;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 ///
 /// # Example: Create `PhysicalExpr` from `Expr`
-/// ```no_run
+/// ```ignore
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
@@ -65,7 +65,7 @@ use crate::utils::scatter;
 /// ```
 ///
 /// # Example: Executing a PhysicalExpr to obtain [`ColumnarValue`]
-/// ```no_run
+/// ```ignore
 /// # use std::sync::Arc;
 /// # use arrow::array::{cast::AsArray, BooleanArray, Int32Array, RecordBatch};
 /// # use arrow::datatypes::{DataType, Field, Schema};
