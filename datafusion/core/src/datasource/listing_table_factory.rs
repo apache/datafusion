@@ -171,7 +171,7 @@ mod tests {
     use crate::execution::context::SessionContext;
 
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{Constraints, DFSchema, OwnedTableReference};
+    use datafusion_common::{Constraints, DFSchema, TableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -184,7 +184,7 @@ mod tests {
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
         let state = context.state();
-        let name = OwnedTableReference::bare("foo");
+        let name = TableReference::bare("foo");
         let cmd = CreateExternalTable {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),
@@ -222,7 +222,7 @@ mod tests {
         let factory = ListingTableFactory::new();
         let context = SessionContext::new();
         let state = context.state();
-        let name = OwnedTableReference::bare("foo");
+        let name = TableReference::bare("foo");
 
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());

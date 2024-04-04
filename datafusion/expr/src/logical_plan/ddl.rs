@@ -26,9 +26,7 @@ use crate::{Expr, LogicalPlan, Volatility};
 
 use arrow::datatypes::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{
-    Constraints, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
-};
+use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
@@ -187,7 +185,7 @@ pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The physical location
     pub location: String,
     /// The file type of physical file
@@ -239,7 +237,7 @@ impl Hash for CreateExternalTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The list of constraints in the schema, such as primary key, unique, etc.
     pub constraints: Constraints,
     /// The logical plan
@@ -256,7 +254,7 @@ pub struct CreateMemoryTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -291,7 +289,7 @@ pub struct CreateCatalogSchema {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// If the table exists
     pub if_exists: bool,
     /// Dummy schema
@@ -302,7 +300,7 @@ pub struct DropTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
     /// The view name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
@@ -313,7 +311,7 @@ pub struct DropView {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropCatalogSchema {
     /// The schema name
-    pub name: OwnedSchemaReference,
+    pub name: SchemaReference,
     /// If the schema exists
     pub if_exists: bool,
     /// Whether drop should cascade

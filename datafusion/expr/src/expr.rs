@@ -35,7 +35,7 @@ use crate::{
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFSchema, OwnedTableReference, Result, ScalarValue,
+    internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::NullTreatment;
 
@@ -193,7 +193,7 @@ pub struct Unnest {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
-    pub relation: Option<OwnedTableReference>,
+    pub relation: Option<TableReference>,
     pub name: String,
 }
 
@@ -201,7 +201,7 @@ impl Alias {
     /// Create an alias with an optional schema/field qualifier.
     pub fn new(
         expr: Expr,
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Self {
         Self {
@@ -1029,7 +1029,7 @@ impl Expr {
     /// Return `self AS name` alias expression with a specific qualifier
     pub fn alias_qualified(
         self,
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
         match self {

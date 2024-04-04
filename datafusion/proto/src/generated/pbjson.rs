@@ -15867,7 +15867,7 @@ impl<'de> serde::Deserialize<'de> for OptimizedPhysicalPlanType {
         deserializer.deserialize_struct("datafusion.OptimizedPhysicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for OwnedTableReference {
+impl serde::Serialize for TableReference {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -15878,7 +15878,7 @@ impl serde::Serialize for OwnedTableReference {
         if self.table_reference_enum.is_some() {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.OwnedTableReference", len)?;
+        let mut struct_ser = serializer.serialize_struct("datafusion.TableReference", len)?;
         if let Some(v) = self.table_reference_enum.as_ref() {
             match v {
                 owned_table_reference::TableReferenceEnum::Bare(v) => {
@@ -15895,7 +15895,7 @@ impl serde::Serialize for OwnedTableReference {
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for OwnedTableReference {
+impl<'de> serde::Deserialize<'de> for TableReference {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -15945,13 +15945,13 @@ impl<'de> serde::Deserialize<'de> for OwnedTableReference {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = OwnedTableReference;
+            type Value = TableReference;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.OwnedTableReference")
+                formatter.write_str("struct datafusion.TableReference")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<OwnedTableReference, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TableReference, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
@@ -15981,12 +15981,12 @@ impl<'de> serde::Deserialize<'de> for OwnedTableReference {
                         }
                     }
                 }
-                Ok(OwnedTableReference {
+                Ok(TableReference {
                     table_reference_enum: table_reference_enum__,
                 })
             }
         }
-        deserializer.deserialize_struct("datafusion.OwnedTableReference", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("datafusion.TableReference", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ParquetFormat {

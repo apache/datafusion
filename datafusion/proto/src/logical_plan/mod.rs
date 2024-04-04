@@ -46,7 +46,7 @@ use datafusion::{
 };
 use datafusion_common::{
     context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
-    plan_datafusion_err, DataFusionError, OwnedTableReference, Result,
+    plan_datafusion_err, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     dml,
@@ -182,9 +182,9 @@ macro_rules! into_logical_plan {
 }
 
 fn from_owned_table_reference(
-    table_ref: Option<&protobuf::OwnedTableReference>,
+    table_ref: Option<&protobuf::TableReference>,
     error_context: &str,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference> {
     let table_ref = table_ref.ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Protobuf deserialization error, {error_context} was missing required field name."
@@ -1235,7 +1235,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: Some(alias.to_owned_reference().into()),
+                            alias: Some((*alias).clone().into()),
                         },
                     ))),
                 })
