@@ -539,7 +539,9 @@ impl ListingOptions {
             Ok(v) => Ok(v),
             Err(None) => Ok(vec![]),
             Err(Some(diff)) => {
-                plan_err!("Found mixed partition values on disk {:?}", diff)
+                let mut sorted_diff = [diff.0, diff.1];
+                sorted_diff.sort();
+                plan_err!("Found mixed partition values on disk {:?}", sorted_diff)
             }
         }
     }
