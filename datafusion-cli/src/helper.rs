@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use datafusion::common::sql_err;
+use datafusion::common::sql_datafusion_err;
 use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
@@ -189,10 +189,9 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
                     't' => '\t',
                     '\\' => '\\',
                     _ => {
-                        return sql_err!(ParserError::TokenizerError(format!(
-                            "unsupported escape char: '\\{}'",
-                            next_char
-                        ),))
+                        return Err(sql_datafusion_err!(ParserError::TokenizerError(
+                            format!("unsupported escape char: '\\{}'", next_char)
+                        )))
                     }
                 });
             }
