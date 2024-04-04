@@ -73,6 +73,7 @@ regex = { version = "1.8", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
@@ -81,3 +82,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 [[bench]]
 harness = false
 name = "in_list"
+
+[[bench]]
+harness = false
+name = "concat"
