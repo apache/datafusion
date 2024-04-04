@@ -249,12 +249,7 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-///        // Error if IGNORE NULLs and ORDER BY are specified in the query
-//         acc_args.check_ignore_nulls(self.name())?;
-//         acc_args.check_order_by(self.name())?;
-///        unimplemented!()
-///     }
+///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_fields(&self, _name: &str, value_type: DataType, _ordering_fields: Vec<Field>) -> Result<Vec<Field>> {
 ///        Ok(vec![
 ///             Field::new("value", value_type, true),
@@ -334,10 +329,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// Even if this function returns true, DataFusion will call
+    /// Even if this function returns true, DataFusion will still use
     /// `Self::accumulator` for certain queries, such as when this aggregate is
-    /// used as a window function or when there are only aggregates (no GROUP BY
-    /// columns) in the plan.
+    /// used as a window function or when there no GROUP BY columns in the
+    /// query.
     fn groups_accumulator_supported(&self) -> bool {
         false
     }

@@ -87,18 +87,7 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     /// is supported, DataFusion will use this row oriented
     /// accumulator when the aggregate function is used as a window function
     /// or when there are only aggregates (no GROUP BY columns) in the plan.
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        // Error if IGNORE NULLs and ORDER BY are specified in the query as this
-        // UDAF does not support them.
-        //
-        // For example `SELECT geo_mean(a) IGNORE NULLS` and `SELECT geo_mean(a)
-        // ORDER BY b` would fail.
-        //
-        // If your Accumulator supports different behavior for these options,
-        // you can implement it here.
-        acc_args.check_ignore_nulls(self.name())?;
-        acc_args.check_order_by(self.name())?;
-
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }
 
