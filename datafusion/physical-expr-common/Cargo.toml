@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion-physical-expr-core"
+name = "datafusion-physical-expr-common"
 description = "Core physical expression implementation for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
@@ -29,7 +29,7 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "datafusion_physical_expr_core"
+name = "datafusion_physical_expr_common"
 path = "src/lib.rs"
 
 [dependencies]

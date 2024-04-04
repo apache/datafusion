@@ -41,7 +41,7 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use datafusion_physical_expr_core::aggregate::AggregateExpr;
+pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 pub use equivalence::EquivalenceProperties;
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
@@ -49,8 +49,8 @@ pub use physical_expr::{
     PhysicalExprRef,
 };
 
-pub use datafusion_physical_expr_core::physical_expr::PhysicalExpr;
-pub use datafusion_physical_expr_core::sort_expr::{
+pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
@@ -58,19 +58,19 @@ pub use datafusion_physical_expr_core::sort_expr::{
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 
-pub use datafusion_physical_expr_core::utils::reverse_order_bys;
+pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::split_conjunction;
 
 pub use aggregate::first_last::create_first_value_accumulator;
 
 // For backwards compatibility
 pub mod sort_properties {
-    pub use datafusion_physical_expr_core::sort_properties::{
+    pub use datafusion_physical_expr_common::sort_properties::{
         ExprOrdering, SortProperties,
     };
 }
 
 // For backwards compatibility
 pub mod tree_node {
-    pub use datafusion_physical_expr_core::tree_node::ExprContext;
+    pub use datafusion_physical_expr_common::tree_node::ExprContext;
 }

@@ -21,7 +21,7 @@
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that provides the core functionality of physical expressions.
-Like `PhysicalExpr` or `PhysicalSortExpr` and related things.
+This crate is a submodule of DataFusion that provides shared APIs for implementing
+physical expressions such as `PhysicalExpr` and `PhysicalSortExpr`.
 
 [df]: https://crates.io/crates/datafusion
