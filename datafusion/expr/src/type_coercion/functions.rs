@@ -41,6 +41,10 @@ pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
+    println!(
+        "***************** \n current types are {:?} \n ***************** \n",
+        current_types
+    );
     if current_types.is_empty() {
         if signature.type_signature.supports_zero_argument() {
             return Ok(vec![]);
@@ -60,7 +64,10 @@ pub fn data_types(
     {
         return Ok(current_types.to_vec());
     }
-
+    println!(
+        "********** \n valid types are {:?} \n ************ \n",
+        valid_types
+    );
     // Try and coerce the argument types to match the signature, returning the
     // coerced types from the first matching signature.
     for valid_types in valid_types {
@@ -173,7 +180,7 @@ fn get_valid_types(
             _ => None,
         }
     }
-
+    println!("current types are {:?}", current_types);
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
@@ -191,6 +198,7 @@ fn get_valid_types(
                     // coercible for the arguments. `comparison_coercion` returns more loose
                     // types that can be coerced to both `acc` and `x` for comparison purpose.
                     // See `maybe_data_types` for the actual coercion.
+                    println!("************* \n left is {:?} and right is {:?} \n **************", acc, x);
                     let coerced_type = comparison_coercion(&acc, x);
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
@@ -276,7 +284,10 @@ fn maybe_data_types(
     let mut new_type = Vec::with_capacity(valid_types.len());
     for (i, valid_type) in valid_types.iter().enumerate() {
         let current_type = &current_types[i];
-
+        println!(
+            "\n ************* \n current_type is {:?}, and valid type is {:?} \n *************** \n",
+            current_type, valid_type
+        );
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
@@ -609,6 +620,18 @@ mod tests {
             ))
         );
 
+        Ok(())
+    }
+    #[test]
+    fn test_variadic_equal_dictionary() -> Result<()> {
+        let vol = Signature::variadic_equal(Volatility::Immutable);
+        let args = vec![
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::Utf8,
+        ];
+        let valid_types = get_valid_types(&vol.type_signature, &args)?;
+        assert_eq!(valid_types.len(), 1);
+        assert_eq!(valid_types[0], vec![DataType::Utf8, DataType::Utf8]);
         Ok(())
     }
 }
