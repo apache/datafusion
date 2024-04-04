@@ -4157,29 +4157,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn preserve_ordering_through_repartition() -> Result<()> {
-        let schema = schema();
-        let sort_key = vec![PhysicalSortExpr {
-            expr: col("d", &schema).unwrap(),
-            options: SortOptions::default(),
-        }];
-        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
-        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
-
-        let expected = &[
-            "SortPreservingMergeExec: [d@3 ASC]",
-            "FilterExec: c@2 = 0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
-            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
-        ];
-        // last flag sets config.optimizer.PREFER_EXISTING_SORT
-        assert_optimized!(expected, physical_plan.clone(), true, true);
-        assert_optimized!(expected, physical_plan, false, true);
-
-        Ok(())
-    }
-
-    #[test]
     fn remove_unnecessary_spm_after_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
@@ -4196,6 +4173,29 @@ pub(crate) mod tests {
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        // last flag sets config.optimizer.PREFER_EXISTING_SORT
+        assert_optimized!(expected, physical_plan.clone(), true, true);
+        assert_optimized!(expected, physical_plan, false, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserve_ordering_through_repartition() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("d", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [d@3 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
         ];
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
