@@ -93,8 +93,10 @@ impl OptimizerRule for UnwrapCastInComparison {
         let mut schema = merge_schema(plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = plan {
-            let source_schema =
-                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            let source_schema = DFSchema::try_from_qualified_schema(
+                ts.table_name.clone(),
+                &ts.source.schema(),
+            )?;
             schema.merge(&source_schema);
         }
 

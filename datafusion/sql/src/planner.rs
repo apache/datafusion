@@ -31,11 +31,11 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::TableReference;
 use datafusion_common::{
     not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
     Result,
 };
-use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
@@ -483,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn object_name_to_table_reference(
         &self,
         object_name: ObjectName,
-    ) -> Result<OwnedTableReference> {
+    ) -> Result<TableReference> {
         object_name_to_table_reference(
             object_name,
             self.options.enable_ident_normalization,
@@ -491,7 +491,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
-/// Create a [`OwnedTableReference`] after normalizing the specified ObjectName
+/// Create a [`TableReference`] after normalizing the specified ObjectName
 ///
 /// Examples
 /// ```text
@@ -504,17 +504,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 pub fn object_name_to_table_reference(
     object_name: ObjectName,
     enable_normalization: bool,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference> {
     // use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(idents) = object_name;
     idents_to_table_reference(idents, enable_normalization)
 }
 
-/// Create a [`OwnedTableReference`] after normalizing the specified identifier
+/// Create a [`TableReference`] after normalizing the specified identifier
 pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
     enable_normalization: bool,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference> {
     struct IdentTaker(Vec<Ident>);
     /// take the next identifier from the back of idents, panic'ing if
     /// there are none left
@@ -530,18 +530,18 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(OwnedTableReference::bare(table))
+            Ok(TableReference::bare(table))
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(OwnedTableReference::partial(schema, table))
+            Ok(TableReference::partial(schema, table))
         }
         3 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
             let catalog = taker.take(enable_normalization);
-            Ok(OwnedTableReference::full(catalog, schema, table))
+            Ok(TableReference::full(catalog, schema, table))
         }
         _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
     }

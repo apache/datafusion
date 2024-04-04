@@ -80,7 +80,7 @@ impl SimplifyExpressions {
             // Thus, use the full schema of the inner provider without any
             // projection applied for simplification
             Arc::new(DFSchema::try_from_qualified_schema(
-                &scan.table_name,
+                scan.table_name.clone(),
                 &scan.source.schema(),
             )?)
         } else {
