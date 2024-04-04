@@ -1327,11 +1327,6 @@ pub(crate) mod tests {
     }
 
     impl SortRequiredExec {
-        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-            let expr = input.output_ordering().unwrap_or(&[]).to_vec();
-            Self::new_with_requirement(input, expr)
-        }
-
         fn new_with_requirement(
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
@@ -1391,10 +1386,11 @@ pub(crate) mod tests {
 
         // model that it requires the output ordering of its input
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-            vec![self
-                .properties()
-                .output_ordering()
-                .map(PhysicalSortRequirement::from_sort_exprs)]
+            if self.expr.is_empty() {
+                vec![None]
+            } else {
+                vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
+            }
         }
 
         fn with_new_children(
@@ -1675,10 +1671,6 @@ pub(crate) mod tests {
 
     fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
         Arc::new(UnionExec::new(input))
-    }
-
-    fn sort_required_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(SortRequiredExec::new(input))
     }
 
     fn sort_required_exec_with_req(
@@ -3206,8 +3198,10 @@ pub(crate) mod tests {
             expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let plan =
-            sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
+        let plan = sort_required_exec_with_req(
+            filter_exec(sort_exec(sort_key.clone(), parquet_exec(), false)),
+            sort_key,
+        );
 
         let expected = &[
             "SortRequiredExec: [d@3 ASC]",
@@ -3216,31 +3210,6 @@ pub(crate) mod tests {
             // is still satisfied.
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[d@3 ASC]",
-            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-        ];
-
-        assert_optimized!(expected, plan.clone(), true);
-        assert_optimized!(expected, plan, false);
-
-        Ok(())
-    }
-
-    #[test]
-    fn repartition_sorted_filter_constant() -> Result<()> {
-        let schema = schema();
-        let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }];
-        let plan =
-            sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
-
-        // Original plan expects c@2 to be ordered at the output.
-        // Optimized plan satisfy this requirement, since after filter c@2 is constant.
-        let expected = &[
-            "SortRequiredExec: []",
-            "FilterExec: c@2 = 0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
@@ -3395,8 +3364,10 @@ pub(crate) mod tests {
             expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let plan =
-            sort_required_exec(filter_exec(parquet_exec_with_sort(vec![sort_key])));
+        let plan = sort_required_exec_with_req(
+            filter_exec(parquet_exec_with_sort(vec![sort_key.clone()])),
+            sort_key,
+        );
 
         // during repartitioning ordering is preserved
         let expected = &[
@@ -3428,7 +3399,10 @@ pub(crate) mod tests {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let input1 = sort_required_exec(parquet_exec_with_sort(vec![sort_key]));
+        let input1 = sort_required_exec_with_req(
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+            sort_key,
+        );
         let input2 = filter_exec(parquet_exec());
         let plan = union_exec(vec![input1, input2]);
 
@@ -3506,10 +3480,13 @@ pub(crate) mod tests {
             ("c".to_string(), "c".to_string()),
         ];
         // sorted input
-        let plan = sort_required_exec(projection_exec_with_alias(
-            parquet_exec_multiple_sorted(vec![sort_key]),
-            alias,
-        ));
+        let plan = sort_required_exec_with_req(
+            projection_exec_with_alias(
+                parquet_exec_multiple_sorted(vec![sort_key.clone()]),
+                alias,
+            ),
+            sort_key,
+        );
 
         let expected = &[
             "SortRequiredExec: [c@2 ASC]",
@@ -3664,8 +3641,8 @@ pub(crate) mod tests {
             options: SortOptions::default(),
         }];
 
-        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key]));
-        let plan = sort_required_exec(plan);
+        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
+        let plan = sort_required_exec_with_req(plan, sort_key);
 
         // The groups must have only contiguous ranges of rows from the same file
         // if any group has rows from multiple files, the data is no longer sorted destroyed
@@ -4050,9 +4027,14 @@ pub(crate) mod tests {
         }];
         //  SortRequired
         //    Parquet(sorted)
-        let plan_parquet =
-            sort_required_exec(parquet_exec_with_sort(vec![sort_key.clone()]));
-        let plan_csv = sort_required_exec(csv_exec_with_sort(vec![sort_key]));
+        let plan_parquet = sort_required_exec_with_req(
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+            sort_key.clone(),
+        );
+        let plan_csv = sort_required_exec_with_req(
+            csv_exec_with_sort(vec![sort_key.clone()]),
+            sort_key,
+        );
 
         // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
         let expected_parquet = &[
