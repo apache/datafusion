@@ -469,7 +469,6 @@ impl CrossJoinStream {
             let result =
                 build_batch(self.left_index, right_batch, &self.left_data, &self.schema);
             join_timer.done();
-            self.join_metrics.input_rows.add(right_batch.num_rows());
 
             if let Ok(ref batch) = result {
                 self.join_metrics.output_batches.add(1);
