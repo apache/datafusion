@@ -144,7 +144,7 @@ pub struct LogicalExprNodeCollection {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
-    pub table_name: ::core::option::Option<TableReference>,
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(string, repeated, tag = "2")]
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
@@ -185,7 +185,7 @@ pub mod listing_table_scan_node {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ViewTableScanNode {
     #[prost(message, optional, tag = "6")]
-    pub table_name: ::core::option::Option<TableReference>,
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
@@ -200,7 +200,7 @@ pub struct ViewTableScanNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CustomTableScanNode {
     #[prost(message, optional, tag = "6")]
-    pub table_name: ::core::option::Option<TableReference>,
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, tag = "2")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "3")]
@@ -320,7 +320,7 @@ pub struct Constraints {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "12")]
-    pub name: ::core::option::Option<TableReference>,
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
@@ -390,7 +390,7 @@ pub struct CreateCatalogNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DropViewNode {
     #[prost(message, optional, tag = "1")]
-    pub name: ::core::option::Option<TableReference>,
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(bool, tag = "2")]
     pub if_exists: bool,
     #[prost(message, optional, tag = "3")]
@@ -400,7 +400,7 @@ pub struct DropViewNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateViewNode {
     #[prost(message, optional, tag = "5")]
-    pub name: ::core::option::Option<TableReference>,
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
@@ -563,7 +563,7 @@ pub struct SubqueryAliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
-    pub alias: ::core::option::Option<TableReference>,
+    pub alias: ::core::option::Option<OwnedTableReference>,
 }
 /// logical expressions
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -803,7 +803,7 @@ pub struct AliasNode {
     #[prost(string, tag = "2")]
     pub alias: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "3")]
-    pub relation: ::prost::alloc::vec::Vec<TableReference>,
+    pub relation: ::prost::alloc::vec::Vec<OwnedTableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1551,13 +1551,13 @@ pub struct FullTableReference {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TableReference {
+pub struct OwnedTableReference {
     #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
     pub table_reference_enum: ::core::option::Option<
         owned_table_reference::TableReferenceEnum,
     >,
 }
-/// Nested message and enum types in `TableReference`.
+/// Nested message and enum types in `OwnedTableReference`.
 pub mod owned_table_reference {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
