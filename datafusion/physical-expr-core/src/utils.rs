@@ -21,6 +21,8 @@ use arrow::{
 };
 use datafusion_common::Result;
 
+use crate::sort_expr::PhysicalSortExpr;
+
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
 /// are taken, when the mask evaluates `false` values null values are filled.
 ///
@@ -62,6 +64,19 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
+}
+
+/// Reverses the ORDER BY expression, which is useful during equivalent window
+/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
+/// 'ORDER BY a DESC, NULLS FIRST'.
+pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+    order_bys
+        .iter()
+        .map(|e| PhysicalSortExpr {
+            expr: e.expr.clone(),
+            options: !e.options,
+        })
+        .collect()
 }
 
 #[cfg(test)]

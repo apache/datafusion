@@ -58,7 +58,8 @@ pub use datafusion_physical_expr_core::sort_expr::{
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 
-pub use utils::{reverse_order_bys, split_conjunction};
+pub use datafusion_physical_expr_core::utils::reverse_order_bys;
+pub use utils::split_conjunction;
 
 pub use aggregate::first_last::create_first_value_accumulator;
 
