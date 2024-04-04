@@ -3203,19 +3203,19 @@ pub(crate) mod tests {
     fn repartition_sorted_limit_with_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan =
             sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
 
         let expected = &[
-            "SortRequiredExec: [c@2 ASC]",
+            "SortRequiredExec: [d@3 ASC]",
             "FilterExec: c@2 = 0",
             // We can use repartition here, ordering requirement by SortRequiredExec
             // is still satisfied.
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[d@3 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
@@ -3367,7 +3367,7 @@ pub(crate) mod tests {
         //    Parquet(sorted)
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan =
@@ -3375,10 +3375,10 @@ pub(crate) mod tests {
 
         // during repartitioning ordering is preserved
         let expected = &[
-            "SortRequiredExec: [c@2 ASC]",
+            "SortRequiredExec: [d@3 ASC]",
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
         ];
 
         assert_optimized!(expected, plan.clone(), true, true);
@@ -4153,17 +4153,17 @@ pub(crate) mod tests {
     fn preserve_ordering_through_repartition() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
         let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortPreservingMergeExec: [d@3 ASC]",
             "FilterExec: c@2 = 0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
-            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
         ];
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
