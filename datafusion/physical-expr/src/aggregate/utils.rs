@@ -19,9 +19,10 @@
 
 use std::sync::Arc;
 
+// For backwards compatibility
 pub use datafusion_physical_expr_core::aggregate::utils::down_cast_any_ref;
-
-use crate::PhysicalSortExpr;
+pub use datafusion_physical_expr_core::aggregate::utils::get_sort_options;
+pub use datafusion_physical_expr_core::aggregate::utils::ordering_fields;
 
 use arrow::array::{ArrayRef, ArrowNativeTypeOp};
 use arrow_array::cast::AsArray;
@@ -30,7 +31,7 @@ use arrow_array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
-use arrow_schema::{DataType, Field, SortOptions};
+use arrow_schema::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
@@ -169,31 +170,6 @@ pub fn adjust_output_array(
         _ => array,
     };
     Ok(array)
-}
-
-/// Construct corresponding fields for lexicographical ordering requirement expression
-pub fn ordering_fields(
-    ordering_req: &[PhysicalSortExpr],
-    // Data type of each expression in the ordering requirement
-    data_types: &[DataType],
-) -> Vec<Field> {
-    ordering_req
-        .iter()
-        .zip(data_types.iter())
-        .map(|(sort_expr, dtype)| {
-            Field::new(
-                sort_expr.expr.to_string().as_str(),
-                dtype.clone(),
-                // Multi partitions may be empty hence field should be nullable.
-                true,
-            )
-        })
-        .collect()
-}
-
-/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
-    ordering_req.iter().map(|item| item.options).collect()
 }
 
 /// A wrapper around a type to provide hash for floats
