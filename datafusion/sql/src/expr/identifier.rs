@@ -18,8 +18,8 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    OwnedTableReference, Result, TableReference,
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -173,8 +173,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // safe unwrap as s can never be empty or exceed the bounds
                                     let (relation, column_name) =
                                         form_identifier(s).unwrap();
-                                    let relation =
-                                        relation.map(|r| r.to_owned_reference());
                                     Ok(Expr::Column(Column::new(relation, column_name)))
                                 }
                             }
@@ -182,7 +180,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let s = &ids[0..ids.len()];
                             // safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            let relation = relation.map(|r| r.to_owned_reference());
                             Ok(Expr::Column(Column::new(relation, column_name)))
                         }
                     }
@@ -273,7 +270,7 @@ fn search_dfschema<'ids, 'schema>(
     schema: &'schema DFSchema,
 ) -> Option<(
     &'schema Field,
-    Option<&'schema OwnedTableReference>,
+    Option<&'schema TableReference>,
     &'ids [String],
 )> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {

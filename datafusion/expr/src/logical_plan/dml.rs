@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion_common::config::FormatOptions;
-use datafusion_common::{DFSchemaRef, OwnedTableReference};
+use datafusion_common::{DFSchemaRef, TableReference};
 
 use crate::LogicalPlan;
 
@@ -63,7 +63,7 @@ impl Hash for CopyTo {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DmlStatement {
     /// The table name
-    pub table_name: OwnedTableReference,
+    pub table_name: TableReference,
     /// The schema of the table (must align with Rel input)
     pub table_schema: DFSchemaRef,
     /// The type of operation to perform

@@ -92,18 +92,6 @@ pub enum TableReference {
     },
 }
 
-/// This is a [`TableReference`] that has 'static lifetime (aka it
-/// owns the underlying string)
-///
-/// To  convert a [`TableReference`] to an [`OwnedTableReference`], use
-///
-/// ```
-/// # use datafusion_common::{OwnedTableReference, TableReference};
-/// let table_reference = TableReference::from("mytable");
-/// let owned_reference = table_reference.to_owned_reference();
-/// ```
-pub type OwnedTableReference = TableReference;
-
 impl std::fmt::Display for TableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -244,12 +232,6 @@ impl TableReference {
         }
     }
 
-    /// Converts directly into an [`OwnedTableReference`] by cloning
-    /// the underlying data.
-    pub fn to_owned_reference(&self) -> OwnedTableReference {
-        self.clone()
-    }
-
     /// Forms a string where the identifiers are quoted
     ///
     /// # Example
@@ -322,19 +304,6 @@ impl TableReference {
     }
 }
 
-/// Parse a `String` into a OwnedTableReference as a multipart SQL identifier.
-impl From<String> for OwnedTableReference {
-    fn from(s: String) -> Self {
-        TableReference::parse_str(&s).to_owned_reference()
-    }
-}
-
-impl<'a> From<&'a OwnedTableReference> for TableReference {
-    fn from(value: &'a OwnedTableReference) -> Self {
-        value.clone()
-    }
-}
-
 /// Parse a string into a TableReference, normalizing where appropriate
 ///
 /// See full details on [`TableReference::parse_str`]
@@ -347,6 +316,12 @@ impl<'a> From<&'a str> for TableReference {
 impl<'a> From<&'a String> for TableReference {
     fn from(s: &'a String) -> Self {
         Self::parse_str(s)
+    }
+}
+
+impl From<String> for TableReference {
+    fn from(s: String) -> Self {
+        Self::parse_str(&s)
     }
 }
 

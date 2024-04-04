@@ -626,7 +626,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 }) => {
                     let name = table_name.table();
-                    let schema = session_state.schema_for_ref(table_name)?;
+                    let schema = session_state.schema_for_ref(table_name.clone())?;
                     if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
@@ -643,7 +643,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 }) => {
                     let name = table_name.table();
-                    let schema = session_state.schema_for_ref(table_name)?;
+                    let schema = session_state.schema_for_ref(table_name.clone())?;
                     if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
@@ -2687,7 +2687,7 @@ mod tests {
             match ctx.read_csv(path, options).await?.into_optimized_plan()? {
                 LogicalPlan::TableScan(ref scan) => {
                     let mut scan = scan.clone();
-                    let table_reference = TableReference::from(name).to_owned_reference();
+                    let table_reference = TableReference::from(name);
                     scan.table_name = table_reference;
                     let new_schema = scan
                         .projected_schema
