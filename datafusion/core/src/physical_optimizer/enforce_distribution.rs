@@ -3226,6 +3226,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn repartition_sorted_filter_constant() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan =
+            sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
+
+        // Original plan expects c@2 to be ordered at the output.
+        // Optimized plan satisfy this requirement, since after filter c@2 is constant.
+        let expected = &[
+            "SortRequiredExec: []",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+
+        Ok(())
+    }
+
+    #[test]
     fn repartition_ignores_limit() -> Result<()> {
         let alias = vec![("a".to_string(), "a".to_string())];
         let plan = aggregate_exec_with_alias(
@@ -4164,6 +4189,31 @@ pub(crate) mod tests {
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
+        ];
+        // last flag sets config.optimizer.PREFER_EXISTING_SORT
+        assert_optimized!(expected, physical_plan.clone(), true, true);
+        assert_optimized!(expected, physical_plan, false, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_unnecessary_spm_after_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        // Original plan expects its output to be ordered by c@2 ASC.
+        // This is still satisfied since, after filter that column is constant.
+        let expected = &[
+            "CoalescePartitionsExec",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
