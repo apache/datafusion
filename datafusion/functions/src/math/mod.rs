@@ -45,6 +45,11 @@ make_math_unary_udf!(SinFunc, SIN, sin, sin, None);
 make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, None);
 make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, None);
 
+make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, None);
+make_math_unary_udf!(CosFunc, COS, cos, cos, None);
+make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
+make_math_unary_udf!(DegreesFunc, DEGREES, degrees, to_degrees, None);
+
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
     (
@@ -77,5 +82,9 @@ export_functions!(
     (signum, num, "sign of the argument (-1, 0, +1)"),
     (sin, num, "sine"),
     (sinh, num, "hyperbolic sine"),
-    (sqrt, num, "square root of a number")
+    (sqrt, num, "square root of a number"),
+    (cbrt, num, "cube root of a number"),
+    (cos, num, "cosine"),
+    (cosh, num, "hyperbolic cosine"),
+    (degrees, num, "converts radians to degrees")
 );
