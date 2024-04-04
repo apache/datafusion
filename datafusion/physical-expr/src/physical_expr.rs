@@ -15,28 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_physical_expr_core::physical_expr::PhysicalExpr;
 use itertools::izip;
 
+pub use datafusion_physical_expr_core::physical_expr::down_cast_any_ref;
+
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
-
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Box<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else {
-        any
-    }
-}
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.
