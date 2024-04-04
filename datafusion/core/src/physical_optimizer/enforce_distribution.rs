@@ -3195,7 +3195,7 @@ pub(crate) mod tests {
     fn repartition_sorted_limit_with_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("d", &schema).unwrap(),
+            expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan = sort_required_exec_with_req(
@@ -3204,12 +3204,12 @@ pub(crate) mod tests {
         );
 
         let expected = &[
-            "SortRequiredExec: [d@3 ASC]",
+            "SortRequiredExec: [c@2 ASC]",
             "FilterExec: c@2 = 0",
             // We can use repartition here, ordering requirement by SortRequiredExec
             // is still satisfied.
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "SortExec: expr=[d@3 ASC]",
+            "SortExec: expr=[c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
