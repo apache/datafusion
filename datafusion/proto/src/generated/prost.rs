@@ -2846,7 +2846,7 @@ pub enum ScalarFunction {
     /// 3 was Atan
     /// 4 was Ascii
     Ceil = 5,
-    Cos = 6,
+    /// 6 was Cos
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
@@ -2913,15 +2913,15 @@ pub enum ScalarFunction {
     /// 70 was CurrentDate
     /// 71 was CurrentTime
     /// 72 was Uuid
-    Cbrt = 73,
+    /// 73 was Cbrt
     /// 74 Acosh
     /// 75 was Asinh
     /// 76 was Atanh
     /// 77 was Sinh
-    Cosh = 78,
-    /// Tanh = 79;
+    /// 78 was Cosh
+    /// Tanh = 79
     Pi = 80,
-    Degrees = 81,
+    /// 81 was Degrees
     /// 82 was Radians
     Factorial = 83,
     Lcm = 84,
@@ -2988,7 +2988,6 @@ impl ScalarFunction {
         match self {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Ceil => "Ceil",
-            ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
             ScalarFunction::Log => "Log",
@@ -3000,10 +2999,7 @@ impl ScalarFunction {
             ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
-            ScalarFunction::Degrees => "Degrees",
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
@@ -3018,7 +3014,6 @@ impl ScalarFunction {
         match value {
             "unknown" => Some(Self::Unknown),
             "Ceil" => Some(Self::Ceil),
-            "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
             "Log" => Some(Self::Log),
@@ -3030,10 +3025,7 @@ impl ScalarFunction {
             "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Cbrt" => Some(Self::Cbrt),
-            "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
-            "Degrees" => Some(Self::Degrees),
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),

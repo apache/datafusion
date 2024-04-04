@@ -748,7 +748,7 @@ RecursiveQueryExec: name=recursive_cte, is_distinct=false
 
 # Test issue: https://github.com/apache/arrow-datafusion/issues/9794
 # Non-recursive term and recursive term have different types
-query IT
+query IT rowsort
 WITH RECURSIVE my_cte AS(
     SELECT 1::int AS a
     UNION ALL

@@ -21,7 +21,10 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
+    expr::{
+        AggregateFunctionDefinition, Alias, Exists, InList, ScalarFunction, Sort,
+        WindowFunction,
+    },
     Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
 use sqlparser::ast::{
@@ -264,6 +267,26 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::Exists(Exists { subquery, negated }) => {
+                let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::Exists {
+                    subquery: sub_query,
+                    negated: *negated,
+                })
+            }
+            Expr::Sort(Sort {
+                expr,
+                asc: _,
+                nulls_first: _,
+            }) => self.expr_to_sql(expr),
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -644,12 +667,13 @@ impl Unparser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
+    use std::{any::Any, sync::Arc, vec};
 
+    use arrow::datatypes::{Field, Schema};
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility,
+        case, col, exists, expr::AggregateFunction, lit, not, not_exists, table_scan,
+        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -695,6 +719,12 @@ mod tests {
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
+        let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
+            .filter(col("a").eq(lit(1)))?
+            .build()?;
+
         let tests: Vec<(Expr, &str)> = vec![
             ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
             (
@@ -835,6 +865,15 @@ mod tests {
                 r#"("a" BETWEEN 1 AND 7)"#,
             ),
             (Expr::Negative(Box::new(col("a"))), r#"-"a""#),
+            (
+                exists(Arc::new(dummy_logical_plan.clone())),
+                r#"EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (
+                not_exists(Arc::new(dummy_logical_plan.clone())),
+                r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (col("a").sort(true, true), r#""a""#),
         ];
 
         for (expr, expected) in tests {
