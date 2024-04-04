@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use rstest::rstest;
 
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -566,27 +567,28 @@ async fn csv_explain_verbose_plans() {
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
 }
 
+#[rstest]
 #[tokio::test]
-async fn explain_analyze_runs_optimizers() {
+async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
     // repro for https://github.com/apache/arrow-datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
 
-    // This happens as an optimization pass where count(*) can be
+    // This happens as an optimization pass where count(*)/count(1) can be
     // answered using statistics only.
     let expected = "PlaceholderRowExec";
 
-    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let sql = format!("EXPLAIN SELECT count({count_expr}) from alltypes_plain");
+    let actual = execute_to_batches(&ctx, &sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
     assert_contains!(actual, expected);
 
     // EXPLAIN ANALYZE should work the same
-    let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let sql = format!("EXPLAIN ANALYZE SELECT count({count_expr}) from alltypes_plain");
+    let actual = execute_to_batches(&ctx, &sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
@@ -791,7 +793,7 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
             \n  SubqueryAlias: t\
             \n    Projection: \
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
