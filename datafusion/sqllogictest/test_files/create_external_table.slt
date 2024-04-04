@@ -170,3 +170,38 @@ query IT
 SELECT * FROM inner_partition;
 ----
 1 y
+
+# Simulate manual creation of invalid (mixed) partitions on disk
+
+statement ok
+CREATE EXTERNAL TABLE test(name string)
+PARTITIONED BY (year string, month string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+
+statement ok
+-- passes the partition check since the previous statement didn't write to disk
+CREATE EXTERNAL TABLE test2(name string)
+PARTITIONED BY (month string, year string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+
+query TTT
+-- creates year -> month partitions
+INSERT INTO test VALUES('name', '2024', '03');
+----
+1
+
+query TTT
+-- creates month -> year partitions.
+-- now table have both partitions (year -> month and month -> year)
+INSERT INTO test2 VALUES('name', '2024', '03');
+----
+1
+
+statement error DataFusion error: Error during planning: Found mixed partition values on disk \(\["year", "month"\], \["month", "year"\]\)
+-- fails to infer as partitions are not consistent
+CREATE EXTERNAL TABLE test3(name string)
+PARTITIONED BY (month string, year string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
