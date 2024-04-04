@@ -31,7 +31,6 @@ use arrow::{
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 
-
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct UnKnownColumn {
     name: String,
@@ -103,7 +102,6 @@ impl PartialEq<dyn Any> for UnKnownColumn {
             .unwrap_or(false)
     }
 }
-
 
 #[cfg(test)]
 mod test {

@@ -38,13 +38,13 @@ use crate::utils::scatter;
 /// `PhysicalExpr` are the physical counterpart to [`Expr`] used in logical
 /// planning, and can be evaluated directly on a [`RecordBatch`]. They are
 /// normally created from `Expr` by a [`PhysicalPlanner`] and can be created
-/// directly using `create_physical_expr`.
+/// directly using [`create_physical_expr`].
 ///
 /// A Physical expression knows its type, nullability and how to evaluate itself.
 ///
-/// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
-/// `create_physical_expr`: datafusion_physical_expr::create_physical_expr
 /// [`Expr`]: datafusion_expr::Expr
+/// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
+/// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 ///
 /// # Example: Create `PhysicalExpr` from `Expr`
 /// ```no_run
