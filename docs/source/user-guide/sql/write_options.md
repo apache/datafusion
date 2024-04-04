@@ -50,15 +50,20 @@ When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` wil
 
 Finally, options can be passed when running a `COPY` command.
 
+<!-- 
+ Test the following example with: 
+ CREATE TABLE source_table AS VALUES ('1','2','3','4');
+-->
+
 ```sql
 COPY source_table
-TO 'test/table_with_options'
-OPTIONS (
-  format parquet,
-  compression snappy,
-  'compression::col1' 'zstd(5)',
-  partition_by 'column3, column4'
-)
+  TO 'test/table_with_options'
+  PARTITIONED BY (column3, column4)
+  OPTIONS (
+    format parquet,
+    compression snappy,
+    'compression::column1' 'zstd(5)',
+  )
 ```
 
 In this example, we write the entirety of `source_table` out to a folder of parquet files. One parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the parquet file will use `ZSTD` compression codec with compression level `5`. In general, parquet options which support column specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
