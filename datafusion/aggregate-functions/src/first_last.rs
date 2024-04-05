@@ -120,14 +120,6 @@ impl AggregateUDFImpl for FirstValue {
     }
 }
 
-// /// Creates a new UDAF with a specific signature, state type and return type.
-// /// The signature and state type must match the `Accumulator's implementation`.
-// /// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-// pub fn create_first_value() -> AggregateUDF {
-//     let accumulator = Arc::new(create_first_value_accumulator);
-//     AggregateUDF::from(FirstValue::new(accumulator))
-// }
-
 pub(crate) fn create_first_value_accumulator(
     acc_args: AccumulatorArgs,
 ) -> Result<Box<dyn Accumulator>> {

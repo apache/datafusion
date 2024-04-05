@@ -62,7 +62,6 @@ use datafusion_expr::AggregateUDF;
 use log::debug;
 
 pub mod first_last;
-pub mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
