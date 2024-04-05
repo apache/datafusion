@@ -1303,7 +1303,7 @@ macro_rules! handle_transform_recursion {
         $F_DOWN?
             .transform_children(|n| n.map_subqueries($F_CHILD))?
             .transform_sibling(|n| n.map_children($F_CHILD))?
-            .transform_parent(|n| $F_UP(n))
+            .transform_parent($F_UP)
     }};
 }
 
