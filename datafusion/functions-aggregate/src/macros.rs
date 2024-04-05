@@ -16,7 +16,7 @@
 // under the License.
 
 macro_rules! make_udaf_function {
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident, $ACCUMULATOR:ident) => {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
@@ -44,10 +44,7 @@ macro_rules! make_udaf_function {
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
-
-                        let accumulator = std::sync::Arc::new($ACCUMULATOR);
-                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::new(accumulator)))
-
+                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::default()))
                     })
                     .clone()
             }

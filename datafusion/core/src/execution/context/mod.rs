@@ -24,7 +24,6 @@ use std::string::String;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
-use crate::{functions, functions_aggregate, functions_array};
 use crate::{
     catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
     catalog::listing_schema::ListingSchemaProvider,
@@ -58,6 +57,7 @@ use crate::{
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
+use crate::{functions, functions_aggregate, functions_array};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;

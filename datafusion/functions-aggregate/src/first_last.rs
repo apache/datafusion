@@ -27,10 +27,7 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDFImpl, Expr, Signature,
-    Volatility,
-};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -48,14 +45,12 @@ make_udaf_function!(
     first_value,
     value,
     "Returns the first value in a group of values.",
-    first_value_udaf,
-    create_first_value_accumulator
+    first_value_udaf
 );
 
 pub struct FirstValue {
     signature: Signature,
     aliases: Vec<String>,
-    accumulator: AccumulatorFactoryFunction,
 }
 
 impl Debug for FirstValue {
@@ -68,12 +63,17 @@ impl Debug for FirstValue {
     }
 }
 
+impl Default for FirstValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FirstValue {
-    pub fn new(accumulator: AccumulatorFactoryFunction) -> Self {
+    pub fn new() -> Self {
         Self {
             aliases: vec![String::from("FIRST_VALUE")],
             signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
-            accumulator,
         }
     }
 }
@@ -96,7 +96,45 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(acc_args)
+        let mut all_sort_orders = vec![];
+
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = vec![];
+        for expr in acc_args.sort_exprs {
+            if let Expr::Sort(sort) = expr {
+                if let Expr::Column(col) = sort.expr.as_ref() {
+                    let name = &col.name;
+                    let e = expressions::column::col(name, acc_args.schema)?;
+                    sort_exprs.push(PhysicalSortExpr {
+                        expr: e,
+                        options: SortOptions {
+                            descending: !sort.asc,
+                            nulls_first: sort.nulls_first,
+                        },
+                    });
+                }
+            }
+        }
+        if !sort_exprs.is_empty() {
+            all_sort_orders.extend(sort_exprs);
+        }
+
+        let ordering_req = all_sort_orders;
+
+        let ordering_dtypes = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let requirement_satisfied = ordering_req.is_empty();
+
+        FirstValueAccumulator::try_new(
+            acc_args.data_type,
+            &ordering_dtypes,
+            ordering_req,
+            acc_args.ignore_nulls,
+        )
+        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     }
 
     fn state_fields(
@@ -118,50 +156,6 @@ impl AggregateUDFImpl for FirstValue {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
-}
-
-pub(crate) fn create_first_value_accumulator(
-    acc_args: AccumulatorArgs,
-) -> Result<Box<dyn Accumulator>> {
-    let mut all_sort_orders = vec![];
-
-    // Construct PhysicalSortExpr objects from Expr objects:
-    let mut sort_exprs = vec![];
-    for expr in acc_args.sort_exprs {
-        if let Expr::Sort(sort) = expr {
-            if let Expr::Column(col) = sort.expr.as_ref() {
-                let name = &col.name;
-                let e = expressions::column::col(name, acc_args.schema)?;
-                sort_exprs.push(PhysicalSortExpr {
-                    expr: e,
-                    options: SortOptions {
-                        descending: !sort.asc,
-                        nulls_first: sort.nulls_first,
-                    },
-                });
-            }
-        }
-    }
-    if !sort_exprs.is_empty() {
-        all_sort_orders.extend(sort_exprs);
-    }
-
-    let ordering_req = all_sort_orders;
-
-    let ordering_dtypes = ordering_req
-        .iter()
-        .map(|e| e.expr.data_type(acc_args.schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let requirement_satisfied = ordering_req.is_empty();
-
-    FirstValueAccumulator::try_new(
-        acc_args.data_type,
-        &ordering_dtypes,
-        ordering_req,
-        acc_args.ignore_nulls,
-    )
-    .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
 }
 
 #[derive(Debug)]

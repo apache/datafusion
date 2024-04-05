@@ -1130,12 +1130,12 @@ dependencies = [
  "bzip2",
  "chrono",
  "dashmap",
- "datafusion-aggregate-functions",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-functions-array",
  "datafusion-optimizer",
  "datafusion-physical-expr",
@@ -1164,19 +1164,6 @@ dependencies = [
  "uuid",
  "xz2",
  "zstd 0.13.0",
-]
-
-[[package]]
-name = "datafusion-aggregate-functions"
-version = "37.0.0"
-dependencies = [
- "arrow",
- "datafusion-common",
- "datafusion-execution",
- "datafusion-expr",
- "datafusion-physical-expr-common",
- "log",
- "paste",
 ]
 
 [[package]]
@@ -1294,6 +1281,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-aggregate"
+version = "37.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr-common",
+ "log",
+ "paste",
+]
+
+[[package]]
 name = "datafusion-functions-array"
 version = "37.0.0"
 dependencies = [
@@ -1342,10 +1342,10 @@ dependencies = [
  "blake2",
  "blake3",
  "chrono",
- "datafusion-aggregate-functions",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.3",
