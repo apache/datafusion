@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
-use crate::udaf::format_state_name;
+use crate::utils::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,

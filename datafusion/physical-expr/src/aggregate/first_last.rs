@@ -21,22 +21,20 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
-use crate::expressions::{self, format_state_name};
+use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, lexsort_to_indices, SortColumn};
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::compute::{lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
-use datafusion_aggregate_functions::first_last::FirstValueAccumulator;
-use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use datafusion_common::{
-    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+use datafusion_aggregate_functions::first_last::{
+    convert_to_sort_cols, filter_states_according_to_is_set, FirstValueAccumulator,
 };
-use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::{Accumulator, Expr};
+use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug, Clone)]
@@ -218,9 +216,6 @@ impl PartialEq<dyn Any> for FirstValue {
             .unwrap_or(false)
     }
 }
-
-
-
 /// LAST_VALUE aggregate expression
 #[derive(Debug, Clone)]
 pub struct LastValue {
@@ -574,32 +569,6 @@ impl Accumulator for LastValueAccumulator {
             + ScalarValue::size_of_vec(&self.orderings)
             - std::mem::size_of_val(&self.orderings)
     }
-}
-
-/// Filters states according to the `is_set` flag at the last column and returns
-/// the resulting states.
-fn filter_states_according_to_is_set(
-    states: &[ArrayRef],
-    flags: &BooleanArray,
-) -> Result<Vec<ArrayRef>> {
-    states
-        .iter()
-        .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
-        .collect::<Result<Vec<_>>>()
-}
-
-/// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: &[PhysicalSortExpr],
-) -> Vec<SortColumn> {
-    arrs.iter()
-        .zip(sort_exprs.iter())
-        .map(|(item, sort_expr)| SortColumn {
-            values: item.clone(),
-            options: Some(sort_expr.options),
-        })
-        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

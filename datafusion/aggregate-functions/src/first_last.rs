@@ -1,4 +1,3 @@
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,15 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, AsArray, BooleanArray};
+use arrow::compute::{self, lexsort_to_indices, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::format_state_name;
-use datafusion_common::Result;
+use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::{Accumulator, AccumulatorFactoryFunction, AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{
+    Accumulator, AccumulatorFactoryFunction, AggregateUDFImpl, Expr,
+    Signature, Volatility,
+};
+use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
+use datafusion_physical_expr_common::expressions;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::any::Any;
 use std::fmt::Debug;
 
+// TODO: macro udaf
 // make_udf_function!(
 //     FirstValue,
 //     first_value,
@@ -32,7 +43,6 @@ use std::fmt::Debug;
 //     "Returns the first value in a group of values.",
 //     first_value_fn
 // );
-
 
 pub struct FirstValue {
     signature: Signature,
@@ -51,13 +61,9 @@ impl Debug for FirstValue {
 }
 
 impl FirstValue {
-    pub fn new(
-        accumulator: AccumulatorFactoryFunction,
-    ) -> Self {
+    pub fn new(accumulator: AccumulatorFactoryFunction) -> Self {
         Self {
-            aliases: vec![
-                String::from("FIRST_VALUE"),
-            ],
+            aliases: vec![String::from("FIRST_VALUE")],
             signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
             accumulator,
         }
@@ -81,10 +87,7 @@ impl AggregateUDFImpl for FirstValue {
         Ok(arg_types[0].clone())
     }
 
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
     }
 
@@ -103,20 +106,21 @@ impl AggregateUDFImpl for FirstValue {
         fields.push(Field::new("is_set", DataType::Boolean, true));
         Ok(fields)
     }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
 }
 
-/// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Accumulator's implementation`.
-/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-pub fn create_first_value(
-    name: &str,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-) -> AggregateUDF {
-    AggregateUDF::from(FirstValue::new(accumulator))
-}
+// /// Creates a new UDAF with a specific signature, state type and return type.
+// /// The signature and state type must match the `Accumulator's implementation`.
+// /// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
+// pub fn create_first_value() -> AggregateUDF {
+//     let accumulator = Arc::new(create_first_value_accumulator);
+//     AggregateUDF::from(FirstValue::new(accumulator))
+// }
 
-pub fn create_first_value_accumulator(
+pub(crate) fn create_first_value_accumulator(
     acc_args: AccumulatorArgs,
 ) -> Result<Box<dyn Accumulator>> {
     let mut all_sort_orders = vec![];
@@ -127,7 +131,7 @@ pub fn create_first_value_accumulator(
         if let Expr::Sort(sort) = expr {
             if let Expr::Column(col) = sort.expr.as_ref() {
                 let name = &col.name;
-                let e = expressions::col(name, acc_args.schema)?;
+                let e = expressions::column::col(name, acc_args.schema)?;
                 sort_exprs.push(PhysicalSortExpr {
                     expr: e,
                     options: SortOptions {
@@ -200,6 +204,11 @@ impl FirstValueAccumulator {
         })
     }
 
+    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
+    }
+
     // Updates state with the values in the given row.
     fn update_with_new_row(&mut self, row: &[ScalarValue]) {
         self.first = row[0].clone();
@@ -248,11 +257,6 @@ impl FirstValueAccumulator {
             let indices = lexsort_to_indices(&sort_columns, Some(1))?;
             Ok((!indices.is_empty()).then_some(indices.value(0) as _))
         }
-    }
-
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
     }
 }
 
@@ -333,4 +337,34 @@ impl Accumulator for FirstValueAccumulator {
             + ScalarValue::size_of_vec(&self.orderings)
             - std::mem::size_of_val(&self.orderings)
     }
+}
+
+/// Filters states according to the `is_set` flag at the last column and returns
+/// the resulting states.
+///
+/// TODO: This function can be private once the `LAST_VALUE` function is moved to the `aggregate-functions` crate.
+pub fn filter_states_according_to_is_set(
+    states: &[ArrayRef],
+    flags: &BooleanArray,
+) -> Result<Vec<ArrayRef>> {
+    states
+        .iter()
+        .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Combines array refs and their corresponding orderings to construct `SortColumn`s.
+///
+/// TODO: This function can be private once the `LAST_VALUE` function is moved to the `aggregate-functions` crate.
+pub fn convert_to_sort_cols(
+    arrs: &[ArrayRef],
+    sort_exprs: &[PhysicalSortExpr],
+) -> Vec<SortColumn> {
+    arrs.iter()
+        .zip(sort_exprs.iter())
+        .map(|(item, sort_expr)| SortColumn {
+            values: item.clone(),
+            options: Some(sort_expr.options),
+        })
+        .collect::<Vec<_>>()
 }

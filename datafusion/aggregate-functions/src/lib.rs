@@ -82,6 +82,7 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::AggregateUDF;
+use first_last::{create_first_value_accumulator, FirstValue};
 use log::debug;
 
 pub mod first_last;
@@ -95,7 +96,11 @@ pub mod expr_fn {}
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let mut functions: Vec<Arc<AggregateUDF>> = vec![];
+    // TODO: macro this creation
+    let accumulator = Arc::new(create_first_value_accumulator);
+    let first_value = AggregateUDF::from(FirstValue::new(accumulator));
+
+    let functions: Vec<Arc<AggregateUDF>> = vec![first_value.into()];
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;

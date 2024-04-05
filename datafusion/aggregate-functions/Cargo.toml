@@ -39,3 +39,5 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+log = { workspace = true }
