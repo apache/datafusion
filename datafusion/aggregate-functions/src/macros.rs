@@ -24,6 +24,7 @@ macro_rules! make_udaf_function {
                 Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                     $AGGREGATE_UDF_FN(),
                     vec![$($arg),*],
+                    // TODO: Support arguments for `expr` API
                     false,
                     None,
                     None,
