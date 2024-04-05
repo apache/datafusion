@@ -315,7 +315,7 @@ fn coerced_from<'a>(
     match (type_into, type_from) {
         // coerced dictionary first
         (cur_type, Dictionary(_, value_type)) | (Dictionary(_, value_type), cur_type)
-            if coerced_from(&cur_type, value_type).is_some() =>
+            if coerced_from(cur_type, value_type).is_some() =>
         {
             Some(type_into.clone())
         }
