@@ -1176,6 +1176,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr-common",
  "log",
+ "paste",
 ]
 
 [[package]]
