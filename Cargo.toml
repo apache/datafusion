@@ -26,6 +26,7 @@ members = [
     "datafusion/functions",
     "datafusion/functions-array",
     "datafusion/optimizer",
+    "datafusion/physical-expr-common",
     "datafusion/physical-expr",
     "datafusion/physical-plan",
     "datafusion/proto",
@@ -80,6 +81,7 @@ datafusion-functions = { path = "datafusion/functions", version = "37.0.0" }
 datafusion-functions-array = { path = "datafusion/functions-array", version = "37.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "37.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "37.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "37.0.0", default-features = false }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "37.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "37.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "37.0.0" }
