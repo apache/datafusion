@@ -1177,7 +1177,6 @@ dependencies = [
  "clap",
  "ctor",
  "datafusion",
- "datafusion-common",
  "dirs",
  "env_logger",
  "futures",

@@ -41,7 +41,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
-use datafusion_common::FileType;
+use datafusion::common::FileType;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -350,8 +350,8 @@ pub(crate) async fn register_object_store_and_config_extensions(
 mod tests {
     use super::*;
 
-    use datafusion_common::config::FormatOptions;
-    use datafusion_common::plan_err;
+    use datafusion::common::config::FormatOptions;
+    use datafusion::common::plan_err;
 
     use url::Url;
 
