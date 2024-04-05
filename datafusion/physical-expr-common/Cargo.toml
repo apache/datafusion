@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-physical-expr-common"
-description = "Core physical expression implementation for DataFusion query engine"
+description = "Common functionality of physical expression for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }

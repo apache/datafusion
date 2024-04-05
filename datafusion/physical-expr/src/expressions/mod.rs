@@ -81,7 +81,7 @@ pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
-pub use datafusion_physical_expr_core::expressions::column::{col, Column};
+pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};

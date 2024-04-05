@@ -1331,7 +1331,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr-core",
+ "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.3",
  "hex",
@@ -1347,7 +1347,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-physical-expr-core"
+name = "datafusion-physical-expr-common"
 version = "37.0.0"
 dependencies = [
  "arrow",
