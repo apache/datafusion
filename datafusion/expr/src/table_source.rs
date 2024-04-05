@@ -24,20 +24,29 @@ use datafusion_common::{Constraints, Result};
 
 use std::any::Any;
 
-/// Indicates whether and how a filter expression can be handled by a
-/// TableProvider for table scans.
+/// Indicates how a filter expression is handled by
+/// [`TableProvider::scan`].
+///
+/// Filter expressions are boolean expressions used to reduce the number of
+/// rows that are read from a table. Only rows that evaluate to `true` ("pass
+/// the filter") are returned. Rows that evaluate to `false` or `NULL` are
+/// omitted.
+///
+/// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html#tymethod.scan
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableProviderFilterPushDown {
-    /// The expression cannot be used by the provider.
+    /// The filter cannot be used by the provider and will not be pushed down.
     Unsupported,
-    /// The expression can be used to reduce the data retrieved,
-    /// but the provider cannot guarantee it will omit all tuples that
-    /// may be filtered. In this case, DataFusion will apply an additional
-    /// `Filter` operation after the scan to ensure all rows are filtered correctly.
+    /// The filter can be used, but the provider might still return some tuples
+    /// that do not pass the filter.
+    ///
+    /// In this case, DataFusion applies an additional `Filter` operation
+    /// after the scan to ensure all rows are filtered correctly.
     Inexact,
-    /// The provider **guarantees** that it will omit **all** tuples that are
-    /// filtered by the filter expression. This is the fastest option, if available
-    /// as DataFusion will not apply additional filtering.
+    /// The provider **guarantees** that it will omit **only** tuples which
+    /// pass the filter.
+    ///
+    /// In this case, DataFusion will not apply additional filtering.
     Exact,
 }
 
