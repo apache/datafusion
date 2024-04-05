@@ -58,7 +58,7 @@ order by
 logical_plan
 Sort: custsale.cntrycode ASC NULLS LAST
 --Projection: custsale.cntrycode, COUNT(*) AS numcust, SUM(custsale.c_acctbal) AS totacctbal
-----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(UInt8(1)) AS COUNT(*), SUM(custsale.c_acctbal)]]
+----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(Int64(1)) AS COUNT(*), SUM(custsale.c_acctbal)]]
 ------SubqueryAlias: custsale
 --------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
 ----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_2.AVG(customer.c_acctbal)

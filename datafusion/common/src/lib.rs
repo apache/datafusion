@@ -65,9 +65,9 @@ pub use functional_dependencies::{
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
-pub use schema_reference::{OwnedSchemaReference, SchemaReference};
+pub use schema_reference::SchemaReference;
 pub use stats::{ColumnStatistics, Statistics};
-pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
+pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
 

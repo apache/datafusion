@@ -134,6 +134,16 @@ impl EquivalenceProperties {
         &self.constants
     }
 
+    /// Returns the output ordering of the properties.
+    pub fn output_ordering(&self) -> Option<LexOrdering> {
+        let constants = self.constants();
+        let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
+        // Prune out constant expressions
+        output_ordering
+            .retain(|sort_expr| !physical_exprs_contains(constants, &sort_expr.expr));
+        (!output_ordering.is_empty()).then_some(output_ordering)
+    }
+
     /// Returns the normalized version of the ordering equivalence class within.
     /// Normalization removes constants and duplicates as well as standardizing
     /// expressions according to the equivalence group within.

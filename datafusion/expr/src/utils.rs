@@ -34,15 +34,15 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    OwnedTableReference, Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
+    ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
-pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::UInt8(Some(1));
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
@@ -741,7 +741,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
     agg: &Aggregate,
-) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -760,7 +760,7 @@ fn exprlist_to_fields_aggregate(
 pub fn exprlist_to_fields(
     exprs: &[Expr],
     plan: &LogicalPlan,
-) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to

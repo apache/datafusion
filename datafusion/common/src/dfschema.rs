@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
 use crate::{
     field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    OwnedTableReference, SchemaError, TableReference,
+    SchemaError, TableReference,
 };
 
 use arrow::compute::can_cast_types;
@@ -111,7 +111,7 @@ pub struct DFSchema {
     inner: SchemaRef,
     /// Optional qualifiers for each column in this schema. In the same order as
     /// the `self.inner.fields()`
-    field_qualifiers: Vec<Option<OwnedTableReference>>,
+    field_qualifiers: Vec<Option<TableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
 }
@@ -128,10 +128,10 @@ impl DFSchema {
 
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
-        qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
+        qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+        let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
 
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
@@ -170,10 +170,9 @@ impl DFSchema {
         schema: &Schema,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
-        let owned_qualifier = qualifier.to_owned_reference();
         let schema = DFSchema {
             inner: schema.clone().into(),
-            field_qualifiers: vec![Some(owned_qualifier); schema.fields.len()],
+            field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         schema.check_names()?;
@@ -182,16 +181,12 @@ impl DFSchema {
 
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn from_field_specific_qualified_schema(
-        qualifiers: Vec<Option<impl Into<TableReference>>>,
+        qualifiers: Vec<Option<TableReference>>,
         schema: &SchemaRef,
     ) -> Result<Self> {
-        let owned_qualifiers = qualifiers
-            .into_iter()
-            .map(|qualifier| qualifier.map(|q| q.into().to_owned_reference()))
-            .collect();
         let dfschema = Self {
             inner: schema.clone(),
-            field_qualifiers: owned_qualifiers,
+            field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
         dfschema.check_names()?;
@@ -216,7 +211,7 @@ impl DFSchema {
         for (qualifier, name) in qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column::new(Some(qualifier.to_owned_reference()), name)
+                    field: Column::new(Some(qualifier.clone()), name)
                 });
             }
         }
@@ -270,7 +265,7 @@ impl DFSchema {
             return;
         }
 
-        let self_fields: HashSet<(Option<&OwnedTableReference>, &FieldRef)> =
+        let self_fields: HashSet<(Option<&TableReference>, &FieldRef)> =
             self.iter().collect();
         let self_unqualified_names: HashSet<&str> = self
             .inner
@@ -316,7 +311,7 @@ impl DFSchema {
 
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector and its qualifier
-    pub fn qualified_field(&self, i: usize) -> (Option<&OwnedTableReference>, &Field) {
+    pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &Field) {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
@@ -383,13 +378,11 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &Field)> {
         if let Some(qualifier) = qualifier {
             let idx = self
                 .index_of_column_by_name(Some(qualifier), name)?
-                .ok_or_else(|| {
-                    field_not_found(Some(qualifier.to_string()), name, self)
-                })?;
+                .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
             Ok((self.field_qualifiers[idx].as_ref(), self.field(idx)))
         } else {
             self.qualified_field_with_unqualified_name(name)
@@ -428,7 +421,7 @@ impl DFSchema {
     pub fn qualified_fields_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Vec<(Option<&OwnedTableReference>, &Field)> {
+    ) -> Vec<(Option<&TableReference>, &Field)> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
             .map(|(qualifier, field)| (qualifier, field.as_ref()))
@@ -456,7 +449,7 @@ impl DFSchema {
     pub fn qualified_field_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &Field)> {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
@@ -527,7 +520,7 @@ impl DFSchema {
     ) -> Result<&Field> {
         let idx = self
             .index_of_column_by_name(Some(qualifier), name)?
-            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
+            .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
 
         Ok(self.field(idx))
     }
@@ -544,7 +537,7 @@ impl DFSchema {
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
-    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &Field)> {
         self.qualified_field_with_name(column.relation.as_ref(), &column.name)
     }
 
@@ -750,7 +743,7 @@ impl DFSchema {
     }
 
     /// Replace all field qualifier with new value in schema
-    pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
+    pub fn replace_qualifier(self, qualifier: impl Into<TableReference>) -> Self {
         let qualifier = qualifier.into();
         DFSchema {
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
@@ -777,9 +770,7 @@ impl DFSchema {
     }
 
     /// Iterate over the qualifiers and fields in the DFSchema
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (Option<&OwnedTableReference>, &FieldRef)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Option<&TableReference>, &FieldRef)> {
         self.field_qualifiers
             .iter()
             .zip(self.inner.fields().iter())
@@ -1065,7 +1056,7 @@ mod tests {
     #[test]
     fn test_from_field_specific_qualified_schema() -> Result<()> {
         let schema = DFSchema::from_field_specific_qualified_schema(
-            vec![Some("t1"), None],
+            vec![Some("t1".into()), None],
             &Arc::new(Schema::new(vec![
                 Field::new("c0", DataType::Boolean, true),
                 Field::new("c1", DataType::Boolean, true),

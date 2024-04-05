@@ -1344,7 +1344,7 @@ group by t1_id
 ----
 logical_plan
 Projection: COUNT(*)
---Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 ----Projection: join_t1.t1_id
 ------Inner Join: join_t1.t1_id = join_t2.t2_id
 --------TableScan: join_t1 projection=[t1_id]
