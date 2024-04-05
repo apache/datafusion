@@ -20,9 +20,9 @@
 use crate::LogicalPlan;
 
 use datafusion_common::tree_node::{
-    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeVisitor,
 };
-use datafusion_common::{handle_visit_recursion, Result};
+use datafusion_common::Result;
 
 impl TreeNode for LogicalPlan {
     fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -31,9 +31,10 @@ impl TreeNode for LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
-        handle_visit_recursion!(f(self)?, DOWN);
-        self.apply_subqueries(f)?;
-        self.apply_children(&mut |n| n.apply(f))
+        f(self)?.visit_children(|| {
+            self.apply_subqueries(f)?;
+            self.apply_children(|n| n.apply(f))
+        })
     }
 
     /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
@@ -62,39 +63,26 @@ impl TreeNode for LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
-        match visitor.f_down(self)? {
-            TreeNodeRecursion::Continue => {
+        visitor
+            .f_down(self)?
+            .visit_children(|| {
                 self.visit_subqueries(visitor)?;
-                handle_visit_recursion!(
-                    self.apply_children(&mut |n| n.visit(visitor))?,
-                    UP
-                );
-                visitor.f_up(self)
-            }
-            TreeNodeRecursion::Jump => {
-                self.visit_subqueries(visitor)?;
-                visitor.f_up(self)
-            }
-            TreeNodeRecursion::Stop => Ok(TreeNodeRecursion::Stop),
-        }
+                self.apply_children(|n| n.visit(visitor))
+            })?
+            .visit_parent(|| visitor.f_up(self))
     }
 
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
-        f: &mut F,
+        f: F,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for child in self.inputs() {
-            tnr = f(child)?;
-            handle_visit_recursion!(tnr, DOWN)
-        }
-        Ok(tnr)
+        self.inputs().into_iter().apply_until_stop(f)
     }
 
-    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
-    where
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    {
+    fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
         let new_children = self
             .inputs()
             .iter()
