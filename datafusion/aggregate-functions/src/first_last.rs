@@ -877,9 +877,7 @@ impl Accumulator for LastValueAccumulator {
 
 /// Filters states according to the `is_set` flag at the last column and returns
 /// the resulting states.
-///
-/// TODO: This function can be private once the `LAST_VALUE` function is moved to the `aggregate-functions` crate.
-pub fn filter_states_according_to_is_set(
+fn filter_states_according_to_is_set(
     states: &[ArrayRef],
     flags: &BooleanArray,
 ) -> Result<Vec<ArrayRef>> {
@@ -890,9 +888,7 @@ pub fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-///
-/// TODO: This function can be private once the `LAST_VALUE` function is moved to the `aggregate-functions` crate.
-pub fn convert_to_sort_cols(
+fn convert_to_sort_cols(
     arrs: &[ArrayRef],
     sort_exprs: &[PhysicalSortExpr],
 ) -> Vec<SortColumn> {
