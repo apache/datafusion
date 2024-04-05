@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Function packages for [DataFusion].
+//! Aggregate Function packages for [DataFusion].
 //!
-//! This crate contains a collection of various function packages for DataFusion,
+//! This crate contains a collection of various aggregate function packages for DataFusion,
 //! implemented using the extension API. Users may wish to control which functions
 //! are available to control the binary size of their application as well as
 //! use dialect specific implementations of functions (e.g. Spark vs Postgres)
@@ -33,32 +33,8 @@
 //! # Using A Package
 //! You can register all functions in all packages using the [`register_all`] function.
 //!
-//! To access and use only the functions in a certain package, use the
-//! `functions()` method in each module.
-//!
-//! ```
-//! # fn main() -> datafusion_common::Result<()> {
-//! # let mut registry = datafusion_execution::registry::MemoryFunctionRegistry::new();
-//! # use datafusion_execution::FunctionRegistry;
-//! // get the encoding functions
-//! use datafusion_functions::encoding;
-//! for udf in encoding::functions() {
-//!   registry.register_udf(udf)?;
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
 //! Each package also exports an `expr_fn` submodule to help create [`Expr`]s that invoke
 //! functions using a fluent style. For example:
-//!
-//! ```
-//! // create an Expr that will invoke the encode function
-//! use datafusion_expr::{col, lit};
-//! use datafusion_functions::expr_fn;
-//! // Equivalent to "encode(my_data, 'hex')" in SQL:
-//! let expr = expr_fn::encode(col("my_data"), lit("hex"));
-//! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
 //!
@@ -67,7 +43,7 @@
 //! To add a new package to this crate, you should follow the model of existing
 //! packages. The high level steps are:
 //!
-//! 1. Create a new module with the appropriate [`ScalarUDF`] implementations.
+//! 1. Create a new module with the appropriate [AggregateUDF] implementations.
 //!
 //! 2. Use the macros in [`macros`] to create standard entry points.
 //!
@@ -75,8 +51,6 @@
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
 //! feature is enabled.
-//!
-//! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use std::sync::Arc;
 
 #[macro_use]
