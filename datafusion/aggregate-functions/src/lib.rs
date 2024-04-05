@@ -79,28 +79,27 @@
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use std::sync::Arc;
 
+#[macro_use]
+pub mod macros;
+
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::AggregateUDF;
-use first_last::{create_first_value_accumulator, FirstValue};
 use log::debug;
 
 pub mod first_last;
 pub mod utils;
 
-#[macro_use]
-pub mod macros;
-
 /// Fluent-style API for creating `Expr`s
-pub mod expr_fn {}
+pub mod expr_fn {
+    pub use super::first_last::first_value;
+}
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    // TODO: macro this creation
-    let accumulator = Arc::new(create_first_value_accumulator);
-    let first_value = AggregateUDF::from(FirstValue::new(accumulator));
-
-    let functions: Vec<Arc<AggregateUDF>> = vec![first_value.into()];
+    let functions: Vec<Arc<AggregateUDF>> = vec![
+        first_last::first_value_udaf()
+    ];
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;

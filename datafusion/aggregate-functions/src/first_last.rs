@@ -43,14 +43,13 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-// TODO: macro udaf
-// make_udf_function!(
-//     FirstValue,
-//     first_value,
-//     value: Expr,
-//     "Returns the first value in a group of values.",
-//     first_value_fn
-// );
+make_udaf_function!(FirstValue,
+    first_value,
+    value,
+    "Returns the first value in a group of values.",
+    first_value_udaf,
+    create_first_value_accumulator
+);
 
 pub struct FirstValue {
     signature: Signature,

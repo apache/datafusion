@@ -612,6 +612,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        // TODO: Add first value after built-in functions are deprecated
     ];
 
     // ensure expressions created with the expr api can be round tripped
