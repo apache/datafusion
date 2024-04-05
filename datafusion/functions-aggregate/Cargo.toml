@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion-aggregate-functions"
+name = "datafusion-functions-aggregate"
 description = "Aggregate function packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
@@ -29,7 +29,7 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "datafusion_aggregate_functions"
+name = "datafusion_functions_aggregate"
 path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

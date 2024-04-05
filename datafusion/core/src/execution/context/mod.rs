@@ -24,6 +24,7 @@ use std::string::String;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+use crate::{functions, functions_aggregate, functions_array};
 use crate::{
     catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
     catalog::listing_schema::ListingSchemaProvider,
@@ -1448,15 +1449,15 @@ impl SessionState {
         };
 
         // register built in functions
-        datafusion_functions::register_all(&mut new_self)
+        functions::register_all(&mut new_self)
             .expect("can not register built in functions");
 
         // register crate of array expressions (if enabled)
         #[cfg(feature = "array_expressions")]
-        datafusion_functions_array::register_all(&mut new_self)
+        functions_array::register_all(&mut new_self)
             .expect("can not register array expressions");
 
-        datafusion_aggregate_functions::register_all(&mut new_self)
+        functions_aggregate::register_all(&mut new_self)
             .expect("can not register aggregate functions");
 
         new_self

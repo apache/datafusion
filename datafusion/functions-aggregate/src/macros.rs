@@ -32,13 +32,13 @@ macro_rules! make_udaf_function {
                 ))
             }
 
-            /// Singleton instance of [$UDAF], ensures the UDF is only created once
+            /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
             static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::AggregateUDF>> =
                 std::sync::OnceLock::new();
 
-            /// Aggregatefunction that returns a [AggregateUDF] for [$UDAF]
+            /// AggregateFunction that returns a [AggregateUDF] for [$UDAF]
             ///
             /// [AggregateUDF]: datafusion_expr::AggregateUDF
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {

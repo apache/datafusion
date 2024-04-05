@@ -339,7 +339,7 @@ impl Accumulator for FirstValueAccumulator {
     }
 }
 
-/// TO BE DEPRECATED: Builtin FIRST_VALUE physical aggregate expression
+/// TO BE DEPRECATED: Builtin FIRST_VALUE physical aggregate expression will be replaced by udf in the future
 #[derive(Debug, Clone)]
 pub struct FirstValuePhysicalExpr {
     name: String,
@@ -520,7 +520,7 @@ impl PartialEq<dyn Any> for FirstValuePhysicalExpr {
     }
 }
 
-/// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression
+/// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
 #[derive(Debug, Clone)]
 pub struct LastValuePhysicalExpr {
     name: String,
