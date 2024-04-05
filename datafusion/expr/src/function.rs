@@ -38,18 +38,33 @@ pub type ScalarFunctionImplementation =
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
-/// Arguments passed to create an accumulator
+/// [`AccumulatorArgs`] contains information about how an aggregate
+/// function was called, including the types of its arguments and any optional
+/// ordering expressions.
 pub struct AccumulatorArgs<'a> {
-    // default arguments
-    /// the return type of the function
+    /// The return type of the aggregate function.
     pub data_type: &'a DataType,
-    /// the schema of the input arguments
+    /// The schema of the input arguments
     pub schema: &'a Schema,
-    /// whether to ignore nulls
+    /// Whether to ignore nulls.
+    ///
+    /// SQL allows the user to specify `IGNORE NULLS`, for example:
+    ///
+    /// ```sql
+    /// SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
+    /// ```
     pub ignore_nulls: bool,
 
-    // ordering arguments
-    /// the expressions of `order by`, if no ordering is required, this will be an empty slice
+    /// The expressions in the `ORDER BY` clause passed to this aggregator.
+    ///
+    /// SQL allows the user to specify the ordering of arguments to the
+    /// aggregate using an `ORDER BY`. For example:
+    ///
+    /// ```sql
+    /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
+    /// ```
+    ///
+    /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
 }
 
