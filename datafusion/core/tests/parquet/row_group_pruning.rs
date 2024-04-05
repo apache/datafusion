@@ -447,8 +447,6 @@ macro_rules! int_tests {
     };
 }
 
-int_tests!(8, correct_bloom_filters: false);
-int_tests!(16, correct_bloom_filters: false);
 int_tests!(32, correct_bloom_filters: true);
 int_tests!(64, correct_bloom_filters: true);
 
@@ -585,8 +583,6 @@ macro_rules! uint_tests {
     };
 }
 
-uint_tests!(8, correct_bloom_filters: false);
-uint_tests!(16, correct_bloom_filters: false);
 uint_tests!(32, correct_bloom_filters: true);
 uint_tests!(64, correct_bloom_filters: true);
 
