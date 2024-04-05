@@ -213,8 +213,8 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-///
 /// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+///
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -282,7 +282,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
     ///
-    /// `acc_args`: the arguments to the accumulator. See [`AccumulatorArgs`] for more details.
+    /// acc_args: [`AccumulatorArgs`] contains information about how the
+    /// aggregate function was called.
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
     /// Return the fields used to store the intermediate state of this accumulator.
@@ -325,6 +326,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator]` will be called.
+    ///
+    /// # Notes
+    ///
+    /// Even if this function returns true, DataFusion will still use
+    /// `Self::accumulator` for certain queries, such as when this aggregate is
+    /// used as a window function or when there no GROUP BY columns in the
+    /// query.
     fn groups_accumulator_supported(&self) -> bool {
         false
     }
