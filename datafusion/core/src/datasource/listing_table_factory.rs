@@ -137,6 +137,8 @@ impl TableProviderFactory for ListingTableFactory {
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone());
 
+        options.validate_partitions(state, &table_path).await?;
+
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
             Some(s) => s,
