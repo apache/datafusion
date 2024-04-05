@@ -972,13 +972,17 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     let null_equals_null = *null_equals_null;
 
-                    // If join has expression equijoin keys, add physical projecton.
+                    // If join has expression equijoin keys, add physical projection.
                     let has_expr_join_key = keys.iter().any(|(l, r)| {
                         !(matches!(l, Expr::Column(_))
                             && matches!(r, Expr::Column(_)))
                     });
                     if has_expr_join_key {
-                        let join_plan = has_expr_join_key_func(keys,left,right,logical_plan,join_schema)?;
+                        // Logic extracted into a function here as subsequent recursive create_initial_plan()
+                        // call can cause a stack overflow for a large number of joins.
+                        //
+                        // See #9962 and #1047 for detailed explanation.
+                        let join_plan = project_expr_join_keys(keys,left,right,logical_plan,join_schema)?;
                         return self
                             .create_initial_plan(&join_plan, session_state)
                             .await;
@@ -1948,8 +1952,8 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
-// TODO: fix name, add docs
-fn has_expr_join_key_func(
+/// Adding physical projection to join if has expression equijoin keys.
+fn project_expr_join_keys(
     keys: &[(Expr, Expr)],
     left: &Arc<LogicalPlan>,
     right: &Arc<LogicalPlan>,
