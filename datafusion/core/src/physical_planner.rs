@@ -978,61 +978,7 @@ impl DefaultPhysicalPlanner {
                             && matches!(r, Expr::Column(_)))
                     });
                     if has_expr_join_key {
-                        let left_keys = keys
-                            .iter()
-                            .map(|(l, _r)| l)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let right_keys = keys
-                            .iter()
-                            .map(|(_l, r)| r)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let (left, right, column_on, added_project) = {
-                            let (left, left_col_keys, left_projected) =
-                                wrap_projection_for_join_if_necessary(
-                                    left_keys.as_slice(),
-                                    left.as_ref().clone(),
-                                )?;
-                            let (right, right_col_keys, right_projected) =
-                                wrap_projection_for_join_if_necessary(
-                                    &right_keys,
-                                    right.as_ref().clone(),
-                                )?;
-                            (
-                                left,
-                                right,
-                                (left_col_keys, right_col_keys),
-                                left_projected || right_projected,
-                            )
-                        };
-
-                        let join_plan =
-                            LogicalPlan::Join(Join::try_new_with_project_input(
-                                logical_plan,
-                                Arc::new(left),
-                                Arc::new(right),
-                                column_on,
-                            )?);
-
-                        // Remove temporary projected columns
-                        let join_plan = if added_project {
-                            let final_join_result = join_schema
-                                .iter()
-                                .map(|(qualifier, field)| {
-                                    Expr::Column(datafusion_common::Column::from((qualifier, field.as_ref())))
-                                })
-                                .collect::<Vec<_>>();
-                            let projection =
-                                Projection::try_new(
-                                    final_join_result,
-                                    Arc::new(join_plan),
-                                )?;
-                            LogicalPlan::Projection(projection)
-                        } else {
-                            join_plan
-                        };
-
+                        let join_plan = has_expr_join_key_func(keys,left,right,logical_plan,join_schema)?;
                         return self
                             .create_initial_plan(&join_plan, session_state)
                             .await;
@@ -1999,6 +1945,54 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Err(e), Ok(_)) => Err(e),
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
+    }
+}
+
+// TODO: fix name, add docs
+fn has_expr_join_key_func(
+    keys: &[(Expr, Expr)],
+    left: &Arc<LogicalPlan>,
+    right: &Arc<LogicalPlan>,
+    logical_plan: &LogicalPlan,
+    join_schema: &Arc<DFSchema>,
+) -> Result<LogicalPlan> {
+    let left_keys = keys.iter().map(|(l, _r)| l).cloned().collect::<Vec<_>>();
+    let right_keys = keys.iter().map(|(_l, r)| r).cloned().collect::<Vec<_>>();
+    let (left, right, column_on, added_project) = {
+        let (left, left_col_keys, left_projected) =
+            wrap_projection_for_join_if_necessary(
+                left_keys.as_slice(),
+                left.as_ref().clone(),
+            )?;
+        let (right, right_col_keys, right_projected) =
+            wrap_projection_for_join_if_necessary(&right_keys, right.as_ref().clone())?;
+        (
+            left,
+            right,
+            (left_col_keys, right_col_keys),
+            left_projected || right_projected,
+        )
+    };
+
+    let join_plan = LogicalPlan::Join(Join::try_new_with_project_input(
+        logical_plan,
+        Arc::new(left),
+        Arc::new(right),
+        column_on,
+    )?);
+
+    // Remove temporary projected columns
+    if added_project {
+        let final_join_result = join_schema
+            .iter()
+            .map(|(qualifier, field)| {
+                Expr::Column(datafusion_common::Column::from((qualifier, field.as_ref())))
+            })
+            .collect::<Vec<_>>();
+        let projection = Projection::try_new(final_join_result, Arc::new(join_plan))?;
+        Ok(LogicalPlan::Projection(projection))
+    } else {
+        Ok(join_plan)
     }
 }
 
