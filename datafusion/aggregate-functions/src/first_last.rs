@@ -43,7 +43,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-make_udaf_function!(FirstValue,
+make_udaf_function!(
+    FirstValue,
     first_value,
     value,
     "Returns the first value in a group of values.",
