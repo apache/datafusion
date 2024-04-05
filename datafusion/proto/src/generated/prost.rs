@@ -144,7 +144,7 @@ pub struct LogicalExprNodeCollection {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
-    pub table_name: ::core::option::Option<OwnedTableReference>,
+    pub table_name: ::core::option::Option<TableReference>,
     #[prost(string, repeated, tag = "2")]
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
@@ -185,7 +185,7 @@ pub mod listing_table_scan_node {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ViewTableScanNode {
     #[prost(message, optional, tag = "6")]
-    pub table_name: ::core::option::Option<OwnedTableReference>,
+    pub table_name: ::core::option::Option<TableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
@@ -200,7 +200,7 @@ pub struct ViewTableScanNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CustomTableScanNode {
     #[prost(message, optional, tag = "6")]
-    pub table_name: ::core::option::Option<OwnedTableReference>,
+    pub table_name: ::core::option::Option<TableReference>,
     #[prost(message, optional, tag = "2")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "3")]
@@ -320,7 +320,7 @@ pub struct Constraints {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "12")]
-    pub name: ::core::option::Option<OwnedTableReference>,
+    pub name: ::core::option::Option<TableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
@@ -390,7 +390,7 @@ pub struct CreateCatalogNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DropViewNode {
     #[prost(message, optional, tag = "1")]
-    pub name: ::core::option::Option<OwnedTableReference>,
+    pub name: ::core::option::Option<TableReference>,
     #[prost(bool, tag = "2")]
     pub if_exists: bool,
     #[prost(message, optional, tag = "3")]
@@ -400,7 +400,7 @@ pub struct DropViewNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateViewNode {
     #[prost(message, optional, tag = "5")]
-    pub name: ::core::option::Option<OwnedTableReference>,
+    pub name: ::core::option::Option<TableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
@@ -563,7 +563,7 @@ pub struct SubqueryAliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
-    pub alias: ::core::option::Option<OwnedTableReference>,
+    pub alias: ::core::option::Option<TableReference>,
 }
 /// logical expressions
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -803,7 +803,7 @@ pub struct AliasNode {
     #[prost(string, tag = "2")]
     pub alias: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "3")]
-    pub relation: ::prost::alloc::vec::Vec<OwnedTableReference>,
+    pub relation: ::prost::alloc::vec::Vec<TableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1551,14 +1551,14 @@ pub struct FullTableReference {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct OwnedTableReference {
-    #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
+pub struct TableReference {
+    #[prost(oneof = "table_reference::TableReferenceEnum", tags = "1, 2, 3")]
     pub table_reference_enum: ::core::option::Option<
-        owned_table_reference::TableReferenceEnum,
+        table_reference::TableReferenceEnum,
     >,
 }
-/// Nested message and enum types in `OwnedTableReference`.
-pub mod owned_table_reference {
+/// Nested message and enum types in `TableReference`.
+pub mod table_reference {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum TableReferenceEnum {
@@ -2846,7 +2846,7 @@ pub enum ScalarFunction {
     /// 3 was Atan
     /// 4 was Ascii
     Ceil = 5,
-    Cos = 6,
+    /// 6 was Cos
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
@@ -2913,15 +2913,15 @@ pub enum ScalarFunction {
     /// 70 was CurrentDate
     /// 71 was CurrentTime
     /// 72 was Uuid
-    Cbrt = 73,
+    /// 73 was Cbrt
     /// 74 Acosh
     /// 75 was Asinh
     /// 76 was Atanh
     /// 77 was Sinh
-    Cosh = 78,
-    /// Tanh = 79;
+    /// 78 was Cosh
+    /// Tanh = 79
     Pi = 80,
-    Degrees = 81,
+    /// 81 was Degrees
     /// 82 was Radians
     Factorial = 83,
     Lcm = 84,
@@ -2988,7 +2988,6 @@ impl ScalarFunction {
         match self {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Ceil => "Ceil",
-            ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
             ScalarFunction::Log => "Log",
@@ -3000,10 +2999,7 @@ impl ScalarFunction {
             ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
-            ScalarFunction::Degrees => "Degrees",
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
@@ -3018,7 +3014,6 @@ impl ScalarFunction {
         match value {
             "unknown" => Some(Self::Unknown),
             "Ceil" => Some(Self::Ceil),
-            "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
             "Log" => Some(Self::Log),
@@ -3030,10 +3025,7 @@ impl ScalarFunction {
             "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Cbrt" => Some(Self::Cbrt),
-            "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),
-            "Degrees" => Some(Self::Degrees),
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),

@@ -96,6 +96,10 @@ pub trait TableProvider: Sync + Send {
     /// which *all* of the `Expr`s evaluate to `true` must be returned (aka the
     /// expressions are `AND`ed together).
     ///
+    /// To enable filter pushdown you must override
+    /// [`Self::supports_filters_pushdown`] as the default implementation does
+    /// not and `filters` will be empty.
+    ///
     /// DataFusion pushes filtering into the scans whenever possible
     /// ("Filter Pushdown"), and depending on the format and the
     /// implementation of the format, evaluating the predicate during the scan
@@ -154,28 +158,31 @@ pub trait TableProvider: Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Tests whether the table provider can make use of a filter expression
-    /// to optimise data retrieval.
-    #[deprecated(since = "20.0.0", note = "use supports_filters_pushdown instead")]
-    fn supports_filter_pushdown(
-        &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Unsupported)
-    }
-
-    /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
-    /// Note:  the returned vector much have the same size as the filters argument.
-    #[allow(deprecated)]
+    /// Specify if DataFusion should provide filter expressions to the
+    /// TableProvider to apply *during* the scan.
+    ///
+    /// The return value must have one element for each filter expression passed
+    /// in. The value of each element indicates if the TableProvider can apply
+    /// that particular filter during the scan.
+    ///
+    /// Some TableProviders can evaluate filters more efficiently than the
+    /// `Filter` operator in DataFusion, for example by using an index.
+    ///
+    /// By default, returns [`Unsupported`] for all filters, meaning no filters
+    /// will be provided to [`Self::scan`]. If the TableProvider can implement
+    /// filter pushdown, it should return either [`Exact`] or [`Inexact`].
+    ///
+    /// [`Unsupported`]: TableProviderFilterPushDown::Unsupported
+    /// [`Exact`]: TableProviderFilterPushDown::Exact
+    /// [`Inexact`]: TableProviderFilterPushDown::Inexact
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        filters
-            .iter()
-            .map(|f| self.supports_filter_pushdown(f))
-            .collect()
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
     }
 
     /// Get statistics for this table, if available

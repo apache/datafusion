@@ -50,7 +50,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, OwnedTableReference, ParamValues, Result, UnnestOptions,
+    FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions,
 };
 
 // backwards compatibility
@@ -1850,7 +1850,7 @@ pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// The alias for the input relation
-    pub alias: OwnedTableReference,
+    pub alias: TableReference,
     /// The schema with qualified field names
     pub schema: DFSchemaRef,
 }
@@ -1858,7 +1858,7 @@ pub struct SubqueryAlias {
 impl SubqueryAlias {
     pub fn try_new(
         plan: Arc<LogicalPlan>,
-        alias: impl Into<OwnedTableReference>,
+        alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
         let fields = change_redundant_column(plan.schema().fields());
@@ -1869,7 +1869,7 @@ impl SubqueryAlias {
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(&alias, &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2009,7 +2009,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = input
+        let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
             .map(|(q, f)| (q.cloned(), f.clone()))
@@ -2080,7 +2080,7 @@ impl Window {
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
-    pub table_name: OwnedTableReference,
+    pub table_name: TableReference,
     /// The source of the table
     pub source: Arc<dyn TableSource>,
     /// Optional column indices to use as a projection
@@ -2119,7 +2119,7 @@ impl TableScan {
     /// Initialize TableScan with appropriate schema from the given
     /// arguments.
     pub fn try_new(
-        table_name: impl Into<OwnedTableReference>,
+        table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,

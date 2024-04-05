@@ -30,15 +30,14 @@ use arrow::{
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
-    ends_with, exp,
+    ceil, coalesce, concat_expr, concat_ws_expr, cot, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
@@ -171,20 +170,19 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
 
     fn try_from(df_schema: &protobuf::DfSchema) -> Result<Self, Self::Error> {
         let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> =
-            df_fields
-                .iter()
-                .map(|df_field| {
-                    let field: Field = df_field.field.as_ref().required("field")?;
-                    Ok((
-                        df_field
-                            .qualifier
-                            .as_ref()
-                            .map(|q| q.relation.clone().into()),
-                        Arc::new(field),
-                    ))
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<Field>)> = df_fields
+            .iter()
+            .map(|df_field| {
+                let field: Field = df_field.field.as_ref().required("field")?;
+                Ok((
+                    df_field
+                        .qualifier
+                        .as_ref()
+                        .map(|q| q.relation.clone().into()),
+                    Arc::new(field),
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
 
         Ok(DFSchema::new_with_metadata(
             qualifiers_and_fields,
@@ -212,28 +210,28 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
-impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
+impl TryFrom<protobuf::TableReference> for TableReference {
     type Error = Error;
 
-    fn try_from(value: protobuf::OwnedTableReference) -> Result<Self, Self::Error> {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+    fn try_from(value: protobuf::TableReference) -> Result<Self, Self::Error> {
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = value
             .table_reference_enum
             .ok_or_else(|| Error::required("table_reference_enum"))?;
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::bare(table))
+                Ok(TableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::partial(schema, table)),
+            }) => Ok(TableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
+            }) => Ok(TableReference::full(catalog, schema, table)),
         }
     }
 }
@@ -421,13 +419,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Cbrt => Self::Cbrt,
-            ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Cosh => Self::Cosh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
-            ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Gcd => Self::Gcd,
             ScalarFunction::Lcm => Self::Lcm,
@@ -1094,7 +1088,7 @@ pub fn parse_expr(
             alias
                 .relation
                 .first()
-                .map(|r| OwnedTableReference::try_from(r.clone()))
+                .map(|r| TableReference::try_from(r.clone()))
                 .transpose()?,
             alias.alias.clone(),
         ))),
@@ -1306,13 +1300,7 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Degrees => {
-                    Ok(degrees(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
                 }

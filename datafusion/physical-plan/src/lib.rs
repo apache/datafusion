@@ -574,7 +574,7 @@ impl PlanProperties {
         execution_mode: ExecutionMode,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
-        let output_ordering = eq_properties.oeq_class().output_ordering();
+        let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
@@ -599,7 +599,7 @@ impl PlanProperties {
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
-        self.output_ordering = eq_properties.oeq_class().output_ordering();
+        self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
         self
     }

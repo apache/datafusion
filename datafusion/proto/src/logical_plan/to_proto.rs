@@ -45,8 +45,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    Column, Constraint, Constraints, DFSchema, DFSchemaRef, OwnedTableReference,
-    ScalarValue,
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
@@ -1408,16 +1407,12 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Cbrt => Self::Cbrt,
-            BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Cot => Self::Cot,
-            BuiltinScalarFunction::Cosh => Self::Cosh,
             BuiltinScalarFunction::Exp => Self::Exp,
             BuiltinScalarFunction::Factorial => Self::Factorial,
             BuiltinScalarFunction::Gcd => Self::Gcd,
             BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
-            BuiltinScalarFunction::Degrees => Self::Degrees,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
@@ -1459,22 +1454,22 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
     }
 }
 
-impl From<OwnedTableReference> for protobuf::OwnedTableReference {
-    fn from(t: OwnedTableReference) -> Self {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+impl From<TableReference> for protobuf::TableReference {
+    fn from(t: TableReference) -> Self {
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
-            OwnedTableReference::Bare { table } => {
+            TableReference::Bare { table } => {
                 TableReferenceEnum::Bare(protobuf::BareTableReference {
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Partial { schema, table } => {
+            TableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
                     schema: schema.to_string(),
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Full {
+            TableReference::Full {
                 catalog,
                 schema,
                 table,
@@ -1485,7 +1480,7 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
             }),
         };
 
-        protobuf::OwnedTableReference {
+        protobuf::TableReference {
             table_reference_enum: Some(table_reference_enum),
         }
     }

@@ -526,7 +526,6 @@ impl Accumulator for TimeSum {
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
-            println!("Adding {v}");
             self.sum += v;
         }
         Ok(())
@@ -538,7 +537,6 @@ impl Accumulator for TimeSum {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        println!("Evaluating to {}", self.sum);
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
 
@@ -558,7 +556,6 @@ impl Accumulator for TimeSum {
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
-            println!("Retracting {v}");
             self.sum -= v;
         }
         Ok(())

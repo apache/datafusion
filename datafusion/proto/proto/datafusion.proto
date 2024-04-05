@@ -107,7 +107,7 @@ message LogicalExprNodeCollection {
 
 message ListingTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 14;
+  TableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -126,7 +126,7 @@ message ListingTableScanNode {
 
 message ViewTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -136,7 +136,7 @@ message ViewTableScanNode {
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;
@@ -201,7 +201,7 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  OwnedTableReference name = 12;
+  TableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -238,14 +238,14 @@ message CreateCatalogNode {
 }
 
 message DropViewNode {
-  OwnedTableReference name = 1;
+  TableReference name = 1;
   bool if_exists = 2;
   DfSchema schema = 3;
 }
 
 message CreateViewNode {
   reserved 1; // was string name
-  OwnedTableReference name = 5;
+  TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -357,7 +357,7 @@ message SelectionExecNode {
 message SubqueryAliasNode {
   reserved 2; // Was string alias
   LogicalPlanNode input = 1;
-  OwnedTableReference alias = 3;
+  TableReference alias = 3;
 }
 
 // logical expressions
@@ -513,7 +513,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
-  repeated OwnedTableReference relation = 3;
+  repeated TableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -547,7 +547,7 @@ enum ScalarFunction {
   // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
-  Cos = 6;
+  // 6 was Cos
   // 7 was Digest
   Exp = 8;
   Floor = 9;
@@ -614,15 +614,15 @@ enum ScalarFunction {
   // 70 was CurrentDate
   // 71 was CurrentTime
   // 72 was Uuid
-  Cbrt = 73;
+  // 73 was Cbrt
   // 74 Acosh
   // 75 was Asinh
   // 76 was Atanh
   // 77 was Sinh
-  Cosh = 78;
-  // Tanh = 79;
+  // 78 was Cosh
+  // Tanh = 79
   Pi = 80;
-  Degrees = 81;
+  // 81 was Degrees
   // 82 was Radians
   Factorial = 83;
   Lcm = 84;
@@ -1169,7 +1169,7 @@ message FullTableReference {
   string table = 3;
 }
 
-message OwnedTableReference {
+message TableReference {
   oneof table_reference_enum {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;

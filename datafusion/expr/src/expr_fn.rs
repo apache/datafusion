@@ -536,10 +536,7 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
-scalar_expr!(Cos, cos, num, "cosine of a number");
 scalar_expr!(Cot, cot, num, "cotangent of a number");
-scalar_expr!(Cosh, cosh, num, "hyperbolic cosine of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
     Floor,
@@ -553,7 +550,6 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
-scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
 nary_scalar_expr!(Round, round, "round to nearest integer");
 nary_scalar_expr!(
     Trunc,
@@ -1060,14 +1056,10 @@ mod test {
 
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Cbrt, cbrt);
-        test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Cot, cot);
-        test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Degrees, degrees);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_nary_scalar_expr!(Trunc, trunc, num);

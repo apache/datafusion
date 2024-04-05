@@ -66,7 +66,7 @@ use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
-    OwnedTableReference, SchemaReference,
+    SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
@@ -80,7 +80,7 @@ use datafusion_physical_expr::create_first_value_accumulator;
 use datafusion_sql::{
     parser::{CopyToSource, CopyToStatement, DFParser},
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
-    ResolvedTableReference, TableReference,
+    ResolvedTableReference,
 };
 
 use async_trait::async_trait;
@@ -507,7 +507,7 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
-        let exist = self.table_exist(&cmd.name)?;
+        let exist = self.table_exist(cmd.name.clone())?;
         if exist {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
@@ -519,7 +519,7 @@ impl SessionContext {
 
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
-        self.register_table(&cmd.name, table_provider)?;
+        self.register_table(cmd.name.clone(), table_provider)?;
         self.return_empty_dataframe()
     }
 
@@ -535,11 +535,11 @@ impl SessionContext {
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
-        let table = self.table(&name).await;
+        let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
-                self.deregister_table(&name)?;
+                self.deregister_table(name.clone())?;
                 let schema = Arc::new(input.schema().as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -551,7 +551,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(&name, table)?;
+                self.register_table(name.clone(), table)?;
                 self.return_empty_dataframe()
             }
             (true, true, Ok(_)) => {
@@ -570,7 +570,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -585,20 +585,20 @@ impl SessionContext {
             definition,
         } = cmd;
 
-        let view = self.table(&name).await;
+        let view = self.table(name.clone()).await;
 
         match (or_replace, view) {
             (true, Ok(_)) => {
-                self.deregister_table(&name)?;
+                self.deregister_table(name.clone())?;
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -674,7 +674,9 @@ impl SessionContext {
         let DropTable {
             name, if_exists, ..
         } = cmd;
-        let result = self.find_and_deregister(&name, TableType::Base).await;
+        let result = self
+            .find_and_deregister(name.clone(), TableType::Base)
+            .await;
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
@@ -686,7 +688,9 @@ impl SessionContext {
         let DropView {
             name, if_exists, ..
         } = cmd;
-        let result = self.find_and_deregister(&name, TableType::View).await;
+        let result = self
+            .find_and_deregister(name.clone(), TableType::View)
+            .await;
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
@@ -1134,13 +1138,14 @@ impl SessionContext {
 
     /// Return `true` if the specified table exists in the schema provider.
     pub fn table_exist(&self, table_ref: impl Into<TableReference>) -> Result<bool> {
-        let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
+        let table_ref: TableReference = table_ref.into();
+        let table = table_ref.table();
+        let table_ref = table_ref.clone();
         Ok(self
             .state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(&table))
+            .table_exist(table))
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -1154,10 +1159,10 @@ impl SessionContext {
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<DataFrame> {
-        let table_ref = table_ref.into();
-        let provider = self.table_provider(table_ref.to_owned_reference()).await?;
+        let table_ref: TableReference = table_ref.into();
+        let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
-            table_ref.to_owned_reference(),
+            table_ref,
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -1716,7 +1721,7 @@ impl SessionState {
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
-    ) -> Result<Vec<OwnedTableReference>> {
+    ) -> Result<Vec<TableReference>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
@@ -1816,11 +1821,10 @@ impl SessionState {
         let parse_float_as_decimal =
             self.config.options().sql_parser.parse_float_as_decimal;
         for reference in references {
-            let table = reference.table();
-            let resolved = self.resolve_table_ref(&reference);
+            let resolved = &self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
-                if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(table).await? {
+                if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
+                    if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
                     }
                 }

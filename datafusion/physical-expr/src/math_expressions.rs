@@ -155,9 +155,6 @@ macro_rules! make_function_scalar_inputs_return_type {
     }};
 }
 
-math_unary_function!("cbrt", cbrt);
-math_unary_function!("cos", cos);
-math_unary_function!("cosh", cosh);
 math_unary_function!("asin", asin);
 math_unary_function!("acos", acos);
 math_unary_function!("atan", atan);
@@ -170,7 +167,6 @@ math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
-math_unary_function!("degrees", to_degrees);
 
 /// Factorial SQL function
 pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
