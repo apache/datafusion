@@ -25,16 +25,14 @@ use crate::expr::{
 use crate::{Expr, GetFieldAccess};
 
 use datafusion_common::tree_node::{
-    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion,
+    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_common::{
-    handle_visit_recursion, internal_err, map_until_stop_and_collect, Result,
-};
+use datafusion_common::{internal_err, map_until_stop_and_collect, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
-        f: &mut F,
+        f: F,
     ) -> Result<TreeNodeRecursion> {
         let children = match self {
             Expr::Alias(Alias{expr,..})
@@ -133,19 +131,13 @@ impl TreeNode for Expr {
             }
         };
 
-        let mut tnr = TreeNodeRecursion::Continue;
-        for child in children {
-            tnr = f(child)?;
-            handle_visit_recursion!(tnr, DOWN);
-        }
-
-        Ok(tnr)
+        children.into_iter().apply_until_stop(f)
     }
 
-    fn map_children<F>(self, mut f: F) -> Result<Transformed<Self>>
-    where
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    {
+    fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
         Ok(match self {
             Expr::Column(_)
             | Expr::Wildcard { .. }
