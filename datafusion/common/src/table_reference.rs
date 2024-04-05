@@ -142,7 +142,7 @@ impl TableReference {
 
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
-    /// As described on [`TableReference`] this does *NO* normalization at all.
+    /// Note: *NO* normalization is applied to the schema or table name.
     pub fn partial(
         schema: impl Into<Arc<str>>,
         table: impl Into<Arc<str>>,
@@ -155,7 +155,8 @@ impl TableReference {
 
     /// Convenience method for creating a [`TableReference::Full`]
     ///
-    /// As described on [`TableReference`] this does *NO* normalization at all.
+    /// Note: *NO* normalization is applied to the catalog, schema or table
+    /// name.
     pub fn full(
         catalog: impl Into<Arc<str>>,
         schema: impl Into<Arc<str>>,
