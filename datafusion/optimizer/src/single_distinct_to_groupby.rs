@@ -33,7 +33,6 @@ use datafusion_expr::{
     Expr, ExprSchemable,
 };
 
-use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use hashbrown::HashSet;
 
 /// single distinct to group by optimizer rule
