@@ -276,7 +276,7 @@ fn maybe_data_types(
     let mut new_type = Vec::with_capacity(valid_types.len());
     for (i, valid_type) in valid_types.iter().enumerate() {
         let current_type = &current_types[i];
-        
+
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
