@@ -276,7 +276,7 @@ fn maybe_data_types(
     let mut new_type = Vec::with_capacity(valid_types.len());
     for (i, valid_type) in valid_types.iter().enumerate() {
         let current_type = &current_types[i];
-
+        
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
@@ -430,7 +430,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-
+        Dictionary(_, _) if matches!(type_from, Utf8) => Some(type_into.clone()),
         // More coerce rules.
         // Note that not all rules in `comparison_coercion` can be reused here.
         // For example, all numeric types can be coerced into Utf8 for comparison,

@@ -1779,6 +1779,18 @@ SELECT COALESCE(NULL, 'test')
 ----
 test
 
+
+statement ok
+create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
+
+
+query ?
+select  coalesce(column1, 'none_set') from test1;
+----
+foo
+none_set
+
+
 statement ok
 CREATE TABLE test(
   c1 INT,
