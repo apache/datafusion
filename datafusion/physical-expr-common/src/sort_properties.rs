@@ -17,9 +17,9 @@
 
 use std::ops::Neg;
 
-use crate::tree_node::ExprContext;
+use arrow::compute::SortOptions;
 
-use arrow_schema::SortOptions;
+use crate::tree_node::ExprContext;
 
 /// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between

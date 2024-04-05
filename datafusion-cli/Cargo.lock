@@ -1331,6 +1331,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.3",
  "hex",
@@ -1343,6 +1344,15 @@ dependencies = [
  "rand",
  "regex",
  "sha2",
+]
+
+[[package]]
+name = "datafusion-physical-expr-common"
+version = "37.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
 ]
 
 [[package]]
