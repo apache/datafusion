@@ -32,23 +32,14 @@ impl TreeNode for LogicalPlan {
         self.inputs().into_iter().apply_until_stop(f)
     }
 
-    fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: F,
-    ) -> Result<Transformed<Self>> {
-        let new_children = self
-            .inputs()
-            .into_iter()
-            .cloned()
-            .map_until_stop_and_collect(f)?;
-        // Propagate up `new_children.transformed` and `new_children.tnr`
-        // along with the node containing transformed children.
-        if new_children.transformed {
-            new_children.map_data(|new_children| {
-                self.with_new_exprs(self.expressions(), new_children)
-            })
-        } else {
-            Ok(new_children.update_data(|_| self))
-        }
+    fn map_children<F>(mut self, f: F) -> Result<Transformed<Self>>
+    where
+        F: FnMut(Self) -> Result<Transformed<Self>>,
+    {
+        // Apply the rewrite *in place* for each child to avoid cloning
+        let result = self.rewrite_children(f)?;
+
+        // return ourself
+        Ok(result.update_data(|_| self))
     }
 }

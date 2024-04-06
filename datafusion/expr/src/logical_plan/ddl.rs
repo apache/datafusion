@@ -110,6 +110,24 @@ impl DdlStatement {
         }
     }
 
+    /// Return a mutable reference to the input `LogicalPlan`, if any
+    pub fn input_mut(&mut self) -> Option<&mut Arc<LogicalPlan>> {
+        match self {
+            DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
+                Some(input)
+            }
+            DdlStatement::CreateExternalTable(_) => None,
+            DdlStatement::CreateView(CreateView { input, .. }) => Some(input),
+            DdlStatement::CreateCatalogSchema(_) => None,
+            DdlStatement::CreateCatalog(_) => None,
+            DdlStatement::DropTable(_) => None,
+            DdlStatement::DropView(_) => None,
+            DdlStatement::DropCatalogSchema(_) => None,
+            DdlStatement::CreateFunction(_) => None,
+            DdlStatement::DropFunction(_) => None,
+        }
+    }
+
     /// Return a `format`able structure with the a human readable
     /// description of this LogicalPlan node per node, not including
     /// children.

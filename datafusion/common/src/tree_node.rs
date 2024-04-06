@@ -534,6 +534,15 @@ impl<T> Transformed<T> {
             TreeNodeRecursion::Jump | TreeNodeRecursion::Stop => Ok(self),
         }
     }
+
+    /// Discards the data of this [`Transformed`] object transforming it into Transformed<()>
+    pub fn discard_data(self) -> Transformed<()> {
+        Transformed {
+            data: (),
+            transformed: self.transformed,
+            tnr: self.tnr,
+        }
+    }
 }
 
 /// Transformation helper to process a sequence of iterable tree nodes that are siblings.

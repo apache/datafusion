@@ -21,6 +21,7 @@ pub mod display;
 pub mod dml;
 mod extension;
 mod plan;
+mod rewrite;
 mod statement;
 
 pub use builder::{
