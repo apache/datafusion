@@ -70,7 +70,10 @@ pub mod expr_fn {
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<AggregateUDF>> = vec![first_last::first_value_udaf()];
+    let functions: Vec<Arc<AggregateUDF>> = vec![
+        first_last::first_value_udaf(),
+        first_last::last_value_udaf(),
+    ];
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;
