@@ -655,7 +655,7 @@ mod tests {
     fn test_unnest_generic_list() -> datafusion_common::Result<()> {
         let list_array = make_test_array();
 
-        // Test with preserve_nulls = true
+        // Test with preserve_nulls = false
         let options = UnnestOptions {
             preserve_nulls: false,
         };
@@ -667,7 +667,7 @@ mod tests {
             vec![Some("A"), Some("B"), Some("C"), Some("D"), None, Some("F")]
         );
 
-        // Test with preserve_nulls = false
+        // Test with preserve_nulls = true
         let options = UnnestOptions {
             preserve_nulls: true,
         };
