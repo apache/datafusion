@@ -945,6 +945,7 @@ fn get_aggregate_exprs_requirement(
             )) {
                 // Converting to FIRST_VALUE enables more efficient execution
                 // given the existing ordering:
+                println!("call convert");
                 let mut first_value = last_value.convert_to_first();
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
@@ -964,6 +965,7 @@ fn get_aggregate_exprs_requirement(
                 continue;
             }
         }
+        println!("try reverse expr {:#?}", aggr_expr);
         if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
             if let Some(finer_ordering) = finer_ordering(
                 &requirement,

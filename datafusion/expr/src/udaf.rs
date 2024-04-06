@@ -195,6 +195,14 @@ impl AggregateUDF {
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
     }
+
+    /// Construct an expression that calculates the aggregate in reverse.
+    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+    /// For aggregates that do not support calculation in reverse,
+    /// returns None (which is the default value).
+    fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
+        None
+    }
 }
 
 impl<F> From<F> for AggregateUDF

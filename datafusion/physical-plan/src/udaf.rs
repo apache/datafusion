@@ -204,6 +204,10 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
+
+    fn reverse_expr(&self) -> Option<Self> {
+        self.fun.reverse_expr()
+    }
 }
 
 impl PartialEq<dyn Any> for AggregateFunctionExpr {
