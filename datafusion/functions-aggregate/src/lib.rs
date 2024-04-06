@@ -62,7 +62,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+    function::AccumulatorArgs, type_coercion::aggregates::check_arg_count, Accumulator,
+    AggregateUDF, Expr, GroupsAccumulator,
 };
 use datafusion_physical_expr_common::{
     physical_expr::PhysicalExpr,
@@ -111,6 +112,13 @@ pub fn create_aggregate_expr(
         .iter()
         .map(|arg| arg.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
+
+    // check with signature
+    check_arg_count(
+        fun.name(),
+        &input_exprs_types,
+        &fun.signature().type_signature,
+    )?;
 
     let ordering_types = ordering_req
         .iter()
@@ -331,6 +339,10 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn reverse_expr(&self) -> Option<Self> {
+        self.fun.reverse_expr()
     }
 }
 

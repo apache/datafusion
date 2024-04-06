@@ -200,9 +200,9 @@ impl AggregateUDF {
     /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
-    fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
-        None
-    }
+    // fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
+    //     self.inner.reverse_expr()
+    // }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -362,6 +362,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    // fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+    //     None
+    // }
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to

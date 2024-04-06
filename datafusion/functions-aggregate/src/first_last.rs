@@ -33,10 +33,6 @@ use datafusion_expr::ArrayFunctionSignature;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::{
-    down_cast_any_ref, get_sort_options, ordering_fields,
-};
-use datafusion_physical_expr_common::aggregate::AggregateExpr;
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -194,6 +190,33 @@ impl AggregateUDFImpl for FirstValue {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    pub fn convert_to_last(self) -> LastValue {
+        // self.
+        // let name = if self.name.starts_with("FIRST") {
+        //     format!("LAST{}", &self.name[5..])
+        // } else {
+        //     format!("LAST_VALUE({})", self.expr)
+        // };
+        // let FirstValuePhysicalExpr {
+        //     expr,
+        //     input_data_type,
+        //     ordering_req,
+        //     order_by_data_types,
+        //     ..
+        // } = self;
+        // LastValuePhysicalExpr::new(
+        //     expr,
+        //     name,
+        //     input_data_type,
+        //     reverse_order_bys(&ordering_req),
+        //     order_by_data_types,
+        // )
+    }
+
+    // fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+    //     Some(Arc::new(self.clone().convert_to_last()))
+    // }
 }
 
 #[derive(Debug)]
