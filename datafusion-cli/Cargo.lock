@@ -1308,6 +1308,7 @@ dependencies = [
  "datafusion-functions",
  "itertools",
  "log",
+ "once_cell",
  "paste",
 ]
 
@@ -1387,6 +1388,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
  "futures",
  "half",
  "hashbrown 0.14.3",
