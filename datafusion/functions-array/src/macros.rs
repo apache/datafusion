@@ -68,6 +68,7 @@ macro_rules! make_udf_function {
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
                 [< STATIC_ $UDF >]
                     .get_or_init(|| {
+                        println!("Creating UDF");
                         std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
                             <$UDF>::new(),
                         ))
