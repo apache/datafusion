@@ -93,7 +93,7 @@ pub fn coerce_types(
 ) -> Result<Vec<DataType>> {
     use DataType::*;
     // Validate input_types matches (at least one of) the func signature.
-    check_arg_count(agg_fun, input_types, &signature.type_signature)?;
+    check_arg_count(agg_fun.name(), input_types, &signature.type_signature)?;
 
     match agg_fun {
         AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
@@ -293,10 +293,9 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median
-        | AggregateFunction::FirstValue
-        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
-        AggregateFunction::NthValue => Ok(input_types.to_vec()),
+        AggregateFunction::Median | AggregateFunction::NthValue => {
+            Ok(input_types.to_vec())
+        }
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
         AggregateFunction::StringAgg => {
             if !is_string_agg_supported_arg_type(&input_types[0]) {
@@ -323,8 +322,8 @@ pub fn coerce_types(
 /// This method DOES NOT validate the argument types - only that (at least one,
 /// in the case of [`TypeSignature::OneOf`]) signature matches the desired
 /// number of input types.
-fn check_arg_count(
-    agg_fun: &AggregateFunction,
+pub fn check_arg_count(
+    func_name: &str,
     input_types: &[DataType],
     signature: &TypeSignature,
 ) -> Result<()> {
@@ -333,7 +332,7 @@ fn check_arg_count(
             if input_types.len() != *agg_count {
                 return plan_err!(
                     "The function {:?} expects {:?} arguments, but {:?} were provided",
-                    agg_fun,
+                    func_name,
                     agg_count,
                     input_types.len()
                 );
@@ -343,7 +342,7 @@ fn check_arg_count(
             if types.len() != input_types.len() {
                 return plan_err!(
                     "The function {:?} expects {:?} arguments, but {:?} were provided",
-                    agg_fun,
+                    func_name,
                     types.len(),
                     input_types.len()
                 );
@@ -352,11 +351,11 @@ fn check_arg_count(
         TypeSignature::OneOf(variants) => {
             let ok = variants
                 .iter()
-                .any(|v| check_arg_count(agg_fun, input_types, v).is_ok());
+                .any(|v| check_arg_count(func_name, input_types, v).is_ok());
             if !ok {
                 return plan_err!(
                     "The function {:?} does not accept {:?} function arguments.",
-                    agg_fun,
+                    func_name,
                     input_types.len()
                 );
             }
@@ -364,7 +363,7 @@ fn check_arg_count(
         TypeSignature::VariadicAny => {
             if input_types.is_empty() {
                 return plan_err!(
-                    "The function {agg_fun:?} expects at least one argument"
+                    "The function {func_name:?} expects at least one argument"
                 );
             }
         }

@@ -920,6 +920,7 @@ fn get_aggregate_exprs_requirement(
             )) {
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
+                println!("call convert");
                 let mut last_value = first_value.convert_to_last();
                 last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
