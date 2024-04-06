@@ -36,9 +36,27 @@ use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+
+pub fn create_first_value_expr(
+    args: Vec<Expr>,
+    distinct: bool,
+    filter: Option<Box<Expr>>,
+    order_by: Option<Vec<Expr>>,
+    null_treatment: Option<NullTreatment>,
+) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        first_value_udaf(),
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    ))
+}
 
 make_udaf_function!(
     FirstValue,
@@ -631,7 +649,6 @@ impl AggregateUDFImpl for LastValue {
         &self.aliases
     }
 }
-
 
 /// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
 #[derive(Debug, Clone)]
