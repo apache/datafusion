@@ -207,6 +207,42 @@ mod tests {
             Utf8,
             StringArray
         );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from("")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
 
         Ok(())
     }
