@@ -117,8 +117,9 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "lower"
+required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
 name = "upper"
-
+required-features = ["string_expressions"]
