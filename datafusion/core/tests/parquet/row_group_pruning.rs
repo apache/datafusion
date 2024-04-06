@@ -290,7 +290,7 @@ async fn prune_disabled() {
 // https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
-    ($bits:expr) => {
+    ($bits:expr, correct_bloom_filters: $correct_bloom_filters:expr) => {
         paste::item! {
             #[tokio::test]
             async fn [<prune_int $bits _lt >]() {
@@ -329,9 +329,9 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -343,9 +343,9 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -404,9 +404,9 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -447,15 +447,15 @@ macro_rules! int_tests {
     };
 }
 
-int_tests!(32);
-int_tests!(64);
+int_tests!(32, correct_bloom_filters: true);
+int_tests!(64, correct_bloom_filters: true);
 
 // $bits: number of bits of the integer to test (8, 16, 32, 64)
 // $correct_bloom_filters: if false, replicates the
 // https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on UInt8 and UInt16 columns are still buggy.
 macro_rules! uint_tests {
-    ($bits:expr) => {
+    ($bits:expr, correct_bloom_filters: $correct_bloom_filters:expr) => {
         paste::item! {
             #[tokio::test]
             async fn [<prune_uint $bits _lt >]() {
@@ -480,9 +480,9 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -494,9 +494,9 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -540,9 +540,9 @@ macro_rules! uint_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(1))
-                    .with_pruned_by_bloom_filter(Some(1))
-                    .with_expected_rows(1)
+                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
+                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
+                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
                     .test_row_group_prune()
                     .await;
             }
@@ -583,8 +583,8 @@ macro_rules! uint_tests {
     };
 }
 
-uint_tests!(32);
-uint_tests!(64);
+uint_tests!(32, correct_bloom_filters: true);
+uint_tests!(64, correct_bloom_filters: true);
 
 #[tokio::test]
 async fn prune_int32_eq_large_in_list() {
