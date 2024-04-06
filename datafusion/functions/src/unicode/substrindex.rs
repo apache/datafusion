@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
+use arrow::array::{ArrayBuilder, ArrayRef, OffsetSizeTrait, StringBuilder};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
@@ -145,6 +145,9 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         });
 
+    if builder.is_empty() {
+        builder.append_null();
+    }
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
