@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
@@ -101,15 +101,17 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let delimiter_array = as_generic_string_array::<T>(&args[1])?;
     let count_array = as_int64_array(&args[2])?;
 
-    let result = string_array
+    let mut builder = StringBuilder::new();
+    string_array
         .iter()
         .zip(delimiter_array.iter())
         .zip(count_array.iter())
-        .map(|((string, delimiter), n)| match (string, delimiter, n) {
+        .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 // In MySQL, these cases will return an empty string.
                 if n == 0 || string.is_empty() || delimiter.is_empty() {
-                    return Some(String::new());
+                    builder.append_value("");
+                    return;
                 }
 
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
@@ -129,16 +131,19 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         - delimiter.len()
                 };
                 if n > 0 {
-                    Some(string[..length].to_owned())
+                    if let Some(substring) = string.get(..length) {
+                        builder.append_value(substring);
+                    }
                 } else {
-                    Some(string[string.len() - length..].to_owned())
+                    if let Some(substring) = string.get(string.len().saturating_sub(length)..) {
+                        builder.append_value(substring);
+                    }
                 }
             }
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
+            _ => (),
+        });
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
