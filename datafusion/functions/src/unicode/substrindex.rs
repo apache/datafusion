@@ -106,8 +106,8 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .zip(delimiter_array.iter())
         .zip(count_array.iter())
-        .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
-            (Some(string), Some(delimiter), Some(n)) => {
+        .for_each(|((string, delimiter), n)| {
+            if let (Some(string), Some(delimiter), Some(n)) = (string, delimiter, n) {
                 // In MySQL, these cases will return an empty string.
                 if n == 0 || string.is_empty() || delimiter.is_empty() {
                     builder.append_value("");
@@ -135,12 +135,14 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         builder.append_value(substring);
                     }
                 } else {
-                    if let Some(substring) = string.get(string.len().saturating_sub(length)..) {
+                    #[allow(clippy::collapsible_else_if)]
+                    if let Some(substring) =
+                        string.get(string.len().saturating_sub(length)..)
+                    {
                         builder.append_value(substring);
                     }
                 }
             }
-            _ => (),
         });
 
     Ok(Arc::new(builder.finish()) as ArrayRef)
