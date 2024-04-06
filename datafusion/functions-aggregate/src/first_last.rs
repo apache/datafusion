@@ -17,6 +17,8 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use crate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
+use crate::AggregateExpr;
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field};
@@ -28,10 +30,6 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
-use datafusion_physical_expr_common::aggregate::utils::{
-    down_cast_any_ref, get_sort_options, ordering_fields,
-};
-use datafusion_physical_expr_common::aggregate::AggregateExpr;
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};

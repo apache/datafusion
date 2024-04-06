@@ -21,10 +21,9 @@ use arrow::{
     compute::SortOptions,
     datatypes::{DataType, Field},
 };
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-use crate::sort_expr::PhysicalSortExpr;
-
-use super::AggregateExpr;
+use crate::AggregateExpr;
 
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
 /// and return the inner trait object as [`Any`] so
