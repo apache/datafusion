@@ -188,14 +188,12 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(convert_array::<i32, _>(
-                array,
-                |string| op(string),
-            )?)),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(convert_array::<i64, _>(
-                array,
-                |string| op(string),
-            )?)),
+            DataType::Utf8 => {
+                Ok(ColumnarValue::Array(convert_array::<i32, _>(array, op)?))
+            }
+            DataType::LargeUtf8 => {
+                Ok(ColumnarValue::Array(convert_array::<i64, _>(array, op)?))
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
