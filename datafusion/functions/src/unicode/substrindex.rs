@@ -112,18 +112,23 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     return Some(String::new());
                 }
 
-                let splitted: Box<dyn Iterator<Item = _>> = if n > 0 {
-                    Box::new(string.split(delimiter))
-                } else {
-                    Box::new(string.rsplit(delimiter))
-                };
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-                // The length of the substring covered by substr_index.
-                let length = splitted
-                    .take(occurrences) // at least 1 element, since n != 0
-                    .map(|s| s.len() + delimiter.len())
-                    .sum::<usize>()
-                    - delimiter.len();
+                let length;
+                if n > 0 {
+                    let splitted = string.split(delimiter);
+                    length = splitted
+                        .take(occurrences)
+                        .map(|s| s.len() + delimiter.len())
+                        .sum::<usize>()
+                        - delimiter.len();
+                } else {
+                    let splitted = string.rsplit(delimiter);
+                    length = splitted
+                        .take(occurrences)
+                        .map(|s| s.len() + delimiter.len())
+                        .sum::<usize>()
+                        - delimiter.len();
+                }
                 if n > 0 {
                     Some(string[..length].to_owned())
                 } else {
