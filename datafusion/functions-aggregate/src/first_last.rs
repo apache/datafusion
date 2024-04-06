@@ -48,6 +48,14 @@ make_udaf_function!(
     first_value_udaf
 );
 
+make_udaf_function!(
+    LastValue,
+    last_value,
+    value,
+    "Returns the last value in a group of values.",
+    last_value_udaf
+);
+
 pub struct FirstValue {
     signature: Signature,
     aliases: Vec<String>,
@@ -513,6 +521,117 @@ impl PartialEq<dyn Any> for FirstValuePhysicalExpr {
             .unwrap_or(false)
     }
 }
+
+pub struct LastValue {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl Debug for LastValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("LastValue")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .field("accumulator", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl Default for LastValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LastValue {
+    pub fn new() -> Self {
+        Self {
+            aliases: vec![String::from("LAST_VALUE")],
+            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for LastValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "LAST_VALUE"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let mut all_sort_orders = vec![];
+
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = vec![];
+        for expr in acc_args.sort_exprs {
+            if let Expr::Sort(sort) = expr {
+                if let Expr::Column(col) = sort.expr.as_ref() {
+                    let name = &col.name;
+                    let e = expressions::column::col(name, acc_args.schema)?;
+                    sort_exprs.push(PhysicalSortExpr {
+                        expr: e,
+                        options: SortOptions {
+                            descending: !sort.asc,
+                            nulls_first: sort.nulls_first,
+                        },
+                    });
+                }
+            }
+        }
+        if !sort_exprs.is_empty() {
+            all_sort_orders.extend(sort_exprs);
+        }
+
+        let ordering_req = all_sort_orders;
+
+        let ordering_dtypes = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let requirement_satisfied = ordering_req.is_empty();
+
+        LastValueAccumulator::try_new(
+            acc_args.data_type,
+            &ordering_dtypes,
+            ordering_req,
+            acc_args.ignore_nulls,
+        )
+        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+    }
+
+    fn state_fields(
+        &self,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        let mut fields = vec![Field::new(
+            format_state_name(name, "last_value"),
+            value_type,
+            true,
+        )];
+        fields.extend(ordering_fields);
+        fields.push(Field::new("is_set", DataType::Boolean, true));
+        Ok(fields)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
 
 /// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
 #[derive(Debug, Clone)]
