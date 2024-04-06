@@ -113,22 +113,21 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
 
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-                let length;
-                if n > 0 {
+                let length = if n > 0 {
                     let splitted = string.split(delimiter);
-                    length = splitted
+                    splitted
                         .take(occurrences)
                         .map(|s| s.len() + delimiter.len())
                         .sum::<usize>()
-                        - delimiter.len();
+                        - delimiter.len()
                 } else {
                     let splitted = string.rsplit(delimiter);
-                    length = splitted
+                    splitted
                         .take(occurrences)
                         .map(|s| s.len() + delimiter.len())
                         .sum::<usize>()
-                        - delimiter.len();
-                }
+                        - delimiter.len()
+                };
                 if n > 0 {
                     Some(string[..length].to_owned())
                 } else {
