@@ -160,7 +160,6 @@ math_unary_function!("atan", atan);
 math_unary_function!("asinh", asinh);
 math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
-math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
 math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
