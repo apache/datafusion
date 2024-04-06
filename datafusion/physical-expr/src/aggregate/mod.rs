@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
 
-pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
+pub use datafusion_functions_aggregate::AggregateExpr;
 
 mod hyperloglog;
 mod tdigest;
