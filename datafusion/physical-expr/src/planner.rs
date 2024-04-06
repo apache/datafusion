@@ -283,25 +283,23 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
-            match field {
-                GetFieldAccess::NamedStructField { name: _ } => {
-                    unreachable!(
-                        "NamedStructField should be rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListIndex { key: _ } => {
-                    unreachable!("ListIndex should be rewritten in OperatorToFunction")
-                }
-                GetFieldAccess::ListRange {
-                    start: _,
-                    stop: _,
-                    stride: _,
-                } => {
-                    unreachable!("ListRange should be rewritten in OperatorToFunction")
-                }
-            };
-        }
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
+            GetFieldAccess::NamedStructField { name: _ } => {
+                internal_err!(
+                    "NamedStructField should be rewritten in OperatorToFunction"
+                )
+            }
+            GetFieldAccess::ListIndex { key: _ } => {
+                internal_err!("ListIndex should be rewritten in OperatorToFunction")
+            }
+            GetFieldAccess::ListRange {
+                start: _,
+                stop: _,
+                stride: _,
+            } => {
+                internal_err!("ListRange should be rewritten in OperatorToFunction")
+            }
+        },
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
             let physical_args =
