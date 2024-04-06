@@ -1240,8 +1240,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Construct state name. State is the intermidiate state of the aggregate function.
-/// TODO: Remove duplicated function in physical-expr
+/// Build state name. State is the intermidiate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }

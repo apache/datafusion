@@ -83,6 +83,7 @@ pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
+pub use datafusion_expr::utils::format_state_name;
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
@@ -93,11 +94,6 @@ pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
 pub use try_cast::{try_cast, TryCastExpr};
-
-/// returns the name of the state
-pub fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{name}[{state_name}]")
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
