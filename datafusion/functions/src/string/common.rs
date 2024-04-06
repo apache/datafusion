@@ -19,6 +19,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -103,6 +104,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
 /// This function errors when:
 /// * the number of arguments is not 1
 /// * the first argument is not castable to a `GenericStringArray`
+#[allow(dead_code)]
 pub(crate) fn unary_string_function<'a, T, O, F, R>(
     args: &[&'a dyn Array],
     op: F,
@@ -128,6 +130,7 @@ where
     Ok(string_array.iter().map(|string| string.map(&op)).collect())
 }
 
+#[allow(dead_code)]
 pub(crate) fn handle<'a, F, R>(
     args: &'a [ColumnarValue],
     op: F,
@@ -173,4 +176,65 @@ where
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
+}
+
+pub(crate) fn case_conversion<'a, F>(
+    args: &'a [ColumnarValue],
+    op: F,
+    name: &str,
+) -> Result<ColumnarValue>
+where
+    F: Fn(&'a str) -> String,
+{
+    match &args[0] {
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Utf8 => Ok(ColumnarValue::Array(convert_array::<i32, _>(
+                array,
+                |string| op(string),
+            )?)),
+            DataType::LargeUtf8 => Ok(ColumnarValue::Array(convert_array::<i64, _>(
+                array,
+                |string| op(string),
+            )?)),
+            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+        },
+        ColumnarValue::Scalar(scalar) => match scalar {
+            ScalarValue::Utf8(a) => {
+                let result = a.as_ref().map(|x| op(x));
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+            }
+            ScalarValue::LargeUtf8(a) => {
+                let result = a.as_ref().map(|x| op(x));
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
+            }
+            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+        },
+    }
+}
+
+fn convert_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    let string_array = as_generic_string_array::<O>(array)?;
+    let value_data = string_array.value_data();
+
+    // SAFETY: all items stored in value_data satisfy UTF8.
+    // ref: impl ByteArrayNativeType for str {...}
+    let str_values = unsafe { std::str::from_utf8_unchecked(value_data) };
+
+    // conversion
+    let converted_values = op(str_values);
+    let bytes = converted_values.into_bytes();
+
+    // build result
+    let values = Buffer::from_vec(bytes);
+    let offsets = string_array.offsets().clone();
+    let nulls = string_array.nulls().cloned();
+
+    // SAFETY: offsets and nulls are consistent with the input array.
+    Ok(Arc::new(unsafe {
+        GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
+    }))
 }

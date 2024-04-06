@@ -23,7 +23,7 @@ use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-use crate::string::common::handle;
+use crate::string::common::case_conversion;
 use crate::utils::utf8_to_str_type;
 
 #[derive(Debug)]
@@ -62,6 +62,6 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_lowercase(), "lower")
+        case_conversion(args, |string| string.to_lowercase(), "lower")
     }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::handle;
+use crate::string::common::case_conversion;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -59,6 +59,49 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_uppercase(), "upper")
+        case_conversion(args, |string| string.to_uppercase(), "upper")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, StringArray};
+    use std::sync::Arc;
+
+    #[test]
+    fn upper() -> Result<()> {
+        let string_array = Arc::new(StringArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("datafusion"),
+            Some("@_"),
+            Some("0123456789"),
+            None,
+            Some(""),
+            Some("\t\n"),
+        ])) as ArrayRef;
+
+        let args = vec![ColumnarValue::Array(string_array)];
+        let result =
+            match case_conversion(&args, |string| string.to_uppercase(), "upper")? {
+                ColumnarValue::Array(result) => result,
+                _ => unreachable!(),
+            };
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("DATAFUSION"),
+            Some("@_"),
+            Some("0123456789"),
+            None,
+            Some(""),
+            Some("\t\n"),
+        ])) as ArrayRef;
+
+        assert_eq!(&expected, &result);
+
+        Ok(())
     }
 }
