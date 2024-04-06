@@ -377,8 +377,8 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
                 take_indicies_builder.append_null();
             }
         } else {
-            let start = offsets[row as usize].as_usize();
-            let end = offsets[row as usize + 1].as_usize();
+            let start = offsets[row].as_usize();
+            let end = offsets[row + 1].as_usize();
             for idx in start..end {
                 take_indicies_builder.append_value(P::Native::from_usize(idx).unwrap());
             }
