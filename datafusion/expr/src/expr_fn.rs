@@ -298,11 +298,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns an approximate value of π
-pub fn pi() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
-}
-
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
@@ -539,12 +534,6 @@ macro_rules! nary_scalar_expr {
 scalar_expr!(Cot, cot, num, "cotangent of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
-    Floor,
-    floor,
-    num,
-    "nearest integer less than or equal to argument"
-);
-scalar_expr!(
     Ceil,
     ceil,
     num,
@@ -557,8 +546,7 @@ nary_scalar_expr!(
     "truncate toward zero, with optional precision"
 );
 scalar_expr!(Exp, exp, num, "exponential");
-scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
-scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
+
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
@@ -1058,7 +1046,6 @@ mod test {
     fn scalar_function_definitions() {
         test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
@@ -1068,8 +1055,6 @@ mod test {
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
-        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
     }
