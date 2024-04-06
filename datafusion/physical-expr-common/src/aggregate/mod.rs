@@ -271,6 +271,22 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        self.fun.reverse_expr().map(|fun| {
+            Arc::new(AggregateFunctionExpr {
+                fun,
+                args: self.args.clone(),
+                data_type: self.data_type.clone(),
+                name: format!("reverse({})", self.name),
+                schema: self.schema.clone(),
+                sort_exprs: self.sort_exprs.clone(),
+                ordering_req: self.ordering_req.clone(),
+                ignore_nulls: self.ignore_nulls,
+                ordering_fields: self.ordering_fields.clone(),
+            })
+        })
+    }
 }
 
 impl PartialEq<dyn Any> for AggregateFunctionExpr {

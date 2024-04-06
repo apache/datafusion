@@ -27,7 +27,7 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature, TypeSignature, Volatility};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };

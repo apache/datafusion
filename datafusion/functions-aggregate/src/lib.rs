@@ -59,14 +59,9 @@ pub mod first_last;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::{
-    function::AccumulatorArgs, type_coercion::aggregates::check_arg_count, Accumulator,
-    AggregateUDF, Expr, GroupsAccumulator,
-};
-use datafusion_physical_expr_common::{
-    physical_expr::PhysicalExpr,
-    sort_expr::{LexOrdering, PhysicalSortExpr},
-};
+use datafusion_expr::
+    AggregateUDF
+;
 use log::debug;
 use std::sync::Arc;
 
