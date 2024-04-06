@@ -141,3 +141,69 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray};
+    use arrow::datatypes::DataType::Utf8;
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::unicode::substrindex::SubstrIndexFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() -> Result<()> {
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("www")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("www.apache")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(-2i64)),
+            ],
+            Ok(Some("apache.org")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(-1i64)),
+            ],
+            Ok(Some("org")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        Ok(())
+    }
+}
