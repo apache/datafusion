@@ -161,20 +161,34 @@ pub trait TableProvider: Sync + Send {
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.
     ///
-    /// The return value must have one element for each filter expression passed
-    /// in. The value of each element indicates if the TableProvider can apply
-    /// that particular filter during the scan.
-    ///
     /// Some TableProviders can evaluate filters more efficiently than the
     /// `Filter` operator in DataFusion, for example by using an index.
+    /// 
+    /// The return value must have one element for each filter expression passed
+    /// in. The value of each element indicates if the TableProvider can apply
+    /// that particular filter during the scan. The position in the return value
+    /// Vec corresponds to the expression in the `filters` input. One approach is to 
+    /// allocate a result Vec equal to the size of the `filters` length, then 
+    /// loop the `filters` array and indicate the proper level of support (or not) 
+    /// for each individual filter expression according to the capabilities 
+    /// of the TableProvider.
     ///
-    /// By default, returns [`Unsupported`] for all filters, meaning no filters
+    /// If this fn is not implemented by the TableProvider, by default 
+    /// it returns [`Unsupported`] for all filters, meaning no filters
     /// will be provided to [`Self::scan`]. If the TableProvider can implement
-    /// filter pushdown, it should return either [`Exact`] or [`Inexact`].
+    /// filter pushdown, it should return either [`Exact`] or [`Inexact`], if 
+    /// the filter cannot be supported it should return [`Unsupported`]
+    /// for that element in the result Vec. As specified above, the result Vec
+    /// must be of the same size as the `filters` input length.
     ///
+    /// The values for each element of the result Vec is one of the following:
+    /// 
     /// [`Unsupported`]: TableProviderFilterPushDown::Unsupported
     /// [`Exact`]: TableProviderFilterPushDown::Exact
     /// [`Inexact`]: TableProviderFilterPushDown::Inexact
+    /// 
+    /// If the length of the result Vec does not match the `filters` input
+    /// an error will be thrown.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
