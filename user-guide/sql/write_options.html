@@ -368,11 +368,6 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#copy-specific-options">
-     COPY Specific Options
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#json-format-specific-options">
      JSON Format Specific Options
     </a>
@@ -449,54 +444,37 @@
 <p>For a list of supported session level config defaults see <a class="reference internal" href="../configs.html"><span class="doc std std-doc">Configuration Settings</span></a>. These defaults apply to all write operations but have the lowest level of precedence.</p>
 <p>If inserting to an external table, table specific write options can be specified when the table is created using the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> clause:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span>
-<span class="n">my_table</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">bigint</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">bigint</span><span class="p">)</span>
-<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">csv</span>
-<span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">gzip</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
-<span class="k">DELIMITER</span><span class="w"> </span><span class="s1">&#39;;&#39;</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/test/location/my_csv_table/&#39;</span>
-<span class="k">OPTIONS</span><span class="p">(</span>
-<span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span>
-<span class="p">);</span>
+<span class="w">  </span><span class="n">my_table</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">bigint</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">bigint</span><span class="p">)</span>
+<span class="w">  </span><span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">csv</span>
+<span class="w">  </span><span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">gzip</span>
+<span class="w">  </span><span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
+<span class="w">  </span><span class="k">DELIMITER</span><span class="w"> </span><span class="s1">&#39;;&#39;</span>
+<span class="w">  </span><span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/test/location/my_csv_table/&#39;</span>
+<span class="w">  </span><span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span>
+<span class="w">  </span><span class="p">)</span>
 </pre></div>
 </div>
 <p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (gzip compression, special delimiter, and header row included). There will be a single output file if the output path doesn’t have folder format, i.e. ending with a <code class="docutils literal notranslate"><span class="pre">\</span></code>. Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.</p>
 <p>Finally, options can be passed when running a <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
+<!--
+ Test the following example with:
+ CREATE TABLE source_table AS VALUES ('1','2','3','4');
+-->
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span>
-<span class="k">TO</span><span class="w"> </span><span class="s1">&#39;test/table_with_options&#39;</span>
-<span class="p">(</span><span class="n">format</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span>
-<span class="n">compression</span><span class="w"> </span><span class="n">snappy</span><span class="p">,</span>
-<span class="s1">&#39;compression::col1&#39;</span><span class="w"> </span><span class="s1">&#39;zstd(5)&#39;</span><span class="p">,</span>
-<span class="n">partition_by</span><span class="w"> </span><span class="s1">&#39;column3, column4&#39;</span>
-<span class="p">)</span>
+<span class="w">  </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;test/table_with_options&#39;</span>
+<span class="w">  </span><span class="n">PARTITIONED</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="p">(</span><span class="n">column3</span><span class="p">,</span><span class="w"> </span><span class="n">column4</span><span class="p">)</span>
+<span class="w">  </span><span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">format</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span>
+<span class="w">    </span><span class="n">compression</span><span class="w"> </span><span class="n">snappy</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;compression::column1&#39;</span><span class="w"> </span><span class="s1">&#39;zstd(5)&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">)</span>
 </pre></div>
 </div>
 <p>In this example, we write the entirety of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> out to a folder of parquet files. One parquet file will be written in parallel to the folder for each partition in the query. The next option <code class="docutils literal notranslate"><span class="pre">compression</span></code> set to <code class="docutils literal notranslate"><span class="pre">snappy</span></code> indicates that unless otherwise specified all columns should use the snappy compression codec. The option <code class="docutils literal notranslate"><span class="pre">compression::col1</span></code> sets an override, so that the column <code class="docutils literal notranslate"><span class="pre">col1</span></code> in the parquet file will use <code class="docutils literal notranslate"><span class="pre">ZSTD</span></code> compression codec with compression level <code class="docutils literal notranslate"><span class="pre">5</span></code>. In general, parquet options which support column specific settings can be specified with the syntax <code class="docutils literal notranslate"><span class="pre">OPTION::COLUMN.NESTED.PATH</span></code>.</p>
 </section>
 <section id="available-options">
 <h2>Available Options<a class="headerlink" href="#available-options" title="Link to this heading">¶</a></h2>
-<section id="copy-specific-options">
-<h3>COPY Specific Options<a class="headerlink" href="#copy-specific-options" title="Link to this heading">¶</a></h3>
-<p>The following special options are specific to the <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
-<table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Description</p></th>
-<th class="head"><p>Default Value</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>FORMAT</p></td>
-<td><p>Specifies the file format COPY query will write out. If there’re more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
-<td><p>N/A</p></td>
-</tr>
-<tr class="row-odd"><td><p>PARTITION_BY</p></td>
-<td><p>Specifies the columns that the output files should be partitioned by into separate hive-style directories. Value should be a comma separated string literal, e.g. ‘col1,col2’</p></td>
-<td><p>N/A</p></td>
-</tr>
-</tbody>
-</table>
-</section>
 <section id="json-format-specific-options">
 <h3>JSON Format Specific Options<a class="headerlink" href="#json-format-specific-options" title="Link to this heading">¶</a></h3>
 <p>The following options are available when writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>

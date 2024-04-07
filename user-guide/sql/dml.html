@@ -361,11 +361,25 @@
   <a class="reference internal nav-link" href="#copy">
    COPY
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#examples">
+     Examples
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#insert">
    INSERT
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id1">
+     Examples
+    </a>
+   </li>
+  </ul>
  </li>
 </ul>
 
@@ -428,7 +442,19 @@ TO '<i><b>file_name</i></b>'
 [ PARTITIONED BY <i><b>column_name</i></b> [, ...] ]
 [ OPTIONS( <i><b>option</i></b> [, ... ] ) ]
 </pre>
+<p><code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code> specifies the file format the <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command will write. If this
+clause is not specified, it will be inferred from the file extension if possible.</p>
+<p><code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> specifies the columns to use for partitioning the output files into
+separate hive-style directories.</p>
+<p>The output format is determined by the first match of the following rules:</p>
+<ol class="arabic simple">
+<li><p>Value of <code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code></p></li>
+<li><p>Value of the <code class="docutils literal notranslate"><span class="pre">OPTION</span> <span class="pre">(FORMAT</span> <span class="pre">..)</span></code></p></li>
+<li><p>Filename extension (e.g. <code class="docutils literal notranslate"><span class="pre">foo.parquet</span></code> implies <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code> format)</p></li>
+</ol>
 <p>For a detailed list of valid OPTIONS, see <a class="reference internal" href="write_options.html"><span class="doc std std-doc">Write Options</span></a>.</p>
+<section id="examples">
+<h3>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h3>
 <p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to <code class="docutils literal notranslate"><span class="pre">file_name.json</span></code> in JSON format:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;file_name.json&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -458,6 +484,21 @@ of hive-style partitioned parquet files:</p>
 <span class="o">+</span><span class="c1">-------+</span>
 </pre></div>
 </div>
+<p>If the the data contains values of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in column1 and only <code class="docutils literal notranslate"><span class="pre">a</span></code> in
+column2, output files will appear in the following directory structure:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">dir_name</span><span class="o">/</span>
+  <span class="n">column1</span><span class="o">=</span><span class="n">x</span><span class="o">/</span>
+    <span class="n">column2</span><span class="o">=</span><span class="n">a</span><span class="o">/</span>
+      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
+      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
+      <span class="o">...</span>
+  <span class="n">column1</span><span class="o">=</span><span class="n">y</span><span class="o">/</span>
+    <span class="n">column2</span><span class="o">=</span><span class="n">a</span><span class="o">/</span>
+      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
+      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
+      <span class="o">...</span>
+</pre></div>
+</div>
 <p>Run the query <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span> <span class="pre">from</span> <span class="pre">source</span> <span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">time</span></code> and write the
 results (maintaining the order) to a parquet file named
 <code class="docutils literal notranslate"><span class="pre">output.parquet</span></code> with a maximum parquet row group size of 10MB:</p>
@@ -469,15 +510,12 @@ results (maintaining the order) to a parquet file named
 <span class="o">+</span><span class="c1">-------+</span>
 </pre></div>
 </div>
-<p>The output format is determined by the first match of the following rules:</p>
-<ol class="arabic simple">
-<li><p>Value of <code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code></p></li>
-<li><p>Value of the <code class="docutils literal notranslate"><span class="pre">OPTION</span> <span class="pre">(FORMAT</span> <span class="pre">..)</span></code></p></li>
-<li><p>Filename extension (e.g. <code class="docutils literal notranslate"><span class="pre">foo.parquet</span></code> implies <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code> format)</p></li>
-</ol>
+</section>
 </section>
 <section id="insert">
 <h2>INSERT<a class="headerlink" href="#insert" title="Link to this heading">¶</a></h2>
+<section id="id1">
+<h3>Examples<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <p>Insert values into a table.</p>
 <pre>
 INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...] ) [, ...] | <i><b>query</i></b> }
@@ -490,6 +528,7 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 <span class="o">+</span><span class="c1">-------+</span>
 </pre></div>
 </div>
+</section>
 </section>
 </section>
 
