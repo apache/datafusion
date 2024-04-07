@@ -1416,7 +1416,7 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         self.apply_expressions(|expr| {
-            match expr {
+            expr.apply(&mut |expr| match expr {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
@@ -1426,7 +1426,7 @@ impl LogicalPlan {
                     f(&LogicalPlan::Subquery(subquery.clone()))
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
-            }
+            })
         })
     }
 
@@ -1434,33 +1434,37 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
-        self.map_expressions(|expr| match expr {
-            Expr::Exists(Exists { subquery, negated }) => {
-                f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
-                    LogicalPlan::Subquery(subquery) => {
-                        Ok(Expr::Exists(Exists { subquery, negated }))
-                    }
-                    _ => internal_err!("Transformation should return Subquery"),
-                })
-            }
-            Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated,
-            }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
-                LogicalPlan::Subquery(subquery) => Ok(Expr::InSubquery(InSubquery {
+        self.map_expressions(|expr| {
+            expr.transform_down_mut(&mut |expr| match expr {
+                Expr::Exists(Exists { subquery, negated }) => {
+                    f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
+                        LogicalPlan::Subquery(subquery) => {
+                            Ok(Expr::Exists(Exists { subquery, negated }))
+                        }
+                        _ => internal_err!("Transformation should return Subquery"),
+                    })
+                }
+                Expr::InSubquery(InSubquery {
                     expr,
                     subquery,
                     negated,
-                })),
-                _ => internal_err!("Transformation should return Subquery"),
-            }),
-            Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?
-                .map_data(|s| match s {
-                    LogicalPlan::Subquery(subquery) => Ok(Expr::ScalarSubquery(subquery)),
+                }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
+                    LogicalPlan::Subquery(subquery) => Ok(Expr::InSubquery(InSubquery {
+                        expr,
+                        subquery,
+                        negated,
+                    })),
                     _ => internal_err!("Transformation should return Subquery"),
                 }),
-            _ => Ok(Transformed::no(expr)),
+                Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?
+                    .map_data(|s| match s {
+                        LogicalPlan::Subquery(subquery) => {
+                            Ok(Expr::ScalarSubquery(subquery))
+                        }
+                        _ => internal_err!("Transformation should return Subquery"),
+                    }),
+                _ => Ok(Transformed::no(expr)),
+            })
         })
     }
 
