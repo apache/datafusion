@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Projection Push Down optimizer rule ensures that only referenced columns are
-//! loaded into memory
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

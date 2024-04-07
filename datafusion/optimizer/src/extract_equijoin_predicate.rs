@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ExtractEquijoinPredicate`] rule that extracts equijoin predicates
+//! [`ExtractEquijoinPredicate`] identifies equality join (equijoin) predicates
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::DFSchema;

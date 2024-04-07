@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to prune unnecessary columns from intermediate schemas
-//! inside the [`LogicalPlan`]. This rule:
-//! - Removes unnecessary columns that do not appear at the output and/or are
-//!   not used during any computation step.
-//! - Adds projections to decrease table column size before operators that
-//!   benefit from a smaller memory footprint at its input.
-//! - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
+//! [`OptimizeProjections`] identifies and eliminates unused columns
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -44,7 +38,13 @@ use datafusion_expr::utils::inspect_expr_pre;
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
-/// A rule for optimizing logical plans by removing unused columns/fields.
+/// Optimizer rule to prune unnecessary columns from intermediate schemas
+/// inside the [`LogicalPlan`]. This rule:
+/// - Removes unnecessary columns that do not appear at the output and/or are
+///   not used during any computation step.
+/// - Adds projections to decrease table column size before operators that
+///   benefit from a smaller memory footprint at its input.
+/// - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
 ///
 /// `OptimizeProjections` is an optimizer rule that identifies and eliminates
 /// columns from a logical plan that are not used by downstream operations.

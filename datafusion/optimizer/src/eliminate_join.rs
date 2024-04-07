@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`EliminateJoin`] rewrites `INNER JOIN` with `true`/`null`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
@@ -24,7 +25,7 @@ use datafusion_expr::{
     CrossJoin, Expr,
 };
 
-/// Eliminates joins when inner join condition is false.
+/// Eliminates joins when join condition is false.
 /// Replaces joins when inner join condition is true with a cross join.
 #[derive(Default)]
 pub struct EliminateJoin;
