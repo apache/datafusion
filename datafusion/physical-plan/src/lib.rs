@@ -66,7 +66,6 @@ pub mod sorts;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
-pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
@@ -91,6 +90,11 @@ pub use datafusion_physical_expr::{
 // Backwards compatibility
 pub use crate::stream::EmptyRecordBatchStream;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub mod udaf {
+    pub use datafusion_physical_expr_common::aggregate::{
+        create_aggregate_expr, AggregateFunctionExpr,
+    };
+}
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
