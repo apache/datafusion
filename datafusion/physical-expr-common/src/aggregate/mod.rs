@@ -19,14 +19,9 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
-// use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
-// use datafusion_physical_expr_common::{
-//     physical_expr::PhysicalExpr,
-//     sort_expr::{LexOrdering, PhysicalSortExpr},
-// };
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
