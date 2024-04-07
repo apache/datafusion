@@ -144,7 +144,7 @@ mod tests {
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
         ExprSchemable, JoinType,
     };
-    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
+    use datafusion_expr::{or, BinaryExpr, Cast, Operator};
 
     use crate::test::{assert_fields_eq, test_table_scan_with_name};
     use crate::OptimizerContext;
@@ -709,42 +709,6 @@ mod tests {
             \n  TableScan: t1\
             \n  TableScan: t2";
 
-        assert_optimized_plan_eq(&plan, expected)
-    }
-
-    #[test]
-    fn simplify_project_scalar_fn() -> Result<()> {
-        // Issue https://github.com/apache/arrow-datafusion/issues/5996
-        let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
-        let plan = table_scan(Some("test"), &schema, None)?
-            .project(vec![call_fn("power", vec![col("f"), lit(1.0)])?])?
-            .build()?;
-
-        // before simplify: power(t.f, 1.0)
-        // after simplify:  t.f as "power(t.f, 1.0)"
-        let expected = "Projection: test.f AS power(test.f,Float64(1))\
-                      \n  TableScan: test";
-
-        assert_optimized_plan_eq(&plan, expected)
-    }
-
-    #[test]
-    fn simplify_scan_predicate() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("f", DataType::Float64, false),
-            Field::new("g", DataType::Float64, false),
-        ]);
-        let plan = table_scan_with_filters(
-            Some("test"),
-            &schema,
-            None,
-            vec![col("g").eq(call_fn("power", vec![col("f"), lit(1.0)])?)],
-        )?
-        .build()?;
-
-        // before simplify: t.g = power(t.f, 1.0)
-        // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-        let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
         assert_optimized_plan_eq(&plan, expected)
     }
 

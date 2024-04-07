@@ -552,7 +552,7 @@ enum ScalarFunction {
   Exp = 8;
   Floor = 9;
   // 10 was Ln
-  Log = 11;
+  // 11 was Log
   // 12 was Log10
   // 13 was Log2
   Round = 14;
@@ -605,7 +605,7 @@ enum ScalarFunction {
   // Trim = 61;
   // Upper = 62;
   Coalesce = 63;
-  Power = 64;
+  // 64 was Power
   // 65 was StructFun
   // 66 was FromUnixtime
   // 67 Atan2

@@ -1412,7 +1412,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Factorial => Self::Factorial,
             BuiltinScalarFunction::Gcd => Self::Gcd,
             BuiltinScalarFunction::Lcm => Self::Lcm,
-            BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
@@ -1424,7 +1423,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Random => Self::Random,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,
-            BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
             BuiltinScalarFunction::Iszero => Self::Iszero,
         };
