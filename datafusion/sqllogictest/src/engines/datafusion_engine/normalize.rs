@@ -84,12 +84,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
     use std::iter::once;
 
     // check last cell
+    let mut linenum = 0;
     if let Some(cell) = row.pop() {
         let lines: Vec<_> = cell.split('\n').collect();
 
         // no newlines in last cell
         if lines.len() < 2 {
-            row.push(cell);
+            row.push(format!("1){cell}"));
             return Either::Left(once(row));
         }
 
@@ -102,8 +103,9 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
                 //
                 // See https://github.com/apache/arrow-datafusion/issues/6328
                 let content = l.trim_start();
+                linenum=linenum+1;
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("{new_prefix}{content}")]
+                vec![format!("{linenum}){new_prefix}{content}")]
             })
             .collect();
 
