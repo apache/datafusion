@@ -26,7 +26,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
@@ -156,18 +155,21 @@ impl Analyzer {
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
     plan.apply(&mut |plan: &LogicalPlan| {
-        for expr in plan.expressions().iter() {
+        plan.inspect_expressions(|expr| {
             // recursively look for subqueries
-            inspect_expr_pre(expr, |expr| match expr {
-                Expr::Exists(Exists { subquery, .. })
-                | Expr::InSubquery(InSubquery { subquery, .. })
-                | Expr::ScalarSubquery(subquery) => {
-                    check_subquery_expr(plan, &subquery.subquery, expr)
-                }
-                _ => Ok(()),
+            expr.apply(&mut |expr| {
+                match expr {
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::ScalarSubquery(subquery) => {
+                        check_subquery_expr(plan, &subquery.subquery, expr)?;
+                    }
+                    _ => {}
+                };
+                Ok(TreeNodeRecursion::Continue)
             })?;
-        }
-
+            Ok::<(), DataFusionError>(())
+        })?;
         Ok(TreeNodeRecursion::Continue)
     })?;
 
