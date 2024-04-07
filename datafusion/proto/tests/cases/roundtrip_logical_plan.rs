@@ -30,6 +30,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -612,6 +613,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        first_value(lit(1)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

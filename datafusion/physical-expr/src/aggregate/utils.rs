@@ -20,9 +20,9 @@
 use std::sync::Arc;
 
 // For backwards compatibility
-pub use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
-pub use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
-pub use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
+pub use datafusion_physical_expr_common::aggregate::utils::{
+    down_cast_any_ref, get_sort_options, ordering_fields,
+};
 
 use arrow::array::{ArrayRef, ArrowNativeTypeOp};
 use arrow_array::cast::AsArray;

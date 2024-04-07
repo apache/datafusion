@@ -61,8 +61,6 @@ pub use scalar_function::ScalarFunctionExpr;
 pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::split_conjunction;
 
-pub use aggregate::first_last::create_first_value_accumulator;
-
 // For backwards compatibility
 pub mod sort_properties {
     pub use datafusion_physical_expr_common::sort_properties::{

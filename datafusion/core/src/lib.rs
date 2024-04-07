@@ -541,6 +541,11 @@ pub mod functions_array {
     pub use datafusion_functions_array::*;
 }
 
+/// re-export of [`datafusion_functions_aggregate`] crate
+pub mod functions_aggregate {
+    pub use datafusion_functions_aggregate::*;
+}
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
