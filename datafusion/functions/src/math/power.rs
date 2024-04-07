@@ -29,6 +29,8 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
+use super::log::LogFunc;
+
 #[derive(Debug)]
 pub struct PowerFunc {
     signature: Signature,
@@ -135,11 +137,17 @@ impl ScalarUDFImpl for PowerFunc {
             {
                 Ok(ExprSimplifyResult::Simplified(base.clone()))
             }
-            // todo: match type instead of name here
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(fun),
                 args,
-            }) if base == &args[0] && fun.name() == "log" => {
+            }) if base == &args[0]
+                && fun
+                    .as_ref()
+                    .inner()
+                    .as_any()
+                    .downcast_ref::<LogFunc>()
+                    .is_some() =>
+            {
                 Ok(ExprSimplifyResult::Simplified(args[1].clone()))
             }
             _ => Ok(ExprSimplifyResult::Original(args)),
