@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to push down LIMIT in the query plan
-//! It will push down through projection, limits (taking the smaller limit)
+//! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
 use std::sync::Arc;
 
@@ -29,7 +28,9 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::CrossJoin;
 
-/// Optimization rule that tries to push down LIMIT.
+/// Optimization rule that tries to push down `LIMIT`.
+///
+//. It will push down through projection, limits (taking the smaller limit)
 #[derive(Default)]
 pub struct PushDownLimit {}
 
