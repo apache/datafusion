@@ -1351,11 +1351,9 @@ impl LogicalPlan {
         &self,
         f: &mut F,
     ) -> Result<TreeNodeRecursion> {
-        self.apply(&mut |n| {
-            f(n)?
-                .visit_children(|| self.apply_subqueries(|c| c.apply_with_subqueries(f)))?
-                .visit_sibling(|| self.apply_children(|c| c.apply_with_subqueries(f)))
-        })
+        f(self)?
+            .visit_children(|| self.apply_subqueries(|c| c.apply_with_subqueries(f)))?
+            .visit_sibling(|| self.apply_children(|c| c.apply_with_subqueries(f)))
     }
 
     pub fn transform_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
