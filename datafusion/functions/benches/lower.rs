@@ -62,7 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         let args = create_args2(size);
-        c.bench_function(&format!("lower no optimization: {}", size), |b| {
+        c.bench_function(&format!("lower maybe optimization: {}", size), |b| {
             b.iter(|| black_box(lower.invoke(&args)))
         });
 

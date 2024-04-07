@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_no_optimization() -> Result<()> {
+    fn lower_maybe_optimization() -> Result<()> {
         let input = Arc::new(StringArray::from(vec![
             Some("农历新年"),
             None,

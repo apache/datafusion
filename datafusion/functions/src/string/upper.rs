@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn upper_no_optimization() -> Result<()> {
+    fn upper_maybe_optimization() -> Result<()> {
         let input = Arc::new(StringArray::from(vec![
             Some("农历新年"),
             None,

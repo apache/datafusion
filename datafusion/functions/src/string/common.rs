@@ -18,7 +18,10 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BufferBuilder, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, BufferBuilder, GenericStringArray, GenericStringBuilder,
+    OffsetSizeTrait,
+};
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 
@@ -98,86 +101,6 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     }
 }
 
-/// applies a unary expression to `args[0]` that is expected to be downcastable to
-/// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
-/// # Errors
-/// This function errors when:
-/// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
-#[allow(dead_code)]
-pub(crate) fn unary_string_function<'a, T, O, F, R>(
-    args: &[&'a dyn Array],
-    op: F,
-    name: &str,
-) -> Result<GenericStringArray<O>>
-where
-    R: AsRef<str>,
-    O: OffsetSizeTrait,
-    T: OffsetSizeTrait,
-    F: Fn(&'a str) -> R,
-{
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            name
-        );
-    }
-
-    let string_array = as_generic_string_array::<T>(args[0])?;
-
-    // first map is the iterator, second is for the `Option<_>`
-    Ok(string_array.iter().map(|string| string.map(&op)).collect())
-}
-
-#[allow(dead_code)]
-pub(crate) fn handle<'a, F, R>(
-    args: &'a [ColumnarValue],
-    op: F,
-    name: &str,
-) -> Result<ColumnarValue>
-where
-    R: AsRef<str>,
-    F: Fn(&'a str) -> R,
-{
-    match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i32,
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i64,
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-    }
-}
-
 pub(crate) fn to_lower(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
     case_conversion(args, |string| string.to_lowercase(), name)
 }
@@ -238,11 +161,13 @@ where
 
     let the_first_nonascii_index = i;
 
-    // Case1: no optimization
+    // Case1: maybe optimization
     if the_first_nonascii_index == 0 {
-        let result: GenericStringArray<O> =
-            string_array.iter().map(|string| string.map(&op)).collect();
-        return Ok(Arc::new(result));
+        let iter = string_array.iter().map(|string| string.map(&op));
+        let capacity = string_array.value_data().len() + 8;
+        let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+        builder.extend(iter);
+        return Ok(Arc::new(builder.finish()));
     }
 
     // Case2: full optimization
