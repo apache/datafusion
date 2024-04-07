@@ -24,7 +24,6 @@ use crate::expr::{
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
-use crate::udaf::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
@@ -708,17 +707,6 @@ pub fn create_udaf(
     ))
 }
 
-/// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Accumulator's implementation`.
-/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-pub fn create_first_value(
-    name: &str,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-) -> AggregateUDF {
-    AggregateUDF::from(FirstValue::new(name, signature, accumulator))
-}
-
 /// Implements [`AggregateUDFImpl`] for functions that have a single signature and
 /// return type.
 pub struct SimpleAggregateUDF {
@@ -810,78 +798,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         _ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
-    }
-}
-
-pub struct FirstValue {
-    name: String,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-}
-
-impl Debug for FirstValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
-}
-
-impl FirstValue {
-    pub fn new(
-        name: impl Into<String>,
-        signature: Signature,
-        accumulator: AccumulatorFactoryFunction,
-    ) -> Self {
-        let name = name.into();
-        Self {
-            name,
-            signature,
-            accumulator,
-        }
-    }
-}
-
-impl AggregateUDFImpl for FirstValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
-    }
-
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(acc_args)
-    }
-
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        let mut fields = vec![Field::new(
-            format_state_name(name, "first_value"),
-            value_type,
-            true,
-        )];
-        fields.extend(ordering_fields);
-        fields.push(Field::new("is_set", DataType::Boolean, true));
-        Ok(fields)
     }
 }
 

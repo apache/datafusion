@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "datafusion-proto"
-description = "Protobuf serialization of DataFusion logical plan expressions"
-keywords = ["arrow", "query", "sql"]
+name = "datafusion-functions-aggregate"
+description = "Aggregate function packages for the DataFusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -26,35 +26,19 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.73"
-
-# Exclude proto files so crates.io consumers don't need protoc
-exclude = ["*.proto"]
+rust-version = { workspace = true }
 
 [lib]
-name = "datafusion_proto"
+name = "datafusion_functions_aggregate"
 path = "src/lib.rs"
 
-[features]
-default = ["parquet"]
-json = ["pbjson", "serde", "serde_json"]
-parquet = ["datafusion/parquet", "datafusion-common/parquet"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-object_store = { workspace = true }
-pbjson = { version = "0.6.0", optional = true }
-prost = "0.12.0"
-serde = { version = "1.0", optional = true }
-serde_json = { workspace = true, optional = true }
-
-[dev-dependencies]
-datafusion-functions = { workspace = true, default-features = true }
-doc-comment = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+datafusion-physical-expr-common = { workspace = true }
+log = { workspace = true }
+paste = "1.0.14"
