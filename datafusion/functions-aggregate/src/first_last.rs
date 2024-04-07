@@ -24,6 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
@@ -109,6 +110,31 @@ impl FirstValue {
             ),
         }
     }
+
+    pub fn convert_to_last(self, arg_name: String) -> LastValue {
+        let name = if self.name().starts_with("FIRST") {
+            format!("LAST{}", &self.name()[5..])
+        } else {
+            format!("LAST_VALUE({})", arg_name)
+        };
+
+        let FirstValue { signature, aliases }
+
+        let FirstValuePhysicalExpr {
+            expr,
+            input_data_type,
+            ordering_req,
+            order_by_data_types,
+            ..
+        } = self;
+        LastValuePhysicalExpr::new(
+            expr,
+            name,
+            input_data_type,
+            reverse_order_bys(&ordering_req),
+            order_by_data_types,
+        )
+    }
 }
 
 impl AggregateUDFImpl for FirstValue {
@@ -190,32 +216,10 @@ impl AggregateUDFImpl for FirstValue {
         &self.aliases
     }
 
-    pub fn convert_to_last(self) -> LastValue {
-        // self.
-        // let name = if self.name.starts_with("FIRST") {
-        //     format!("LAST{}", &self.name[5..])
-        // } else {
-        //     format!("LAST_VALUE({})", self.expr)
-        // };
-        // let FirstValuePhysicalExpr {
-        //     expr,
-        //     input_data_type,
-        //     ordering_req,
-        //     order_by_data_types,
-        //     ..
-        // } = self;
-        // LastValuePhysicalExpr::new(
-        //     expr,
-        //     name,
-        //     input_data_type,
-        //     reverse_order_bys(&ordering_req),
-        //     order_by_data_types,
-        // )
+    fn reverse_expr(&self, args_name: Vec<String>) -> Option<AggregateFunction> {
+        // First value only take one argument
+        Some(Arc::new(self.clone().convert_to_last(args_name[0])))
     }
-
-    // fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-    //     Some(Arc::new(self.clone().convert_to_last()))
-    // }
 }
 
 #[derive(Debug)]

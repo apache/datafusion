@@ -19,6 +19,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::expr::AggregateFunction;
 // use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -135,6 +136,10 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        None
+    }
+
+    fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
         None
     }
 
@@ -272,20 +277,13 @@ impl AggregateExpr for AggregateFunctionExpr {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        self.fun.reverse_expr().map(|fun| {
-            Arc::new(AggregateFunctionExpr {
-                fun,
-                args: self.args.clone(),
-                data_type: self.data_type.clone(),
-                name: format!("reverse({})", self.name),
-                schema: self.schema.clone(),
-                sort_exprs: self.sort_exprs.clone(),
-                ordering_req: self.ordering_req.clone(),
-                ignore_nulls: self.ignore_nulls,
-                ordering_fields: self.ordering_fields.clone(),
-            })
-        })
+    fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
+        let args_name = self
+            .args
+            .iter()
+            .map(|arg| format!("{}", arg))
+            .collect::<Vec<_>>();
+        self.fun.reverse_expr(args_name)
     }
 }
 
