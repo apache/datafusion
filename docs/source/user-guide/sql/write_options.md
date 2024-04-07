@@ -35,43 +35,40 @@ If inserting to an external table, table specific write options can be specified
 
 ```sql
 CREATE EXTERNAL TABLE
-my_table(a bigint, b bigint)
-STORED AS csv
-COMPRESSION TYPE gzip
-WITH HEADER ROW
-DELIMITER ';'
-LOCATION '/test/location/my_csv_table/'
-OPTIONS(
-NULL_VALUE 'NAN'
-);
+  my_table(a bigint, b bigint)
+  STORED AS csv
+  COMPRESSION TYPE gzip
+  WITH HEADER ROW
+  DELIMITER ';'
+  LOCATION '/test/location/my_csv_table/'
+  OPTIONS(
+    NULL_VALUE 'NAN'
+  )
 ```
 
 When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (gzip compression, special delimiter, and header row included). There will be a single output file if the output path doesn't have folder format, i.e. ending with a `\`. Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
 
 Finally, options can be passed when running a `COPY` command.
 
+<!--
+ Test the following example with:
+ CREATE TABLE source_table AS VALUES ('1','2','3','4');
+-->
+
 ```sql
 COPY source_table
-TO 'test/table_with_options'
-(format parquet,
-compression snappy,
-'compression::col1' 'zstd(5)',
-partition_by 'column3, column4'
-)
+  TO 'test/table_with_options'
+  PARTITIONED BY (column3, column4)
+  OPTIONS (
+    format parquet,
+    compression snappy,
+    'compression::column1' 'zstd(5)',
+  )
 ```
 
 In this example, we write the entirety of `source_table` out to a folder of parquet files. One parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the parquet file will use `ZSTD` compression codec with compression level `5`. In general, parquet options which support column specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
 
 ## Available Options
-
-### COPY Specific Options
-
-The following special options are specific to the `COPY` command.
-
-| Option       | Description                                                                                                                                                                         | Default Value |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| FORMAT       | Specifies the file format COPY query will write out. If there're more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |
-| PARTITION_BY | Specifies the columns that the output files should be partitioned by into separate hive-style directories. Value should be a comma separated string literal, e.g. 'col1,col2'       | N/A           |
 
 ### JSON Format Specific Options
 

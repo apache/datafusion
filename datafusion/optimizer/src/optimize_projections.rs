@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to prune unnecessary columns from intermediate schemas
-//! inside the [`LogicalPlan`]. This rule:
-//! - Removes unnecessary columns that do not appear at the output and/or are
-//!   not used during any computation step.
-//! - Adds projections to decrease table column size before operators that
-//!   benefit from a smaller memory footprint at its input.
-//! - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
+//! [`OptimizeProjections`] identifies and eliminates unused columns
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,11 +34,17 @@ use datafusion_expr::{
     Expr, Projection, TableScan, Window,
 };
 
-use datafusion_expr::utils::inspect_expr_pre;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
-/// A rule for optimizing logical plans by removing unused columns/fields.
+/// Optimizer rule to prune unnecessary columns from intermediate schemas
+/// inside the [`LogicalPlan`]. This rule:
+/// - Removes unnecessary columns that do not appear at the output and/or are
+///   not used during any computation step.
+/// - Adds projections to decrease table column size before operators that
+///   benefit from a smaller memory footprint at its input.
+/// - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
 ///
 /// `OptimizeProjections` is an optimizer rule that identifies and eliminates
 /// columns from a logical plan that are not used by downstream operations.
@@ -613,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());
@@ -632,7 +632,7 @@ fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
             }
             _ => {}
         };
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // unwrap: closure above never returns Err, so can not be Err here
     .unwrap();

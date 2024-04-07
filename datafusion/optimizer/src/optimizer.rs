@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Query optimizer traits
+//! [`Optimizer`] and [`OptimizerRule`]
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use chrono::{DateTime, Utc};
 use log::{debug, warn};
 
-/// `OptimizerRule` transforms one [`LogicalPlan`] into another which
+/// `OptimizerRule`s transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
 /// way. If there are no suitable transformations for the input plan,
 /// the optimizer should simply return it unmodified.
