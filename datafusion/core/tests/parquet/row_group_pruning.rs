@@ -447,6 +447,7 @@ macro_rules! int_tests {
     };
 }
 
+// int8/int16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
 int_tests!(32);
 int_tests!(64);
 
@@ -583,6 +584,7 @@ macro_rules! uint_tests {
     };
 }
 
+// uint8/uint16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
 uint_tests!(32);
 uint_tests!(64);
 
