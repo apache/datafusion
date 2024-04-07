@@ -38,8 +38,8 @@ impl TreeNode for LogicalPlan {
     ) -> Result<Transformed<Self>> {
         let new_children = self
             .inputs()
-            .iter()
-            .map(|&c| c.clone())
+            .into_iter()
+            .cloned()
             .map_until_stop_and_collect(f)?;
         // Propagate up `new_children.transformed` and `new_children.tnr`
         // along with the node containing transformed children.
