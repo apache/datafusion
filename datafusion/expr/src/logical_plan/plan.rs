@@ -1331,8 +1331,10 @@ impl LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         visitor
             .f_down(self)?
-            .visit_children(|| self.apply_subqueries(|c| c.visit(visitor)))?
-            .visit_sibling(|| self.apply_children(|c| c.visit(visitor)))?
+            .visit_children(|| {
+                self.apply_subqueries(|c| c.visit_with_subqueries(visitor))
+            })?
+            .visit_sibling(|| self.apply_children(|c| c.visit_with_subqueries(visitor)))?
             .visit_parent(|| visitor.f_up(self))
     }
 
