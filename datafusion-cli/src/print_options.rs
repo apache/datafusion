@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::instant::Instant;
+use datafusion::common::instant::Instant;
 use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::pin::Pin;

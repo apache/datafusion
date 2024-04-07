@@ -435,10 +435,13 @@
 //! and improve compilation times. The crates are:
 //!
 //! * [datafusion_common]: Common traits and types
-//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
 //! * [datafusion_execution]: State and structures needed for execution
+//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_functions]: Scalar function packages
+//! * [datafusion_functions_array]: Scalar function packages for `ARRAY`s
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
+//! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
