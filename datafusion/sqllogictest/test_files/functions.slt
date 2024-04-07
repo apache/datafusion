@@ -1025,6 +1025,25 @@ SELECT
 ----
 (empty) (empty)
 
+# Test substring_index with NULL values and multiple rows
+query TIT
+SELECT str, n, substring_index(str, '.', n) AS c FROM
+  (VALUES
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(-1),
+    ROW(-2)
+  ) AS occurrences(n)
+ORDER BY str, n;
+----
+NULL -2 NULL
+NULL -1 NULL
+NULL  1 NULL
+NULL  2 NULL
+
 # Test substring_index with 0 occurrence
 query T
 SELECT substring_index('arrow.apache.org', 'ac', 0)

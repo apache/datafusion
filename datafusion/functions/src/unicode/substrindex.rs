@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayBuilder, ArrayRef, OffsetSizeTrait, StringBuilder};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
@@ -106,8 +106,8 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .zip(delimiter_array.iter())
         .zip(count_array.iter())
-        .for_each(|((string, delimiter), n)| {
-            if let (Some(string), Some(delimiter), Some(n)) = (string, delimiter, n) {
+        .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
+            (Some(string), Some(delimiter), Some(n)) => {
                 // In MySQL, these cases will return an empty string.
                 if n == 0 || string.is_empty() || delimiter.is_empty() {
                     builder.append_value("");
@@ -131,23 +131,20 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         - delimiter.len()
                 };
                 if n > 0 {
-                    if let Some(substring) = string.get(..length) {
-                        builder.append_value(substring);
+                    match string.get(..length) {
+                        Some(substring) => builder.append_value(substring),
+                        None => builder.append_null(),
                     }
                 } else {
-                    #[allow(clippy::collapsible_else_if)]
-                    if let Some(substring) =
-                        string.get(string.len().saturating_sub(length)..)
-                    {
-                        builder.append_value(substring);
+                    match string.get(string.len().saturating_sub(length)..) {
+                        Some(substring) => builder.append_value(substring),
+                        None => builder.append_null(),
                     }
                 }
             }
+            _ => builder.append_null(),
         });
 
-    if builder.is_empty() {
-        builder.append_null();
-    }
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
