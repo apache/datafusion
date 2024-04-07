@@ -17,22 +17,59 @@
 
 extern crate criterion;
 
+use arrow::array::{ArrayRef, StringArray};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::string;
 use std::sync::Arc;
 
-fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
+fn create_args1(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
+    vec![ColumnarValue::Array(array)]
+}
+
+fn create_args2(size: usize) -> Vec<ColumnarValue> {
+    let mut items = Vec::with_capacity(size);
+    items.push("农历新年".to_string());
+    for i in 1..size {
+        items.push(format!("DATAFUSION {}", i));
+    }
+    let array = Arc::new(StringArray::from(items)) as ArrayRef;
+    vec![ColumnarValue::Array(array)]
+}
+
+fn create_args3(size: usize) -> Vec<ColumnarValue> {
+    let mut items = Vec::with_capacity(size);
+    let half = size / 2;
+    for i in 0..half {
+        items.push(format!("DATAFUSION {}", i));
+    }
+    items.push("Ⱦ".to_string());
+    for i in half + 1..size {
+        items.push(format!("DATAFUSION {}", i));
+    }
+    let array = Arc::new(StringArray::from(items)) as ArrayRef;
     vec![ColumnarValue::Array(array)]
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
     for size in [1024, 4096, 8192] {
-        let args = create_args(size, 32);
-        c.bench_function("lower", |b| b.iter(|| black_box(lower.invoke(&args))));
+        let args = create_args1(size, 32);
+        c.bench_function(&format!("lower full optimization: {}", size), |b| {
+            b.iter(|| black_box(lower.invoke(&args)))
+        });
+
+        let args = create_args2(size);
+        c.bench_function(&format!("lower no optimization: {}", size), |b| {
+            b.iter(|| black_box(lower.invoke(&args)))
+        });
+
+        let args = create_args3(size);
+        c.bench_function(&format!("lower partial optimization: {}", size), |b| {
+            b.iter(|| black_box(lower.invoke(&args)))
+        });
     }
 }
 

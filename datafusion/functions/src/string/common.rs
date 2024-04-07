@@ -18,8 +18,8 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
-use arrow::buffer::Buffer;
+use arrow::array::{Array, ArrayRef, BufferBuilder, GenericStringArray, OffsetSizeTrait};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -178,7 +178,15 @@ where
     }
 }
 
-pub(crate) fn case_conversion<'a, F>(
+pub(crate) fn to_lower(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
+    case_conversion(args, |string| string.to_lowercase(), name)
+}
+
+pub(crate) fn to_upper(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
+    case_conversion(args, |string| string.to_uppercase(), name)
+}
+
+fn case_conversion<'a, F>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
@@ -216,6 +224,76 @@ where
     F: Fn(&'a str) -> String,
 {
     let string_array = as_generic_string_array::<O>(array)?;
+    let item_len = string_array.len();
+
+    // Find the ASCII string at the beginning.
+    let mut i = 0;
+    while i < item_len {
+        let item = unsafe { string_array.value_unchecked(i) };
+        if !item.as_bytes().is_ascii() {
+            break;
+        }
+        i += 1;
+    }
+
+    let the_first_nonascii_index = i;
+
+    // Case1: no optimization
+    if the_first_nonascii_index == 0 {
+        let result: GenericStringArray<O> =
+            string_array.iter().map(|string| string.map(&op)).collect();
+        return Ok(Arc::new(result));
+    }
+
+    // Case2: full optimization
+    if the_first_nonascii_index == item_len {
+        return convert_ascii_array::<O, _>(array, op);
+    }
+
+    // Case3: partial optimization
+    let value_data = string_array.value_data();
+    let offsets = string_array.offsets();
+    let nulls = string_array.nulls().cloned();
+
+    // Init new offsets buffer builder
+    let mut offsets_builder = BufferBuilder::<O>::new(item_len + 1);
+    offsets_builder.append_slice(&offsets.as_ref()[..the_first_nonascii_index + 1]);
+
+    // convert ascii
+    let end: O = unsafe { *offsets.get_unchecked(the_first_nonascii_index) };
+    let end = end.as_usize();
+    let ascii = unsafe { std::str::from_utf8_unchecked(&value_data[..end]) };
+    let mut converted_values = op(ascii);
+    // To avoid repeatedly allocating memory, perform a reserve in advance.
+    converted_values.reserve(value_data.len() - end + 8);
+
+    // Convert remaining items
+    for j in the_first_nonascii_index..item_len {
+        let item = unsafe { string_array.value_unchecked(j) };
+        // Memory will be continuously allocated here, but it is unavoidable.
+        let converted = op(item);
+        converted_values.push_str(&converted);
+        offsets_builder
+            .append(O::from_usize(converted_values.len()).expect("offset overflow"));
+    }
+    let offsets_buffer = offsets_builder.finish();
+
+    // Build result
+    let bytes = converted_values.into_bytes();
+    let values = Buffer::from_vec(bytes);
+    let offsets = OffsetBuffer::new(ScalarBuffer::new(offsets_buffer, 0, item_len + 1));
+    // SAFETY: offsets and nulls are consistent with the input array.
+    Ok(Arc::new(unsafe {
+        GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
+    }))
+}
+
+fn convert_ascii_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    let string_array = as_generic_string_array::<O>(array)?;
     let value_data = string_array.value_data();
 
     // SAFETY: all items stored in value_data satisfy UTF8.
@@ -224,13 +302,13 @@ where
 
     // conversion
     let converted_values = op(str_values);
+    assert_eq!(converted_values.len(), str_values.len());
     let bytes = converted_values.into_bytes();
 
     // build result
     let values = Buffer::from_vec(bytes);
     let offsets = string_array.offsets().clone();
     let nulls = string_array.nulls().cloned();
-
     // SAFETY: offsets and nulls are consistent with the input array.
     Ok(Arc::new(unsafe {
         GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
