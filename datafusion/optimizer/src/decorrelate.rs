@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
+
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 
@@ -31,8 +33,11 @@ use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
-/// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's 'Filter'.
-/// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
+/// This struct rewrite the sub query plan by pull up the correlated
+/// expressions(contains outer reference columns) from the inner subquery's
+/// 'Filter'. It adds the inner reference columns to the 'Projection' or
+/// 'Aggregate' of the subquery if they are missing, so that they can be
+/// evaluated by the parent operator as the join condition.
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
     // mapping from the plan to its holding correlated columns
@@ -54,7 +59,9 @@ pub struct PullUpCorrelatedExpr {
 /// This is used to handle the Count bug
 pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 
-/// Mapping from expr display name to its evaluation result on empty record batch (for example: 'count(*)' is 'ScalarValue(0)', 'count(*) + 2' is 'ScalarValue(2)')
+/// Mapping from expr display name to its evaluation result on empty record
+/// batch (for example: 'count(*)' is 'ScalarValue(0)', 'count(*) + 2' is
+/// 'ScalarValue(2)')
 pub type ExprResultMap = HashMap<String, Expr>;
 
 impl TreeNodeRewriter for PullUpCorrelatedExpr {
