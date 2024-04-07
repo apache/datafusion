@@ -53,9 +53,14 @@ pub mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
+use datafusion_expr::type_coercion::functions;
 use datafusion_expr::ScalarUDF;
 use log::debug;
+use string::array_to_string;
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
@@ -98,54 +103,245 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
 }
 
+
+
+pub type ScalarFactory = Box<dyn Fn() -> Arc<ScalarUDF> + Send + Sync>;
+
+/// HashMap Singleton for UDFs
+///
+/// Replace register_all with our built-in functions
+/// Replace  scalar_functions: HashMap<String, Arc<ScalarUDF>> in SessionState
+pub fn array_functions() -> &'static Mutex<HashMap<String, ScalarFactory>> {
+    static FUNCTIONS: OnceLock<Mutex<HashMap<String, ScalarFactory>>> = OnceLock::new();
+    FUNCTIONS.get_or_init(|| {
+        let mut functions = HashMap::new();
+        functions.insert(
+            String::from("array_to_string"),
+            Box::new(string::array_to_string_udf) as _,
+        );
+        functions.insert(
+            String::from("string_to_array"),
+            Box::new(string::string_to_array_udf) as _,
+        );
+        functions.insert(String::from("range"), Box::new(range::range_udf) as _);
+        functions.insert(
+            String::from("gen_series"),
+            Box::new(range::gen_series_udf) as _,
+        );
+        functions.insert(
+            String::from("array_dims"),
+            Box::new(dimension::array_dims_udf) as _,
+        );
+        functions.insert(
+            String::from("cardinality"),
+            Box::new(cardinality::cardinality_udf) as _,
+        );
+        functions.insert(
+            String::from("array_ndims"),
+            Box::new(dimension::array_ndims_udf) as _,
+        );
+        functions.insert(
+            String::from("array_append"),
+            Box::new(concat::array_append_udf) as _,
+        );
+        functions.insert(
+            String::from("array_prepend"),
+            Box::new(concat::array_prepend_udf) as _,
+        );
+        functions.insert(
+            String::from("array_concat"),
+            Box::new(concat::array_concat_udf) as _,
+        );
+        functions.insert(
+            String::from("array_except"),
+            Box::new(except::array_except_udf) as _,
+        );
+        functions.insert(
+            String::from("array_element"),
+            Box::new(extract::array_element_udf) as _,
+        );
+        functions.insert(
+            String::from("array_pop_back"),
+            Box::new(extract::array_pop_back_udf) as _,
+        );
+        functions.insert(
+            String::from("array_pop_front"),
+            Box::new(extract::array_pop_front_udf) as _,
+        );
+        functions.insert(
+            String::from("array_slice"),
+            Box::new(extract::array_slice_udf) as _,
+        );
+        functions.insert(
+            String::from("make_array"),
+            Box::new(make_array::make_array_udf) as _,
+        );
+        functions.insert(
+            String::from("array_has"),
+            Box::new(array_has::array_has_udf) as _,
+        );
+        functions.insert(
+            String::from("array_has_all"),
+            Box::new(array_has::array_has_all_udf) as _,
+        );
+        functions.insert(
+            String::from("array_has_any"),
+            Box::new(array_has::array_has_any_udf) as _,
+        );
+        functions.insert(
+            String::from("array_empty"),
+            Box::new(empty::array_empty_udf) as _,
+        );
+        functions.insert(
+            String::from("array_length"),
+            Box::new(length::array_length_udf) as _,
+        );
+        functions.insert(
+            String::from("flatten"),
+            Box::new(flatten::flatten_udf) as _,
+        );
+        functions.insert(
+            String::from("array_sort"),
+            Box::new(sort::array_sort_udf) as _,
+        );
+        functions.insert(
+            String::from("array_repeat"),
+            Box::new(repeat::array_repeat_udf) as _,
+        );
+        functions.insert(
+            String::from("array_resize"),
+            Box::new(resize::array_resize_udf) as _,
+        );
+        functions.insert(
+            String::from("array_reverse"),
+            Box::new(reverse::array_reverse_udf) as _,
+        );
+        functions.insert(
+            String::from("array_distinct"),
+            Box::new(set_ops::array_distinct_udf) as _,
+        );
+        functions.insert(
+            String::from("array_intersect"),
+            Box::new(set_ops::array_intersect_udf) as _,
+        );
+        functions.insert(
+            String::from("array_union"),
+            Box::new(set_ops::array_union_udf) as _,
+        );
+        functions.insert(
+            String::from("array_position"),
+            Box::new(position::array_position_udf) as _,
+        );
+        functions.insert(
+            String::from("array_positions"),
+            Box::new(position::array_positions_udf) as _,
+        );
+        functions.insert(
+            String::from("array_remove"),
+            Box::new(remove::array_remove_udf) as _,
+        );
+        functions.insert(
+            String::from("array_remove_all"),
+            Box::new(remove::array_remove_all_udf) as _,
+        );
+        functions.insert(
+            String::from("array_remove_n"),
+            Box::new(remove::array_remove_n_udf) as _,
+        );
+        functions.insert(
+            String::from("array_replace"),
+            Box::new(replace::array_replace_udf) as _,
+        );
+        functions.insert(
+            String::from("array_replace_all"),
+            Box::new(replace::array_replace_all_udf) as _,
+        );
+        functions.insert(
+            String::from("array_replace_n"),
+            Box::new(replace::array_replace_n_udf) as _,
+        );
+
+
+
+        // TODO: Add more builtin functions here
+        Mutex::new(functions)
+    })
+}
+
+// Get an UDF by name
+//
+// Replace with `get_udf`
+// fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+//     self.state.scalar_functions().get(name).cloned()
+// }
+pub fn get_array_udf(name: &str) -> Option<Arc<ScalarUDF>> {
+    array_functions().lock().unwrap().get(name).map(|f| f())
+}
+
+/// Register a single new UDF, so the user can register their own functions
+/// 
+/// Repalce old regsiter_udf
+pub fn register_array_udf(name: &str, udf: ScalarFactory) -> Option<ScalarFactory> {
+    // TODO: Check overwrite?
+    array_functions().lock().unwrap().insert(name.to_string(), udf)
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<ScalarUDF>> = vec![
-        string::array_to_string_udf(),
-        string::string_to_array_udf(),
-        range::range_udf(),
-        range::gen_series_udf(),
-        dimension::array_dims_udf(),
-        cardinality::cardinality_udf(),
-        dimension::array_ndims_udf(),
-        concat::array_append_udf(),
-        concat::array_prepend_udf(),
-        concat::array_concat_udf(),
-        except::array_except_udf(),
-        extract::array_element_udf(),
-        extract::array_pop_back_udf(),
-        extract::array_pop_front_udf(),
-        extract::array_slice_udf(),
-        make_array::make_array_udf(),
-        array_has::array_has_udf(),
-        array_has::array_has_all_udf(),
-        array_has::array_has_any_udf(),
-        empty::array_empty_udf(),
-        length::array_length_udf(),
-        flatten::flatten_udf(),
-        sort::array_sort_udf(),
-        repeat::array_repeat_udf(),
-        resize::array_resize_udf(),
-        reverse::array_reverse_udf(),
-        set_ops::array_distinct_udf(),
-        set_ops::array_intersect_udf(),
-        set_ops::array_union_udf(),
-        position::array_position_udf(),
-        position::array_positions_udf(),
-        remove::array_remove_udf(),
-        remove::array_remove_all_udf(),
-        remove::array_remove_n_udf(),
-        replace::array_replace_n_udf(),
-        replace::array_replace_all_udf(),
-        replace::array_replace_udf(),
-    ];
-    functions.into_iter().try_for_each(|udf| {
-        let existing_udf = registry.register_udf(udf)?;
-        if let Some(existing_udf) = existing_udf {
-            debug!("Overwrite existing UDF: {}", existing_udf.name());
-        }
-        Ok(()) as Result<()>
-    })?;
+    // let functions: Vec<Arc<ScalarUDF>> = vec![
+    //     string::array_to_string_udf(),
+    //     string::string_to_array_udf(),
+    //     range::range_udf(),
+    //     range::gen_series_udf(),
+    //     dimension::array_dims_udf(),
+    //     cardinality::cardinality_udf(),
+    //     dimension::array_ndims_udf(),
+    //     concat::array_append_udf(),
+    //     concat::array_prepend_udf(),
+    //     concat::array_concat_udf(),
+    //     except::array_except_udf(),
+    //     extract::array_element_udf(),
+    //     extract::array_pop_back_udf(),
+    //     extract::array_pop_front_udf(),
+    //     extract::array_slice_udf(),
+    //     make_array::make_array_udf(),
+    //     array_has::array_has_udf(),
+    //     array_has::array_has_all_udf(),
+    //     array_has::array_has_any_udf(),
+    //     empty::array_empty_udf(),
+    //     length::array_length_udf(),
+    //     flatten::flatten_udf(),
+    //     sort::array_sort_udf(),
+    //     repeat::array_repeat_udf(),
+    //     resize::array_resize_udf(),
+    //     reverse::array_reverse_udf(),
+    //     set_ops::array_distinct_udf(),
+    //     set_ops::array_intersect_udf(),
+    //     set_ops::array_union_udf(),
+    //     position::array_position_udf(),
+    //     position::array_positions_udf(),
+    //     remove::array_remove_udf(),
+    //     remove::array_remove_all_udf(),
+    //     remove::array_remove_n_udf(),
+    //     replace::array_replace_n_udf(),
+    //     replace::array_replace_all_udf(),
+    //     replace::array_replace_udf(),
+    // ];
+    // let functions = vec![
+    //     (
+    //         String::from("array_remove_all"),
+    //         Box::new(remove::array_remove_all_udf),
+    //     )
+    // ];
+
+    // functions.into_iter().try_for_each(|(name, udf)| {
+    //     let existing_udf = registry.register_udf_impl(vec![name.clone()], udf as _)?;
+    //     if let Some(existing_udf) = existing_udf {
+    //         debug!("Overwrite existing UDF: {}", name);
+    //     }
+    //     Ok(()) as Result<()>
+    // })?;
+
     registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
 
     Ok(())

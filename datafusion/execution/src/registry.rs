@@ -23,6 +23,8 @@ use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
 
+pub type ScalarFactory = Box<dyn Fn() -> Arc<ScalarUDF> + Send + Sync>;
+
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
     /// Set of all available udfs.
@@ -46,6 +48,9 @@ pub trait FunctionRegistry {
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        not_impl_err!("Registering ScalarUDF")
+    }
+    fn register_udf_impl(&mut self, names: Vec<String>, _udf: ScalarFactory) -> Result<Option<ScalarFactory>> {
         not_impl_err!("Registering ScalarUDF")
     }
     /// Registers a new [`AggregateUDF`], returning any previously registered
