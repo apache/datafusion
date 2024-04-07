@@ -264,7 +264,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
 /// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
@@ -307,8 +307,9 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
-        Ok(())
+        Ok(TreeNodeRecursion::Continue)
     })
+    .map(|_| ())
 }
 
 /// Find excluded columns in the schema, if any
@@ -838,11 +839,11 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(&mut |expr| {
         if let Expr::Column(c) = expr {
             exprs.push(c.clone())
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
@@ -867,7 +868,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
     let mut indexes = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(&mut |expr| {
         match expr {
             Expr::Column(qc) => {
                 if let Ok(idx) = schema.index_of_column(qc) {
@@ -879,7 +880,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
             }
             _ => {}
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     .unwrap();
     indexes
