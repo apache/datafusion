@@ -45,12 +45,8 @@ pub enum BuiltinScalarFunction {
     Exp,
     /// factorial
     Factorial,
-    /// log, same as log10
-    Log,
     /// nanvl
     Nanvl,
-    /// power
-    Power,
     // string functions
     /// concat
     Concat,
@@ -118,9 +114,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
-            BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Nanvl => Volatility::Immutable,
-            BuiltinScalarFunction::Power => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
@@ -162,16 +156,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
 
             BuiltinScalarFunction::Factorial => Ok(Int64),
-
-            BuiltinScalarFunction::Power => match &input_expr_types[0] {
-                Int64 => Ok(Int64),
-                _ => Ok(Float64),
-            },
-
-            BuiltinScalarFunction::Log => match &input_expr_types[0] {
-                Float32 => Ok(Float32),
-                _ => Ok(Float64),
-            },
 
             BuiltinScalarFunction::Nanvl => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
@@ -216,20 +200,6 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
-            BuiltinScalarFunction::Power => Signature::one_of(
-                vec![Exact(vec![Int64, Int64]), Exact(vec![Float64, Float64])],
-                self.volatility(),
-            ),
-
-            BuiltinScalarFunction::Log => Signature::one_of(
-                vec![
-                    Exact(vec![Float32]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Nanvl => Signature::one_of(
                 vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
                 self.volatility(),
@@ -259,8 +229,6 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Factorial
         ) {
             Some(vec![Some(true)])
-        } else if *self == BuiltinScalarFunction::Log {
-            Some(vec![Some(true), Some(false)])
         } else {
             None
         }
@@ -272,9 +240,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ceil => &["ceil"],
             BuiltinScalarFunction::Exp => &["exp"],
             BuiltinScalarFunction::Factorial => &["factorial"],
-            BuiltinScalarFunction::Log => &["log"],
             BuiltinScalarFunction::Nanvl => &["nanvl"],
-            BuiltinScalarFunction::Power => &["power", "pow"],
             BuiltinScalarFunction::Random => &["random"],
 
             // conditional functions

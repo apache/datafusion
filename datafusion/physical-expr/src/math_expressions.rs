@@ -27,7 +27,6 @@ use arrow::datatypes::DataType;
 use arrow_array::Array;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::ScalarValue::Float32;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -250,85 +249,6 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
-/// Power SQL function
-pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "base",
-            "exponent",
-            Float64Array,
-            { f64::powf }
-        )) as ArrayRef),
-
-        DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "base",
-            "exponent",
-            Int64Array,
-            { i64::pow }
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function power"),
-    }
-}
-
-/// Log SQL function
-pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
-    // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
-    // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
-    let mut base = ColumnarValue::Scalar(Float32(Some(10.0)));
-
-    let mut x = &args[0];
-    if args.len() == 2 {
-        x = &args[1];
-        base = ColumnarValue::Array(args[0].clone());
-    }
-    match args[0].data_type() {
-        DataType::Float64 => match base {
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                let base = base as f64;
-                Ok(
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
-                        |value: f64| f64::log(value, base)
-                    })) as ArrayRef,
-                )
-            }
-            ColumnarValue::Array(base) => Ok(Arc::new(make_function_inputs2!(
-                x,
-                base,
-                "x",
-                "base",
-                Float64Array,
-                { f64::log }
-            )) as ArrayRef),
-            _ => exec_err!("log function requires a scalar or array for base"),
-        },
-
-        DataType::Float32 => match base {
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Ok(Arc::new(
-                make_function_scalar_inputs!(x, "x", Float32Array, {
-                    |value: f32| f32::log(value, base)
-                }),
-            )
-                as ArrayRef),
-            ColumnarValue::Array(base) => Ok(Arc::new(make_function_inputs2!(
-                x,
-                base,
-                "x",
-                "base",
-                Float32Array,
-                { f32::log }
-            )) as ArrayRef),
-            _ => exec_err!("log function requires a scalar or array for base"),
-        },
-
-        other => exec_err!("Unsupported data type {other:?} for function log"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::array::{Float64Array, NullArray};
@@ -351,78 +271,6 @@ mod tests {
 
         assert_eq!(floats.len(), 1);
         assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
-    }
-
-    #[test]
-    fn test_power_f64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0])), // base
-            Arc::new(Float64Array::from(vec![3.0, 2.0, 4.0, 4.0])), // exponent
-        ];
-
-        let result = power(&args).expect("failed to initialize function power");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function power");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 8.0);
-        assert_eq!(floats.value(1), 4.0);
-        assert_eq!(floats.value(2), 81.0);
-        assert_eq!(floats.value(3), 625.0);
-    }
-
-    #[test]
-    fn test_power_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![2, 2, 3, 5])), // base
-            Arc::new(Int64Array::from(vec![3, 2, 4, 4])), // exponent
-        ];
-
-        let result = power(&args).expect("failed to initialize function power");
-        let floats =
-            as_int64_array(&result).expect("failed to initialize function power");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 8);
-        assert_eq!(floats.value(1), 4);
-        assert_eq!(floats.value(2), 81);
-        assert_eq!(floats.value(3), 625);
-    }
-
-    #[test]
-    fn test_log_f64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0])), // base
-            Arc::new(Float64Array::from(vec![8.0, 4.0, 81.0, 625.0])), // x
-        ];
-
-        let result = log(&args).expect("failed to initialize function log");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function log");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 3.0);
-        assert_eq!(floats.value(1), 2.0);
-        assert_eq!(floats.value(2), 4.0);
-        assert_eq!(floats.value(3), 4.0);
-    }
-
-    #[test]
-    fn test_log_f32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![2.0, 2.0, 3.0, 5.0])), // base
-            Arc::new(Float32Array::from(vec![8.0, 4.0, 81.0, 625.0])), // x
-        ];
-
-        let result = log(&args).expect("failed to initialize function log");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function log");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), 3.0);
-        assert_eq!(floats.value(1), 2.0);
-        assert_eq!(floats.value(2), 4.0);
-        assert_eq!(floats.value(3), 4.0);
     }
 
     #[test]

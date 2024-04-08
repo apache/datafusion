@@ -108,19 +108,6 @@ macro_rules! make_stub_package {
     };
 }
 
-macro_rules! make_function_scalar_inputs {
-    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-}
-
 /// Invokes a function on each element of an array and returns the result as a new array
 ///
 /// $ARG: ArrayRef
@@ -368,6 +355,19 @@ macro_rules! make_math_binary_udf {
             }
         }
     };
+}
+
+macro_rules! make_function_scalar_inputs {
+    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
+
+        arg.iter()
+            .map(|a| match a {
+                Some(a) => Some($FUNC(a)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
+    }};
 }
 
 macro_rules! make_function_inputs2 {
