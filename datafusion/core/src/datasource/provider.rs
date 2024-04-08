@@ -171,21 +171,38 @@ pub trait TableProvider: Sync + Send {
     /// 
     /// Here is an example of how this can be done:
     /// 
-    /// ```
+    /// ```rust
+    /// use datafusion::error::{Result, DataFusionError};
+    /// use datafusion_expr::{Expr, TableProviderFilterPushDown};
+    /// 
     /// fn supports_filters_pushdown(
     ///     &self,
     ///     filters: &[&Expr],) -> Result<Vec<TableProviderFilterPushDown>> {
     /// 
-    ///     let result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(&filters.len());
-    ///     for i in 0..filters.len() {
-    ///         // Evaluate a filter
-    ///         let filter = filters[i];
+    ///     let mut result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(&filters.len());
     /// 
-    ///         // Evaluate a filter to support here
-    ///         if filter ... {
-    ///             result_vec.push(TableProviderFilterPushDown::Exact);
-    ///         } else {
-    ///             result_vec.push(TableProviderFilterPushDown::Unsupported);
+    ///     for i in 0..filters.len() {
+    ///         let expr = *filters[i];
+    /// 
+    ///         match expr {
+    ///             Expr::Between(between_expr) => {
+    ///                 match between_expr.expr.try_into_col().ok() {
+    ///                     Some(column) => {
+    ///                         let column_name = column.name;
+    ///                         if column_name = "c1".to_string() {
+    ///                             result_vec.push(TableProviderFilterPushDown::Exact);
+    ///                         } else {
+    ///                             result_vec.push(TableProviderFilterPushDown::Unsupported);
+    ///                         }
+    ///                     } 
+    ///                     None => {
+    ///                         return Err(DataFusionError::Execution(format!("Could not get column. between_expr: {:?}", between_expr)));
+    ///                     }
+    ///                 }
+    ///             }
+    ///     _ => {
+    ///                 result_vec.push(TableProviderFilterPushDown::Unsupported);
+    ///             }
     ///         }
     ///     }
     /// 
