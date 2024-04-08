@@ -1350,7 +1350,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .enumerate()
                 .map(|(i, c)| {
                     let column_index = table_schema
-                        .index_of_column_by_name(None, &c)?
+                        .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
