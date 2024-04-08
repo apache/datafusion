@@ -117,8 +117,7 @@ mod tests {
     use itertools::Itertools;
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{BuiltinScalarFunction, Operator, ScalarUDF};
+    use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::tests::{
         apply_projection, convert_to_orderings, convert_to_orderings_owned,
@@ -649,11 +648,13 @@ mod tests {
             col_b.clone(),
         )) as Arc<dyn PhysicalExpr>;
 
-        let round_c = &crate::functions::create_physical_expr(
-            &BuiltinScalarFunction::Round,
+        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+        let round_c = &create_physical_expr(
+            &test_fun,
             &[col_c.clone()],
             &schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
 
         let option_asc = SortOptions {

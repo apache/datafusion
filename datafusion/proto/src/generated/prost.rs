@@ -2854,12 +2854,12 @@ pub enum ScalarFunction {
     /// 11 was Log
     /// 12 was Log10
     /// 13 was Log2
-    Round = 14,
+    /// 14 was Round
     /// 15 was Signum
     /// 16 was Sin
     /// 17 was Sqrt
     /// Tan = 18;
-    Trunc = 19,
+    /// 19 was Trunc
     /// 20 was Array
     /// RegexpMatch = 21;
     /// 22 was BitLength
@@ -2941,7 +2941,7 @@ pub enum ScalarFunction {
     /// 98 was Cardinality
     /// 99 was ArrayElement
     /// 100 was ArraySlice
-    Cot = 103,
+    /// 103 was Cot
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
@@ -2952,7 +2952,7 @@ pub enum ScalarFunction {
     Nanvl = 111,
     /// 112 was Flatten
     /// 113 was IsNan
-    Iszero = 114,
+    /// 114 was Iszero
     /// 115 was ArrayEmpty
     /// 116 was ArrayPopBack
     /// 117 was StringToArray
@@ -2989,17 +2989,13 @@ impl ScalarFunction {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Exp => "Exp",
-            ScalarFunction::Round => "Round",
-            ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Factorial => "Factorial",
-            ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
-            ScalarFunction::Iszero => "Iszero",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3009,17 +3005,13 @@ impl ScalarFunction {
             "unknown" => Some(Self::Unknown),
             "Ceil" => Some(Self::Ceil),
             "Exp" => Some(Self::Exp),
-            "Round" => Some(Self::Round),
-            "Trunc" => Some(Self::Trunc),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
             "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
             "Factorial" => Some(Self::Factorial),
-            "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
-            "Iszero" => Some(Self::Iszero),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }
