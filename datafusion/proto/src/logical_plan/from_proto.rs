@@ -39,9 +39,9 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     ceil, coalesce, concat_expr, concat_ws_expr, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, initcap, log,
+    factorial, initcap,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, power, random, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    nanvl, random, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
     BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
     GroupingSet,
     GroupingSet::GroupingSets,
@@ -420,7 +420,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         match f {
             ScalarFunction::Unknown => todo!(),
             ScalarFunction::Exp => Self::Exp,
-            ScalarFunction::Log => Self::Log,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Concat => Self::Concat,
@@ -429,7 +428,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::InitCap => Self::InitCap,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::Coalesce => Self::Coalesce,
-            ScalarFunction::Power => Self::Power,
             ScalarFunction::Nanvl => Self::Nanvl,
         }
     }
@@ -1314,14 +1312,6 @@ pub fn parse_expr(
                 ScalarFunction::Coalesce => {
                     Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Power => Ok(power(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Log => Ok(log(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

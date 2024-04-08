@@ -540,9 +540,6 @@ scalar_expr!(
 
 scalar_expr!(Exp, exp, num, "exponential");
 
-scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
-scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
-
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");

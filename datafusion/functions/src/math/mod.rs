@@ -25,8 +25,10 @@ pub mod cot;
 pub mod gcd;
 mod iszero;
 pub mod lcm;
+pub mod log;
 pub mod nans;
 pub mod pi;
+pub mod power;
 pub mod round;
 pub mod trunc;
 
@@ -45,6 +47,8 @@ make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
 make_udf_function!(cot::CotFunc, COT, cot);
 make_math_unary_udf!(DegreesFunc, DEGREES, degrees, to_degrees, None);
 make_math_unary_udf!(FloorFunc, FLOOR, floor, floor, Some(vec![Some(true)]));
+make_udf_function!(log::LogFunc, LOG, log);
+make_udf_function!(power::PowerFunc, POWER, power);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(iszero::IsZeroFunc, ISZERO, iszero);
@@ -161,6 +165,11 @@ pub mod expr_fn {
         super::ln().call(vec![num])
     }
 
+    #[doc = "logarithm of a number for a particular `base`"]
+    pub fn log(base: Expr, num: Expr) -> Expr {
+        super::log().call(vec![base, num])
+    }
+
     #[doc = "base 2 logarithm of a number"]
     pub fn log2(num: Expr) -> Expr {
         super::log2().call(vec![num])
@@ -174,6 +183,11 @@ pub mod expr_fn {
     #[doc = "Returns an approximate value of π"]
     pub fn pi() -> Expr {
         super::pi().call(vec![])
+    }
+
+    #[doc = "`base` raised to the power of `exponent`"]
+    pub fn power(base: Expr, exponent: Expr) -> Expr {
+        super::power().call(vec![base, exponent])
     }
 
     #[doc = "converts degrees to radians"]
@@ -244,9 +258,11 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         iszero(),
         lcm(),
         ln(),
+        log(),
         log2(),
         log10(),
         pi(),
+        power(),
         radians(),
         round(),
         signum(),

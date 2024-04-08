@@ -188,12 +188,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
         }
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
-        BuiltinScalarFunction::Power => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
-        }
-        BuiltinScalarFunction::Log => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
-        }
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
