@@ -185,18 +185,23 @@ pub trait TableProvider: Sync + Send {
     ///         let expr = *filters[i];
     /// 
     ///         match expr {
+    ///             // This example is only evaluting one type of expr and one column.
     ///             Expr::Between(between_expr) => {
     ///                 match between_expr.expr.try_into_col().ok() {
     ///                     Some(column) => {
     ///                         let column_name = column.name;
     ///                         if column_name = "c1".to_string() {
+    ///                             // Use Exact if you can ensure proper a proper distinct set from the pushdown
+    ///                             // result, with unique rows, otherwise use Inexact. In the latter case DataFusion will
+    ///                             // provide the distinct functionality which is less performant.
     ///                             result_vec.push(TableProviderFilterPushDown::Exact);
     ///                         } else {
     ///                             result_vec.push(TableProviderFilterPushDown::Unsupported);
     ///                         }
     ///                     } 
     ///                     None => {
-    ///                         return Err(DataFusionError::Execution(format!("Could not get column. between_expr: {:?}", between_expr)));
+    ///                         // If there is no column expr in the query an error is thrown.
+    ///                         result_vec.push(TableProviderFilterPushDown::Unsupported);
     ///                     }
     ///                 }
     ///             }
