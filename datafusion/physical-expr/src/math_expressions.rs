@@ -27,7 +27,6 @@ use arrow::datatypes::DataType;
 use arrow_array::Array;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::ScalarValue::Int64;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -154,17 +153,8 @@ macro_rules! make_function_scalar_inputs_return_type {
     }};
 }
 
-math_unary_function!("asin", asin);
-math_unary_function!("acos", acos);
-math_unary_function!("atan", atan);
-math_unary_function!("asinh", asinh);
-math_unary_function!("acosh", acosh);
-math_unary_function!("atanh", atanh);
 math_unary_function!("ceil", ceil);
 math_unary_function!("exp", exp);
-math_unary_function!("ln", ln);
-math_unary_function!("log2", log2);
-math_unary_function!("log10", log10);
 
 /// Factorial SQL function
 pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -247,29 +237,6 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Iszero SQL function
-pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float64Array,
-            BooleanArray,
-            { |x: f64| { x == 0_f64 } }
-        )) as ArrayRef),
-
-        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float32Array,
-            BooleanArray,
-            { |x: f32| { x == 0_f32 } }
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function iszero"),
-    }
-}
-
 /// Random SQL function
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
@@ -280,192 +247,6 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
     let array = Float64Array::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
-}
-
-/// Round SQL function
-pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return exec_err!(
-            "round function requires one or two arguments, got {}",
-            args.len()
-        );
-    }
-
-    let mut decimal_places = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
-
-    if args.len() == 2 {
-        decimal_places = ColumnarValue::Array(args[1].clone());
-    }
-
-    match args[0].data_type() {
-        DataType::Float64 => match decimal_places {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
-                let decimal_places = decimal_places.try_into().unwrap();
-
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float64Array,
-                    {
-                        |value: f64| {
-                            (value * 10.0_f64.powi(decimal_places)).round()
-                                / 10.0_f64.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
-            }
-            ColumnarValue::Array(decimal_places) => Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                decimal_places,
-                "value",
-                "decimal_places",
-                Float64Array,
-                Int64Array,
-                {
-                    |value: f64, decimal_places: i64| {
-                        (value * 10.0_f64.powi(decimal_places.try_into().unwrap()))
-                            .round()
-                            / 10.0_f64.powi(decimal_places.try_into().unwrap())
-                    }
-                }
-            )) as ArrayRef),
-            _ => {
-                exec_err!("round function requires a scalar or array for decimal_places")
-            }
-        },
-
-        DataType::Float32 => match decimal_places {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
-                let decimal_places = decimal_places.try_into().unwrap();
-
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float32Array,
-                    {
-                        |value: f32| {
-                            (value * 10.0_f32.powi(decimal_places)).round()
-                                / 10.0_f32.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
-            }
-            ColumnarValue::Array(decimal_places) => Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                decimal_places,
-                "value",
-                "decimal_places",
-                Float32Array,
-                Int64Array,
-                {
-                    |value: f32, decimal_places: i64| {
-                        (value * 10.0_f32.powi(decimal_places.try_into().unwrap()))
-                            .round()
-                            / 10.0_f32.powi(decimal_places.try_into().unwrap())
-                    }
-                }
-            )) as ArrayRef),
-            _ => {
-                exec_err!("round function requires a scalar or array for decimal_places")
-            }
-        },
-
-        other => exec_err!("Unsupported data type {other:?} for function round"),
-    }
-}
-
-///cot SQL function
-pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float64Array,
-            { compute_cot64 }
-        )) as ArrayRef),
-
-        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float32Array,
-            { compute_cot32 }
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function cot"),
-    }
-}
-
-fn compute_cot32(x: f32) -> f32 {
-    let a = f32::tan(x);
-    1.0 / a
-}
-
-fn compute_cot64(x: f64) -> f64 {
-    let a = f64::tan(x);
-    1.0 / a
-}
-
-/// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
-pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return exec_err!(
-            "truncate function requires one or two arguments, got {}",
-            args.len()
-        );
-    }
-
-    //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
-    //or then invoke the compute_truncate method to process precision
-    let num = &args[0];
-    let precision = if args.len() == 1 {
-        ColumnarValue::Scalar(Int64(Some(0)))
-    } else {
-        ColumnarValue::Array(args[1].clone())
-    };
-
-    match args[0].data_type() {
-        DataType::Float64 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float64Array,
-                Int64Array,
-                { compute_truncate64 }
-            )) as ArrayRef),
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
-        DataType::Float32 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float32Array,
-                Int64Array,
-                { compute_truncate32 }
-            )) as ArrayRef),
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
-        },
-        other => exec_err!("Unsupported data type {other:?} for function trunc"),
-    }
-}
-
-fn compute_truncate32(x: f32, y: i64) -> f32 {
-    let factor = 10.0_f32.powi(y as i32);
-    (x * factor).round() / factor
-}
-
-fn compute_truncate64(x: f64, y: i64) -> f64 {
-    let factor = 10.0_f64.powi(y as i32);
-    (x * factor).round() / factor
 }
 
 #[cfg(test)]
@@ -493,72 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_f32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
-        ];
-
-        let result = round(&args).expect("failed to initialize function round");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function round");
-
-        let expected = Float32Array::from(vec![
-            125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
-        ]);
-
-        assert_eq!(floats, &expected);
-    }
-
-    #[test]
-    fn test_round_f64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
-        ];
-
-        let result = round(&args).expect("failed to initialize function round");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function round");
-
-        let expected = Float64Array::from(vec![
-            125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
-        ]);
-
-        assert_eq!(floats, &expected);
-    }
-
-    #[test]
-    fn test_round_f32_one_input() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![125.2345, 12.345, 1.234, 0.1234])), // input
-        ];
-
-        let result = round(&args).expect("failed to initialize function round");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function round");
-
-        let expected = Float32Array::from(vec![125.0, 12.0, 1.0, 0.0]);
-
-        assert_eq!(floats, &expected);
-    }
-
-    #[test]
-    fn test_round_f64_one_input() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![125.2345, 12.345, 1.234, 0.1234])), // input
-        ];
-
-        let result = round(&args).expect("failed to initialize function round");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function round");
-
-        let expected = Float64Array::from(vec![125.0, 12.0, 1.0, 0.0]);
-
-        assert_eq!(floats, &expected);
-    }
-
-    #[test]
     fn test_factorial_i64() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![0, 1, 2, 4])), // input
@@ -571,124 +286,6 @@ mod tests {
         let expected = Int64Array::from(vec![1, 1, 2, 24]);
 
         assert_eq!(ints, &expected);
-    }
-
-    #[test]
-    fn test_cot_f32() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function cot");
-
-        let expected = Float32Array::from(vec![
-            -1.986_460_4,
-            -0.156_119_96,
-            -0.501_202_8,
-            0.156_119_96,
-        ]);
-
-        let eps = 1e-6;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
-    }
-
-    #[test]
-    fn test_cot_f64() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function cot");
-
-        let expected = Float64Array::from(vec![
-            -1.986_458_685_881_4,
-            -0.156_119_952_161_6,
-            -0.501_202_783_380_1,
-            0.156_119_952_161_6,
-        ]);
-
-        let eps = 1e-12;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
-    }
-
-    #[test]
-    fn test_truncate_32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![
-                15.0,
-                1_234.267_8,
-                1_233.123_4,
-                3.312_979_2,
-                -21.123_4,
-            ])),
-            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
-        ];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 15.0);
-        assert_eq!(floats.value(1), 1_234.268);
-        assert_eq!(floats.value(2), 1_233.12);
-        assert_eq!(floats.value(3), 3.312_98);
-        assert_eq!(floats.value(4), -21.123_4);
-    }
-
-    #[test]
-    fn test_truncate_64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![
-                5.0,
-                234.267_812_176,
-                123.123_456_789,
-                123.312_979_313_2,
-                -321.123_1,
-            ])),
-            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
-        ];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.268);
-        assert_eq!(floats.value(2), 123.12);
-        assert_eq!(floats.value(3), 123.312_98);
-        assert_eq!(floats.value(4), -321.123_1);
-    }
-
-    #[test]
-    fn test_truncate_64_one_arg() {
-        let args: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
-            5.0,
-            234.267_812,
-            123.123_45,
-            123.312_979_313_2,
-            -321.123,
-        ]))];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.0);
-        assert_eq!(floats.value(2), 123.0);
-        assert_eq!(floats.value(3), 123.0);
-        assert_eq!(floats.value(4), -321.0);
     }
 
     #[test]
@@ -759,38 +356,6 @@ mod tests {
         let result = isnan(&args).expect("failed to initialize function isnan");
         let booleans =
             as_boolean_array(&result).expect("failed to initialize function isnan");
-
-        assert_eq!(booleans.len(), 4);
-        assert!(!booleans.value(0));
-        assert!(booleans.value(1));
-        assert!(!booleans.value(2));
-        assert!(booleans.value(3));
-    }
-
-    #[test]
-    fn test_iszero_f64() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
-
-        let result = iszero(&args).expect("failed to initialize function iszero");
-        let booleans =
-            as_boolean_array(&result).expect("failed to initialize function iszero");
-
-        assert_eq!(booleans.len(), 4);
-        assert!(!booleans.value(0));
-        assert!(booleans.value(1));
-        assert!(!booleans.value(2));
-        assert!(booleans.value(3));
-    }
-
-    #[test]
-    fn test_iszero_f32() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float32Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
-
-        let result = iszero(&args).expect("failed to initialize function iszero");
-        let booleans =
-            as_boolean_array(&result).expect("failed to initialize function iszero");
 
         assert_eq!(booleans.len(), 4);
         assert!(!booleans.value(0));
