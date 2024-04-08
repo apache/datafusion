@@ -149,17 +149,18 @@ where
     let string_array = as_generic_string_array::<O>(array)?;
     let item_len = string_array.len();
 
-    // Find the ASCII string at the beginning.
-    let mut i = 0;
-    while i < item_len {
-        let item = unsafe { string_array.value_unchecked(i) };
-        if !item.as_bytes().is_ascii() {
-            break;
+    // Find the first nonascii string at the beginning.
+    let find_the_first_nonascii = || {
+        for (i, item) in string_array.iter().enumerate() {
+            if let Some(str) = item {
+                if !str.as_bytes().is_ascii() {
+                    return i;
+                }
+            }
         }
-        i += 1;
-    }
-
-    let the_first_nonascii_index = i;
+        item_len
+    };
+    let the_first_nonascii_index = find_the_first_nonascii();
 
     // Case1: maybe optimization
     if the_first_nonascii_index == 0 {
@@ -194,10 +195,12 @@ where
 
     // Convert remaining items
     for j in the_first_nonascii_index..item_len {
-        let item = unsafe { string_array.value_unchecked(j) };
-        // Memory will be continuously allocated here, but it is unavoidable.
-        let converted = op(item);
-        converted_values.push_str(&converted);
+        if string_array.is_valid(j) {
+            let item = unsafe { string_array.value_unchecked(j) };
+            // Memory will be continuously allocated here, but it is unavoidable.
+            let converted = op(item);
+            converted_values.push_str(&converted);
+        }
         offsets_builder
             .append(O::from_usize(converted_values.len()).expect("offset overflow"));
     }
