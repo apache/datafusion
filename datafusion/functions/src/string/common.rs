@@ -119,12 +119,13 @@ where
 {
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(convert_array::<i32, _>(array, op)?))
-            }
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(convert_array::<i64, _>(array, op)?))
-            }
+            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32, _>(
+                array, op,
+            )?)),
+            DataType::LargeUtf8 => Ok(ColumnarValue::Array(case_conversion_array::<
+                i64,
+                _,
+            >(array, op)?)),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -141,7 +142,7 @@ where
     }
 }
 
-fn convert_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+fn case_conversion_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
 where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
@@ -173,7 +174,7 @@ where
 
     // Case2: full optimization
     if the_first_nonascii_index == item_len {
-        return convert_ascii_array::<O, _>(array, op);
+        return case_conversion_ascii_array::<O, _>(array, op);
     }
 
     // Case3: partial optimization
@@ -216,7 +217,7 @@ where
     }))
 }
 
-fn convert_ascii_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+fn case_conversion_ascii_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
 where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
