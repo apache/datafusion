@@ -933,7 +933,7 @@ pub fn check_all_columns_from_schema(
     schema: DFSchemaRef,
 ) -> Result<bool> {
     for col in columns.iter() {
-        let exist = schema.is_column_from_schema(col)?;
+        let exist = schema.is_column_from_schema(col);
         if !exist {
             return Ok(false);
         }

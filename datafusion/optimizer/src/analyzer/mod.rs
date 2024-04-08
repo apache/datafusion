@@ -155,8 +155,8 @@ impl Analyzer {
 
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    plan.apply(&mut |plan: &LogicalPlan| {
-        plan.inspect_expressions(|expr| {
+    plan.apply_with_subqueries(&mut |plan: &LogicalPlan| {
+        plan.apply_expressions(|expr| {
             // recursively look for subqueries
             expr.apply(&mut |expr| {
                 match expr {
@@ -168,11 +168,8 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
                     _ => {}
                 };
                 Ok(TreeNodeRecursion::Continue)
-            })?;
-            Ok::<(), DataFusionError>(())
-        })?;
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-
-    Ok(())
+            })
+        })
+    })
+    .map(|_| ())
 }
