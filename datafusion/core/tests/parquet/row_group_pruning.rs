@@ -1267,7 +1267,7 @@ async fn prune_periods_in_column_names() {
 
 #[tokio::test]
 async fn test_row_group_all_null_values() {
-    // Tree row groups:
+    // Three row groups:
     // 1. all Null values
     // 2. values from 1 to 5
     // 3. all Null values
