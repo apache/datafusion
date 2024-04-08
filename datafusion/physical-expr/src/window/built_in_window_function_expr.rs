@@ -91,4 +91,9 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn get_result_ordering(&self, _schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         None
     }
+
+    /// Indicates whether the BuiltInWindowFunctionExpr supports IGNORE NULLS.
+    fn support_ignore_nulls(&self) -> bool {
+        false
+    }
 }

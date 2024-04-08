@@ -142,6 +142,14 @@ impl AggregateExpr for NthValueAgg {
             ordering_req: reverse_order_bys(&self.ordering_req),
         }) as _)
     }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
+
+    fn support_ordering(&self) -> bool {
+        true
+    }
 }
 
 impl PartialEq<dyn Any> for NthValueAgg {

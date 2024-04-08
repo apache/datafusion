@@ -130,6 +130,10 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             ignore_nulls: self.ignore_nulls,
         }))
     }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]

@@ -149,6 +149,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
             ignore_nulls: self.ignore_nulls,
         }))
     }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
 }
 
 /// Value evaluator for nth_value functions

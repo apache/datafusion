@@ -32,7 +32,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
@@ -76,6 +76,10 @@ pub fn create_window_expr(
                 name,
                 ignore_nulls,
             )?;
+            let agg_name = aggregate.name();
+            if ignore_nulls && !aggregate.support_ignore_nulls() {
+                return not_impl_err!("IGNORE NULLS is not implemented for {agg_name}");
+            }
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -105,6 +109,10 @@ pub fn create_window_expr(
                 name,
                 ignore_nulls,
             )?;
+            let agg_name = aggregate.name();
+            if ignore_nulls && !aggregate.support_ignore_nulls() {
+                return not_impl_err!("IGNORE NULLS is not implemented for {agg_name}");
+            }
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -187,8 +195,7 @@ fn create_built_in_window_expr(
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // derive the output datatype from incoming schema
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
-
-    Ok(match fun {
+    let window_expr: Arc<dyn BuiltInWindowFunctionExpr> = match fun {
         BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, out_data_type)),
         BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
@@ -281,7 +288,12 @@ fn create_built_in_window_expr(
                 ignore_nulls,
             ))
         }
-    })
+    };
+    let window_name = window_expr.name();
+    if ignore_nulls && !window_expr.support_ignore_nulls() {
+        return not_impl_err!("IGNORE NULLS is not implemented for {window_name}");
+    }
+    Ok(window_expr)
 }
 
 /// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function

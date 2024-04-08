@@ -52,8 +52,7 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
-
-    Ok(Arc::new(AggregateFunctionExpr {
+    let aggregate = Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
@@ -63,7 +62,18 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
-    }))
+    });
+
+    let agg_name = aggregate.name();
+    if ignore_nulls && !aggregate.support_ignore_nulls() {
+        return not_impl_err!("IGNORE NULLS is not implemented for {agg_name}");
+    }
+
+    if !ordering_req.is_empty() && !aggregate.support_ordering() {
+        return not_impl_err!("ORDER BY is not implemented for {agg_name}");
+    }
+
+    Ok(aggregate)
 }
 
 /// An aggregate expression that:
@@ -136,6 +146,16 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Creates accumulator implementation that supports retract
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
+    }
+
+    /// Indicate whether the AggregateUDF supports IGNORE NULLS
+    fn support_ignore_nulls(&self) -> bool {
+        false
+    }
+
+    /// Indicate whether the AggregateUDF supports ORDER BY
+    fn support_ordering(&self) -> bool {
+        false
     }
 }
 

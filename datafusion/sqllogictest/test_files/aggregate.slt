@@ -3428,3 +3428,16 @@ SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
 
 statement ok
 DROP TABLE t;
+
+# Test for IGNORE NULLS / ORDER BY not implemented
+statement error DataFusion error: This feature is not implemented: IGNORE NULLS is not implemented for COUNT
+SELECT COUNT(*) IGNORE NULLS FROM (values (1), (null), (2));
+
+statement error DataFusion error: This feature is not implemented: IGNORE NULLS is not implemented for AVG
+SELECT AVG(column1) IGNORE NULLS FROM (values (1), (null), (2));
+
+statement error DataFusion error: This feature is not implemented: ORDER BY is not implemented for COUNT
+SELECT COUNT(column1 ORDER BY column2) FROM (values (1,2), (3,4), (null,0));
+
+statement error DataFusion error: This feature is not implemented: ORDER BY is not implemented for AVG
+SELECT AVG(column1 ORDER BY column2) FROM (values (1,2), (3,4), (null,0));

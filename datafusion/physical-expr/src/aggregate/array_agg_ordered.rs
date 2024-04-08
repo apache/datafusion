@@ -147,6 +147,10 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             reverse: !self.reverse,
         }))
     }
+
+    fn support_ordering(&self) -> bool {
+        true
+    }
 }
 
 impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {

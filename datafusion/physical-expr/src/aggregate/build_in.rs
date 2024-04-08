@@ -60,7 +60,7 @@ pub fn create_aggregate_expr(
         .map(|e| e.expr.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
-    Ok(match (fun, distinct) {
+    let aggregate_expr: Arc<dyn AggregateExpr> = match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
         ),
@@ -417,7 +417,18 @@ pub fn create_aggregate_expr(
         (AggregateFunction::StringAgg, true) => {
             return not_impl_err!("STRING_AGG(DISTINCT) aggregations are not available");
         }
-    })
+    };
+
+    let agg_name = aggregate_expr.name();
+    if ignore_nulls && !aggregate_expr.support_ignore_nulls() {
+        return not_impl_err!("IGNORE NULLS is not implemented for {agg_name}");
+    }
+
+    if !ordering_req.is_empty() && !aggregate_expr.support_ordering() {
+        return not_impl_err!("ORDER BY is not implemented for {agg_name}");
+    }
+
+    Ok(aggregate_expr)
 }
 
 #[cfg(test)]

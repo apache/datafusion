@@ -156,6 +156,14 @@ impl AggregateUDFImpl for FirstValue {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
+
+    fn support_ordering(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -498,6 +506,14 @@ impl AggregateExpr for FirstValuePhysicalExpr {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
         })
     }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
+
+    fn support_ordering(&self) -> bool {
+        true
+    }
 }
 
 impl PartialEq<dyn Any> for FirstValuePhysicalExpr {
@@ -672,6 +688,14 @@ impl AggregateExpr for LastValuePhysicalExpr {
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
         })
+    }
+
+    fn support_ignore_nulls(&self) -> bool {
+        true
+    }
+
+    fn support_ordering(&self) -> bool {
+        true
     }
 }
 

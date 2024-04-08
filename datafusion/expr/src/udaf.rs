@@ -354,6 +354,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    /// Indicate whether the AggregateUDF supports IGNORE NULLS
+    fn support_ignore_nulls(&self) -> bool {
+        false
+    }
+
+    /// Indicate whether the AggregateUDF supports ORDER BY
+    fn support_ordering(&self) -> bool {
+        false
+    }
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to
