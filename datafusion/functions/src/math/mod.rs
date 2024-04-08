@@ -20,9 +20,9 @@
 pub mod abs;
 pub mod gcd;
 pub mod lcm;
+pub mod log;
 pub mod nans;
 pub mod pi;
-pub mod log;
 pub mod power;
 
 // Create UDFs
