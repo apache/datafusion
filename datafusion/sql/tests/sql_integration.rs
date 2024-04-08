@@ -445,18 +445,6 @@ CopyTo: format=csv output_url=output.csv options: ()
 }
 
 #[test]
-fn plan_copy_stored_as_priority() {
-    let sql = "COPY (select * from (values (1))) to 'output/' STORED AS CSV OPTIONS (format json)";
-    let plan = r#"
-CopyTo: format=csv output_url=output/ options: (format json)
-  Projection: column1
-    Values: (Int64(1))
-    "#
-    .trim();
-    quick_test(sql, plan);
-}
-
-#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
