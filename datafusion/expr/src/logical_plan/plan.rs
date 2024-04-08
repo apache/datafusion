@@ -56,7 +56,7 @@ use datafusion_common::{
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::tree_node::expr::transform_option_vec;
+use crate::tree_node::transform_option_vec;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
