@@ -256,7 +256,9 @@ pub fn merge_vectors(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use arrow_array::{ArrayRef, Float32Array, Float64Array};
+    use std::any::Any;
     use std::fmt::{Display, Formatter};
     use std::sync::Arc;
 
@@ -265,9 +267,102 @@ mod tests {
     use crate::PhysicalSortExpr;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 
+    use datafusion_expr::{
+        ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
+    };
     use petgraph::visit::Bfs;
+
+    #[derive(Debug, Clone)]
+    pub struct TestScalarUDF {
+        signature: Signature,
+    }
+
+    impl TestScalarUDF {
+        pub fn new() -> Self {
+            use DataType::*;
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![Float64, Float32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "test-scalar-udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            let arg_type = &arg_types[0];
+
+            match arg_type {
+                DataType::Float32 => Ok(DataType::Float32),
+                _ => Ok(DataType::Float64),
+            }
+        }
+
+        fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+            Ok(Some(vec![Some(true)]))
+        }
+
+        fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            let args = ColumnarValue::values_to_arrays(args)?;
+
+            let arr: ArrayRef = match args[0].data_type() {
+                DataType::Float64 => Arc::new({
+                    let arg = &args[0]
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "could not cast {} to {}",
+                                self.name(),
+                                std::any::type_name::<Float64Array>()
+                            ))
+                        })?;
+
+                    arg.iter()
+                        .map(|a| a.map(f64::floor))
+                        .collect::<Float64Array>()
+                }),
+                DataType::Float32 => Arc::new({
+                    let arg = &args[0]
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "could not cast {} to {}",
+                                self.name(),
+                                std::any::type_name::<Float32Array>()
+                            ))
+                        })?;
+
+                    arg.iter()
+                        .map(|a| a.map(f32::floor))
+                        .collect::<Float32Array>()
+                }),
+                other => {
+                    return exec_err!(
+                        "Unsupported data type {other:?} for function {}",
+                        self.name()
+                    );
+                }
+            };
+            Ok(ColumnarValue::Array(arr))
+        }
+    }
 
     #[derive(Clone)]
     struct DummyProperty {
