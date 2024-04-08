@@ -305,9 +305,9 @@ impl LogicalPlan {
         err
     }
 
-    /// Calls `f` on all expressions (non-recursively) in the current
-    /// logical plan node. This does not include expressions in any
-    /// children.
+    /// Calls `f` on all expressions in the current `LogicalPlan` node.
+    ///
+    /// Note this does not include expressions in child `LogicalPlan` nodes.
     pub fn apply_expressions<F: FnMut(&Expr) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
@@ -393,6 +393,11 @@ impl LogicalPlan {
         }
     }
 
+    /// Rewrites all expressions in the current `LogicalPlan` node using `f`.
+    ///
+    /// Returns the current node.
+    ///
+    /// Note this does not include expressions in child `LogicalPlan` nodes.
     pub fn map_expressions<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
         self,
         mut f: F,
@@ -608,8 +613,9 @@ impl LogicalPlan {
         })
     }
 
-    /// returns all inputs of this `LogicalPlan` node. Does not
-    /// include inputs to inputs, or subqueries.
+    /// Returns all inputs / children of this `LogicalPlan` node.
+    ///
+    /// Note does not include inputs to inputs, or subqueries.
     pub fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
@@ -1370,6 +1376,10 @@ impl LogicalPlan {
         )
     }
 
+    /// Calls `f` recursively on all children of the  `LogicalPlan` node.
+    ///
+    /// Unlike [`Self::apply`], this method *does* includes `LogicalPlan`s that
+    /// are referenced in `Expr`s
     pub fn apply_with_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: &mut F,
@@ -1434,6 +1444,8 @@ impl LogicalPlan {
         )
     }
 
+    /// Calls `f` on all subqueries referenced in expressions of the current
+    /// `LogicalPlan` node.
     fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
@@ -1453,6 +1465,10 @@ impl LogicalPlan {
         })
     }
 
+    /// Rewrites all subquery `LogicalPlan` in the current `LogicalPlan` node
+    /// using `f`.
+    ///
+    /// Returns the current node.
     fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
