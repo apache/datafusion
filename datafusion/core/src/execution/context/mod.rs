@@ -70,7 +70,7 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
     SchemaReference, TableReference,
 };
-use datafusion_execution::registry::{ScalarFactory, SerializerRegistry};
+use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     var_provider::is_system_variables,
@@ -1235,9 +1235,6 @@ impl FunctionRegistry for SessionContext {
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         self.state.write().register_udf(udf)
     }
-    // fn register_udf_impl(&mut self, names: Vec<String>, udf: datafusion_execution::registry::ScalarFactory) -> Result<Option<datafusion_execution::registry::ScalarFactory>> {
-    //     self.state.write().register_udf_impl(names, udf)
-    // }
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
@@ -2138,13 +2135,6 @@ impl FunctionRegistry for SessionState {
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
-    // fn register_udf_impl(&mut self, names: Vec<String>, udf: ScalarFactory) -> Result<Option<ScalarFactory>> {
-    //     names.iter().for_each(|name| {
-    //         // TODO: check overwrite
-    //         self.scalar_functions_impl.insert(name.clone(), udf.clone());
-    //     });
-    // }
-
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,

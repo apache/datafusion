@@ -53,14 +53,14 @@ pub mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::type_coercion::functions;
 use datafusion_expr::ScalarUDF;
 use log::debug;
-use string::array_to_string;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+
+use crate::array_has::array_has_aliases;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
@@ -103,14 +103,12 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
 }
 
-
-
 pub type ScalarFactory = Box<dyn Fn() -> Arc<ScalarUDF> + Send + Sync>;
 
-/// HashMap Singleton for UDFs
-///
-/// Replace register_all with our built-in functions
-/// Replace  scalar_functions: HashMap<String, Arc<ScalarUDF>> in SessionState
+// HashMap Singleton for UDFs
+//
+// Replace register_all with our built-in functions
+// Replace  scalar_functions: HashMap<String, Arc<ScalarUDF>> in SessionState
 pub fn array_functions() -> &'static Mutex<HashMap<String, ScalarFactory>> {
     static FUNCTIONS: OnceLock<Mutex<HashMap<String, ScalarFactory>>> = OnceLock::new();
     FUNCTIONS.get_or_init(|| {
@@ -176,10 +174,12 @@ pub fn array_functions() -> &'static Mutex<HashMap<String, ScalarFactory>> {
             String::from("make_array"),
             Box::new(make_array::make_array_udf) as _,
         );
-        functions.insert(
-            String::from("array_has"),
-            Box::new(array_has::array_has_udf) as _,
-        );
+
+        // TODO: Rewrite for other functions as well
+        array_has_aliases().into_iter().for_each(|alias| {
+            functions.insert(alias, Box::new(array_has::array_has_udf) as _);
+        });
+
         functions.insert(
             String::from("array_has_all"),
             Box::new(array_has::array_has_all_udf) as _,
@@ -196,10 +196,7 @@ pub fn array_functions() -> &'static Mutex<HashMap<String, ScalarFactory>> {
             String::from("array_length"),
             Box::new(length::array_length_udf) as _,
         );
-        functions.insert(
-            String::from("flatten"),
-            Box::new(flatten::flatten_udf) as _,
-        );
+        functions.insert(String::from("flatten"), Box::new(flatten::flatten_udf) as _);
         functions.insert(
             String::from("array_sort"),
             Box::new(sort::array_sort_udf) as _,
@@ -261,8 +258,6 @@ pub fn array_functions() -> &'static Mutex<HashMap<String, ScalarFactory>> {
             Box::new(replace::array_replace_n_udf) as _,
         );
 
-
-
         // TODO: Add more builtin functions here
         Mutex::new(functions)
     })
@@ -279,68 +274,67 @@ pub fn get_array_udf(name: &str) -> Option<Arc<ScalarUDF>> {
 }
 
 /// Register a single new UDF, so the user can register their own functions
-/// 
+///
 /// Repalce old regsiter_udf
 pub fn register_array_udf(name: &str, udf: ScalarFactory) -> Option<ScalarFactory> {
     // TODO: Check overwrite?
-    array_functions().lock().unwrap().insert(name.to_string(), udf)
+    array_functions()
+        .lock()
+        .unwrap()
+        .insert(name.to_string(), udf)
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    // let functions: Vec<Arc<ScalarUDF>> = vec![
-    //     string::array_to_string_udf(),
-    //     string::string_to_array_udf(),
-    //     range::range_udf(),
-    //     range::gen_series_udf(),
-    //     dimension::array_dims_udf(),
-    //     cardinality::cardinality_udf(),
-    //     dimension::array_ndims_udf(),
-    //     concat::array_append_udf(),
-    //     concat::array_prepend_udf(),
-    //     concat::array_concat_udf(),
-    //     except::array_except_udf(),
-    //     extract::array_element_udf(),
-    //     extract::array_pop_back_udf(),
-    //     extract::array_pop_front_udf(),
-    //     extract::array_slice_udf(),
-    //     make_array::make_array_udf(),
-    //     array_has::array_has_udf(),
-    //     array_has::array_has_all_udf(),
-    //     array_has::array_has_any_udf(),
-    //     empty::array_empty_udf(),
-    //     length::array_length_udf(),
-    //     flatten::flatten_udf(),
-    //     sort::array_sort_udf(),
-    //     repeat::array_repeat_udf(),
-    //     resize::array_resize_udf(),
-    //     reverse::array_reverse_udf(),
-    //     set_ops::array_distinct_udf(),
-    //     set_ops::array_intersect_udf(),
-    //     set_ops::array_union_udf(),
-    //     position::array_position_udf(),
-    //     position::array_positions_udf(),
-    //     remove::array_remove_udf(),
-    //     remove::array_remove_all_udf(),
-    //     remove::array_remove_n_udf(),
-    //     replace::array_replace_n_udf(),
-    //     replace::array_replace_all_udf(),
-    //     replace::array_replace_udf(),
-    // ];
-    // let functions = vec![
-    //     (
-    //         String::from("array_remove_all"),
-    //         Box::new(remove::array_remove_all_udf),
-    //     )
-    // ];
+    // TODO: Remove. Keep this to fallback for non-supported aliases
+    let functions: Vec<Arc<ScalarUDF>> = vec![
+        string::array_to_string_udf(),
+        string::string_to_array_udf(),
+        range::range_udf(),
+        range::gen_series_udf(),
+        dimension::array_dims_udf(),
+        cardinality::cardinality_udf(),
+        dimension::array_ndims_udf(),
+        concat::array_append_udf(),
+        concat::array_prepend_udf(),
+        concat::array_concat_udf(),
+        except::array_except_udf(),
+        extract::array_element_udf(),
+        extract::array_pop_back_udf(),
+        extract::array_pop_front_udf(),
+        extract::array_slice_udf(),
+        make_array::make_array_udf(),
+        array_has::array_has_udf(),
+        array_has::array_has_all_udf(),
+        array_has::array_has_any_udf(),
+        empty::array_empty_udf(),
+        length::array_length_udf(),
+        flatten::flatten_udf(),
+        sort::array_sort_udf(),
+        repeat::array_repeat_udf(),
+        resize::array_resize_udf(),
+        reverse::array_reverse_udf(),
+        set_ops::array_distinct_udf(),
+        set_ops::array_intersect_udf(),
+        set_ops::array_union_udf(),
+        position::array_position_udf(),
+        position::array_positions_udf(),
+        remove::array_remove_udf(),
+        remove::array_remove_all_udf(),
+        remove::array_remove_n_udf(),
+        replace::array_replace_n_udf(),
+        replace::array_replace_all_udf(),
+        replace::array_replace_udf(),
+    ];
 
-    // functions.into_iter().try_for_each(|(name, udf)| {
-    //     let existing_udf = registry.register_udf_impl(vec![name.clone()], udf as _)?;
-    //     if let Some(existing_udf) = existing_udf {
-    //         debug!("Overwrite existing UDF: {}", name);
-    //     }
-    //     Ok(()) as Result<()>
-    // })?;
+    // TODO: Remove. Define in array_functions directly
+    functions.into_iter().try_for_each(|udf| {
+        let existing_udf = registry.register_udf(udf)?;
+        if let Some(existing_udf) = existing_udf {
+            debug!("Overwrite existing UDF: {}", existing_udf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
 
     registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
 

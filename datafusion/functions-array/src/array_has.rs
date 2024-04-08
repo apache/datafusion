@@ -53,6 +53,16 @@ make_udf_function!(ArrayHasAny,
     array_has_any_udf // internal function name
 );
 
+// TODO: Macro-ify aliases for all functions
+pub fn array_has_aliases() -> Vec<String> {
+    vec![
+        String::from("array_has"),
+        String::from("list_has"),
+        String::from("array_contains"),
+        String::from("list_contains"),
+    ]
+}
+
 #[derive(Debug)]
 pub struct ArrayHas {
     signature: Signature,

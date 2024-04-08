@@ -50,9 +50,6 @@ pub trait FunctionRegistry {
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
     }
-    fn register_udf_impl(&mut self, names: Vec<String>, _udf: ScalarFactory) -> Result<Option<ScalarFactory>> {
-        not_impl_err!("Registering ScalarUDF")
-    }
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
     ///
