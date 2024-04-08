@@ -21,7 +21,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::LogicalPlan;
 
 /// Non-unique identifier of a [`LogicalPlan`].
@@ -73,7 +73,7 @@ impl LogicalPlanSignature {
 /// Get total number of [`LogicalPlan`]s in the plan.
 fn get_node_number(plan: &LogicalPlan) -> NonZeroUsize {
     let mut node_number = 0;
-    plan.apply(&mut |_plan| {
+    plan.apply_with_subqueries(&mut |_plan| {
         node_number += 1;
         Ok(TreeNodeRecursion::Continue)
     })
