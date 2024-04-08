@@ -87,11 +87,11 @@ impl fmt::Display for ExplainStatement {
 ///
 /// ```sql
 /// COPY lineitem  TO 'lineitem'
-///  (format parquet,
+/// STORED AS PARQUET (
 ///   partitions 16,
 ///   row_group_limit_rows 100000,
 ///   row_group_limit_bytes 200000
-///  )
+/// )
 ///
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
 /// ```
