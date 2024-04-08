@@ -39,9 +39,9 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     ceil, coalesce, concat_expr, concat_ws_expr, cot, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, initcap, iszero, log,
+    factorial, initcap, iszero,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, power, random, round, trunc, AggregateFunction, Between, BinaryExpr,
+    nanvl, random, round, trunc, AggregateFunction, Between, BinaryExpr,
     BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
     GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
@@ -421,7 +421,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Unknown => todo!(),
             ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Exp => Self::Exp,
-            ScalarFunction::Log => Self::Log,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
@@ -432,7 +431,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::InitCap => Self::InitCap,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::Coalesce => Self::Coalesce,
-            ScalarFunction::Power => Self::Power,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
         }
@@ -1320,14 +1318,6 @@ pub fn parse_expr(
                 ScalarFunction::Coalesce => {
                     Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Power => Ok(power(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Log => Ok(log(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,

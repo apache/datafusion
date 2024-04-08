@@ -357,6 +357,19 @@ macro_rules! make_math_binary_udf {
     };
 }
 
+macro_rules! make_function_scalar_inputs {
+    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
+
+        arg.iter()
+            .map(|a| match a {
+                Some(a) => Some($FUNC(a)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
+    }};
+}
+
 macro_rules! make_function_inputs2 {
     ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
         let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);

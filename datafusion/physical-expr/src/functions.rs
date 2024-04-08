@@ -197,12 +197,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
         }
-        BuiltinScalarFunction::Power => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
-        }
-        BuiltinScalarFunction::Log => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
-        }
         BuiltinScalarFunction::Cot => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }

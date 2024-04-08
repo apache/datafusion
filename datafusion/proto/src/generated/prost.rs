@@ -2851,7 +2851,7 @@ pub enum ScalarFunction {
     Exp = 8,
     /// 9 was Floor
     /// 10 was Ln
-    Log = 11,
+    /// 11 was Log
     /// 12 was Log10
     /// 13 was Log2
     Round = 14,
@@ -2904,7 +2904,7 @@ pub enum ScalarFunction {
     /// Trim = 61;
     /// Upper = 62;
     Coalesce = 63,
-    Power = 64,
+    /// 64 was Power
     /// 65 was StructFun
     /// 66 was FromUnixtime
     /// 67 Atan2
@@ -2989,7 +2989,6 @@ impl ScalarFunction {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Exp => "Exp",
-            ScalarFunction::Log => "Log",
             ScalarFunction::Round => "Round",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Concat => "Concat",
@@ -2997,7 +2996,6 @@ impl ScalarFunction {
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
-            ScalarFunction::Power => "Power",
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
@@ -3011,7 +3009,6 @@ impl ScalarFunction {
             "unknown" => Some(Self::Unknown),
             "Ceil" => Some(Self::Ceil),
             "Exp" => Some(Self::Exp),
-            "Log" => Some(Self::Log),
             "Round" => Some(Self::Round),
             "Trunc" => Some(Self::Trunc),
             "Concat" => Some(Self::Concat),
@@ -3019,7 +3016,6 @@ impl ScalarFunction {
             "InitCap" => Some(Self::InitCap),
             "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
-            "Power" => Some(Self::Power),
             "Factorial" => Some(Self::Factorial),
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
