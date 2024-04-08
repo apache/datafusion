@@ -1328,23 +1328,6 @@ macro_rules! handle_transform_recursion {
     }};
 }
 
-macro_rules! handle_transform_recursion_down {
-    ($F_DOWN:expr, $F_CHILD:expr) => {{
-        $F_DOWN?
-            .transform_children(|n| n.map_subqueries($F_CHILD))?
-            .transform_sibling(|n| n.map_children($F_CHILD))
-    }};
-}
-
-macro_rules! handle_transform_recursion_up {
-    ($SELF:expr, $F_CHILD:expr, $F_UP:expr) => {{
-        $SELF
-            .map_subqueries($F_CHILD)?
-            .transform_sibling(|n| n.map_children($F_CHILD))?
-            .transform_parent(|n| $F_UP(n))
-    }};
-}
-
 impl LogicalPlan {
     pub fn visit_with_subqueries<V: TreeNodeVisitor<Node = Self>>(
         &self,
@@ -1379,62 +1362,7 @@ impl LogicalPlan {
             .visit_sibling(|| self.apply_children(|c| c.apply_with_subqueries(f)))
     }
 
-    pub fn transform_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &F,
-    ) -> Result<Transformed<Self>> {
-        self.transform_up_with_subqueries(f)
-    }
-
-    pub fn transform_down_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c.transform_down_with_subqueries(f))
-    }
-
-    pub fn transform_down_mut_with_subqueries<
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    >(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c
-            .transform_down_mut_with_subqueries(f))
-    }
-
-    pub fn transform_up_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_with_subqueries(f), f)
-    }
-
-    pub fn transform_up_mut_with_subqueries<
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    >(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_mut_with_subqueries(f), f)
-    }
-
-    pub fn transform_down_up_with_subqueries<
-        FD: FnMut(Self) -> Result<Transformed<Self>>,
-        FU: FnMut(Self) -> Result<Transformed<Self>>,
-    >(
-        self,
-        f_down: &mut FD,
-        f_up: &mut FU,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion!(
-            f_down(self),
-            |c| c.transform_down_up_with_subqueries(f_down, f_up),
-            f_up
-        )
-    }
-
-    fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+    pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
@@ -1453,7 +1381,7 @@ impl LogicalPlan {
         })
     }
 
-    fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+    pub fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
