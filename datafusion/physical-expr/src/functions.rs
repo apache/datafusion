@@ -184,15 +184,8 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Factorial => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
         }
-        BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
-        BuiltinScalarFunction::Gcd => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::gcd)(args))
-        }
         BuiltinScalarFunction::Iszero => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::iszero)(args))
-        }
-        BuiltinScalarFunction::Lcm => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::lcm)(args))
         }
         BuiltinScalarFunction::Nanvl => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
@@ -203,13 +196,6 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
-        }
-        BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
-        BuiltinScalarFunction::Power => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
-        }
-        BuiltinScalarFunction::Log => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
         }
         BuiltinScalarFunction::Cot => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
@@ -573,7 +559,7 @@ mod tests {
         let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let funs = [BuiltinScalarFunction::Pi, BuiltinScalarFunction::Random];
+        let funs = [BuiltinScalarFunction::Random];
 
         for fun in funs.iter() {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;

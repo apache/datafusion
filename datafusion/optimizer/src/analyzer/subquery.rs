@@ -283,7 +283,7 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
-    inner_plan.apply(&mut |plan| {
+    inner_plan.apply_with_subqueries(&mut |plan| {
         if let LogicalPlan::Filter(Filter { predicate, .. }) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()

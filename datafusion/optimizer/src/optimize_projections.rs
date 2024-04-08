@@ -34,7 +34,7 @@ use datafusion_expr::{
     Expr, Projection, TableScan, Window,
 };
 
-use datafusion_expr::utils::inspect_expr_pre;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
@@ -613,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());
@@ -632,7 +632,7 @@ fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
             }
             _ => {}
         };
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // unwrap: closure above never returns Err, so can not be Err here
     .unwrap();
