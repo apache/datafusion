@@ -167,12 +167,32 @@ pub trait TableProvider: Sync + Send {
     /// The return value must have one element for each filter expression passed
     /// in. The value of each element indicates if the TableProvider can apply
     /// that particular filter during the scan. The position in the return value
-    /// Vec corresponds to the expression in the `filters` input. One approach is to 
-    /// allocate a result Vec equal to the size of the `filters` length, then 
-    /// loop the `filters` array and indicate the proper level of support (or not) 
-    /// for each individual filter expression according to the capabilities 
-    /// of the TableProvider.
-    ///
+    /// Vec corresponds to the expression in the `filters` input. 
+    /// 
+    /// Here is an example of how this can be done:
+    /// 
+    /// ```
+    /// fn supports_filters_pushdown(
+    ///     &self,
+    ///     filters: &[&Expr],) -> Result<Vec<TableProviderFilterPushDown>> {
+    /// 
+    ///     let result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(&filters.len());
+    ///     for i in 0..filters.len() {
+    ///         // Evaluate a filter
+    ///         let filter = filters[i];
+    /// 
+    ///         // Evaluate a filter to support here
+    ///         if filter ... {
+    ///             result_vec.push(TableProviderFilterPushDown::Exact);
+    ///         } else {
+    ///             result_vec.push(TableProviderFilterPushDown::Unsupported);
+    ///         }
+    ///     }
+    /// 
+    ///     Ok(result_vec)
+    /// }
+    /// ```
+    /// 
     /// If this fn is not implemented by the TableProvider, by default 
     /// it returns [`Unsupported`] for all filters, meaning no filters
     /// will be provided to [`Self::scan`]. If the TableProvider can implement
