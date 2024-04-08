@@ -42,55 +42,55 @@ order by
 limit 10;
 ----
 logical_plan
-Limit: skip=0, fetch=10
---Sort: revenue DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST, fetch=10
-----Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, orders.o_orderdate, orders.o_shippriority
-------Aggregate: groupBy=[[lineitem.l_orderkey, orders.o_orderdate, orders.o_shippriority]], aggr=[[SUM(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
---------Projection: orders.o_orderdate, orders.o_shippriority, lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
-----------Inner Join: orders.o_orderkey = lineitem.l_orderkey
-------------Projection: orders.o_orderkey, orders.o_orderdate, orders.o_shippriority
---------------Inner Join: customer.c_custkey = orders.o_custkey
-----------------Projection: customer.c_custkey
-------------------Filter: customer.c_mktsegment = Utf8("BUILDING")
---------------------TableScan: customer projection=[c_custkey, c_mktsegment], partial_filters=[customer.c_mktsegment = Utf8("BUILDING")]
-----------------Filter: orders.o_orderdate < Date32("9204")
-------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate, o_shippriority], partial_filters=[orders.o_orderdate < Date32("9204")]
-------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
---------------Filter: lineitem.l_shipdate > Date32("9204")
-----------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate > Date32("9204")]
+1)Limit: skip=0, fetch=10
+2)--Sort: revenue DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST, fetch=10
+3)----Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, orders.o_orderdate, orders.o_shippriority
+4)------Aggregate: groupBy=[[lineitem.l_orderkey, orders.o_orderdate, orders.o_shippriority]], aggr=[[SUM(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
+5)--------Projection: orders.o_orderdate, orders.o_shippriority, lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
+6)----------Inner Join: orders.o_orderkey = lineitem.l_orderkey
+7)------------Projection: orders.o_orderkey, orders.o_orderdate, orders.o_shippriority
+8)--------------Inner Join: customer.c_custkey = orders.o_custkey
+9)----------------Projection: customer.c_custkey
+10)------------------Filter: customer.c_mktsegment = Utf8("BUILDING")
+11)--------------------TableScan: customer projection=[c_custkey, c_mktsegment], partial_filters=[customer.c_mktsegment = Utf8("BUILDING")]
+12)----------------Filter: orders.o_orderdate < Date32("9204")
+13)------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate, o_shippriority], partial_filters=[orders.o_orderdate < Date32("9204")]
+14)------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
+15)--------------Filter: lineitem.l_shipdate > Date32("9204")
+16)----------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate > Date32("9204")]
 physical_plan
-GlobalLimitExec: skip=0, fetch=10
---SortPreservingMergeExec: [revenue@1 DESC,o_orderdate@2 ASC NULLS LAST], fetch=10
-----SortExec: TopK(fetch=10), expr=[revenue@1 DESC,o_orderdate@2 ASC NULLS LAST]
-------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@3 as revenue, o_orderdate@1 as o_orderdate, o_shippriority@2 as o_shippriority]
---------AggregateExec: mode=FinalPartitioned, gby=[l_orderkey@0 as l_orderkey, o_orderdate@1 as o_orderdate, o_shippriority@2 as o_shippriority], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([l_orderkey@0, o_orderdate@1, o_shippriority@2], 4), input_partitions=4
---------------AggregateExec: mode=Partial, gby=[l_orderkey@2 as l_orderkey, o_orderdate@0 as o_orderdate, o_shippriority@1 as o_shippriority], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-----------------CoalesceBatchesExec: target_batch_size=8192
-------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderdate@1, o_shippriority@2, l_orderkey@3, l_extendedprice@4, l_discount@5]
---------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
-------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[o_orderkey@1, o_orderdate@3, o_shippriority@4]
-----------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
---------------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey]
-----------------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------------FilterExec: c_mktsegment@1 = BUILDING
---------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_mktsegment], has_header=false
-----------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
---------------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------------FilterExec: o_orderdate@2 < 9204
-------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_orderdate, o_shippriority], has_header=false
---------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
-------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
---------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------FilterExec: l_shipdate@3 > 9204
-------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_extendedprice, l_discount, l_shipdate], has_header=false
+1)GlobalLimitExec: skip=0, fetch=10
+2)--SortPreservingMergeExec: [revenue@1 DESC,o_orderdate@2 ASC NULLS LAST], fetch=10
+3)----SortExec: TopK(fetch=10), expr=[revenue@1 DESC,o_orderdate@2 ASC NULLS LAST]
+4)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@3 as revenue, o_orderdate@1 as o_orderdate, o_shippriority@2 as o_shippriority]
+5)--------AggregateExec: mode=FinalPartitioned, gby=[l_orderkey@0 as l_orderkey, o_orderdate@1 as o_orderdate, o_shippriority@2 as o_shippriority], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+6)----------CoalesceBatchesExec: target_batch_size=8192
+7)------------RepartitionExec: partitioning=Hash([l_orderkey@0, o_orderdate@1, o_shippriority@2], 4), input_partitions=4
+8)--------------AggregateExec: mode=Partial, gby=[l_orderkey@2 as l_orderkey, o_orderdate@0 as o_orderdate, o_shippriority@1 as o_shippriority], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+9)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderdate@1, o_shippriority@2, l_orderkey@3, l_extendedprice@4, l_discount@5]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+13)------------------------CoalesceBatchesExec: target_batch_size=8192
+14)--------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[o_orderkey@1, o_orderdate@3, o_shippriority@4]
+15)----------------------------CoalesceBatchesExec: target_batch_size=8192
+16)------------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
+17)--------------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey]
+18)----------------------------------CoalesceBatchesExec: target_batch_size=8192
+19)------------------------------------FilterExec: c_mktsegment@1 = BUILDING
+20)--------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+21)----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_mktsegment], has_header=false
+22)----------------------------CoalesceBatchesExec: target_batch_size=8192
+23)------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
+24)--------------------------------CoalesceBatchesExec: target_batch_size=8192
+25)----------------------------------FilterExec: o_orderdate@2 < 9204
+26)------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_orderdate, o_shippriority], has_header=false
+27)--------------------CoalesceBatchesExec: target_batch_size=8192
+28)----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+29)------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
+30)--------------------------CoalesceBatchesExec: target_batch_size=8192
+31)----------------------------FilterExec: l_shipdate@3 > 9204
+32)------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_extendedprice, l_discount, l_shipdate], has_header=false
 
 
 
@@ -119,13 +119,13 @@ order by
     o_orderdate
  limit 10;
 ----
-223140 355369.0698 1995-03-14 0
-584291 354494.7318 1995-02-21 0
-405063 353125.4577 1995-03-03 0
-573861 351238.277 1995-03-09 0
-554757 349181.7426 1995-03-14 0
-506021 321075.581 1995-03-10 0
-121604 318576.4154 1995-03-07 0
-108514 314967.0754 1995-02-20 0
-462502 312604.542 1995-03-08 0
-178727 309728.9306 1995-02-25 0
+223140 355369.0698 1995-03-14 1)0
+584291 354494.7318 1995-02-21 1)0
+405063 353125.4577 1995-03-03 1)0
+573861 351238.277 1995-03-09 1)0
+554757 349181.7426 1995-03-14 1)0
+506021 321075.581 1995-03-10 1)0
+121604 318576.4154 1995-03-07 1)0
+108514 314967.0754 1995-02-20 1)0
+462502 312604.542 1995-03-08 1)0
+178727 309728.9306 1995-02-25 1)0
