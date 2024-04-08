@@ -1032,13 +1032,13 @@ mod tests {
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
                 .set_statistics(s.clone())
-                .set_num_values(number_row.clone())
+                .set_num_values(number_row)
                 .build()
                 .unwrap();
             columns.push(column);
         }
         RowGroupMetaData::builder(schema_descr.clone())
-            .set_num_rows(number_row.clone())
+            .set_num_rows(number_row)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
             .build()
