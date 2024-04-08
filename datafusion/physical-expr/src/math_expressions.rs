@@ -19,7 +19,6 @@
 
 use std::any::type_name;
 use std::iter;
-use std::mem::swap;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -161,7 +160,6 @@ math_unary_function!("atan", atan);
 math_unary_function!("asinh", asinh);
 math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
-math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
 math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
@@ -178,79 +176,6 @@ pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
             { |value: i64| { (1..=value).product() } }
         )) as ArrayRef),
         other => exec_err!("Unsupported data type {other:?} for function factorial."),
-    }
-}
-
-/// Computes greatest common divisor using Binary GCD algorithm.
-fn compute_gcd(x: i64, y: i64) -> i64 {
-    let mut a = x.wrapping_abs();
-    let mut b = y.wrapping_abs();
-
-    if a == 0 {
-        return b;
-    }
-    if b == 0 {
-        return a;
-    }
-
-    let shift = (a | b).trailing_zeros();
-    a >>= shift;
-    b >>= shift;
-    a >>= a.trailing_zeros();
-
-    loop {
-        b >>= b.trailing_zeros();
-        if a > b {
-            swap(&mut a, &mut b);
-        }
-
-        b -= a;
-
-        if b == 0 {
-            return a << shift;
-        }
-    }
-}
-
-/// Gcd SQL function
-pub fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "x",
-            "y",
-            Int64Array,
-            Int64Array,
-            { compute_gcd }
-        )) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function gcd"),
-    }
-}
-
-/// Lcm SQL function
-pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let compute_lcm = |x: i64, y: i64| {
-        let a = x.wrapping_abs();
-        let b = y.wrapping_abs();
-
-        if a == 0 || b == 0 {
-            return 0;
-        }
-        a / compute_gcd(a, b) * b
-    };
-
-    match args[0].data_type() {
-        DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "x",
-            "y",
-            Int64Array,
-            Int64Array,
-            { compute_lcm }
-        )) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
 
@@ -343,15 +268,6 @@ pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),
     }
-}
-
-/// Pi SQL function
-pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if !matches!(&args[0], ColumnarValue::Array(_)) {
-        return exec_err!("Expect pi function to take no param");
-    }
-    let array = Float64Array::from_value(std::f64::consts::PI, 1);
-    Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
 /// Random SQL function
@@ -806,40 +722,6 @@ mod tests {
         let expected = Int64Array::from(vec![1, 1, 2, 24]);
 
         assert_eq!(ints, &expected);
-    }
-
-    #[test]
-    fn test_gcd_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 3, 25, -16])), // x
-            Arc::new(Int64Array::from(vec![0, -2, 15, 8])),  // y
-        ];
-
-        let result = gcd(&args).expect("failed to initialize function gcd");
-        let ints = as_int64_array(&result).expect("failed to initialize function gcd");
-
-        assert_eq!(ints.len(), 4);
-        assert_eq!(ints.value(0), 0);
-        assert_eq!(ints.value(1), 1);
-        assert_eq!(ints.value(2), 5);
-        assert_eq!(ints.value(3), 8);
-    }
-
-    #[test]
-    fn test_lcm_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 3, 25, -16])), // x
-            Arc::new(Int64Array::from(vec![0, -2, 15, 8])),  // y
-        ];
-
-        let result = lcm(&args).expect("failed to initialize function lcm");
-        let ints = as_int64_array(&result).expect("failed to initialize function lcm");
-
-        assert_eq!(ints.len(), 4);
-        assert_eq!(ints.value(0), 0);
-        assert_eq!(ints.value(1), 6);
-        assert_eq!(ints.value(2), 75);
-        assert_eq!(ints.value(3), 16);
     }
 
     #[test]
