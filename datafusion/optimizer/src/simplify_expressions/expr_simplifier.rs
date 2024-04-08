@@ -1318,18 +1318,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
             },
 
-            // log
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
-                args,
-            }) => Transformed::yes(simpl_log(args, info)?),
-
-            // power
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
-                args,
-            }) => Transformed::yes(simpl_power(args, info)?),
-
             // concat
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
@@ -2663,68 +2651,6 @@ mod tests {
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
         assert_eq!(simplify(expr_eq), lit(true));
-    }
-
-    #[test]
-    fn test_simplify_log() {
-        // Log(c3, 1) ===> 0
-        {
-            let expr = log(col("c3_non_null"), lit(1));
-            let expected = lit(0i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, c3) ===> 1
-        {
-            let expr = log(col("c3_non_null"), col("c3_non_null"));
-            let expected = lit(1i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, Power(c3, c4)) ===> c4
-        {
-            let expr = log(
-                col("c3_non_null"),
-                power(col("c3_non_null"), col("c4_non_null")),
-            );
-            let expected = col("c4_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, c4) ===> Log(c3, c4)
-        {
-            let expr = log(col("c3_non_null"), col("c4_non_null"));
-            let expected = log(col("c3_non_null"), col("c4_non_null"));
-            assert_eq!(simplify(expr), expected);
-        }
-    }
-
-    #[test]
-    fn test_simplify_power() {
-        // Power(c3, 0) ===> 1
-        {
-            let expr = power(col("c3_non_null"), lit(0));
-            let expected = lit(1i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, 1) ===> c3
-        {
-            let expr = power(col("c3_non_null"), lit(1));
-            let expected = col("c3_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, Log(c3, c4)) ===> c4
-        {
-            let expr = power(
-                col("c3_non_null"),
-                log(col("c3_non_null"), col("c4_non_null")),
-            );
-            let expected = col("c4_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, c4) ===> Power(c3, c4)
-        {
-            let expr = power(col("c3_non_null"), col("c4_non_null"));
-            let expected = power(col("c3_non_null"), col("c4_non_null"));
-            assert_eq!(simplify(expr), expected);
-        }
     }
 
     #[test]
