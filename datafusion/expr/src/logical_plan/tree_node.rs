@@ -20,58 +20,11 @@
 use crate::LogicalPlan;
 
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_common::Result;
 
 impl TreeNode for LogicalPlan {
-    fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
-        f: &mut F,
-    ) -> Result<TreeNodeRecursion> {
-        // Compared to the default implementation, we need to invoke
-        // [`Self::apply_subqueries`] before visiting its children
-        f(self)?.visit_children(|| {
-            self.apply_subqueries(f)?;
-            self.apply_children(|n| n.apply(f))
-        })
-    }
-
-    /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
-    /// [`LogicalPlan::visit`].
-    ///
-    /// For example, for a logical plan like:
-    ///
-    /// ```text
-    /// Projection: id
-    ///    Filter: state Eq Utf8(\"CO\")\
-    ///       CsvScan: employee.csv projection=Some([0, 3])";
-    /// ```
-    ///
-    /// The sequence of visit operations would be:
-    /// ```text
-    /// visitor.pre_visit(Projection)
-    /// visitor.pre_visit(Filter)
-    /// visitor.pre_visit(CsvScan)
-    /// visitor.post_visit(CsvScan)
-    /// visitor.post_visit(Filter)
-    /// visitor.post_visit(Projection)
-    /// ```
-    fn visit<V: TreeNodeVisitor<Node = Self>>(
-        &self,
-        visitor: &mut V,
-    ) -> Result<TreeNodeRecursion> {
-        // Compared to the default implementation, we need to invoke
-        // [`Self::visit_subqueries`] before visiting its children
-        visitor
-            .f_down(self)?
-            .visit_children(|| {
-                self.visit_subqueries(visitor)?;
-                self.apply_children(|n| n.visit(visitor))
-            })?
-            .visit_parent(|| visitor.f_up(self))
-    }
-
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
@@ -85,8 +38,8 @@ impl TreeNode for LogicalPlan {
     ) -> Result<Transformed<Self>> {
         let new_children = self
             .inputs()
-            .iter()
-            .map(|&c| c.clone())
+            .into_iter()
+            .cloned()
             .map_until_stop_and_collect(f)?;
         // Propagate up `new_children.transformed` and `new_children.tnr`
         // along with the node containing transformed children.

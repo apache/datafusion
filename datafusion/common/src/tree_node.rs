@@ -25,10 +25,9 @@ use crate::Result;
 /// These macros are used to determine continuation during transforming traversals.
 macro_rules! handle_transform_recursion {
     ($F_DOWN:expr, $F_CHILD:expr, $F_UP:expr) => {{
-        #[allow(clippy::redundant_closure_call)]
         $F_DOWN?
             .transform_children(|n| n.map_children($F_CHILD))?
-            .transform_parent(|n| $F_UP(n))
+            .transform_parent($F_UP)
     }};
 }
 

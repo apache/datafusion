@@ -59,6 +59,7 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }

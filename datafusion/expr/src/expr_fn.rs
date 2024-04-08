@@ -24,7 +24,6 @@ use crate::expr::{
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
-use crate::udaf::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
@@ -298,11 +297,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns an approximate value of π
-pub fn pi() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
-}
-
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
@@ -539,12 +533,6 @@ macro_rules! nary_scalar_expr {
 scalar_expr!(Cot, cot, num, "cotangent of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
-    Floor,
-    floor,
-    num,
-    "nearest integer less than or equal to argument"
-);
-scalar_expr!(
     Ceil,
     ceil,
     num,
@@ -557,8 +545,7 @@ nary_scalar_expr!(
     "truncate toward zero, with optional precision"
 );
 scalar_expr!(Exp, exp, num, "exponential");
-scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
-scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
+
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
@@ -705,17 +692,6 @@ pub fn create_udaf(
     ))
 }
 
-/// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Accumulator's implementation`.
-/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-pub fn create_first_value(
-    name: &str,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-) -> AggregateUDF {
-    AggregateUDF::from(FirstValue::new(name, signature, accumulator))
-}
-
 /// Implements [`AggregateUDFImpl`] for functions that have a single signature and
 /// return type.
 pub struct SimpleAggregateUDF {
@@ -807,78 +783,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         _ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
-    }
-}
-
-pub struct FirstValue {
-    name: String,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-}
-
-impl Debug for FirstValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
-}
-
-impl FirstValue {
-    pub fn new(
-        name: impl Into<String>,
-        signature: Signature,
-        accumulator: AccumulatorFactoryFunction,
-    ) -> Self {
-        let name = name.into();
-        Self {
-            name,
-            signature,
-            accumulator,
-        }
-    }
-}
-
-impl AggregateUDFImpl for FirstValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
-    }
-
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(acc_args)
-    }
-
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        let mut fields = vec![Field::new(
-            format_state_name(name, "first_value"),
-            value_type,
-            true,
-        )];
-        fields.extend(ordering_fields);
-        fields.push(Field::new("is_set", DataType::Boolean, true));
-        Ok(fields)
     }
 }
 
@@ -1055,7 +959,6 @@ mod test {
     fn scalar_function_definitions() {
         test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
@@ -1065,8 +968,6 @@ mod test {
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
-        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
     }

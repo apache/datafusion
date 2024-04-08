@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`PropagateEmptyRelation`] eliminates nodes fed by `EmptyRelation`
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, JoinType, Projection, Union};

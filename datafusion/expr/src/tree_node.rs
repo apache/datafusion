@@ -412,7 +412,7 @@ where
 }
 
 /// &mut transform a Option<`Vec` of `Expr`s>
-fn transform_option_vec<F>(
+pub fn transform_option_vec<F>(
     ove: Option<Vec<Expr>>,
     f: &mut F,
 ) -> Result<Transformed<Option<Vec<Expr>>>>

@@ -319,7 +319,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<Option<usize>> {
+    ) -> Option<usize> {
         let mut matches = self
             .iter()
             .enumerate()
@@ -345,19 +345,19 @@ impl DFSchema {
                 (None, Some(_)) | (None, None) => f.name() == name,
             })
             .map(|(idx, _)| idx);
-        Ok(matches.next())
+        matches.next()
     }
 
     /// Find the index of the column with the given qualifier and name
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        self.index_of_column_by_name(col.relation.as_ref(), &col.name)?
+        self.index_of_column_by_name(col.relation.as_ref(), &col.name)
             .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
     /// Check if the column is in the current schema
-    pub fn is_column_from_schema(&self, col: &Column) -> Result<bool> {
+    pub fn is_column_from_schema(&self, col: &Column) -> bool {
         self.index_of_column_by_name(col.relation.as_ref(), &col.name)
-            .map(|idx| idx.is_some())
+            .is_some()
     }
 
     /// Find the field with the given name
@@ -381,7 +381,7 @@ impl DFSchema {
     ) -> Result<(Option<&TableReference>, &Field)> {
         if let Some(qualifier) = qualifier {
             let idx = self
-                .index_of_column_by_name(Some(qualifier), name)?
+                .index_of_column_by_name(Some(qualifier), name)
                 .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
             Ok((self.field_qualifiers[idx].as_ref(), self.field(idx)))
         } else {
@@ -519,7 +519,7 @@ impl DFSchema {
         name: &str,
     ) -> Result<&Field> {
         let idx = self
-            .index_of_column_by_name(Some(qualifier), name)?
+            .index_of_column_by_name(Some(qualifier), name)
             .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
 
         Ok(self.field(idx))
@@ -1190,11 +1190,8 @@ mod tests {
                 .to_string(),
             expected_help
         );
-        assert!(schema.index_of_column_by_name(None, "y").unwrap().is_none());
-        assert!(schema
-            .index_of_column_by_name(None, "t1.c0")
-            .unwrap()
-            .is_none());
+        assert!(schema.index_of_column_by_name(None, "y").is_none());
+        assert!(schema.index_of_column_by_name(None, "t1.c0").is_none());
 
         Ok(())
     }
@@ -1284,28 +1281,28 @@ mod tests {
         {
             let col = Column::from_qualified_name("t1.c0");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(schema.is_column_from_schema(&col)?);
+            assert!(schema.is_column_from_schema(&col));
         }
 
         // qualified not exists
         {
             let col = Column::from_qualified_name("t1.c2");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(!schema.is_column_from_schema(&col)?);
+            assert!(!schema.is_column_from_schema(&col));
         }
 
         // unqualified exists
         {
             let col = Column::from_name("c0");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(schema.is_column_from_schema(&col)?);
+            assert!(schema.is_column_from_schema(&col));
         }
 
         // unqualified not exists
         {
             let col = Column::from_name("c2");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(!schema.is_column_from_schema(&col)?);
+            assert!(!schema.is_column_from_schema(&col));
         }
 
         Ok(())

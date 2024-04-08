@@ -39,9 +39,9 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     ceil, coalesce, concat_expr, concat_ws_expr, cot, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, floor, gcd, initcap, iszero, lcm,
+    factorial, initcap, iszero, 
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, pi, random, round, trunc, AggregateFunction, Between, BinaryExpr,
+    nanvl, random, round, trunc, AggregateFunction, Between, BinaryExpr,
     BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
     GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
@@ -422,9 +422,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Factorial => Self::Factorial,
-            ScalarFunction::Gcd => Self::Gcd,
-            ScalarFunction::Lcm => Self::Lcm,
-            ScalarFunction::Floor => Self::Floor,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
@@ -434,7 +431,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::InitCap => Self::InitCap,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::Coalesce => Self::Coalesce,
-            ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
         }
@@ -1299,9 +1295,6 @@ pub fn parse_expr(
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Floor => {
-                    Ok(floor(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Factorial => {
                     Ok(factorial(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1311,14 +1304,6 @@ pub fn parse_expr(
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Gcd => Ok(gcd(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Lcm => Ok(lcm(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Random => Ok(random()),
                 ScalarFunction::Concat => {
                     Ok(concat_expr(parse_exprs(args, registry, codec)?))
@@ -1333,7 +1318,6 @@ pub fn parse_expr(
                 ScalarFunction::Coalesce => {
                     Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,

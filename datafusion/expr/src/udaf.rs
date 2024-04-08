@@ -19,6 +19,7 @@
 
 use crate::function::AccumulatorArgs;
 use crate::groups_accumulator::GroupsAccumulator;
+use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
@@ -446,10 +447,4 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
     }
-}
-
-/// returns the name of the state
-/// TODO: Remove duplicated function in physical-expr
-pub(crate) fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{name}[{state_name}]")
 }

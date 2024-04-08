@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
-//! where the join key is nullable on one side and non-nullable on the other side
-//! and then insert an `IsNotNull` filter on the nullable side since null values
-//! can never match.
+//! [`FilterNullJoinKeys`] adds filters to join inputs when input isn't nullable
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
