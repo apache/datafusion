@@ -2849,7 +2849,7 @@ pub enum ScalarFunction {
     /// 6 was Cos
     /// 7 was Digest
     Exp = 8,
-    Floor = 9,
+    /// 9 was Floor
     /// 10 was Ln
     Log = 11,
     /// 12 was Log10
@@ -2920,12 +2920,12 @@ pub enum ScalarFunction {
     /// 77 was Sinh
     /// 78 was Cosh
     /// Tanh = 79
-    Pi = 80,
+    /// 80 was Pi
     /// 81 was Degrees
     /// 82 was Radians
     Factorial = 83,
-    Lcm = 84,
-    Gcd = 85,
+    /// 84 was Lcm
+    /// 85 was Gcd
     /// 86 was ArrayAppend
     /// 87 was ArrayConcat
     /// 88 was ArrayDims
@@ -2989,7 +2989,6 @@ impl ScalarFunction {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Exp => "Exp",
-            ScalarFunction::Floor => "Floor",
             ScalarFunction::Log => "Log",
             ScalarFunction::Round => "Round",
             ScalarFunction::Trunc => "Trunc",
@@ -2999,10 +2998,7 @@ impl ScalarFunction {
             ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Pi => "Pi",
             ScalarFunction::Factorial => "Factorial",
-            ScalarFunction::Lcm => "Lcm",
-            ScalarFunction::Gcd => "Gcd",
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
@@ -3015,7 +3011,6 @@ impl ScalarFunction {
             "unknown" => Some(Self::Unknown),
             "Ceil" => Some(Self::Ceil),
             "Exp" => Some(Self::Exp),
-            "Floor" => Some(Self::Floor),
             "Log" => Some(Self::Log),
             "Round" => Some(Self::Round),
             "Trunc" => Some(Self::Trunc),
@@ -3025,10 +3020,7 @@ impl ScalarFunction {
             "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Pi" => Some(Self::Pi),
             "Factorial" => Some(Self::Factorial),
-            "Lcm" => Some(Self::Lcm),
-            "Gcd" => Some(Self::Gcd),
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
