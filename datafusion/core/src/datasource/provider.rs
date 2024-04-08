@@ -175,43 +175,40 @@ pub trait TableProvider: Sync + Send {
     /// use datafusion::error::{Result, DataFusionError};
     /// use datafusion_expr::{Expr, TableProviderFilterPushDown};
     /// 
-    /// fn supports_filters_pushdown(
-    ///     &self,
-    ///     filters: &[&Expr],) -> Result<Vec<TableProviderFilterPushDown>> {
-    /// 
+    /// // Override the supports_filters_pushdown to evaluate which expressions 
+    /// // to accept as pushdown predicates.
+    /// fn supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
+    ///
     ///     let mut result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(&filters.len());
-    /// 
+    ///
+    ///     // Process each filter
     ///     for i in 0..filters.len() {
     ///         let expr = *filters[i];
-    /// 
-    ///         match expr {
-    ///             // This example is only evaluting one type of expr and one column.
+    ///
+    ///         let table_provider_filter_pushdown = match expr {
+    ///             // This example only supports a between expr with a single column name.
     ///             Expr::Between(between_expr) => {
-    ///                 match between_expr.expr.try_into_col().ok() {
-    ///                     Some(column) => {
-    ///                         let column_name = column.name;
-    ///                         if column_name = "c1".to_string() {
-    ///                             // Use Exact if you can ensure proper a proper distinct set from the pushdown
-    ///                             // result, with unique rows, otherwise use Inexact. In the latter case DataFusion will
-    ///                             // provide the distinct functionality which is less performant.
-    ///                             result_vec.push(TableProviderFilterPushDown::Exact);
+    ///                 between_expr.expr.try_into_col()
+    ///                     .map(|column| {
+    ///                         if column.name = "c1".to_string() {
+    ///                             TableProviderFilterPushDown::Exact
     ///                         } else {
-    ///                             result_vec.push(TableProviderFilterPushDown::Unsupported);
+    ///                             TableProviderFilterPushDown::Unsupported
     ///                         }
-    ///                     } 
-    ///                     None => {
-    ///                         // If there is no column expr in the query an error is thrown.
-    ///                         result_vec.push(TableProviderFilterPushDown::Unsupported);
-    ///                     }
+    ///                     })
+    ///                     // If there is no column in the expr set the filter to unsupported.
+    ///                     .unwrap_or(TableProviderFilterPushDown::Unsupported);
     ///                 }
+    ///             _ => {
+    ///                 // For all other cases return Unsupported.
+    ///                 TableProviderFilterPushDown::Unsupported
     ///             }
-    ///     _ => {
-    ///                 result_vec.push(TableProviderFilterPushDown::Unsupported);
-    ///             }
-    ///         }
+    ///         };
+    ///         result_vec.push(table_provider_filter_pushdown);
     ///     }
-    /// 
+    ///
     ///     Ok(result_vec)
+    ///
     /// }
     /// ```
     /// 
