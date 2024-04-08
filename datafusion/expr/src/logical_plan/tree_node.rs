@@ -45,6 +45,8 @@ impl TreeNode for LogicalPlan {
     ///
     /// Inputs include ONLY direct children, not embedded `LogicalPlan`s for
     /// subqueries, for example such as are in [`Expr::Exists`].
+    ///
+    /// [`Expr::Exists`]: crate::Expr::Exists
     fn map_children<F>(self, mut f: F) -> Result<Transformed<Self>>
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
