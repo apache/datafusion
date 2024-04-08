@@ -45,21 +45,12 @@ pub enum BuiltinScalarFunction {
     Exp,
     /// factorial
     Factorial,
-    /// iszero
-    Iszero,
     /// log, same as log10
     Log,
     /// nanvl
     Nanvl,
     /// power
     Power,
-    /// round
-    Round,
-    /// trunc
-    Trunc,
-    /// cot
-    Cot,
-
     // string functions
     /// concat
     Concat,
@@ -127,13 +118,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
-            BuiltinScalarFunction::Iszero => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Nanvl => Volatility::Immutable,
             BuiltinScalarFunction::Power => Volatility::Immutable,
-            BuiltinScalarFunction::Round => Volatility::Immutable,
-            BuiltinScalarFunction::Cot => Volatility::Immutable,
-            BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
@@ -191,16 +178,12 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
-            BuiltinScalarFunction::Iszero => Ok(Boolean),
-
-            BuiltinScalarFunction::Ceil
-            | BuiltinScalarFunction::Exp
-            | BuiltinScalarFunction::Round
-            | BuiltinScalarFunction::Trunc
-            | BuiltinScalarFunction::Cot => match input_expr_types[0] {
-                Float32 => Ok(Float32),
-                _ => Ok(Float64),
-            },
+            BuiltinScalarFunction::Ceil | BuiltinScalarFunction::Exp => {
+                match input_expr_types[0] {
+                    Float32 => Ok(Float32),
+                    _ => Ok(Float64),
+                }
+            }
         }
     }
 
@@ -237,24 +220,6 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Int64, Int64]), Exact(vec![Float64, Float64])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Round => Signature::one_of(
-                vec![
-                    Exact(vec![Float64, Int64]),
-                    Exact(vec![Float32, Int64]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::Trunc => Signature::one_of(
-                vec![
-                    Exact(vec![Float32, Int64]),
-                    Exact(vec![Float64, Int64]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32]),
-                ],
-                self.volatility(),
-            ),
 
             BuiltinScalarFunction::Log => Signature::one_of(
                 vec![
@@ -272,9 +237,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::Ceil
-            | BuiltinScalarFunction::Exp
-            | BuiltinScalarFunction::Cot => {
+            BuiltinScalarFunction::Ceil | BuiltinScalarFunction::Exp => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
                 // return the best approximation for it (in f64).
@@ -282,10 +245,6 @@ impl BuiltinScalarFunction {
                 // will be as good as the number of digits in the number
                 Signature::uniform(1, vec![Float64, Float32], self.volatility())
             }
-            BuiltinScalarFunction::Iszero => Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
-                self.volatility(),
-            ),
         }
     }
 
@@ -298,8 +257,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ceil
                 | BuiltinScalarFunction::Exp
                 | BuiltinScalarFunction::Factorial
-                | BuiltinScalarFunction::Round
-                | BuiltinScalarFunction::Trunc
         ) {
             Some(vec![Some(true)])
         } else if *self == BuiltinScalarFunction::Log {
@@ -313,16 +270,12 @@ impl BuiltinScalarFunction {
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
             BuiltinScalarFunction::Ceil => &["ceil"],
-            BuiltinScalarFunction::Cot => &["cot"],
             BuiltinScalarFunction::Exp => &["exp"],
             BuiltinScalarFunction::Factorial => &["factorial"],
-            BuiltinScalarFunction::Iszero => &["iszero"],
             BuiltinScalarFunction::Log => &["log"],
             BuiltinScalarFunction::Nanvl => &["nanvl"],
             BuiltinScalarFunction::Power => &["power", "pow"],
             BuiltinScalarFunction::Random => &["random"],
-            BuiltinScalarFunction::Round => &["round"],
-            BuiltinScalarFunction::Trunc => &["trunc"],
 
             // conditional functions
             BuiltinScalarFunction::Coalesce => &["coalesce"],

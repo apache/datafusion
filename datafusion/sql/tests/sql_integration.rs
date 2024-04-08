@@ -2696,6 +2696,11 @@ fn logical_plan_with_dialect_and_options(
             DataType::Int32,
         ))
         .with_udf(make_udf(
+            "round",
+            vec![DataType::Float64, DataType::Int64],
+            DataType::Float32,
+        ))
+        .with_udf(make_udf(
             "arrow_cast",
             vec![DataType::Int64, DataType::Utf8],
             DataType::Float64,

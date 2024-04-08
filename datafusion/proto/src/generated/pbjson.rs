@@ -22795,8 +22795,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Ceil => "Ceil",
             Self::Exp => "Exp",
             Self::Log => "Log",
-            Self::Round => "Round",
-            Self::Trunc => "Trunc",
             Self::Concat => "Concat",
             Self::ConcatWithSeparator => "ConcatWithSeparator",
             Self::InitCap => "InitCap",
@@ -22804,9 +22802,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Coalesce => "Coalesce",
             Self::Power => "Power",
             Self::Factorial => "Factorial",
-            Self::Cot => "Cot",
             Self::Nanvl => "Nanvl",
-            Self::Iszero => "Iszero",
             Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
@@ -22823,8 +22819,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Ceil",
             "Exp",
             "Log",
-            "Round",
-            "Trunc",
             "Concat",
             "ConcatWithSeparator",
             "InitCap",
@@ -22832,9 +22826,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Coalesce",
             "Power",
             "Factorial",
-            "Cot",
             "Nanvl",
-            "Iszero",
             "EndsWith",
         ];
 
@@ -22880,8 +22872,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Ceil" => Ok(ScalarFunction::Ceil),
                     "Exp" => Ok(ScalarFunction::Exp),
                     "Log" => Ok(ScalarFunction::Log),
-                    "Round" => Ok(ScalarFunction::Round),
-                    "Trunc" => Ok(ScalarFunction::Trunc),
                     "Concat" => Ok(ScalarFunction::Concat),
                     "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
                     "InitCap" => Ok(ScalarFunction::InitCap),
@@ -22889,9 +22879,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
                     "Power" => Ok(ScalarFunction::Power),
                     "Factorial" => Ok(ScalarFunction::Factorial),
-                    "Cot" => Ok(ScalarFunction::Cot),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
-                    "Iszero" => Ok(ScalarFunction::Iszero),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }

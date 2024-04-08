@@ -184,27 +184,15 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Factorial => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
         }
-        BuiltinScalarFunction::Iszero => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::iszero)(args))
-        }
         BuiltinScalarFunction::Nanvl => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
         }
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
-        BuiltinScalarFunction::Round => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::round)(args))
-        }
-        BuiltinScalarFunction::Trunc => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
-        }
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
         }
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
-        }
-        BuiltinScalarFunction::Cot => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),

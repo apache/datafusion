@@ -1407,13 +1407,10 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Cot => Self::Cot,
             BuiltinScalarFunction::Exp => Self::Exp,
             BuiltinScalarFunction::Factorial => Self::Factorial,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Ceil => Self::Ceil,
-            BuiltinScalarFunction::Round => Self::Round,
-            BuiltinScalarFunction::Trunc => Self::Trunc,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
@@ -1422,7 +1419,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
-            BuiltinScalarFunction::Iszero => Self::Iszero,
         };
 
         Ok(scalar_function)

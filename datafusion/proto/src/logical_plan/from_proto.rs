@@ -37,13 +37,13 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    ceil, coalesce, concat_expr, concat_ws_expr, cot, ends_with, exp,
+    ceil, coalesce, concat_expr, concat_ws_expr, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, initcap, iszero, log,
+    factorial, initcap, log,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, power, random, round, trunc, AggregateFunction, Between, BinaryExpr,
-    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
-    GetIndexedField, GroupingSet,
+    nanvl, power, random, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -419,13 +419,10 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Ceil => Self::Ceil,
-            ScalarFunction::Round => Self::Round,
-            ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
@@ -434,7 +431,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::Nanvl => Self::Nanvl,
-            ScalarFunction::Iszero => Self::Iszero,
         }
     }
 }
@@ -1301,8 +1297,6 @@ pub fn parse_expr(
                     Ok(factorial(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1328,14 +1322,10 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Iszero => {
-                    Ok(iszero(parse_expr(&args[0], registry, codec)?))
-                }
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
