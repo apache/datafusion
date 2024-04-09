@@ -297,11 +297,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns an approximate value of π
-pub fn pi() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
-}
-
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
@@ -535,31 +530,15 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Cot, cot, num, "cotangent of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
-scalar_expr!(
-    Floor,
-    floor,
-    num,
-    "nearest integer less than or equal to argument"
-);
 scalar_expr!(
     Ceil,
     ceil,
     num,
     "nearest integer greater than or equal to argument"
 );
-nary_scalar_expr!(Round, round, "round to nearest integer");
-nary_scalar_expr!(
-    Trunc,
-    trunc,
-    "truncate toward zero, with optional precision"
-);
+
 scalar_expr!(Exp, exp, num, "exponential");
-scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
-scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
-scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
@@ -572,12 +551,6 @@ nary_scalar_expr!(
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
-scalar_expr!(
-    Iszero,
-    iszero,
-    num,
-    "returns true if a given number is +0.0 or -0.0 otherwise returns false"
-);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -887,12 +860,6 @@ impl WindowUDFImpl for SimpleWindowUDF {
 }
 
 /// Calls a named built in function
-/// ```
-/// use datafusion_expr::{col, lit, call_fn};
-///
-/// // create the expression trunc(x) < 0.2
-/// let expr = call_fn("trunc", vec![col("x")]).unwrap().lt(lit(0.2));
-/// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
@@ -950,42 +917,13 @@ mod test {
     };
 }
 
-    macro_rules! test_nary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-        let expected = [$(stringify!($arg)),*];
-        let result = $FUNC(
-            vec![
-                $(
-                    col(stringify!($arg.to_string()))
-                ),*
-            ]
-        );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
-            let name = built_in_function::BuiltinScalarFunction::$ENUM;
-            assert_eq!(name, fun);
-            assert_eq!(expected.len(), args.len());
-        } else {
-            assert!(false, "unexpected: {:?}", result);
-        }
-    };
-}
-
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_nary_scalar_expr!(Round, round, input);
-        test_nary_scalar_expr!(Round, round, input, decimal_places);
-        test_nary_scalar_expr!(Trunc, trunc, num);
-        test_nary_scalar_expr!(Trunc, trunc, num, precision);
         test_unary_scalar_expr!(Exp, exp);
         test_scalar_expr!(Nanvl, nanvl, x, y);
-        test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
-        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
     }

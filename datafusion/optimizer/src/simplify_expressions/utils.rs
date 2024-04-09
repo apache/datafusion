@@ -18,11 +18,10 @@
 //! Utility functions for expression simplification
 
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList, ScalarFunction},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
-    lit, BuiltinScalarFunction, Expr, Like, Operator, ScalarFunctionDefinition,
+    lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -340,77 +339,6 @@ pub fn distribute_negation(expr: Expr) -> Expr {
         Expr::Negative(expr) => *expr,
         // use negative clause
         _ => Expr::Negative(Box::new(expr)),
-    }
-}
-
-/// Simplify the `log` function by the relevant rules:
-/// 1. Log(a, 1) ===> 0
-/// 2. Log(a, a) ===> 1
-/// 3. Log(a, Power(a, b)) ===> b
-pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Expr> {
-    let mut number = &current_args[0];
-    let mut base = &Expr::Literal(ScalarValue::new_ten(&info.get_data_type(number)?)?);
-    if current_args.len() == 2 {
-        base = &current_args[0];
-        number = &current_args[1];
-    }
-
-    match number {
-        Expr::Literal(value)
-            if value == &ScalarValue::new_one(&info.get_data_type(number)?)? =>
-        {
-            Ok(Expr::Literal(ScalarValue::new_zero(
-                &info.get_data_type(base)?,
-            )?))
-        }
-        Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
-            args,
-        }) if base == &args[0] => Ok(args[1].clone()),
-        _ => {
-            if number == base {
-                Ok(Expr::Literal(ScalarValue::new_one(
-                    &info.get_data_type(number)?,
-                )?))
-            } else {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::Log,
-                    vec![base.clone(), number.clone()],
-                )))
-            }
-        }
-    }
-}
-
-/// Simplify the `power` function by the relevant rules:
-/// 1. Power(a, 0) ===> 0
-/// 2. Power(a, 1) ===> a
-/// 3. Power(a, Log(a, b)) ===> b
-pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Expr> {
-    let base = &current_args[0];
-    let exponent = &current_args[1];
-
-    match exponent {
-        Expr::Literal(value)
-            if value == &ScalarValue::new_zero(&info.get_data_type(exponent)?)? =>
-        {
-            Ok(Expr::Literal(ScalarValue::new_one(
-                &info.get_data_type(base)?,
-            )?))
-        }
-        Expr::Literal(value)
-            if value == &ScalarValue::new_one(&info.get_data_type(exponent)?)? =>
-        {
-            Ok(base.clone())
-        }
-        Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
-            args,
-        }) if base == &args[0] => Ok(args[1].clone()),
-        _ => Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Power,
-            current_args,
-        ))),
     }
 }
 

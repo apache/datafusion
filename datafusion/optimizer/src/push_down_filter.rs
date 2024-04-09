@@ -12,8 +12,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PushDownFilter`] Moves filters so they are applied as early as possible in
-//! the plan.
+//! [`PushDownFilter`] applies filters as early as possible
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
