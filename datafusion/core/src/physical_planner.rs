@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
@@ -97,6 +97,7 @@ use datafusion_sql::utils::window_expr_common_partition_keys;
 use async_trait::async_trait;
 use datafusion_common::config::FormatOptions;
 use datafusion_physical_expr::LexOrdering;
+use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
@@ -483,6 +484,20 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     }
 }
 
+#[derive(Debug)]
+enum NodeStatus {
+    Ready,
+    PendingChildren(Mutex<Vec<(usize, Arc<dyn ExecutionPlan>)>>),
+}
+
+#[derive(Debug)]
+struct LogicalNode<'a> {
+    node: &'a LogicalPlan,
+    // None if root
+    parent_index: Option<usize>,
+    status: NodeStatus,
+}
+
 impl DefaultPhysicalPlanner {
     /// Create a physical planner that uses `extension_planners` to
     /// plan user-defined logical nodes [`LogicalPlan::Extension`].
@@ -507,26 +522,137 @@ impl DefaultPhysicalPlanner {
         // representation (since parents need to know their children at
         // construction time).
         let mut flat_tree = vec![];
-        let mut dfs_visit_stack = vec![logical_plan];
-        while let Some(visit) = dfs_visit_stack.pop() {
-            dfs_visit_stack.extend(visit.inputs());
-            flat_tree.push(visit);
+        let mut dfs_visit_stack = vec![(None, logical_plan)];
+        // Use this to be able to find the leaves to start construction bottom
+        // up concurrently.
+        let mut flat_tree_leaf_indices = vec![];
+        while let Some((parent_index, visit)) = dfs_visit_stack.pop() {
+            let current_index = flat_tree.len();
+            dfs_visit_stack.extend(
+                visit
+                    .inputs()
+                    .iter()
+                    .map(|&n| (Some(current_index), n))
+                    .rev(),
+            );
+            let status = match visit.inputs().len() {
+                0 => {
+                    flat_tree_leaf_indices.push(current_index);
+                    NodeStatus::Ready
+                }
+                1 => NodeStatus::Ready,
+                _ => NodeStatus::PendingChildren(Mutex::new(vec![])),
+            };
+            let node = LogicalNode {
+                node: visit,
+                parent_index,
+                status,
+            };
+            flat_tree.push(node);
         }
 
-        let mut children = ChildrenStack::new();
-        while let Some(node) = flat_tree.pop() {
-            let children_nodes = children.pop_n(node.inputs().len())?;
-            let exec_node = self
-                .map_logical_node_to_physical(node, session_state, children_nodes)
-                .await?;
-            children.push(exec_node);
+        let planning_concurrency = session_state
+            .config_options()
+            .execution
+            .planning_concurrency;
+        // Can never spawn more tasks than leaves in the tree.
+        // As these tasks must all converge down to the root node.
+        // Which can only be processed by one task.
+        let max_concurrency = planning_concurrency.min(flat_tree_leaf_indices.len());
+
+        // We need a work queue to spawn tasks from
+        // We have up to n tasks
+        // A task needs to build up a single lineage
+        // A task terminates when it has to build a parent with an unresolved child
+        // Need a way for tasks to know when a parent is now available (all children ready)
+        // Need a way for tasks to associate parents to child (and also child to parent)
+        //
+        // When building up, reach a join point
+        // Either:
+        //   - not ready (pending children) = finish task -> where to store results?
+        //     - when finish task, look for another leaf.
+        //       if no more leaves, then can't spawn anymore tasks
+        //       because we can't parallelize any further
+        //       since max parallelism = number of leaves
+        //   - ready (children done) = proceed -> where to retrieve children in right order?
+        //
+        // So children need to know where their parents are
+        // So when task finishes its lineage, it will check parent
+        // See parent ready via a mutex of a vec of tuple (index, processed child)
+
+        // TODO: cleanup comments
+        let flat_tree = Arc::new(flat_tree);
+
+        let leaf_tasks = flat_tree_leaf_indices
+            .into_iter()
+            .map(|index| self.task_helper(index, flat_tree.clone(), session_state))
+            .collect::<Vec<_>>();
+
+        let outputs = futures::stream::iter(leaf_tasks)
+            .buffer_unordered(max_concurrency)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut outputs = outputs.into_iter().flatten().collect::<Vec<_>>();
+        assert!(outputs.len() == 1);
+        let plan = outputs.pop().unwrap();
+        Ok(plan)
+    }
+
+    async fn task_helper<'a>(
+        &'a self,
+        leaf_starter_index: usize,
+        flat_tree: Arc<Vec<LogicalNode<'a>>>,
+        session_state: &'a SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // We always start with a leaf, so can ignore status and pass empty children
+        let mut l_node = &flat_tree[leaf_starter_index];
+        let mut plan = self
+            .map_logical_node_to_physical(l_node.node, session_state, vec![])
+            .await?;
+        let mut current_index = leaf_starter_index;
+        while let Some(parent_index) = l_node.parent_index {
+            l_node = &flat_tree[parent_index];
+            match &l_node.status {
+                NodeStatus::Ready => {
+                    plan = self
+                        .map_logical_node_to_physical(
+                            l_node.node,
+                            session_state,
+                            vec![plan],
+                        )
+                        .await?;
+                }
+                NodeStatus::PendingChildren(children) => {
+                    let mut children = {
+                        let mut children = children.lock().unwrap();
+                        // Add our contribution to this parent node.
+                        children.push((current_index, plan));
+                        if children.len() < l_node.node.inputs().len() {
+                            // This node is not ready yet, still pending more children.
+                            // This task is finished forever.
+                            return Ok(None);
+                        } else {
+                            // With our contribution we have enough children.
+                            // We are the only ones building this node now.
+                            children.clone()
+                        }
+                    };
+                    // Unstable as the indices are guaranteed to be unique.
+                    children.sort_unstable_by_key(|(index, _)| *index);
+                    let children = children.into_iter().map(|(_, plan)| plan).collect();
+
+                    plan = self
+                        .map_logical_node_to_physical(
+                            l_node.node,
+                            session_state,
+                            children,
+                        )
+                        .await?;
+                }
+            }
+            current_index = parent_index;
         }
-        debug_assert_eq!(
-            children.0.len(),
-            1,
-            "Should be no dangling children after physical planning"
-        );
-        children.pop()
+        Ok(Some(plan))
     }
 
     async fn map_logical_node_to_physical(
@@ -1388,39 +1514,6 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?,
             ))
-        }
-    }
-}
-
-/// Thin wrapper to make stack operations easier (e.g. popping with
-/// error instead of unwrap()).
-struct ChildrenStack(Vec<Arc<dyn ExecutionPlan>>);
-
-impl ChildrenStack {
-    fn new() -> Self {
-        Self(vec![])
-    }
-
-    fn push(&mut self, node: Arc<dyn ExecutionPlan>) {
-        self.0.push(node);
-    }
-
-    fn pop(&mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(node) = self.0.pop() {
-            Ok(node)
-        } else {
-            // Ideally this can never occur for a valid LogicalPlan
-            internal_err!("Invalid state when creating physical plan from logical plan")
-        }
-    }
-
-    fn pop_n(&mut self, n: usize) -> Result<Vec<Arc<dyn ExecutionPlan>>> {
-        if n > self.0.len() {
-            // Ideally this can never occur for a valid LogicalPlan
-            internal_err!("Invalid state when creating physical plan from logical plan")
-        } else {
-            let at = self.0.len() - n;
-            Ok(self.0.split_off(at))
         }
     }
 }
