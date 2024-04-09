@@ -184,10 +184,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Factorial => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
         }
-        BuiltinScalarFunction::Nanvl => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
-        }
-        BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
@@ -290,12 +286,13 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
+    use std::any::Any;
 
     use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{internal_err, plan_err};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
-    use datafusion_expr::Signature;
+    use datafusion_expr::{ScalarUDFImpl, Signature};
 
     use crate::expressions::lit;
     use crate::expressions::try_cast;
@@ -542,17 +539,30 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_empty_arguments() -> Result<()> {
-        let execution_props = ExecutionProps::new();
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    #[derive(Debug)]
+    struct EmptyArgsUDF {
+        signature: Signature,
+    }
 
-        let funs = [BuiltinScalarFunction::Random];
-
-        for fun in funs.iter() {
-            create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
+    impl ScalarUDFImpl for EmptyArgsUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
         }
-        Ok(())
+        fn name(&self) -> &str {
+            "EmptyArgsUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
     }
 
     // Helper function just for testing.

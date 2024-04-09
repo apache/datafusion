@@ -41,9 +41,8 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     factorial, initcap,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, random, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
-    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
-    GroupingSet,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -426,9 +425,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Random => Self::Random,
             ScalarFunction::Coalesce => Self::Coalesce,
-            ScalarFunction::Nanvl => Self::Nanvl,
         }
     }
 }
@@ -1298,7 +1295,6 @@ pub fn parse_expr(
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Random => Ok(random()),
                 ScalarFunction::Concat => {
                     Ok(concat_expr(parse_exprs(args, registry, codec)?))
                 }
@@ -1312,10 +1308,6 @@ pub fn parse_expr(
                 ScalarFunction::Coalesce => {
                     Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Nanvl => Ok(nanvl(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
