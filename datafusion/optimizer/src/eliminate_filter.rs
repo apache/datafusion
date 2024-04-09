@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false or null` on a plan with an empty relation.
-//! This saves time in planning and executing the query.
-//! Note that this rule should be applied after simplify expressions optimizer rule.
+//! [`EliminateFilter`] replaces `where false` or `where null` with an empty relation.
+
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
@@ -27,7 +26,11 @@ use datafusion_expr::{
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-/// Optimization rule that eliminate the scalar value (true/false/null) filter with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that eliminate the scalar value (true/false/null) filter
+/// with an [LogicalPlan::EmptyRelation]
+///
+/// This saves time in planning and executing the query.
+/// Note that this rule should be applied after simplify expressions optimizer rule.
 #[derive(Default)]
 pub struct EliminateFilter;
 

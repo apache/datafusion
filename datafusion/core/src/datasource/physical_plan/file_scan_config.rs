@@ -32,7 +32,7 @@ use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, ColumnStatistics, Statistics};
+use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
 use log::warn;
@@ -256,9 +256,17 @@ impl PartitionColumnProjector {
                 file_batch.columns().len()
             );
         }
+
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
-            let mut partition_value = Cow::Borrowed(&partition_values[pidx]);
+            let p_value =
+                partition_values
+                    .get(pidx)
+                    .ok_or(DataFusionError::Execution(
+                        "Invalid partitioning found on disk".to_string(),
+                    ))?;
+
+            let mut partition_value = Cow::Borrowed(p_value);
 
             // check if user forgot to dict-encode the partition value
             let field = self.projected_schema.field(sidx);

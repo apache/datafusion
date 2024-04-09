@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::SortOptions;
 use std::hash::Hash;
 use std::sync::Arc;
+
+use arrow_schema::SortOptions;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
@@ -220,6 +221,16 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::SortOptions;
+    use itertools::Itertools;
+
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{BuiltinScalarFunction, Operator, ScalarUDF};
+
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, create_random_schema,
         create_test_params, generate_table_for_eq_properties, is_table_same_after_sort,
@@ -231,14 +242,8 @@ mod tests {
     use crate::expressions::Column;
     use crate::expressions::{col, BinaryExpr};
     use crate::functions::create_physical_expr;
+    use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExpr, PhysicalSortExpr};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SortOptions;
-    use datafusion_common::Result;
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{BuiltinScalarFunction, Operator};
-    use itertools::Itertools;
-    use std::sync::Arc;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -281,17 +286,20 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let floor_a = &create_physical_expr(
-            &BuiltinScalarFunction::Floor,
+        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+        let floor_a = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
-        let floor_f = &create_physical_expr(
-            &BuiltinScalarFunction::Floor,
+        let floor_f = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("f", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
         let exp_a = &create_physical_expr(
             &BuiltinScalarFunction::Exp,
@@ -804,11 +812,13 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let floor_a = create_physical_expr(
-                &BuiltinScalarFunction::Floor,
+            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+            let floor_a = crate::udf::create_physical_expr(
+                &test_fun,
                 &[col("a", &test_schema)?],
                 &test_schema,
-                &ExecutionProps::default(),
+                &[],
+                &DFSchema::empty(),
             )?;
             let a_plus_b = Arc::new(BinaryExpr::new(
                 col("a", &test_schema)?,

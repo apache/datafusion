@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Eliminate common sub-expression.
+//! [`CommonSubexprEliminate`] to avoid redundant computation of common sub-expressions
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
@@ -126,7 +126,7 @@ type Identifier = String;
 /// same value
 ///
 /// Currently only common sub-expressions within a single `LogicalPlan` are
-/// be eliminated.
+/// eliminated.
 ///
 /// # Example
 ///
@@ -148,6 +148,12 @@ type Identifier = String;
 pub struct CommonSubexprEliminate {}
 
 impl CommonSubexprEliminate {
+    /// Rewrites `exprs_list` with common sub-expressions replaced with a new
+    /// column.
+    ///
+    /// `affected_id` is updated with any sub expressions that were replaced.
+    ///
+    /// Returns the rewritten expressions
     fn rewrite_exprs_list(
         &self,
         exprs_list: &[&[Expr]],
@@ -166,6 +172,14 @@ impl CommonSubexprEliminate {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// Rewrites the expression in `exprs_list` with common sub-expressions
+    /// replaced with a new colum and adds a ProjectionExec on top of `input`
+    /// which computes any replaced common sub-expressions.
+    ///
+    /// Returns a tuple of:
+    /// 1. The rewritten expressions
+    /// 2. A `LogicalPlan::Projection` with input of `input` that computes any
+    ///    common sub-expressions that were used
     fn rewrite_expr(
         &self,
         exprs_list: &[&[Expr]],
@@ -458,7 +472,16 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
         .ok_or_else(|| DataFusionError::Internal("Failed to pop expression".to_string()))
 }
 
-/// Build the "intermediate" projection plan that evaluates the extracted common expressions.
+/// Build the "intermediate" projection plan that evaluates the extracted common
+/// expressions.
+///
+/// # Arguments
+/// input: the input plan
+///
+/// affected_id: which common subexpressions were used (and thus are added to
+/// intermediate projection)
+///
+/// expr_set: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
     affected_id: BTreeSet<Identifier>,
@@ -493,10 +516,11 @@ fn build_common_expr_project_plan(
     )?))
 }
 
-/// Build the projection plan to eliminate unexpected columns produced by
+/// Build the projection plan to eliminate unnecessary columns produced by
 /// the "intermediate" projection plan built in [build_common_expr_project_plan].
 ///
-/// This is for those plans who don't keep its own output schema like `Filter` or `Sort`.
+/// This is required to keep the schema the same for plans that pass the input
+/// on to the output, such as `Filter` or `Sort`.
 fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
@@ -570,7 +594,7 @@ impl ExprMask {
     }
 }
 
-/// Go through an expression tree and generate identifier.
+/// Go through an expression tree and generate identifiers for each subexpression.
 ///
 /// An identifier contains information of the expression itself and its sub-expression.
 /// This visitor implementation use a stack `visit_stack` to track traversal, which
@@ -679,9 +703,10 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 }
 
-/// Rewrite expression by replacing detected common sub-expression with
-/// the corresponding temporary column name. That column contains the
-/// evaluate result of replaced expression.
+/// Rewrite expression by common sub-expression with a corresponding temporary
+/// column name that will compute the subexpression.
+///
+/// `affected_id` is updated with any sub expressions that were replaced
 struct CommonSubexprRewriter<'a> {
     expr_set: &'a ExprSet,
     /// Which identifier is replaced.
@@ -726,6 +751,8 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     }
 }
 
+/// Replace common sub-expression in `expr` with the corresponding temporary
+/// column name, updating `affected_id` with any replaced expressions
 fn replace_common_expr(
     expr: Expr,
     expr_set: &ExprSet,
@@ -806,7 +833,6 @@ mod test {
 
         let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type = vec![DataType::UInt32];
         let udf_agg = |inner: Expr| {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -814,10 +840,11 @@ mod test {
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
                     accumulator.clone(),
-                    state_type.clone(),
+                    vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
                 false,
+                None,
                 None,
                 None,
             ))

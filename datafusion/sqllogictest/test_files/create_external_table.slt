@@ -114,3 +114,94 @@ CREATE EXTERNAL TABLE csv_table (column1 int)
 STORED AS CSV
 LOCATION 'foo.csv'
 OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')
+
+# Partitioned table on a single file
+query error DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash\?
+CREATE EXTERNAL TABLE single_file_partition(c1 int)
+PARTITIONED BY (p2 string, p1 string)
+STORED AS CSV
+LOCATION 'foo.csv';
+
+# Wrong partition order error
+
+statement ok
+CREATE EXTERNAL TABLE partitioned (c1 int)
+PARTITIONED BY (p1 string, p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+query ITT
+INSERT INTO partitioned VALUES (1, 'x', 'y');
+----
+1
+
+query error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2", "p1"\]
+CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
+PARTITIONED BY (p2 string, p1 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+statement error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2"\]
+CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
+PARTITIONED BY (p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+# But allows partial partition selection
+
+statement ok
+CREATE EXTERNAL TABLE partial_partitioned (c1 int)
+PARTITIONED BY (p1 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+query IT
+SELECT * FROM partial_partitioned;
+----
+1 x
+
+statement ok
+CREATE EXTERNAL TABLE inner_partition (c1 int)
+PARTITIONED BY (p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/p1=x/';
+
+query IT
+SELECT * FROM inner_partition;
+----
+1 y
+
+# Simulate manual creation of invalid (mixed) partitions on disk
+
+statement ok
+CREATE EXTERNAL TABLE test(name string)
+PARTITIONED BY (year string, month string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+
+statement ok
+-- passes the partition check since the previous statement didn't write to disk
+CREATE EXTERNAL TABLE test2(name string)
+PARTITIONED BY (month string, year string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+
+query TTT
+-- creates year -> month partitions
+INSERT INTO test VALUES('name', '2024', '03');
+----
+1
+
+query TTT
+-- creates month -> year partitions.
+-- now table have both partitions (year -> month and month -> year)
+INSERT INTO test2 VALUES('name', '2024', '03');
+----
+1
+
+statement error DataFusion error: Error during planning: Found mixed partition values on disk \[\["month", "year"\], \["year", "month"\]\]
+-- fails to infer as partitions are not consistent
+CREATE EXTERNAL TABLE test3(name string)
+PARTITIONED BY (month string, year string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';

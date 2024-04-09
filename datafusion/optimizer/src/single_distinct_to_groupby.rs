@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! single distinct to group by optimizer rule
+//! [`SingleDistinctToGroupBy`] replaces `AGG(DISTINCT ..)` with `AGG(..) GROUP BY ..`
 
 use std::sync::Arc;
 

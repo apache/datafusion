@@ -29,6 +29,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
 };
+use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
 mod order_by;
@@ -162,13 +163,20 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(Some(subqry_alias), name)),
-        Expr::Column(Column { relation: _, name }) => {
-            Ok(Column::new(Some(subqry_alias), name))
-        }
+        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
+            Some::<TableReference>(subqry_alias.into()),
+            name,
+        )),
+        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
+            Some::<TableReference>(subqry_alias.into()),
+            name,
+        )),
         _ => {
             let scalar_column = scalar_expr.display_name()?;
-            Ok(Column::new(Some(subqry_alias), scalar_column))
+            Ok(Column::new(
+                Some::<TableReference>(subqry_alias.into()),
+                scalar_column,
+            ))
         }
     }
 }
@@ -286,7 +294,7 @@ mod test {
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFSchema, OwnedTableReference, ScalarValue};
+    use datafusion_common::{DFSchema, ScalarValue, TableReference};
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -401,7 +409,7 @@ mod test {
     }
 
     fn make_schema_with_empty_metadata(
-        qualifiers: Vec<Option<OwnedTableReference>>,
+        qualifiers: Vec<Option<TableReference>>,
         fields: Vec<&str>,
     ) -> DFSchema {
         let fields = fields

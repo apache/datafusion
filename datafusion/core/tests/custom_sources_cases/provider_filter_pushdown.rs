@@ -214,8 +214,11 @@ impl TableProvider for CustomProvider {
         }
     }
 
-    fn supports_filter_pushdown(&self, _: &Expr) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Exact)
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }
 

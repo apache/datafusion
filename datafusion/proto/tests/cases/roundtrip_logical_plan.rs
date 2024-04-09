@@ -30,6 +30,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -45,11 +46,10 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt,
-    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
-    ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    col, create_udaf, lit, Accumulator, AggregateFunction, ColumnarValue, Expr,
+    ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, ScalarUDFImpl,
+    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -613,6 +613,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        first_value(lit(1)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1624,13 +1625,6 @@ fn roundtrip_qualified_wildcard() {
 }
 
 #[test]
-fn roundtrip_sqrt() {
-    let test_expr = Expr::ScalarFunction(ScalarFunction::new(Sqrt, vec![col("col")]));
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_like() {
     fn like(negated: bool, escape_char: Option<char>) {
         let test_expr = Expr::Like(Like::new(
@@ -1779,6 +1773,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
+        None,
         None,
     ));
 

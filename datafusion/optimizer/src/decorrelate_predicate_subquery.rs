@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
 use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;

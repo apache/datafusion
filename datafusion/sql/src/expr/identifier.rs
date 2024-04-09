@@ -18,8 +18,8 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    OwnedTableReference, Result, TableReference,
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -173,8 +173,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // safe unwrap as s can never be empty or exceed the bounds
                                     let (relation, column_name) =
                                         form_identifier(s).unwrap();
-                                    let relation =
-                                        relation.map(|r| r.to_owned_reference());
                                     Ok(Expr::Column(Column::new(relation, column_name)))
                                 }
                             }
@@ -182,7 +180,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let s = &ids[0..ids.len()];
                             // safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            let relation = relation.map(|r| r.to_owned_reference());
                             Ok(Expr::Column(Column::new(relation, column_name)))
                         }
                     }
@@ -245,22 +242,22 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
         1 => Ok((None, &idents[0])),
         2 => Ok((
             Some(TableReference::Bare {
-                table: (&idents[0]).into(),
+                table: idents[0].clone().into(),
             }),
             &idents[1],
         )),
         3 => Ok((
             Some(TableReference::Partial {
-                schema: (&idents[0]).into(),
-                table: (&idents[1]).into(),
+                schema: idents[0].clone().into(),
+                table: idents[1].clone().into(),
             }),
             &idents[2],
         )),
         4 => Ok((
             Some(TableReference::Full {
-                catalog: (&idents[0]).into(),
-                schema: (&idents[1]).into(),
-                table: (&idents[2]).into(),
+                catalog: idents[0].clone().into(),
+                schema: idents[1].clone().into(),
+                table: idents[2].clone().into(),
             }),
             &idents[3],
         )),
@@ -273,7 +270,7 @@ fn search_dfschema<'ids, 'schema>(
     schema: &'schema DFSchema,
 ) -> Option<(
     &'schema Field,
-    Option<&'schema OwnedTableReference>,
+    Option<&'schema TableReference>,
     &'ids [String],
 )> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
@@ -338,7 +335,7 @@ mod test {
     // where ensure generated search terms are in correct order with correct values
     fn test_generate_schema_search_terms() -> Result<()> {
         type ExpectedItem = (
-            Option<TableReference<'static>>,
+            Option<TableReference>,
             &'static str,
             &'static [&'static str],
         );

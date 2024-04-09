@@ -34,8 +34,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
-    SchemaReference, TableReference, ToDFSchema,
+    DataFusionError, FileType, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -850,7 +850,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
             };
-            if !(key.contains('.') || key == "format") {
+            if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
@@ -866,16 +866,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FileType::from_str(&file_type).map_err(|_| {
                 DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
             })?
-        } else if let Some(format) = options.remove("format") {
-            // try to infer file format from the "format" key in options
-            FileType::from_str(&format)
-                .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
         } else {
             let e = || {
                 DataFusionError::Configuration(
-                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                        .to_string(),
-                )
+                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                    .to_string(),
+            )
             };
             // try to infer file format from file extension
             let extension: &str = &Path::new(&statement.target)
@@ -994,7 +990,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::bare(name);
+        let name = TableReference::bare(name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -1350,7 +1346,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .enumerate()
                 .map(|(i, c)| {
                     let column_index = table_schema
-                        .index_of_column_by_name(None, &c)?
+                        .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {

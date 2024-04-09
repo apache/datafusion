@@ -52,8 +52,8 @@ use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -258,7 +258,7 @@ impl LogicalPlanBuilder {
     /// let scan = LogicalPlanBuilder::scan(table_reference, table, None);
     /// ```
     pub fn scan(
-        table_name: impl Into<OwnedTableReference>,
+        table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
@@ -285,7 +285,7 @@ impl LogicalPlanBuilder {
     /// Create a [DmlStatement] for inserting the contents of this builder into the named table
     pub fn insert_into(
         input: LogicalPlan,
-        table_name: impl Into<OwnedTableReference>,
+        table_name: impl Into<TableReference>,
         table_schema: &Schema,
         overwrite: bool,
     ) -> Result<Self> {
@@ -307,7 +307,7 @@ impl LogicalPlanBuilder {
 
     /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
-        table_name: impl Into<OwnedTableReference>,
+        table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
@@ -403,7 +403,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply an alias
-    pub fn alias(self, alias: impl Into<OwnedTableReference>) -> Result<Self> {
+    pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
         subquery_alias(self.plan, alias).map(Self::from)
     }
 
@@ -1152,13 +1152,13 @@ pub fn build_join_schema(
     join_type: &JoinType,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
-        fields: impl Iterator<Item = (Option<&'a OwnedTableReference>, &'a Arc<Field>)>,
-    ) -> Vec<(Option<OwnedTableReference>, Arc<Field>)> {
+        fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<Field>)>,
+    ) -> Vec<(Option<TableReference>, Arc<Field>)> {
         fields
             .map(|(q, f)| {
                 // TODO: find a good way to do that
                 let field = f.as_ref().clone().with_nullable(true);
-                (q.map(|r| r.to_owned_reference()), Arc::new(field))
+                (q.cloned(), Arc::new(field))
             })
             .collect()
     }
@@ -1166,22 +1166,21 @@ pub fn build_join_schema(
     let right_fields = right.iter();
     let left_fields = left.iter();
 
-    let qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = match join_type
-    {
+    let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> = match join_type {
         JoinType::Inner => {
             // left then right
             let left_fields = left_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .map(|(q, f)| (q.cloned(), f.clone()))
                 .collect::<Vec<_>>();
             let right_fields = right_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .map(|(q, f)| (q.cloned(), f.clone()))
                 .collect::<Vec<_>>();
             left_fields.into_iter().chain(right_fields).collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
             let left_fields = left_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .map(|(q, f)| (q.cloned(), f.clone()))
                 .collect::<Vec<_>>();
             left_fields
                 .into_iter()
@@ -1191,7 +1190,7 @@ pub fn build_join_schema(
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
             let right_fields = right_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .map(|(q, f)| (q.cloned(), f.clone()))
                 .collect::<Vec<_>>();
             nullify_fields(left_fields)
                 .into_iter()
@@ -1207,15 +1206,11 @@ pub fn build_join_schema(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
-                .collect()
+            left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_fields
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
-                .collect()
+            right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
         }
     };
     let func_dependencies = left.functional_dependencies().join(
@@ -1417,15 +1412,15 @@ pub fn project(
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(
     plan: LogicalPlan,
-    alias: impl Into<OwnedTableReference>,
+    alias: impl Into<TableReference>,
 ) -> Result<LogicalPlan> {
     SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
 /// This is mostly used for testing and documentation.
-pub fn table_scan<'a>(
-    name: Option<impl Into<TableReference<'a>>>,
+pub fn table_scan(
+    name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
@@ -1435,8 +1430,8 @@ pub fn table_scan<'a>(
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
 /// and inlined filters.
 /// This is mostly used for testing and documentation.
-pub fn table_scan_with_filters<'a>(
-    name: Option<impl Into<TableReference<'a>>>,
+pub fn table_scan_with_filters(
+    name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -1444,8 +1439,7 @@ pub fn table_scan_with_filters<'a>(
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
-        .unwrap_or_else(|| OwnedTableReference::bare(UNNAMED_TABLE))
-        .to_owned_reference();
+        .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
     LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
 }
 
@@ -1603,7 +1597,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
 
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
+    use datafusion_common::{SchemaError, TableReference};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -1905,13 +1899,13 @@ mod tests {
                 SchemaError::AmbiguousReference {
                     field:
                         Column {
-                            relation: Some(OwnedTableReference::Bare { table }),
+                            relation: Some(TableReference::Bare { table }),
                             name,
                         },
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1935,13 +1929,13 @@ mod tests {
                 SchemaError::AmbiguousReference {
                     field:
                         Column {
-                            relation: Some(OwnedTableReference::Bare { table }),
+                            relation: Some(TableReference::Bare { table }),
                             name,
                         },
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("state", &name);
                 Ok(())
             }

@@ -34,15 +34,15 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    OwnedTableReference, Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
+    ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
-pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::UInt8(Some(1));
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
@@ -264,7 +264,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
 /// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
@@ -307,8 +307,9 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
-        Ok(())
+        Ok(TreeNodeRecursion::Continue)
     })
+    .map(|_| ())
 }
 
 /// Find excluded columns in the schema, if any
@@ -741,7 +742,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
     agg: &Aggregate,
-) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -760,7 +761,7 @@ fn exprlist_to_fields_aggregate(
 pub fn exprlist_to_fields(
     exprs: &[Expr],
     plan: &LogicalPlan,
-) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
@@ -838,11 +839,11 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(&mut |expr| {
         if let Expr::Column(c) = expr {
             exprs.push(c.clone())
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
@@ -867,7 +868,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
     let mut indexes = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(&mut |expr| {
         match expr {
             Expr::Column(qc) => {
                 if let Ok(idx) = schema.index_of_column(qc) {
@@ -879,7 +880,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
             }
             _ => {}
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     .unwrap();
     indexes
@@ -932,7 +933,7 @@ pub fn check_all_columns_from_schema(
     schema: DFSchemaRef,
 ) -> Result<bool> {
     for col in columns.iter() {
-        let exist = schema.is_column_from_schema(col)?;
+        let exist = schema.is_column_from_schema(col);
         if !exist {
             return Ok(false);
         }
@@ -1238,6 +1239,11 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
             },
         )
     }
+}
+
+/// Build state name. State is the intermidiate state of the aggregate function.
+pub fn format_state_name(name: &str, state_name: &str) -> String {
+    format!("{name}[{state_name}]")
 }
 
 #[cfg(test)]

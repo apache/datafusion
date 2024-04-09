@@ -21,7 +21,7 @@ use arrow_schema::Field;
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
+use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -32,7 +32,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
-    pub relation: Option<OwnedTableReference>,
+    pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
 }
@@ -45,7 +45,7 @@ impl Column {
     ///
     /// [`TableReference::parse_str`]: crate::TableReference::parse_str
     pub fn new(
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Self {
         Self {
@@ -74,20 +74,20 @@ impl Column {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
-                Some(OwnedTableReference::Bare {
+                Some(TableReference::Bare {
                     table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             3 => (
-                Some(OwnedTableReference::Partial {
+                Some(TableReference::Partial {
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             4 => (
-                Some(OwnedTableReference::Full {
+                Some(TableReference::Full {
                     catalog: idents.remove(0).into(),
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
@@ -340,8 +340,8 @@ impl From<String> for Column {
 }
 
 /// Create a column, use qualifier and field name
-impl From<(Option<&OwnedTableReference>, &Field)> for Column {
-    fn from((relation, field): (Option<&OwnedTableReference>, &Field)) -> Self {
+impl From<(Option<&TableReference>, &Field)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &Field)) -> Self {
         Self::new(relation.cloned(), field.name())
     }
 }

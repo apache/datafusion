@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
-//! of expr can be added if needed.
-//! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+//! [`UnwrapCastInComparison`] rewrites `CAST(col) = lit` to `col = CAST(lit)`
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -93,8 +91,10 @@ impl OptimizerRule for UnwrapCastInComparison {
         let mut schema = merge_schema(plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = plan {
-            let source_schema =
-                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            let source_schema = DFSchema::try_from_qualified_schema(
+                ts.table_name.clone(),
+                &ts.source.schema(),
+            )?;
             schema.merge(&source_schema);
         }
 

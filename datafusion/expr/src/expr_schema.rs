@@ -29,7 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
-    OwnedTableReference, Result,
+    Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub trait ExprSchemable {
     fn to_field(
         &self,
         input_schema: &dyn ExprSchema,
-    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)>;
+    ) -> Result<(Option<TableReference>, Arc<Field>)>;
 
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
@@ -442,7 +442,7 @@ impl ExprSchemable for Expr {
     fn to_field(
         &self,
         input_schema: &dyn ExprSchema,
-    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
+    ) -> Result<(Option<TableReference>, Arc<Field>)> {
         match self {
             Expr::Column(c) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
@@ -719,7 +719,7 @@ mod tests {
         let schema = builder.finish();
 
         let dfschema = DFSchema::from_field_specific_qualified_schema(
-            vec![Some("table_name"), None],
+            vec![Some("table_name".into()), None],
             &Arc::new(schema),
         )
         .unwrap();
