@@ -78,6 +78,15 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         2 => {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
 
+            if characters_array.len() == 1 {
+                let characters = characters_array.value(0);
+                let result = string_array
+                    .iter()
+                    .map(|item| item.map(|string| func(string, characters)))
+                    .collect::<GenericStringArray<T>>();
+                return Ok(Arc::new(result) as ArrayRef);
+            }
+
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
