@@ -292,6 +292,20 @@ pub trait TreeNode: Sized {
         )
     }
 
+    fn exists<F: FnMut(&Self) -> bool>(&self, mut f: F) -> bool {
+        let mut found = false;
+        self.apply(&mut |n| {
+            Ok(if f(n) {
+                found = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+        found
+    }
+
     /// Apply the closure `F` to the node's children.
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
