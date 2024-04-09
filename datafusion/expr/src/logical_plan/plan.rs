@@ -1322,6 +1322,7 @@ impl LogicalPlan {
         }
     }
 
+    /// If this node's expressions contains any references to an outer subquery
     pub fn contains_outer_reference(&self) -> bool {
         let mut contains = false;
         self.apply_expressions(|expr| {
