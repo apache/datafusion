@@ -1274,7 +1274,7 @@ async fn test_row_group_with_null_values() {
 
     // After pruning, only row group 2 should be selected
     RowGroupPruningTest::new()
-        .with_scenario(Scenario::AllNullValues)
+        .with_scenario(Scenario::WithNullValues)
         .with_query("SELECT * FROM t WHERE \"i8\" <= 5")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(1))
@@ -1287,12 +1287,38 @@ async fn test_row_group_with_null_values() {
 
     // After pruning, only row group 1,3 should be selected
     RowGroupPruningTest::new()
-        .with_scenario(Scenario::AllNullValues)
+        .with_scenario(Scenario::WithNullValues)
         .with_query("SELECT * FROM t WHERE \"i8\" is Null")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_expected_rows(10)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    // After pruning, only row group 2should be selected
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i16\" is Not Null")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(2))
+        .with_expected_rows(5)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    // All row groups will be pruned
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i32\" > 7")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
+        .with_pruned_by_stats(Some(3))
+        .with_expected_rows(0)
         .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
