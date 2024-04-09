@@ -18,7 +18,8 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, Dependency, Result,
+    internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
+    Dependency, Result,
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
@@ -221,9 +222,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
+                let order_by =
+                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
+                let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+                // TODO: Support filter and distinct for UDAFs
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    fm, args, false, None, None,
+                    fm,
+                    args,
+                    false,
+                    None,
+                    order_by,
+                    null_treatment,
                 )));
             }
 
@@ -253,6 +263,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let suggested_func_name =
             suggest_valid_function(&name, is_function_window, self.context_provider);
         plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
+    }
+
+    pub(super) fn sql_fn_name_to_expr(
+        &self,
+        expr: SQLExpr,
+        fn_name: &str,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let fun = self
+            .context_provider
+            .get_function_meta(fn_name)
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected '{fn_name}' function")
+            })?;
+        let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
     pub(super) fn sql_named_function_to_expr(

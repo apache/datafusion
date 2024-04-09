@@ -108,6 +108,10 @@ impl RecursiveQueryExec {
 }
 
 impl ExecutionPlan for RecursiveQueryExec {
+    fn name(&self) -> &'static str {
+        "RecursiveQueryExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

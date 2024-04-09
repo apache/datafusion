@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
-//! of expr can be added if needed.
-//! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+//! [`UnwrapCastInComparison`] rewrites `CAST(col) = lit` to `col = CAST(lit)`
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -93,8 +91,10 @@ impl OptimizerRule for UnwrapCastInComparison {
         let mut schema = merge_schema(plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = plan {
-            let source_schema =
-                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            let source_schema = DFSchema::try_from_qualified_schema(
+                ts.table_name.clone(),
+                &ts.source.schema(),
+            )?;
             schema.merge(&source_schema);
         }
 
@@ -484,7 +484,7 @@ mod tests {
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
 
     #[test]
@@ -740,25 +740,18 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::new_with_metadata(
+            DFSchema::from_unqualifed_fields(
                 vec![
-                    DFField::new_unqualified("c1", DataType::Int32, false),
-                    DFField::new_unqualified("c2", DataType::Int64, false),
-                    DFField::new_unqualified("c3", DataType::Decimal128(18, 2), false),
-                    DFField::new_unqualified("c4", DataType::Decimal128(38, 37), false),
-                    DFField::new_unqualified("c5", DataType::Float32, false),
-                    DFField::new_unqualified("c6", DataType::UInt32, false),
-                    DFField::new_unqualified(
-                        "ts_nano_none",
-                        timestamp_nano_none_type(),
-                        false,
-                    ),
-                    DFField::new_unqualified(
-                        "ts_nano_utf",
-                        timestamp_nano_utc_type(),
-                        false,
-                    ),
-                ],
+                    Field::new("c1", DataType::Int32, false),
+                    Field::new("c2", DataType::Int64, false),
+                    Field::new("c3", DataType::Decimal128(18, 2), false),
+                    Field::new("c4", DataType::Decimal128(38, 37), false),
+                    Field::new("c5", DataType::Float32, false),
+                    Field::new("c6", DataType::UInt32, false),
+                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
+                ]
+                .into(),
                 HashMap::new(),
             )
             .unwrap(),

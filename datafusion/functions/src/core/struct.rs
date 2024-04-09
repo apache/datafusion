@@ -47,22 +47,21 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(StructArray::from(vec)))
 }
+
 /// put values in a struct array.
 fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays = args
-        .iter()
-        .map(|x| {
-            Ok(match x {
-                ColumnarValue::Array(array) => array.clone(),
-                ColumnarValue::Scalar(scalar) => scalar.to_array()?.clone(),
-            })
-        })
-        .collect::<Result<Vec<ArrayRef>>>()?;
+    let arrays = ColumnarValue::values_to_arrays(args)?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 #[derive(Debug)]
-pub(super) struct StructFunc {
+pub struct StructFunc {
     signature: Signature,
+}
+
+impl Default for StructFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StructFunc {

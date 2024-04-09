@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `LIMIT 0` or
-//! `LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch`
-//! on a plan with an empty relation.
-//! This rule also removes OFFSET 0 from the [LogicalPlan]
-//! This saves time in planning and executing the query.
+//! [`EliminateLimit`] eliminates `LIMIT` when possible
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
 
-/// Optimization rule that eliminate LIMIT 0 or useless LIMIT(skip:0, fetch:None).
-/// It can cooperate with `propagate_empty_relation` and `limit_push_down`.
+/// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
+/// greater than or equal to current's fetch
+///
+/// It can cooperate with `propagate_empty_relation` and `limit_push_down`. on a
+/// plan with an empty relation.
+///
+/// This rule also removes OFFSET 0 from the [LogicalPlan]
 #[derive(Default)]
 pub struct EliminateLimit;
 

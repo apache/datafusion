@@ -15867,128 +15867,6 @@ impl<'de> serde::Deserialize<'de> for OptimizedPhysicalPlanType {
         deserializer.deserialize_struct("datafusion.OptimizedPhysicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for OwnedTableReference {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.table_reference_enum.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.OwnedTableReference", len)?;
-        if let Some(v) = self.table_reference_enum.as_ref() {
-            match v {
-                owned_table_reference::TableReferenceEnum::Bare(v) => {
-                    struct_ser.serialize_field("bare", v)?;
-                }
-                owned_table_reference::TableReferenceEnum::Partial(v) => {
-                    struct_ser.serialize_field("partial", v)?;
-                }
-                owned_table_reference::TableReferenceEnum::Full(v) => {
-                    struct_ser.serialize_field("full", v)?;
-                }
-            }
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for OwnedTableReference {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "bare",
-            "partial",
-            "full",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Bare,
-            Partial,
-            Full,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "bare" => Ok(GeneratedField::Bare),
-                            "partial" => Ok(GeneratedField::Partial),
-                            "full" => Ok(GeneratedField::Full),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = OwnedTableReference;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.OwnedTableReference")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<OwnedTableReference, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut table_reference_enum__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Bare => {
-                            if table_reference_enum__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bare"));
-                            }
-                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(owned_table_reference::TableReferenceEnum::Bare)
-;
-                        }
-                        GeneratedField::Partial => {
-                            if table_reference_enum__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("partial"));
-                            }
-                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(owned_table_reference::TableReferenceEnum::Partial)
-;
-                        }
-                        GeneratedField::Full => {
-                            if table_reference_enum__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("full"));
-                            }
-                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(owned_table_reference::TableReferenceEnum::Full)
-;
-                        }
-                    }
-                }
-                Ok(OwnedTableReference {
-                    table_reference_enum: table_reference_enum__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.OwnedTableReference", FIELDS, GeneratedVisitor)
-    }
-}
 impl serde::Serialize for ParquetFormat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -22931,67 +22809,15 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Atan => "Atan",
-            Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
-            Self::Cos => "Cos",
             Self::Exp => "Exp",
-            Self::Floor => "Floor",
-            Self::Ln => "Ln",
-            Self::Log => "Log",
-            Self::Log10 => "Log10",
-            Self::Log2 => "Log2",
-            Self::Round => "Round",
-            Self::Signum => "Signum",
-            Self::Sin => "Sin",
-            Self::Sqrt => "Sqrt",
-            Self::Trunc => "Trunc",
-            Self::BitLength => "BitLength",
-            Self::Btrim => "Btrim",
-            Self::CharacterLength => "CharacterLength",
-            Self::Chr => "Chr",
             Self::Concat => "Concat",
             Self::ConcatWithSeparator => "ConcatWithSeparator",
             Self::InitCap => "InitCap",
-            Self::Left => "Left",
-            Self::Lpad => "Lpad",
-            Self::Lower => "Lower",
-            Self::Ltrim => "Ltrim",
-            Self::OctetLength => "OctetLength",
             Self::Random => "Random",
-            Self::Repeat => "Repeat",
-            Self::Replace => "Replace",
-            Self::Reverse => "Reverse",
-            Self::Right => "Right",
-            Self::Rpad => "Rpad",
-            Self::Rtrim => "Rtrim",
-            Self::SplitPart => "SplitPart",
-            Self::Strpos => "Strpos",
-            Self::Substr => "Substr",
-            Self::Translate => "Translate",
             Self::Coalesce => "Coalesce",
-            Self::Power => "Power",
-            Self::Atan2 => "Atan2",
-            Self::Uuid => "Uuid",
-            Self::Cbrt => "Cbrt",
-            Self::Acosh => "Acosh",
-            Self::Asinh => "Asinh",
-            Self::Atanh => "Atanh",
-            Self::Sinh => "Sinh",
-            Self::Cosh => "Cosh",
-            Self::Pi => "Pi",
-            Self::Degrees => "Degrees",
-            Self::Radians => "Radians",
             Self::Factorial => "Factorial",
-            Self::Lcm => "Lcm",
-            Self::Gcd => "Gcd",
-            Self::Cot => "Cot",
             Self::Nanvl => "Nanvl",
-            Self::Iszero => "Iszero",
-            Self::OverLay => "OverLay",
-            Self::Levenshtein => "Levenshtein",
-            Self::SubstrIndex => "SubstrIndex",
-            Self::FindInSet => "FindInSet",
             Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
@@ -23005,67 +22831,15 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Atan",
-            "Ascii",
             "Ceil",
-            "Cos",
             "Exp",
-            "Floor",
-            "Ln",
-            "Log",
-            "Log10",
-            "Log2",
-            "Round",
-            "Signum",
-            "Sin",
-            "Sqrt",
-            "Trunc",
-            "BitLength",
-            "Btrim",
-            "CharacterLength",
-            "Chr",
             "Concat",
             "ConcatWithSeparator",
             "InitCap",
-            "Left",
-            "Lpad",
-            "Lower",
-            "Ltrim",
-            "OctetLength",
             "Random",
-            "Repeat",
-            "Replace",
-            "Reverse",
-            "Right",
-            "Rpad",
-            "Rtrim",
-            "SplitPart",
-            "Strpos",
-            "Substr",
-            "Translate",
             "Coalesce",
-            "Power",
-            "Atan2",
-            "Uuid",
-            "Cbrt",
-            "Acosh",
-            "Asinh",
-            "Atanh",
-            "Sinh",
-            "Cosh",
-            "Pi",
-            "Degrees",
-            "Radians",
             "Factorial",
-            "Lcm",
-            "Gcd",
-            "Cot",
             "Nanvl",
-            "Iszero",
-            "OverLay",
-            "Levenshtein",
-            "SubstrIndex",
-            "FindInSet",
             "EndsWith",
         ];
 
@@ -23108,67 +22882,15 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Atan" => Ok(ScalarFunction::Atan),
-                    "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
-                    "Cos" => Ok(ScalarFunction::Cos),
                     "Exp" => Ok(ScalarFunction::Exp),
-                    "Floor" => Ok(ScalarFunction::Floor),
-                    "Ln" => Ok(ScalarFunction::Ln),
-                    "Log" => Ok(ScalarFunction::Log),
-                    "Log10" => Ok(ScalarFunction::Log10),
-                    "Log2" => Ok(ScalarFunction::Log2),
-                    "Round" => Ok(ScalarFunction::Round),
-                    "Signum" => Ok(ScalarFunction::Signum),
-                    "Sin" => Ok(ScalarFunction::Sin),
-                    "Sqrt" => Ok(ScalarFunction::Sqrt),
-                    "Trunc" => Ok(ScalarFunction::Trunc),
-                    "BitLength" => Ok(ScalarFunction::BitLength),
-                    "Btrim" => Ok(ScalarFunction::Btrim),
-                    "CharacterLength" => Ok(ScalarFunction::CharacterLength),
-                    "Chr" => Ok(ScalarFunction::Chr),
                     "Concat" => Ok(ScalarFunction::Concat),
                     "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
                     "InitCap" => Ok(ScalarFunction::InitCap),
-                    "Left" => Ok(ScalarFunction::Left),
-                    "Lpad" => Ok(ScalarFunction::Lpad),
-                    "Lower" => Ok(ScalarFunction::Lower),
-                    "Ltrim" => Ok(ScalarFunction::Ltrim),
-                    "OctetLength" => Ok(ScalarFunction::OctetLength),
                     "Random" => Ok(ScalarFunction::Random),
-                    "Repeat" => Ok(ScalarFunction::Repeat),
-                    "Replace" => Ok(ScalarFunction::Replace),
-                    "Reverse" => Ok(ScalarFunction::Reverse),
-                    "Right" => Ok(ScalarFunction::Right),
-                    "Rpad" => Ok(ScalarFunction::Rpad),
-                    "Rtrim" => Ok(ScalarFunction::Rtrim),
-                    "SplitPart" => Ok(ScalarFunction::SplitPart),
-                    "Strpos" => Ok(ScalarFunction::Strpos),
-                    "Substr" => Ok(ScalarFunction::Substr),
-                    "Translate" => Ok(ScalarFunction::Translate),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
-                    "Power" => Ok(ScalarFunction::Power),
-                    "Atan2" => Ok(ScalarFunction::Atan2),
-                    "Uuid" => Ok(ScalarFunction::Uuid),
-                    "Cbrt" => Ok(ScalarFunction::Cbrt),
-                    "Acosh" => Ok(ScalarFunction::Acosh),
-                    "Asinh" => Ok(ScalarFunction::Asinh),
-                    "Atanh" => Ok(ScalarFunction::Atanh),
-                    "Sinh" => Ok(ScalarFunction::Sinh),
-                    "Cosh" => Ok(ScalarFunction::Cosh),
-                    "Pi" => Ok(ScalarFunction::Pi),
-                    "Degrees" => Ok(ScalarFunction::Degrees),
-                    "Radians" => Ok(ScalarFunction::Radians),
                     "Factorial" => Ok(ScalarFunction::Factorial),
-                    "Lcm" => Ok(ScalarFunction::Lcm),
-                    "Gcd" => Ok(ScalarFunction::Gcd),
-                    "Cot" => Ok(ScalarFunction::Cot),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
-                    "Iszero" => Ok(ScalarFunction::Iszero),
-                    "OverLay" => Ok(ScalarFunction::OverLay),
-                    "Levenshtein" => Ok(ScalarFunction::Levenshtein),
-                    "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
-                    "FindInSet" => Ok(ScalarFunction::FindInSet),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
@@ -26438,6 +26160,128 @@ impl<'de> serde::Deserialize<'de> for TableParquetOptions {
             }
         }
         deserializer.deserialize_struct("datafusion.TableParquetOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TableReference {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.table_reference_enum.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.TableReference", len)?;
+        if let Some(v) = self.table_reference_enum.as_ref() {
+            match v {
+                table_reference::TableReferenceEnum::Bare(v) => {
+                    struct_ser.serialize_field("bare", v)?;
+                }
+                table_reference::TableReferenceEnum::Partial(v) => {
+                    struct_ser.serialize_field("partial", v)?;
+                }
+                table_reference::TableReferenceEnum::Full(v) => {
+                    struct_ser.serialize_field("full", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TableReference {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bare",
+            "partial",
+            "full",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Bare,
+            Partial,
+            Full,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bare" => Ok(GeneratedField::Bare),
+                            "partial" => Ok(GeneratedField::Partial),
+                            "full" => Ok(GeneratedField::Full),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TableReference;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.TableReference")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TableReference, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut table_reference_enum__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Bare => {
+                            if table_reference_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bare"));
+                            }
+                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(table_reference::TableReferenceEnum::Bare)
+;
+                        }
+                        GeneratedField::Partial => {
+                            if table_reference_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partial"));
+                            }
+                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(table_reference::TableReferenceEnum::Partial)
+;
+                        }
+                        GeneratedField::Full => {
+                            if table_reference_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("full"));
+                            }
+                            table_reference_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(table_reference::TableReferenceEnum::Full)
+;
+                        }
+                    }
+                }
+                Ok(TableReference {
+                    table_reference_enum: table_reference_enum__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.TableReference", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for TimeUnit {

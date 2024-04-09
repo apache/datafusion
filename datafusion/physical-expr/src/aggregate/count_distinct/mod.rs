@@ -35,7 +35,7 @@ use arrow_array::types::{
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
@@ -268,8 +268,11 @@ impl Accumulator for DistinctCountAccumulator {
         let array = &states[0];
         let list_array = array.as_list::<i32>();
         for inner_array in list_array.iter() {
-            let inner_array = inner_array
-                .expect("counts are always non null, so are intermediate results");
+            let Some(inner_array) = inner_array else {
+                return internal_err!(
+                    "Intermediate results of COUNT DISTINCT should always be non null"
+                );
+            };
             self.update_batch(&[inner_array])?;
         }
         Ok(())

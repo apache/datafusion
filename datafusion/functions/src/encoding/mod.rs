@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod inner;
+pub mod inner;
 
 // create `encode` and `decode` UDFs
 make_udf_function!(inner::EncodeFunc, ENCODE, encode);

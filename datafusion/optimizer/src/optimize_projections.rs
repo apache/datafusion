@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to prune unnecessary columns from intermediate schemas
-//! inside the [`LogicalPlan`]. This rule:
-//! - Removes unnecessary columns that do not appear at the output and/or are
-//!   not used during any computation step.
-//! - Adds projections to decrease table column size before operators that
-//!   benefit from a smaller memory footprint at its input.
-//! - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
+//! [`OptimizeProjections`] identifies and eliminates unused columns
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,7 +25,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
+    get_required_group_by_exprs_indices, internal_err, Column, DFSchema, DFSchemaRef,
+    JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
@@ -39,11 +34,17 @@ use datafusion_expr::{
     Expr, Projection, TableScan, Window,
 };
 
-use datafusion_expr::utils::inspect_expr_pre;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
-/// A rule for optimizing logical plans by removing unused columns/fields.
+/// Optimizer rule to prune unnecessary columns from intermediate schemas
+/// inside the [`LogicalPlan`]. This rule:
+/// - Removes unnecessary columns that do not appear at the output and/or are
+///   not used during any computation step.
+/// - Adds projections to decrease table column size before operators that
+///   benefit from a smaller memory footprint at its input.
+/// - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
 ///
 /// `OptimizeProjections` is an optimizer rule that identifies and eliminates
 /// columns from a logical plan that are not used by downstream operations.
@@ -162,14 +163,40 @@ fn optimize_projections(
                 .map(|input| ((0..input.schema().fields().len()).collect_vec(), false))
                 .collect::<Vec<_>>()
         }
+        LogicalPlan::Extension(extension) => {
+            let necessary_children_indices = if let Some(necessary_children_indices) =
+                extension.node.necessary_children_exprs(indices)
+            {
+                necessary_children_indices
+            } else {
+                // Requirements from parent cannot be routed down to user defined logical plan safely
+                return Ok(None);
+            };
+            let children = extension.node.inputs();
+            if children.len() != necessary_children_indices.len() {
+                return internal_err!("Inconsistent length between children and necessary children indices. \
+                Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
+                consistent with actual children length for the node.");
+            }
+            // Expressions used by node.
+            let exprs = plan.expressions();
+            children
+                .into_iter()
+                .zip(necessary_children_indices)
+                .map(|(child, necessary_indices)| {
+                    let child_schema = child.schema();
+                    let child_req_indices =
+                        indices_referred_by_exprs(child_schema, exprs.iter())?;
+                    Ok((merge_slices(&necessary_indices, &child_req_indices), false))
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::Extension(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
-            // TODO: Add support for `LogicalPlan::Extension`.
             return Ok(None);
         }
         LogicalPlan::Projection(proj) => {
@@ -586,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());
@@ -605,7 +632,7 @@ fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
             }
             _ => {}
         };
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // unwrap: closure above never returns Err, so can not be Err here
     .unwrap();
@@ -638,10 +665,9 @@ fn outer_columns_helper_multi<'a>(
 ///
 /// A vector of `Expr::Column` expressions residing at `indices` of the `input_schema`.
 fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Expr> {
-    let fields = input_schema.fields();
     indices
         .iter()
-        .map(|&idx| Expr::Column(fields[idx].qualified_column()))
+        .map(|&idx| Expr::Column(Column::from(input_schema.qualified_field(idx))))
         .collect()
 }
 
@@ -899,19 +925,159 @@ fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
     use std::sync::Arc;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::test::{assert_optimized_plan_eq, test_table_scan};
+    use crate::test::{
+        assert_optimized_plan_eq, test_table_scan, test_table_scan_with_name,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Result, TableReference};
+    use datafusion_common::{Column, DFSchemaRef, JoinType, Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
+        binary_expr, build_join_schema, col, count, lit,
+        logical_plan::builder::LogicalPlanBuilder, not, table_scan, try_cast, when,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
+        UserDefinedLogicalNodeCore,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct NoOpUserDefined {
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+        input: Arc<LogicalPlan>,
+    }
+
+    impl NoOpUserDefined {
+        fn new(schema: DFSchemaRef, input: Arc<LogicalPlan>) -> Self {
+            Self {
+                exprs: vec![],
+                schema,
+                input,
+            }
+        }
+
+        fn with_exprs(mut self, exprs: Vec<Expr>) -> Self {
+            self.exprs = exprs;
+            self
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for NoOpUserDefined {
+        fn name(&self) -> &str {
+            "NoOpUserDefined"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.exprs.clone()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "NoOpUserDefined")
+        }
+
+        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            Self {
+                exprs: exprs.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: self.schema.clone(),
+            }
+        }
+
+        fn necessary_children_exprs(
+            &self,
+            output_columns: &[usize],
+        ) -> Option<Vec<Vec<usize>>> {
+            // Since schema is same. Output columns requires their corresponding version in the input columns.
+            Some(vec![output_columns.to_vec()])
+        }
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct UserDefinedCrossJoin {
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+        left_child: Arc<LogicalPlan>,
+        right_child: Arc<LogicalPlan>,
+    }
+
+    impl UserDefinedCrossJoin {
+        fn new(left_child: Arc<LogicalPlan>, right_child: Arc<LogicalPlan>) -> Self {
+            let left_schema = left_child.schema();
+            let right_schema = right_child.schema();
+            let schema = Arc::new(
+                build_join_schema(left_schema, right_schema, &JoinType::Inner).unwrap(),
+            );
+            Self {
+                exprs: vec![],
+                schema,
+                left_child,
+                right_child,
+            }
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for UserDefinedCrossJoin {
+        fn name(&self) -> &str {
+            "UserDefinedCrossJoin"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.left_child, &self.right_child]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.exprs.clone()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "UserDefinedCrossJoin")
+        }
+
+        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            assert_eq!(inputs.len(), 2);
+            Self {
+                exprs: exprs.to_vec(),
+                left_child: Arc::new(inputs[0].clone()),
+                right_child: Arc::new(inputs[1].clone()),
+                schema: self.schema.clone(),
+            }
+        }
+
+        fn necessary_children_exprs(
+            &self,
+            output_columns: &[usize],
+        ) -> Option<Vec<Vec<usize>>> {
+            let left_child_len = self.left_child.schema().fields().len();
+            let mut left_reqs = vec![];
+            let mut right_reqs = vec![];
+            for &out_idx in output_columns {
+                if out_idx < left_child_len {
+                    left_reqs.push(out_idx);
+                } else {
+                    // Output indices further than the left_child_len
+                    // comes from right children
+                    right_reqs.push(out_idx - left_child_len)
+                }
+            }
+            Some(vec![left_reqs, right_reqs])
+        }
     }
 
     #[test]
@@ -1190,6 +1356,114 @@ mod tests {
         let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
         \n  Projection: test.a, Int32(0) AS d\
         \n    TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Since only column `a` is referred at the output. Scan should only contain projection=[a].
+    // User defined node should be able to propagate necessary expressions by its parent to its child.
+    #[test]
+    fn test_user_defined_logical_plan_node() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpUserDefined::new(
+                table_scan.schema().clone(),
+                Arc::new(table_scan.clone()),
+            )),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Only column `a` is referred at the output. However, User defined node itself uses column `b`
+    // during its operation. Hence, scan should contain projection=[a, b].
+    // User defined node should be able to propagate necessary expressions by its parent, as well as its own
+    // required expressions.
+    #[test]
+    fn test_user_defined_logical_plan_node2() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let exprs = vec![Expr::Column(Column::from_qualified_name("b"))];
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(
+                NoOpUserDefined::new(
+                    table_scan.schema().clone(),
+                    Arc::new(table_scan.clone()),
+                )
+                .with_exprs(exprs),
+            ),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a, b]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Only column `a` is referred at the output. However, User defined node itself uses expression `b+c`
+    // during its operation. Hence, scan should contain projection=[a, b, c].
+    // User defined node should be able to propagate necessary expressions by its parent, as well as its own
+    // required expressions. Expressions doesn't have to be just column. Requirements from complex expressions
+    // should be propagated also.
+    #[test]
+    fn test_user_defined_logical_plan_node3() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left_expr = Expr::Column(Column::from_qualified_name("b"));
+        let right_expr = Expr::Column(Column::from_qualified_name("c"));
+        let binary_expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left_expr),
+            Operator::Plus,
+            Box::new(right_expr),
+        ));
+        let exprs = vec![binary_expr];
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(
+                NoOpUserDefined::new(
+                    table_scan.schema().clone(),
+                    Arc::new(table_scan.clone()),
+                )
+                .with_exprs(exprs),
+            ),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a, b, c]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Columns `l.a`, `l.c`, `r.a` is referred at the output.
+    // User defined node should be able to propagate necessary expressions by its parent, to its children.
+    // Even if it has multiple children.
+    // left child should have `projection=[a, c]`, and right side should have `projection=[a]`.
+    #[test]
+    fn test_user_defined_logical_plan_node4() -> Result<()> {
+        let left_table = test_table_scan_with_name("l")?;
+        let right_table = test_table_scan_with_name("r")?;
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(UserDefinedCrossJoin::new(
+                Arc::new(left_table.clone()),
+                Arc::new(right_table.clone()),
+            )),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("l.a"), col("l.c"), col("r.a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: l.a, l.c, r.a, Int32(0) AS d\
+        \n  UserDefinedCrossJoin\
+        \n    TableScan: l projection=[a, c]\
+        \n    TableScan: r projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }

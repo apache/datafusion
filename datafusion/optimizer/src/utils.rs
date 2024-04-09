@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Collection of utility functions that are leveraged by the query optimizer rules
+//! Utility functions leveraged by the query optimizer rules
 
 use std::collections::{BTreeSet, HashMap};
 

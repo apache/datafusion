@@ -15,278 +15,163 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait},
-    datatypes::DataType,
-};
-use datafusion_common::{
-    cast::as_generic_string_array, exec_err, plan_err, Result, ScalarValue,
-};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use datafusion_physical_expr::functions::Hint;
-use std::{
-    fmt::{Display, Formatter},
-    sync::Arc,
-};
+//! "string" DataFusion functions
 
-/// Creates a function to identify the optimal return type of a string function given
-/// the type of its first argument.
-///
-/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
-/// `$largeUtf8Type`,
-///
-/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
-macro_rules! get_optimal_return_type {
-    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
-        fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
-            Ok(match arg_type {
-                // LargeBinary inputs are automatically coerced to Utf8
-                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                // Binary inputs are automatically coerced to Utf8
-                DataType::Utf8 | DataType::Binary => $utf8Type,
-                DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                    DataType::Utf8 | DataType::Binary => $utf8Type,
-                    DataType::Null => DataType::Null,
-                    _ => {
-                        return plan_err!(
-                            "The {} function can only accept strings, but got {:?}.",
-                            name.to_uppercase(),
-                            **value_type
-                        );
-                    }
-                },
-                data_type => {
-                    return plan_err!(
-                        "The {} function can only accept strings, but got {:?}.",
-                        name.to_uppercase(),
-                        data_type
-                    );
-                }
-            })
-        }
-    };
-}
+use std::sync::Arc;
 
-// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
-get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+use datafusion_expr::ScalarUDF;
 
-/// applies a unary expression to `args[0]` that is expected to be downcastable to
-/// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
-/// # Errors
-/// This function errors when:
-/// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
-pub(crate) fn unary_string_function<'a, T, O, F, R>(
-    args: &[&'a dyn Array],
-    op: F,
-    name: &str,
-) -> Result<GenericStringArray<O>>
-where
-    R: AsRef<str>,
-    O: OffsetSizeTrait,
-    T: OffsetSizeTrait,
-    F: Fn(&'a str) -> R,
-{
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            name
-        );
-    }
-
-    let string_array = as_generic_string_array::<T>(args[0])?;
-
-    // first map is the iterator, second is for the `Option<_>`
-    Ok(string_array.iter().map(|string| string.map(&op)).collect())
-}
-
-fn handle<'a, F, R>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
-where
-    R: AsRef<str>,
-    F: Fn(&'a str) -> R,
-{
-    match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i32,
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i64,
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-    }
-}
-
-// TODO: mode allow[(dead_code)] after move ltrim and rtrim
-enum TrimType {
-    #[allow(dead_code)]
-    Left,
-    #[allow(dead_code)]
-    Right,
-    Both,
-}
-
-impl Display for TrimType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TrimType::Left => write!(f, "ltrim"),
-            TrimType::Right => write!(f, "rtrim"),
-            TrimType::Both => write!(f, "btrim"),
-        }
-    }
-}
-
-fn general_trim<T: OffsetSizeTrait>(
-    args: &[ArrayRef],
-    trim_type: TrimType,
-) -> Result<ArrayRef> {
-    let func = match trim_type {
-        TrimType::Left => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Right => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Both => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(
-                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
-                pattern.as_ref(),
-            )
-        },
-    };
-
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-
-    match args.len() {
-        1 => {
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
-        )
-        }
-    }
-}
-
-pub(super) fn make_scalar_function<F>(
-    inner: F,
-    hints: Vec<Hint>,
-) -> ScalarFunctionImplementation
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
-{
-    Arc::new(move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let inferred_length = len.unwrap_or(1);
-        let args = args
-            .iter()
-            .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
-            .map(|(arg, hint)| {
-                // Decide on the length to expand this scalar to depending
-                // on the given hints.
-                let expansion_len = match hint {
-                    Hint::AcceptsSingular => 1,
-                    Hint::Pad => inferred_length,
-                };
-                arg.clone().into_array(expansion_len)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = (inner)(&args);
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
-        }
-    })
-}
-
+mod ascii;
+mod bit_length;
+mod btrim;
+mod chr;
+mod common;
+mod levenshtein;
+mod lower;
+mod ltrim;
+mod octet_length;
+mod overlay;
+mod repeat;
+mod replace;
+mod rtrim;
+mod split_part;
 mod starts_with;
 mod to_hex;
-mod trim;
 mod upper;
-// create UDFs
-make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
-make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
-make_udf_function!(trim::TrimFunc, TRIM, trim);
-make_udf_function!(upper::UpperFunc, UPPER, upper);
+mod uuid;
 
-export_functions!(
-    (
-    starts_with,
-    arg1 arg2,
-    "Returns true if string starts with prefix."),
-    (
-    to_hex,
-    arg1,
-    "Converts an integer to a hexadecimal string."),
-    (trim,
-    arg1,
-    "removes all characters, space by default from the string"),
-    (upper,
-    arg1,
-    "Converts a string to uppercase."));
+// create UDFs
+make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
+make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
+make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
+make_udf_function!(chr::ChrFunc, CHR, chr);
+make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
+make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
+make_udf_function!(lower::LowerFunc, LOWER, lower);
+make_udf_function!(octet_length::OctetLengthFunc, OCTET_LENGTH, octet_length);
+make_udf_function!(overlay::OverlayFunc, OVERLAY, overlay);
+make_udf_function!(repeat::RepeatFunc, REPEAT, repeat);
+make_udf_function!(replace::ReplaceFunc, REPLACE, replace);
+make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
+make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
+make_udf_function!(split_part::SplitPartFunc, SPLIT_PART, split_part);
+make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
+make_udf_function!(upper::UpperFunc, UPPER, upper);
+make_udf_function!(uuid::UuidFunc, UUID, uuid);
+
+pub mod expr_fn {
+    use datafusion_expr::Expr;
+
+    #[doc = "Returns the numeric code of the first character of the argument."]
+    pub fn ascii(arg1: Expr) -> Expr {
+        super::ascii().call(vec![arg1])
+    }
+
+    #[doc = "Returns the number of bits in the `string`"]
+    pub fn bit_length(arg: Expr) -> Expr {
+        super::bit_length().call(vec![arg])
+    }
+
+    #[doc = "Removes all characters, spaces by default, from both sides of a string"]
+    pub fn btrim(args: Vec<Expr>) -> Expr {
+        super::btrim().call(args)
+    }
+
+    #[doc = "Converts the Unicode code point to a UTF8 character"]
+    pub fn chr(arg: Expr) -> Expr {
+        super::chr().call(vec![arg])
+    }
+
+    #[doc = "Returns the Levenshtein distance between the two given strings"]
+    pub fn levenshtein(arg1: Expr, arg2: Expr) -> Expr {
+        super::levenshtein().call(vec![arg1, arg2])
+    }
+
+    #[doc = "Converts a string to lowercase."]
+    pub fn lower(arg1: Expr) -> Expr {
+        super::lower().call(vec![arg1])
+    }
+
+    #[doc = "Removes all characters, spaces by default, from the beginning of a string"]
+    pub fn ltrim(args: Vec<Expr>) -> Expr {
+        super::ltrim().call(args)
+    }
+
+    #[doc = "returns the number of bytes of a string"]
+    pub fn octet_length(args: Vec<Expr>) -> Expr {
+        super::octet_length().call(args)
+    }
+
+    #[doc = "replace the substring of string that starts at the start'th character and extends for count characters with new substring"]
+    pub fn overlay(args: Vec<Expr>) -> Expr {
+        super::overlay().call(args)
+    }
+
+    #[doc = "Repeats the `string` to `n` times"]
+    pub fn repeat(string: Expr, n: Expr) -> Expr {
+        super::repeat().call(vec![string, n])
+    }
+
+    #[doc = "Replaces all occurrences of `from` with `to` in the `string`"]
+    pub fn replace(string: Expr, from: Expr, to: Expr) -> Expr {
+        super::replace().call(vec![string, from, to])
+    }
+
+    #[doc = "Removes all characters, spaces by default, from the end of a string"]
+    pub fn rtrim(args: Vec<Expr>) -> Expr {
+        super::rtrim().call(args)
+    }
+
+    #[doc = "Splits a string based on a delimiter and picks out the desired field based on the index."]
+    pub fn split_part(string: Expr, delimiter: Expr, index: Expr) -> Expr {
+        super::split_part().call(vec![string, delimiter, index])
+    }
+
+    #[doc = "Returns true if string starts with prefix."]
+    pub fn starts_with(arg1: Expr, arg2: Expr) -> Expr {
+        super::starts_with().call(vec![arg1, arg2])
+    }
+
+    #[doc = "Converts an integer to a hexadecimal string."]
+    pub fn to_hex(arg1: Expr) -> Expr {
+        super::to_hex().call(vec![arg1])
+    }
+
+    #[doc = "Removes all characters, spaces by default, from both sides of a string"]
+    pub fn trim(args: Vec<Expr>) -> Expr {
+        super::btrim().call(args)
+    }
+
+    #[doc = "Converts a string to uppercase."]
+    pub fn upper(arg1: Expr) -> Expr {
+        super::upper().call(vec![arg1])
+    }
+
+    #[doc = "returns uuid v4 as a string value"]
+    pub fn uuid() -> Expr {
+        super::uuid().call(vec![])
+    }
+}
+
+///   Return a list of all functions in this package
+pub fn functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
+        ascii(),
+        bit_length(),
+        btrim(),
+        chr(),
+        levenshtein(),
+        lower(),
+        ltrim(),
+        octet_length(),
+        overlay(),
+        repeat(),
+        replace(),
+        rtrim(),
+        split_part(),
+        starts_with(),
+        to_hex(),
+        upper(),
+        uuid(),
+    ]
+}

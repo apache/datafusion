@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array functions.
+//! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
 use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -54,9 +54,15 @@ make_udf_function!(ArrayHasAny,
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayHas {
+pub struct ArrayHas {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHas {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHas {
@@ -85,11 +91,11 @@ impl ScalarUDFImpl for ArrayHas {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         if args.len() != 2 {
@@ -121,9 +127,15 @@ impl ScalarUDFImpl for ArrayHas {
 }
 
 #[derive(Debug)]
-pub(super) struct ArrayHasAll {
+pub struct ArrayHasAll {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHasAll {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHasAll {
@@ -147,11 +159,11 @@ impl ScalarUDFImpl for ArrayHasAll {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         if args.len() != 2 {
             return exec_err!("array_has_all needs two arguments");
@@ -178,9 +190,15 @@ impl ScalarUDFImpl for ArrayHasAll {
 }
 
 #[derive(Debug)]
-pub(super) struct ArrayHasAny {
+pub struct ArrayHasAny {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHasAny {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHasAny {
@@ -204,11 +222,11 @@ impl ScalarUDFImpl for ArrayHasAny {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         if args.len() != 2 {

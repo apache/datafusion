@@ -119,6 +119,10 @@ impl DisplayAs for PlaceholderRowExec {
 }
 
 impl ExecutionPlan for PlaceholderRowExec {
+    fn name(&self) -> &'static str {
+        "PlaceholderRowExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

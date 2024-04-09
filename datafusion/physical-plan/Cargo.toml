@@ -46,7 +46,9 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
+datafusion-physical-expr-common = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
@@ -58,7 +60,6 @@ parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 rstest = { workspace = true }

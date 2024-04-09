@@ -636,6 +636,10 @@ impl DisplayAs for AggregateExec {
 }
 
 impl ExecutionPlan for AggregateExec {
+    fn name(&self) -> &'static str {
+        "AggregateExec"
+    }
+
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
         self
@@ -1231,7 +1235,7 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, LastValue, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
@@ -1658,6 +1662,10 @@ mod tests {
     }
 
     impl ExecutionPlan for TestYieldingExec {
+        fn name(&self) -> &'static str {
+            "TestYieldingExec"
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -2018,6 +2026,7 @@ mod tests {
                 DataType::Float64,
                 ordering_req.clone(),
                 vec![DataType::Float64],
+                vec![],
             ))]
         } else {
             vec![Arc::new(LastValue::new(
@@ -2201,6 +2210,7 @@ mod tests {
                 DataType::Float64,
                 sort_expr_reverse.clone(),
                 vec![DataType::Float64],
+                vec![],
             )),
             Arc::new(LastValue::new(
                 col_b.clone(),

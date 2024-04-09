@@ -21,15 +21,16 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     Placeholder, ScalarFunction, TryCast,
 };
-use crate::function::PartitionEvaluatorFactory;
+use crate::function::{
+    AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
-    ScalarUDF, Signature, Volatility,
+    logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
+    Operator, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
@@ -296,11 +297,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns an approximate value of π
-pub fn pi() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
-}
-
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
@@ -534,117 +530,18 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Sqrt, sqrt, num, "square root of a number");
-scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
-scalar_expr!(Sin, sin, num, "sine");
-scalar_expr!(Cos, cos, num, "cosine");
-scalar_expr!(Cot, cot, num, "cotangent");
-scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
-scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
-scalar_expr!(Atan, atan, num, "inverse tangent");
-scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
-scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
-scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
 scalar_expr!(Factorial, factorial, num, "factorial");
-scalar_expr!(
-    Floor,
-    floor,
-    num,
-    "nearest integer less than or equal to argument"
-);
 scalar_expr!(
     Ceil,
     ceil,
     num,
     "nearest integer greater than or equal to argument"
 );
-scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
-scalar_expr!(Radians, radians, num, "converts degrees to radians");
-nary_scalar_expr!(Round, round, "round to nearest integer");
-nary_scalar_expr!(
-    Trunc,
-    trunc,
-    "truncate toward zero, with optional precision"
-);
-scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
-scalar_expr!(Exp, exp, num, "exponential");
-scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
-scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Log2, log2, num, "base 2 logarithm of number");
-scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
-scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
-scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
-scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
-scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
-scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-// string functions
-scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
-scalar_expr!(
-    BitLength,
-    bit_length,
-    string,
-    "the number of bits in the `string`"
-);
-scalar_expr!(
-    CharacterLength,
-    character_length,
-    string,
-    "the number of characters in the `string`"
-);
-scalar_expr!(
-    Chr,
-    chr,
-    code_point,
-    "converts the Unicode code point to a UTF8 character"
-);
+scalar_expr!(Exp, exp, num, "exponential");
+
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
-scalar_expr!(Lower, lower, string, "convert the string to lower case");
-scalar_expr!(
-    Ltrim,
-    ltrim,
-    string,
-    "removes all characters, spaces by default, from the beginning of a string"
-);
-scalar_expr!(
-    OctetLength,
-    octet_length,
-    string,
-    "returns the number of bytes of a string"
-);
-scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
-scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
-scalar_expr!(Reverse, reverse, string, "reverses the `string`");
-scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
-scalar_expr!(
-    Rtrim,
-    rtrim,
-    string,
-    "removes all characters, spaces by default, from the end of a string"
-);
-scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
-scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
-scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
-scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
-//use vec as parameter
-nary_scalar_expr!(
-    Lpad,
-    lpad,
-    "fill up a string to the length by prepending the characters"
-);
-nary_scalar_expr!(
-    Rpad,
-    rpad,
-    "fill up a string to the length by appending the characters"
-);
-nary_scalar_expr!(
-    Btrim,
-    btrim,
-    "removes all characters, spaces by default, from both sides of a string"
-);
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(
@@ -653,23 +550,7 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
-nary_scalar_expr!(
-    OverLay,
-    overlay,
-    "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
-);
-
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
-scalar_expr!(
-    Iszero,
-    iszero,
-    num,
-    "returns true if a given number is +0.0 or -0.0 otherwise returns false"
-);
-
-scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
-scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
-scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -784,13 +665,18 @@ pub fn create_udaf(
 ) -> AggregateUDF {
     let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
     let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
+    let state_fields = state_type
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| Field::new(format!("{i}"), t, true))
+        .collect::<Vec<_>>();
     AggregateUDF::from(SimpleAggregateUDF::new(
         name,
         input_type,
         return_type,
         volatility,
         accumulator,
-        state_type,
+        state_fields,
     ))
 }
 
@@ -801,7 +687,7 @@ pub struct SimpleAggregateUDF {
     signature: Signature,
     return_type: DataType,
     accumulator: AccumulatorFactoryFunction,
-    state_type: Vec<DataType>,
+    state_fields: Vec<Field>,
 }
 
 impl Debug for SimpleAggregateUDF {
@@ -823,7 +709,7 @@ impl SimpleAggregateUDF {
         return_type: DataType,
         volatility: Volatility,
         accumulator: AccumulatorFactoryFunction,
-        state_type: Vec<DataType>,
+        state_fields: Vec<Field>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -832,7 +718,7 @@ impl SimpleAggregateUDF {
             signature,
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         }
     }
 
@@ -841,7 +727,7 @@ impl SimpleAggregateUDF {
         signature: Signature,
         return_type: DataType,
         accumulator: AccumulatorFactoryFunction,
-        state_type: Vec<DataType>,
+        state_fields: Vec<Field>,
     ) -> Self {
         let name = name.into();
         Self {
@@ -849,7 +735,7 @@ impl SimpleAggregateUDF {
             signature,
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         }
     }
 }
@@ -871,12 +757,20 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         Ok(self.return_type.clone())
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(arg)
+    fn accumulator(
+        &self,
+        acc_args: AccumulatorArgs,
+    ) -> Result<Box<dyn crate::Accumulator>> {
+        (self.accumulator)(acc_args)
     }
 
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(self.state_type.clone())
+    fn state_fields(
+        &self,
+        _name: &str,
+        _value_type: DataType,
+        _ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        Ok(self.state_fields.clone())
     }
 }
 
@@ -966,12 +860,6 @@ impl WindowUDFImpl for SimpleWindowUDF {
 }
 
 /// Calls a named built in function
-/// ```
-/// use datafusion_expr::{col, lit, call_fn};
-///
-/// // create the expression sin(x) < 0.2
-/// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
-/// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
@@ -1029,104 +917,14 @@ mod test {
     };
 }
 
-    macro_rules! test_nary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-        let expected = [$(stringify!($arg)),*];
-        let result = $FUNC(
-            vec![
-                $(
-                    col(stringify!($arg.to_string()))
-                ),*
-            ]
-        );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
-            let name = built_in_function::BuiltinScalarFunction::$ENUM;
-            assert_eq!(name, fun);
-            assert_eq!(expected.len(), args.len());
-        } else {
-            assert!(false, "unexpected: {:?}", result);
-        }
-    };
-}
-
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Sqrt, sqrt);
-        test_unary_scalar_expr!(Cbrt, cbrt);
-        test_unary_scalar_expr!(Sin, sin);
-        test_unary_scalar_expr!(Cos, cos);
-        test_unary_scalar_expr!(Cot, cot);
-        test_unary_scalar_expr!(Sinh, sinh);
-        test_unary_scalar_expr!(Cosh, cosh);
-        test_unary_scalar_expr!(Atan, atan);
-        test_unary_scalar_expr!(Asinh, asinh);
-        test_unary_scalar_expr!(Acosh, acosh);
-        test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Degrees, degrees);
-        test_unary_scalar_expr!(Radians, radians);
-        test_nary_scalar_expr!(Round, round, input);
-        test_nary_scalar_expr!(Round, round, input, decimal_places);
-        test_nary_scalar_expr!(Trunc, trunc, num);
-        test_nary_scalar_expr!(Trunc, trunc, num, precision);
-        test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
-        test_unary_scalar_expr!(Log2, log2);
-        test_unary_scalar_expr!(Log10, log10);
-        test_unary_scalar_expr!(Ln, ln);
-        test_scalar_expr!(Atan2, atan2, y, x);
         test_scalar_expr!(Nanvl, nanvl, x, y);
-        test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(Ascii, ascii, input);
-        test_scalar_expr!(BitLength, bit_length, string);
-        test_nary_scalar_expr!(Btrim, btrim, string);
-        test_nary_scalar_expr!(Btrim, btrim, string, characters);
-        test_scalar_expr!(CharacterLength, character_length, string);
-        test_scalar_expr!(Chr, chr, string);
-        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
-        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(Left, left, string, count);
-        test_scalar_expr!(Lower, lower, string);
-        test_nary_scalar_expr!(Lpad, lpad, string, count);
-        test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
-        test_scalar_expr!(Ltrim, ltrim, string);
-        test_scalar_expr!(OctetLength, octet_length, string);
-        test_scalar_expr!(Replace, replace, string, from, to);
-        test_scalar_expr!(Repeat, repeat, string, count);
-        test_scalar_expr!(Reverse, reverse, string);
-        test_scalar_expr!(Right, right, string, count);
-        test_nary_scalar_expr!(Rpad, rpad, string, count);
-        test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
-        test_scalar_expr!(Rtrim, rtrim, string);
-        test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
-        test_scalar_expr!(Strpos, strpos, string, substring);
-        test_scalar_expr!(Substr, substr, string, position);
-        test_scalar_expr!(Substr, substring, string, position, count);
-        test_scalar_expr!(Translate, translate, string, from, to);
-        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
-        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
-        test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
-        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
-        test_scalar_expr!(FindInSet, find_in_set, string, stringlist);
-    }
-
-    #[test]
-    fn uuid_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = uuid()
-        {
-            let name = BuiltinScalarFunction::Uuid;
-            assert_eq!(name, fun);
-            assert_eq!(0, args.len());
-        } else {
-            unreachable!();
-        }
     }
 }

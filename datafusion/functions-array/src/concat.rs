@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Includes `array append`, `array prepend`, and `array concat` functions
+//! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
 use std::{any::Any, cmp::Ordering, sync::Arc};
 
@@ -39,15 +39,21 @@ use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function
 make_udf_function!(
     ArrayAppend,
     array_append,
-    array element,                                         // arg name
+    array element,                                // arg name
     "appends an element to the end of an array.", // doc
     array_append_udf                              // internal function name
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayAppend {
+pub struct ArrayAppend {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayAppend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayAppend {
@@ -99,9 +105,15 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayPrepend {
+pub struct ArrayPrepend {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayPrepend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayPrepend {
@@ -152,9 +164,15 @@ make_udf_function!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayConcat {
+pub struct ArrayConcat {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayConcat {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayConcat {
@@ -283,9 +301,9 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect::<Vec<&dyn Array>>();
 
             // Concatenated array on i-th row
-            let concated_array = arrow::compute::concat(elements.as_slice())?;
-            array_lengths.push(concated_array.len());
-            arrays.push(concated_array);
+            let concatenated_array = arrow::compute::concat(elements.as_slice())?;
+            array_lengths.push(concatenated_array.len());
+            arrays.push(concatenated_array);
             valid.append(true);
         }
     }

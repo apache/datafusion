@@ -30,12 +30,9 @@ runs:
       # 
       # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
       # See for more details: https://github.com/rust-lang/rust/issues/119560
-      #
-      # set RUST_MIN_STACK to avoid rust stack overflows on tpc-ds tests
       run: |
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV  
         echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV 
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-        echo "RUST_MIN_STACK=3000000" >> $GITHUB_ENV
         echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
      

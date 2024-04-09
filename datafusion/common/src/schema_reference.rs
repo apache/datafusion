@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Cow;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum SchemaReference<'a> {
-    Bare {
-        schema: Cow<'a, str>,
-    },
-    Full {
-        schema: Cow<'a, str>,
-        catalog: Cow<'a, str>,
-    },
+pub enum SchemaReference {
+    Bare { schema: Arc<str> },
+    Full { schema: Arc<str>, catalog: Arc<str> },
 }
 
-impl SchemaReference<'_> {
+impl SchemaReference {
     /// Get only the schema name that this references.
     pub fn schema_name(&self) -> &str {
         match self {
@@ -38,27 +33,11 @@ impl SchemaReference<'_> {
     }
 }
 
-pub type OwnedSchemaReference = SchemaReference<'static>;
-
-impl std::fmt::Display for SchemaReference<'_> {
+impl std::fmt::Display for SchemaReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bare { schema } => write!(f, "{schema}"),
             Self::Full { schema, catalog } => write!(f, "{catalog}.{schema}"),
-        }
-    }
-}
-
-impl<'a> From<&'a OwnedSchemaReference> for SchemaReference<'a> {
-    fn from(value: &'a OwnedSchemaReference) -> Self {
-        match value {
-            SchemaReference::Bare { schema } => SchemaReference::Bare {
-                schema: Cow::Borrowed(schema),
-            },
-            SchemaReference::Full { schema, catalog } => SchemaReference::Full {
-                schema: Cow::Borrowed(schema),
-                catalog: Cow::Borrowed(catalog),
-            },
         }
     }
 }

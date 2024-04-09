@@ -42,7 +42,7 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 statement ok
-create table dictionary_encoded_values as values 
+create table dictionary_encoded_values as values
 ('a', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('b', arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
 query TTT
@@ -55,13 +55,13 @@ statement ok
 CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
   a varchar,
   b varchar,
-) 
+)
 STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b);
 
 query TT
-insert into dictionary_encoded_parquet_partitioned 
+insert into dictionary_encoded_parquet_partitioned
 select * from dictionary_encoded_values
 ----
 2
@@ -76,13 +76,13 @@ statement ok
 CREATE EXTERNAL TABLE dictionary_encoded_arrow_partitioned(
   a varchar,
   b varchar,
-) 
+)
 STORED AS arrow
 LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
 PARTITIONED BY (b);
 
 query TT
-insert into dictionary_encoded_arrow_partitioned 
+insert into dictionary_encoded_arrow_partitioned
 select * from dictionary_encoded_values
 ----
 2
@@ -90,7 +90,7 @@ select * from dictionary_encoded_values
 statement ok
 CREATE EXTERNAL TABLE dictionary_encoded_arrow_test_readback(
   a varchar,
-) 
+)
 STORED AS arrow
 LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/b=bar/';
 
@@ -184,6 +184,30 @@ select * from partitioned_insert_test_verify;
 ----
 1
 2
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_hive(c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned'
+PARTITIONED BY (a string, b string);
+
+query ITT
+INSERT INTO partitioned_insert_test_hive VALUES (3,30,300);
+----
+1
+
+query ITT
+SELECT * FROM partitioned_insert_test_hive order by a,b,c;
+----
+1 10 100
+1 10 200
+1 20 100
+2 20 100
+1 20 200
+2 20 200
+3 30 300
+
 
 statement ok
 CREATE EXTERNAL TABLE
@@ -326,7 +350,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 --Projection: SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS field2
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------Projection: SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, aggregate_test_100.c1
---------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+--------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ----------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
@@ -388,7 +412,7 @@ FROM aggregate_test_100
 logical_plan
 Dml: op=[Insert Into] table=[table_without_values]
 --Projection: SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS field2
-----WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+----WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])

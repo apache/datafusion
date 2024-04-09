@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
+//! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
 use std::collections::HashSet;
 use std::sync::Arc;
 

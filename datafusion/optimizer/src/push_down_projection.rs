@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Projection Push Down optimizer rule ensures that only referenced columns are
-//! loaded into memory
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -29,7 +26,7 @@ mod tests {
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Column, DFField, DFSchema, Result};
+    use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::builder::table_scan_with_filters;
     use datafusion_expr::expr::{self, Cast};
     use datafusion_expr::logical_plan::{
@@ -225,11 +222,20 @@ mod tests {
             **optimized_join.schema(),
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(Some("test"), "a", DataType::UInt32, false),
-                    DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "c1", DataType::UInt32, true),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("b", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test2".into()),
+                        Arc::new(Field::new("c1", DataType::UInt32, true))
+                    ),
                 ],
-                HashMap::new(),
+                HashMap::new()
             )?,
         );
 
@@ -268,11 +274,20 @@ mod tests {
             **optimized_join.schema(),
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(Some("test"), "a", DataType::UInt32, false),
-                    DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "c1", DataType::UInt32, true),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("b", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test2".into()),
+                        Arc::new(Field::new("c1", DataType::UInt32, true))
+                    ),
                 ],
-                HashMap::new(),
+                HashMap::new()
             )?,
         );
 
@@ -309,11 +324,20 @@ mod tests {
             **optimized_join.schema(),
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(Some("test"), "a", DataType::UInt32, false),
-                    DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "a", DataType::UInt32, true),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("b", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test2".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, true))
+                    ),
                 ],
-                HashMap::new(),
+                HashMap::new()
             )?,
         );
 

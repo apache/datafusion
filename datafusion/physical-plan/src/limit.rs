@@ -111,6 +111,10 @@ impl DisplayAs for GlobalLimitExec {
 }
 
 impl ExecutionPlan for GlobalLimitExec {
+    fn name(&self) -> &'static str {
+        "GlobalLimitExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -317,6 +321,10 @@ impl DisplayAs for LocalLimitExec {
 }
 
 impl ExecutionPlan for LocalLimitExec {
+    fn name(&self) -> &'static str {
+        "LocalLimitExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`PropagateEmptyRelation`] eliminates nodes fed by `EmptyRelation`
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, JoinType, Projection, Union};
@@ -188,7 +189,7 @@ mod tests {
         test_table_scan_fields, test_table_scan_with_name,
     };
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Column, DFField, DFSchema, ScalarValue};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
@@ -373,14 +374,14 @@ mod tests {
     fn test_empty_with_non_empty() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let fields = test_table_scan_fields()
-            .into_iter()
-            .map(DFField::from)
-            .collect();
+        let fields = test_table_scan_fields();
 
         let empty = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::new_with_metadata(fields, Default::default())?),
+            schema: Arc::new(DFSchema::from_unqualifed_fields(
+                fields.into(),
+                Default::default(),
+            )?),
         });
 
         let one = LogicalPlanBuilder::from(empty.clone()).build()?;
