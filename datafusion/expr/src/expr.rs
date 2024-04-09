@@ -1232,10 +1232,7 @@ impl Expr {
 
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
-        self.exists(|expr| match expr {
-            Expr::OuterReferenceColumn { .. } => true,
-            _ => false,
-        })
+        self.exists(|expr| matches!(expr, Expr::OuterReferenceColumn { .. }))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
