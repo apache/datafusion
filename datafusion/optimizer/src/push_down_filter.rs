@@ -1028,6 +1028,7 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
     use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
 
@@ -1038,15 +1039,17 @@ mod tests {
     use crate::OptimizerContext;
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, random, sum,
-        BinaryExpr, Expr, Extension, LogicalPlanBuilder, Operator, TableSource,
-        TableType, UserDefinedLogicalNodeCore,
+        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
+        ColumnarValue, Expr, Extension, LogicalPlanBuilder, Operator, ScalarUDF,
+        ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
+        Volatility,
     };
 
     use async_trait::async_trait;
+    use datafusion_expr::expr::ScalarFunction;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         crate::test::assert_optimized_plan_eq(
@@ -2859,17 +2862,44 @@ Projection: a, b
         assert_optimized_plan_eq(&plan, expected)
     }
 
+    #[derive(Debug)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
+        }
+    }
+
     #[test]
     fn test_push_down_volatile_function_in_aggregate() -> Result<()> {
-        // SELECT t.a, t.r FROM (SELECT a, SUM(b), random()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
+        // SELECT t.a, t.r FROM (SELECT a, SUM(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
-            .project(vec![
-                col("a"),
-                sum(col("b")),
-                add(random(), lit(1)).alias("r"),
-            ])?
+            .project(vec![col("a"), sum(col("b")), add(expr, lit(1)).alias("r")])?
             .alias("t")?
             .filter(col("t.a").gt(lit(5)).and(col("t.r").gt(lit(0.5))))?
             .project(vec![col("t.a"), col("t.r")])?
@@ -2878,7 +2908,7 @@ Projection: a, b
         let expected_before = "Projection: t.a, t.r\
         \n  Filter: t.a > Int32(5) AND t.r > Float64(0.5)\
         \n    SubqueryAlias: t\
-        \n      Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
+        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
         \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
         \n          TableScan: test1";
         assert_eq!(format!("{plan:?}"), expected_before);
@@ -2886,7 +2916,7 @@ Projection: a, b
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
         \n    Filter: r > Float64(0.5)\
-        \n      Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
+        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
         \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
         \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
         assert_optimized_plan_eq(&plan, expected_after)
@@ -2894,8 +2924,12 @@ Projection: a, b
 
     #[test]
     fn test_push_down_volatile_function_in_join() -> Result<()> {
-        // SELECT t.a, t.r FROM (SELECT test1.a AS a, random() AS r FROM test1 join test2 ON test1.a = test2.a) AS t WHERE t.r > 0.5;
+        // SELECT t.a, t.r FROM (SELECT test1.a AS a, TestScalarUDF() AS r FROM test1 join test2 ON test1.a = test2.a) AS t WHERE t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let left = LogicalPlanBuilder::from(table_scan).build()?;
         let right_table_scan = test_table_scan_with_name("test2")?;
         let right = LogicalPlanBuilder::from(right_table_scan).build()?;
@@ -2909,7 +2943,7 @@ Projection: a, b
                 ),
                 None,
             )?
-            .project(vec![col("test1.a").alias("a"), random().alias("r")])?
+            .project(vec![col("test1.a").alias("a"), expr.alias("r")])?
             .alias("t")?
             .filter(col("t.r").gt(lit(0.8)))?
             .project(vec![col("t.a"), col("t.r")])?
@@ -2918,7 +2952,7 @@ Projection: a, b
         let expected_before = "Projection: t.a, t.r\
         \n  Filter: t.r > Float64(0.8)\
         \n    SubqueryAlias: t\
-        \n      Projection: test1.a AS a, random() AS r\
+        \n      Projection: test1.a AS a, TestScalarUDF() AS r\
         \n        Inner Join: test1.a = test2.a\
         \n          TableScan: test1\
         \n          TableScan: test2";
@@ -2927,7 +2961,7 @@ Projection: a, b
         let expected = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
         \n    Filter: r > Float64(0.8)\
-        \n      Projection: test1.a AS a, random() AS r\
+        \n      Projection: test1.a AS a, TestScalarUDF() AS r\
         \n        Inner Join: test1.a = test2.a\
         \n          TableScan: test1\
         \n          TableScan: test2";
