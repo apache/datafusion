@@ -25,6 +25,7 @@
 //! * [`LogicalPlan::apply_expressions`]: (non recursively) visit all expressions of this node
 //!
 //! Rewriting (update) APIs:
+//! * [`LogicalPlan::exists`]: search for an expression in a plan
 //! * [`LogicalPlan::rewrite`]: recursively rewrite the node and all of its inputs
 //! * [`LogicalPlan::rewrite_with_subqueries`]: recursively rewrite the node and all of its inputs, including subqueries
 //! * [`LogicalPlan::map_children`]: recursively rewrite all inputs of this node
