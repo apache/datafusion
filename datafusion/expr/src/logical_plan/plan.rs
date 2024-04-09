@@ -1321,6 +1321,21 @@ impl LogicalPlan {
             | LogicalPlan::Extension(_) => None,
         }
     }
+
+    /// If this node's expressions contains any references to an outer subquery
+    pub fn contains_outer_reference(&self) -> bool {
+        let mut contains = false;
+        self.apply_expressions(|expr| {
+            Ok(if expr.contains_outer() {
+                contains = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+        contains
+    }
 }
 
 /// This macro is used to determine continuation during combined transforming

@@ -91,7 +91,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     _ => Ok(Transformed::no(plan)),
                 }
             }
-            _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
+            _ if plan.contains_outer_reference() => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.can_pull_up = false;
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
