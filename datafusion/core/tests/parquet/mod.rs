@@ -76,7 +76,7 @@ enum Scenario {
     DecimalLargePrecisionBloomFilter,
     ByteArray,
     PeriodsInColumnNames,
-    AllNullValues,
+    WithNullValues,
 }
 
 enum Unit {
@@ -822,7 +822,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ),
             ]
         }
-        Scenario::AllNullValues => {
+        Scenario::WithNullValues => {
             vec![
                 make_all_null_values(),
                 make_int_batches(1, 6),

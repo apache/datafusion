@@ -1266,7 +1266,7 @@ async fn prune_periods_in_column_names() {
 }
 
 #[tokio::test]
-async fn test_row_group_all_null_values() {
+async fn test_row_group_with_null_values() {
     // Three row groups:
     // 1. all Null values
     // 2. values from 1 to 5
