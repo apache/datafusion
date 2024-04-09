@@ -286,13 +286,12 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use std::any::Any;
 
     use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{internal_err, plan_err};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
-    use datafusion_expr::{ScalarUDFImpl, Signature};
+    use datafusion_expr::Signature;
 
     use crate::expressions::lit;
     use crate::expressions::try_cast;
@@ -537,32 +536,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[derive(Debug)]
-    struct EmptyArgsUDF {
-        signature: Signature,
-    }
-
-    impl ScalarUDFImpl for EmptyArgsUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn name(&self) -> &str {
-            "EmptyArgsUDF"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
-        }
-
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
-        }
     }
 
     // Helper function just for testing.
