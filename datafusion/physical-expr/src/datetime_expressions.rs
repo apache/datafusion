@@ -16,7 +16,7 @@
 // under the License.
 
 //! DateTime expressions
-
+#![allow(deprecated)]
 use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
