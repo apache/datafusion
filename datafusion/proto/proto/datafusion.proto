@@ -579,7 +579,7 @@ enum ScalarFunction {
   // 35 was MD5
   //  36 was NullIf
   // 37 was OctetLength 
-  Random = 38;
+  // 38 was Random
   // 39 was RegexpReplace
   // 40 was Repeat
   // 41 was Replace
@@ -650,7 +650,7 @@ enum ScalarFunction {
   // 108 was ArrayReplaceN
   // 109 was ArrayRemoveAll
   // 110 was ArrayReplaceAll
-  Nanvl = 111;
+  // 111 was Nanvl
   // 112 was Flatten
   // 113 was IsNan
   // 114 was Iszero

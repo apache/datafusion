@@ -184,10 +184,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Factorial => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
         }
-        BuiltinScalarFunction::Nanvl => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
-        }
-        BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
@@ -538,19 +534,6 @@ mod tests {
                         "Builtin scalar function {fun} didn't got the right error with empty arguments");
                 }
             }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_arguments() -> Result<()> {
-        let execution_props = ExecutionProps::new();
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-
-        let funs = [BuiltinScalarFunction::Random];
-
-        for fun in funs.iter() {
-            create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
         }
         Ok(())
     }

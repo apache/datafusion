@@ -1903,8 +1903,8 @@ mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{
-        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        case, lit, ColumnarValue, Expr, ScalarFunctionDefinition, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
@@ -2018,13 +2018,6 @@ mod test {
 
     #[test]
     fn test_is_volatile_scalar_func_definition() {
-        // BuiltIn
-        assert!(
-            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
-                .is_volatile()
-                .unwrap()
-        );
-
         // UDF
         #[derive(Debug)]
         struct TestScalarUDF {

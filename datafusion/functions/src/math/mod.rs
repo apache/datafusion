@@ -27,8 +27,10 @@ pub mod iszero;
 pub mod lcm;
 pub mod log;
 pub mod nans;
+pub mod nanvl;
 pub mod pi;
 pub mod power;
+pub mod random;
 pub mod round;
 pub mod trunc;
 
@@ -55,9 +57,11 @@ make_udf_function!(lcm::LcmFunc, LCM, lcm);
 make_math_unary_udf!(LnFunc, LN, ln, ln, Some(vec![Some(true)]));
 make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
 make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
+make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
 make_udf_function!(pi::PiFunc, PI, pi);
 make_udf_function!(power::PowerFunc, POWER, power);
 make_math_unary_udf!(RadiansFunc, RADIANS, radians, to_radians, None);
+make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
 make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, None);
 make_math_unary_udf!(SinFunc, SIN, sin, sin, None);
@@ -180,6 +184,11 @@ pub mod expr_fn {
         super::log10().call(vec![num])
     }
 
+    #[doc = "returns x if x is not NaN otherwise returns y"]
+    pub fn nanvl(x: Expr, y: Expr) -> Expr {
+        super::nanvl().call(vec![x, y])
+    }
+
     #[doc = "Returns an approximate value of π"]
     pub fn pi() -> Expr {
         super::pi().call(vec![])
@@ -193,6 +202,11 @@ pub mod expr_fn {
     #[doc = "converts degrees to radians"]
     pub fn radians(num: Expr) -> Expr {
         super::radians().call(vec![num])
+    }
+
+    #[doc = "Returns a random value in the range 0.0 <= x < 1.0"]
+    pub fn random() -> Expr {
+        super::random().call(vec![])
     }
 
     #[doc = "round to nearest integer"]
@@ -261,9 +275,11 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         log(),
         log2(),
         log10(),
+        nanvl(),
         pi(),
         power(),
         radians(),
+        random(),
         round(),
         signum(),
         sin(),
