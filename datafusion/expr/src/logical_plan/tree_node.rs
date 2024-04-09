@@ -365,14 +365,9 @@ fn rewrite_arcs<F>(
 where
     F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
 {
-    Ok(input_plans
+    input_plans
         .into_iter()
-        .map(unwrap_arc)
-        .map_until_stop_and_collect(&mut f)?
-        .update_data(|inputs| {
-            // have a Vec<LogicalPlan>, now need to wrap in `Arc`s again
-            inputs.into_iter().map(Arc::new).collect::<Vec<_>>()
-        }))
+        .map_until_stop_and_collect(|plan| rewrite_arc(plan, &mut f))
 }
 
 /// Rewrites all inputs for an Extension node "in place"
