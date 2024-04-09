@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns};
+use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
     aggregate_function, built_in_function, built_in_window_function, udaf,
@@ -33,9 +33,7 @@ use crate::{
 };
 
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
