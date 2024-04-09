@@ -83,31 +83,31 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
     use itertools::Either;
     use std::iter::once;
 
-    // maintain for each line a number, so
-    // making reviewing explain result changes easier
-    let mut line_num = 0;
     // check last cell
     if let Some(cell) = row.pop() {
         let lines: Vec<_> = cell.split('\n').collect();
 
         // no newlines in last cell
         if lines.len() < 2 {
-            row.push(format!("1{cell}"));
+            row.push(cell);
             return Either::Left(once(row));
         }
 
         // form new rows with each additional line
         let new_lines: Vec<_> = lines
             .into_iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(idx, l)| {
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
                 // See https://github.com/apache/arrow-datafusion/issues/6328
                 let content = l.trim_start();
-                line_num = line_num + 1;
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("{line_num}{new_prefix}{content}")]
+                // maintain for each line a number, so
+                // reviewing explain result changes is easier
+                let line_num = idx + 1;
+                vec![format!("{line_num:02}){new_prefix}{content}")]
             })
             .collect();
 
