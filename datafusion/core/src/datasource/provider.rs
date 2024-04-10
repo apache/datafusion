@@ -219,7 +219,7 @@ pub trait TableProvider: Sync + Send {
     ///                 between_expr.expr
     ///                 .try_into_col()
     ///                 .map(|column| {
-    ///                     if column.name == "c1".to_string() {
+    ///                     if column.name == "c1" {
     ///                         TableProviderFilterPushDown::Exact
     ///                     } else {
     ///                         TableProviderFilterPushDown::Unsupported
