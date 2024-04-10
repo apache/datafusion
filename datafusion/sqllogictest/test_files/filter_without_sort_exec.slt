@@ -123,6 +123,18 @@ Sort: data.time ASC NULLS LAST
 --Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) != data.date
 ----TableScan: data projection=[date, ticker, time]
 
+# no relation between time & date
+# should also be pipeline breaking
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A'
+ORDER BY "time"
+----
+logical_plan
+Sort: data.time ASC NULLS LAST
+--Filter: data.ticker = Utf8("A")
+----TableScan: data projection=[date, ticker, time]
+
 # query
 query TT
 explain SELECT * FROM data 
