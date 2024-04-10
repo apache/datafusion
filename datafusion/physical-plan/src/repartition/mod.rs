@@ -53,7 +53,6 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use tokio::sync::OnceCell;
 
 mod distributor_channels;
 
@@ -161,7 +160,19 @@ impl RepartitionExecState {
     }
 }
 
-type LazyState = Arc<OnceCell<Mutex<RepartitionExecState>>>;
+/// Lazily initialized state
+///
+/// Note that the state is initialized ONCE for all partitions by a single task(thread).
+/// This may take a short while.  It is also like that multiple threads
+/// call execute at the same time, because we have just started "target partitions" tasks
+/// which is commonly set to the number of CPU cores and all call execute at the same time.
+///
+/// Thus, use a **tokio** `OnceCell` for this initialization so as not to waste CPU cycles
+/// in a futex lock but instead allow other threads to do something useful.
+///
+/// Uses a parking_lot `Mutex` to control other accesses as they are very short duration
+///  (e.g. removing channels on completion) where the overhead of `await` is not warranted.
+type LazyState = Arc<tokio::sync::OnceCell<Mutex<RepartitionExecState>>>;
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
 pub struct BatchPartitioner {
