@@ -296,11 +296,15 @@
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! [`Expr`]s can be rewritten using the  [`TreeNode`] API and simplified using
-//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be found in the
-//! [`expr_api`.rs] example
+//! `LogicalPlan`s can be rewritten with [`TreeNode`] API, see the
+//! [`tree_node module`] for more details.
+//!
+//! [`Expr`]s can also be rewritten with [`TreeNode`] API and simplified using
+//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be
+//! found in the [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
+//! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
 //! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
