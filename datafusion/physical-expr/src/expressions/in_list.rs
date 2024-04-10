@@ -1385,7 +1385,7 @@ mod tests {
             );
         }
 
-        // expression: "a in ("a", "b")"
+        // expression: "a in ("a", "b", null)"
         let lists = vec![
             vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
             vec![
@@ -1405,7 +1405,7 @@ mod tests {
             );
         }
 
-        // expression: "a not in ("a", "b")"
+        // expression: "a not in ("a", "b", null)"
         for list in lists.iter() {
             in_list!(
                 batch,
