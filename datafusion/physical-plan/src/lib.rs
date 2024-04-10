@@ -674,17 +674,7 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
-        let plan = plan.with_new_children(children)?;
-
-        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        //     let p = aggr_exec.rewrite_ordering()?;
-        //     Ok(Arc::new(p))
-        // } else {
-        //     Ok(plan)
-        // }
-        Ok(plan)
-
-        
+        plan.with_new_children(children)
     } else {
         Ok(plan)
     }

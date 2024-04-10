@@ -360,16 +360,7 @@ fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
             Ok(Transformed::no(plan))
         } else {
             let new_plan = plan.clone().with_new_children(plan.children())?;
-
-            
-            if let Some(aggr_exec) = new_plan.as_any().downcast_ref::<AggregateExec>() {
-                let p = aggr_exec.rewrite_ordering()?;
-                Ok(Transformed::yes(Arc::new(p)))
-            } else {
-                Ok(Transformed::yes(new_plan))
-            }
-
-            // Ok(Transformed::yes(new_plan))
+            Ok(Transformed::yes(new_plan))
         }
     })
     .data()

@@ -332,7 +332,7 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
-        let res = AggregateExec::try_new_with_schema(
+        AggregateExec::try_new_with_schema(
             mode,
             group_by,
             aggr_expr,
@@ -340,65 +340,7 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
-        )?;
-
-        res.rewrite_ordering()
-    }
-
-    pub fn rewrite_ordering(&self) -> Result<Self> {
-        let input = self.input();
-        let group_by = self.group_by();
-        let mut aggr_expr = self.aggr_expr().to_vec();
-        let mode = self.mode();
-
-        let input_eq_properties = input.equivalence_properties();
-        // Get GROUP BY expressions:
-        let groupby_exprs = group_by.input_exprs();
-        // If existing ordering satisfies a prefix of the GROUP BY expressions,
-        // prefix requirements with this section. In this case, aggregation will
-        // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-
-        let mut new_requirement = indices
-            .iter()
-            .map(|&idx| PhysicalSortRequirement {
-                expr: groupby_exprs[idx].clone(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-
-        let req = get_aggregate_exprs_requirement(
-            &new_requirement,
-            &mut aggr_expr,
-            &group_by,
-            input_eq_properties,
-            &mode,
-        )?;
-        new_requirement.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
-
-        let required_input_ordering =
-            (!new_requirement.is_empty()).then_some(new_requirement);
-
-        Ok(Self {
-            mode: self.mode().clone(),
-            group_by: self.group_by().clone(),
-            aggr_expr,
-            filter_expr: self.filter_expr().to_vec(),
-            input: self.input().clone(),
-            schema: self.schema.clone(),
-            input_schema: self.input_schema.clone(),
-            metrics: self.metrics.clone(),
-            required_input_ordering,
-            limit: self.limit,
-            input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
-        })
-
-        // self.aggr_expr = aggr_expr;
-        // self.required_input_ordering = required_input_ordering;
-
-        // Ok(())
+        )
     }
 
     /// Create a new hash aggregate execution plan with the given schema.
@@ -473,7 +415,7 @@ impl AggregateExec {
             &input_order_mode,
         );
 
-        let required_input_ordering = None;
+        // let required_input_ordering = None;
         Ok(AggregateExec {
             mode,
             group_by,
@@ -1025,15 +967,15 @@ fn get_aggregate_exprs_requirement(
             )) {
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to LAST_VALUE enables more efficient execution
-                // given the existing ordering:
-                let mut last_value = first_value.convert_to_last();
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
+            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+            //     prefix_requirement,
+            //     &reverse_aggr_req,
+            // )) {
+            //     // Converting to LAST_VALUE enables more efficient execution
+            //     // given the existing ordering:
+            //     let mut last_value = first_value.convert_to_last();
+            //     last_value = last_value.with_requirement_satisfied(true);
+            //     *aggr_expr = Arc::new(last_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 first_value = first_value.with_requirement_satisfied(false);
@@ -1049,15 +991,15 @@ fn get_aggregate_exprs_requirement(
             )) {
                 last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to FIRST_VALUE enables more efficient execution
-                // given the existing ordering:
-                let mut first_value = last_value.convert_to_first();
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
+            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+            //     prefix_requirement,
+            //     &reverse_aggr_req,
+            // )) {
+            //     // Converting to FIRST_VALUE enables more efficient execution
+            //     // given the existing ordering:
+            //     let mut first_value = last_value.convert_to_first();
+            //     first_value = first_value.with_requirement_satisfied(true);
+            //     *aggr_expr = Arc::new(first_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 last_value = last_value.with_requirement_satisfied(false);

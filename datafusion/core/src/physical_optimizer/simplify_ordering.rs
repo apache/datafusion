@@ -95,12 +95,6 @@ fn get_common_requirement_of_aggregate_input(
 
     let plan = if is_transformed {
 
-        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        //     let p = aggr_exec.clone_with_input(new_children[0].clone());
-        //     Arc::new(p) as Arc<dyn ExecutionPlan>
-        // } else {
-        //     plan.with_new_children(new_children)?
-        // }
         plan.with_new_children(new_children)?
 
     } else {

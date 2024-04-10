@@ -17,6 +17,7 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
+use core::panic;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -65,14 +66,6 @@ impl<T> PlanContext<T> {
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
         let plan = with_new_children_if_necessary(self.plan, children_plans)?;
-
-        let plan = if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-            let p = aggr_exec.rewrite_ordering()?;
-            Arc::new(p)
-        } else {
-            plan
-        };
-
         self.plan = plan;
 
         Ok(self)

@@ -77,14 +77,14 @@ impl PhysicalOptimizer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
             Arc::new(OutputRequirements::new_add_mode()),
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             Arc::new(AggregateStatistics::new()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
@@ -96,24 +96,24 @@ impl PhysicalOptimizer {
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
             // least one of the operators in the plan benefits from increased parallelism.
             Arc::new(EnforceDistribution::new()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
             Arc::new(CombinePartialFinalAggregate::new()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
@@ -123,7 +123,7 @@ impl PhysicalOptimizer {
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
             // diagnostic error message when this happens. It makes no changes to the
@@ -134,8 +134,7 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
-            // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
+            // Arc::new(SimplifyOrdering::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
@@ -143,6 +142,8 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // Appears after AggregateExec is created
+            // Arc::new(SimplifyOrdering::new()),
         ];
 
         Self::with_rules(rules)

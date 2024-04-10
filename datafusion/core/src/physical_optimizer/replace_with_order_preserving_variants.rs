@@ -139,18 +139,6 @@ fn plan_with_order_preserving_variants(
         }
     }
 
-    // let mut plan_context = sort_input.update_plan_from_children()?;
-    // let plan = plan_context.plan.clone();
-    // let p = if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-    //     let p = aggr_exec.rewrite_ordering()?;
-    //     Arc::new(p)
-    // } else {
-    //     plan
-    // };
-    // plan_context.plan = p;
-
-    // Ok(plan_context)
-
     sort_input.update_plan_from_children()
 }
 
@@ -197,16 +185,6 @@ fn plan_with_order_breaking_variants(
         let coalesce = CoalescePartitionsExec::new(child);
         sort_input.plan = Arc::new(coalesce) as _;
     } else {
-        // let mut pc = sort_input.update_plan_from_children()?;
-        // let plan = pc.plan.clone();
-        // let p = if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        //     let p = aggr_exec.rewrite_ordering()?;
-        //     Arc::new(p)
-        // } else {
-        //     plan
-        // };
-        // pc.plan = p;
-        // return Ok(pc);
         return sort_input.update_plan_from_children();
     }
 
