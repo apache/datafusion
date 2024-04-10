@@ -188,7 +188,7 @@ pub trait TableProvider: Sync + Send {
     /// # Example
     ///
     /// ```rust
-    /// # use std::any::Any;    /// #
+    /// # use std::any::Any;
     /// # use std::sync::Arc;
     /// # use arrow_schema::SchemaRef;
     /// # use async_trait::async_trait;
