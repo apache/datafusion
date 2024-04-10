@@ -241,19 +241,19 @@ impl From<StreamType> for SendableRecordBatchStream {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    mode: AggregateMode,
+    pub mode: AggregateMode,
     /// Group by expressions
-    group_by: PhysicalGroupBy,
+    pub group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    pub aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
-    filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    pub filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
-    limit: Option<usize>,
+    pub limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
-    schema: SchemaRef,
+    pub schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate, i.e., partial and final aggregates have same `input_schema`.
@@ -261,14 +261,28 @@ pub struct AggregateExec {
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
     /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    required_input_ordering: Option<LexRequirement>,
+    pub metrics: ExecutionPlanMetricsSet,
+    pub required_input_ordering: Option<LexRequirement>,
     /// Describes how the input is ordered relative to the group by columns
-    input_order_mode: InputOrderMode,
-    cache: PlanProperties,
+    pub input_order_mode: InputOrderMode,
+    pub cache: PlanProperties,
 }
 
 impl AggregateExec {
+    pub fn with_required_input_ordering(
+        self,
+        required_input_ordering: Option<LexRequirement>,
+    ) -> Self {
+        Self {
+            required_input_ordering,
+            ..self
+        }
+    }
+
+    pub fn cache(&self) -> &PlanProperties {
+        &self.cache
+    }
+
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
@@ -336,6 +350,11 @@ impl AggregateExec {
             })
             .collect::<Vec<_>>();
 
+        println!("correct new_requirement: {:?}", new_requirement);
+        println!("correct aggr_expr: {:?}", aggr_expr);
+        println!("correct group_by: {:?}", group_by);
+        println!("correct input_eq_properties: {:?}", input_eq_properties);
+        println!("correct mode: {:?}", mode);
         let req = get_aggregate_exprs_requirement(
             &new_requirement,
             &mut aggr_expr,
@@ -361,6 +380,15 @@ impl AggregateExec {
 
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
+
+        if required_input_ordering.is_some() {
+            println!(
+                "correct required_input_ordering: {:?}",
+                required_input_ordering
+            );
+        }
+
+        let required_input_ordering = None;
 
         let cache = Self::compute_properties(
             &input,
