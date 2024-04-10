@@ -683,6 +683,7 @@ impl DefaultPhysicalPlanner {
 
                     // Indices refer to position in flat tree Vec, which means they are
                     // guaranteed to be unique, hence unstable sort used.
+                    //
                     // We reverse sort because of how we visited the node in the initial
                     // DFS traversal (see above).
                     children.sort_unstable_by_key(|(index, _)| std::cmp::Reverse(*index));
