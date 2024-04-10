@@ -45,8 +45,6 @@ pub enum BuiltinScalarFunction {
     Exp,
     /// factorial
     Factorial,
-    /// nanvl
-    Nanvl,
     // string functions
     /// concat
     Concat,
@@ -56,8 +54,6 @@ pub enum BuiltinScalarFunction {
     EndsWith,
     /// initcap
     InitCap,
-    /// random
-    Random,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -114,14 +110,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
-            BuiltinScalarFunction::Nanvl => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
-
-            // Volatile builtin functions
-            BuiltinScalarFunction::Random => Volatility::Volatile,
         }
     }
 
@@ -152,15 +144,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
-            BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
 
             BuiltinScalarFunction::Factorial => Ok(Int64),
-
-            BuiltinScalarFunction::Nanvl => match &input_expr_types[0] {
-                Float32 => Ok(Float32),
-                _ => Ok(Float64),
-            },
 
             BuiltinScalarFunction::Ceil | BuiltinScalarFunction::Exp => {
                 match input_expr_types[0] {
@@ -199,11 +185,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
-            BuiltinScalarFunction::Nanvl => Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Factorial => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
@@ -240,8 +221,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ceil => &["ceil"],
             BuiltinScalarFunction::Exp => &["exp"],
             BuiltinScalarFunction::Factorial => &["factorial"],
-            BuiltinScalarFunction::Nanvl => &["nanvl"],
-            BuiltinScalarFunction::Random => &["random"],
 
             // conditional functions
             BuiltinScalarFunction::Coalesce => &["coalesce"],

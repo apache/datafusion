@@ -1479,7 +1479,7 @@ impl LogicalPlan {
 
     /// Calls `f` on all subqueries referenced in expressions of the current
     /// `LogicalPlan` node.
-    fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+    pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
@@ -1502,7 +1502,7 @@ impl LogicalPlan {
     /// using `f`.
     ///
     /// Returns the current node.
-    fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+    pub fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {

@@ -2878,7 +2878,7 @@ pub enum ScalarFunction {
     /// 35 was MD5
     ///   36 was NullIf
     /// 37 was OctetLength
-    Random = 38,
+    /// 38 was Random
     /// 39 was RegexpReplace
     /// 40 was Repeat
     /// 41 was Replace
@@ -2949,7 +2949,7 @@ pub enum ScalarFunction {
     /// 108 was ArrayReplaceN
     /// 109 was ArrayRemoveAll
     /// 110 was ArrayReplaceAll
-    Nanvl = 111,
+    /// 111 was Nanvl
     /// 112 was Flatten
     /// 113 was IsNan
     /// 114 was Iszero
@@ -2992,10 +2992,8 @@ impl ScalarFunction {
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
-            ScalarFunction::Random => "Random",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Factorial => "Factorial",
-            ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3008,10 +3006,8 @@ impl ScalarFunction {
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
-            "Random" => Some(Self::Random),
             "Coalesce" => Some(Self::Coalesce),
             "Factorial" => Some(Self::Factorial),
-            "Nanvl" => Some(Self::Nanvl),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }
