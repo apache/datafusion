@@ -57,12 +57,13 @@ impl PhysicalOptimizerRule for SimplifyOrdering {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let res = plan
-            .transform_down(&get_common_requirement_of_aggregate_input)
-            .data();
+        Ok(plan)
+        // let res = plan
+        //     .transform_down(&get_common_requirement_of_aggregate_input)
+        //     .data();
 
-        // println!("res: {:?}", res);
-        res
+        // // println!("res: {:?}", res);
+        // res
     }
 
     fn name(&self) -> &str {
