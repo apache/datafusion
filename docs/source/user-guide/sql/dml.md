@@ -44,8 +44,7 @@ separate hive-style directories.
 The output format is determined by the first match of the following rules:
 
 1. Value of `STORED AS`
-2. Value of the `OPTION (FORMAT ..)`
-3. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
+2. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
 
 For a detailed list of valid OPTIONS, see [Write Options](write_options).
 

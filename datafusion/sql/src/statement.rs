@@ -850,7 +850,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
             };
-            if !(key.contains('.') || key == "format") {
+            if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
@@ -866,16 +866,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FileType::from_str(&file_type).map_err(|_| {
                 DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
             })?
-        } else if let Some(format) = options.remove("format") {
-            // try to infer file format from the "format" key in options
-            FileType::from_str(&format)
-                .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
         } else {
             let e = || {
                 DataFusionError::Configuration(
-                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                        .to_string(),
-                )
+                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                    .to_string(),
+            )
             };
             // try to infer file format from file extension
             let extension: &str = &Path::new(&statement.target)
@@ -1350,7 +1346,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .enumerate()
                 .map(|(i, c)| {
                     let column_index = table_schema
-                        .index_of_column_by_name(None, &c)?
+                        .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {

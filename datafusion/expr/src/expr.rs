@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
     aggregate_function, built_in_function, built_in_window_function, udaf,
@@ -1232,7 +1232,7 @@ impl Expr {
 
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
-        !find_out_reference_exprs(self).is_empty()
+        self.exists(|expr| matches!(expr, Expr::OuterReferenceColumn { .. }))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -1903,8 +1903,8 @@ mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{
-        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        case, lit, ColumnarValue, Expr, ScalarFunctionDefinition, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
@@ -2018,13 +2018,6 @@ mod test {
 
     #[test]
     fn test_is_volatile_scalar_func_definition() {
-        // BuiltIn
-        assert!(
-            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
-                .is_volatile()
-                .unwrap()
-        );
-
         // UDF
         #[derive(Debug)]
         struct TestScalarUDF {
