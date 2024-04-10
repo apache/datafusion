@@ -545,7 +545,11 @@ impl DefaultPhysicalPlanner {
                     NodeState::ZeroOrOneChild
                 }
                 1 => NodeState::ZeroOrOneChild,
-                _ => NodeState::TwoOrMoreChildren(Mutex::new(vec![])),
+                _ => {
+                    let ready_children = Vec::with_capacity(node.inputs().len());
+                    let ready_children = Mutex::new(ready_children);
+                    NodeState::TwoOrMoreChildren(ready_children)
+                }
             };
             let node = LogicalNode {
                 node,
