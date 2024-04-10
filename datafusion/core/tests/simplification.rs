@@ -28,9 +28,10 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, BuiltinScalarFunction, Cast, ColumnarValue, Expr, ExprSchemable,
-    LogicalPlan, LogicalPlanBuilder, ScalarUDF, Volatility,
+    expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
+    LogicalPlanBuilder, ScalarUDF, Volatility,
 };
+use datafusion_functions::math;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
@@ -383,17 +384,17 @@ fn test_const_evaluator_scalar_functions() {
 
     // volatile / stable functions should not be evaluated
     // rand() + (1 + 2) --> rand() + 3
-    let fun = BuiltinScalarFunction::Random;
-    assert_eq!(fun.volatility(), Volatility::Volatile);
-    let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
+    let fun = math::random();
+    assert_eq!(fun.signature().volatility, Volatility::Volatile);
+    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
     let expr = rand.clone() + (lit(1) + lit(2));
     let expected = rand + lit(3);
     test_evaluate(expr, expected);
 
     // parenthesization matters: can't rewrite
     // (rand() + 1) + 2 --> (rand() + 1) + 2)
-    let fun = BuiltinScalarFunction::Random;
-    let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
+    let fun = math::random();
+    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
     let expr = (rand + lit(1)) + lit(2);
     test_evaluate(expr.clone(), expr);
 }

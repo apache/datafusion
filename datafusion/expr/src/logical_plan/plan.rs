@@ -1321,6 +1321,21 @@ impl LogicalPlan {
             | LogicalPlan::Extension(_) => None,
         }
     }
+
+    /// If this node's expressions contains any references to an outer subquery
+    pub fn contains_outer_reference(&self) -> bool {
+        let mut contains = false;
+        self.apply_expressions(|expr| {
+            Ok(if expr.contains_outer() {
+                contains = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+        contains
+    }
 }
 
 /// This macro is used to determine continuation during combined transforming
@@ -1446,7 +1461,7 @@ impl LogicalPlan {
 
     /// Calls `f` on all subqueries referenced in expressions of the current
     /// `LogicalPlan` node.
-    fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+    pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
@@ -1469,7 +1484,7 @@ impl LogicalPlan {
     /// using `f`.
     ///
     /// Returns the current node.
-    fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+    pub fn map_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {

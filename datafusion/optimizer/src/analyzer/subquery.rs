@@ -140,7 +140,7 @@ fn check_inner_plan(
     is_aggregate: bool,
     can_contain_outer_ref: bool,
 ) -> Result<()> {
-    if !can_contain_outer_ref && contains_outer_reference(inner_plan) {
+    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
     // We want to support as many operators as possible inside the correlated subquery
@@ -231,13 +231,6 @@ fn check_inner_plan(
         LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
-}
-
-fn contains_outer_reference(inner_plan: &LogicalPlan) -> bool {
-    inner_plan
-        .expressions()
-        .iter()
-        .any(|expr| expr.contains_outer())
 }
 
 fn check_aggregation_in_scalar_subquery(

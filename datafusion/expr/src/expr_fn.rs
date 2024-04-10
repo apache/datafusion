@@ -297,11 +297,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns a random value in the range 0.0 <= x < 1.0
-pub fn random() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
-}
-
 /// Returns the approximate number of distinct input values.
 /// This function provides an approximation of count(DISTINCT x).
 /// Zero is returned if all input values are null.
@@ -550,7 +545,6 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
-scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -922,7 +916,6 @@ mod test {
         test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Ceil, ceil);
         test_unary_scalar_expr!(Exp, exp);
-        test_scalar_expr!(Nanvl, nanvl, x, y);
 
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);

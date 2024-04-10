@@ -1414,9 +1414,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
-            BuiltinScalarFunction::Random => Self::Random,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
-            BuiltinScalarFunction::Nanvl => Self::Nanvl,
         };
 
         Ok(scalar_function)
