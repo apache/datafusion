@@ -2244,35 +2244,26 @@ mod tests {
             should_satisfy_ordering: bool,
         }
 
+        let col_a = col("a", schema.as_ref())?;
+        let col_b = col("b", schema.as_ref())?;
+        let col_c = col("c", schema.as_ref())?;
+        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None));
+
         let cases = vec![
             TestCase {
-                name: "(date, ticker, time) -> (time)",
+                name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
-                constants: vec![col("b", schema.as_ref())?],
-                equal_conditions: vec![[
-                    Arc::new(CastExpr::new(
-                        col("c", schema.as_ref())?,
-                        DataType::Date32,
-                        None,
-                    )),
-                    col("a", schema.as_ref())?,
-                ]],
+                constants: vec![col_b],
+                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
             TestCase {
-                name: "not ordered because (ticker) is not constant",
+                name: "not ordered because (b) is not constant",
                 // b is not constant anymore
                 constants: vec![],
                 // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
-                equal_conditions: vec![[
-                    Arc::new(CastExpr::new(
-                        col("c", schema.as_ref())?,
-                        DataType::Date32,
-                        None,
-                    )),
-                    col("a", schema.as_ref())?,
-                ]],
+                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: false,
             },
