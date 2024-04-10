@@ -94,6 +94,15 @@ pub(crate) struct OutputRequirementExec {
 }
 
 impl OutputRequirementExec {
+    pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            input,
+            order_requirement: self.order_requirement.clone(),
+            dist_requirement: self.dist_requirement.clone(),
+            cache: self.cache.clone(),
+        }
+    }
+
     pub(crate) fn new(
         input: Arc<dyn ExecutionPlan>,
         requirements: Option<LexRequirement>,

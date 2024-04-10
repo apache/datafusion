@@ -17,10 +17,11 @@
 
 use std::sync::Arc;
 
+use arrow::compute::kernels::aggregate;
 use datafusion_common::{
     config::ConfigOptions,
     not_impl_err,
-    tree_node::{Transformed, TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
@@ -30,13 +31,16 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
-    metrics::ExecutionPlanMetricsSet,
+    coalesce_partitions::CoalescePartitionsExec,
     ExecutionPlan, ExecutionPlanProperties,
 };
 
+use datafusion_physical_expr::equivalence::collapse_lex_req;
+use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
+
 use crate::error::Result;
 
-use super::PhysicalOptimizerRule;
+use super::{output_requirements::OutputRequirementExec, PhysicalOptimizerRule};
 
 #[derive(Default)]
 pub struct SimplifyOrdering {}
@@ -53,8 +57,12 @@ impl PhysicalOptimizerRule for SimplifyOrdering {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&get_common_requirement_of_aggregate_input)
-            .data()
+        let res = plan
+            .transform_down(&get_common_requirement_of_aggregate_input)
+            .data();
+
+        // println!("res: {:?}", res);
+        res
     }
 
     fn name(&self) -> &str {
@@ -69,104 +77,100 @@ impl PhysicalOptimizerRule for SimplifyOrdering {
 fn get_common_requirement_of_aggregate_input(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let mut is_transformed = false;
+    let children = plan.children();
 
-    let plan = if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        let input = if let Some(aggr_exec) =
-            aggr_exec.input().as_any().downcast_ref::<AggregateExec>()
-        {
-            // println!("AggregateExec");
-            let input = aggr_exec.input().clone();
-            let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
-            let group_by = aggr_exec.group_by();
-            let mode = aggr_exec.mode().clone();
-
-            use datafusion_physical_expr::equivalence::collapse_lex_req;
-            use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
-
-            let input_eq_properties = input.equivalence_properties();
-            let groupby_exprs = group_by.input_exprs();
-            let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-            let mut new_requirement = indices
-                .iter()
-                .map(|&idx| PhysicalSortRequirement {
-                    expr: groupby_exprs[idx].clone(),
-                    options: None,
-                })
-                .collect::<Vec<_>>();
-
-            // print!("my new_requirement: {:?}", new_requirement);
-            // println!("my aggr_expr: {:?}", aggr_expr);
-            // println!("my group_by: {:?}", group_by);
-            // println!("my input_eq_properties: {:?}", input_eq_properties);
-            // println!("my mode: {:?}", mode);
-            let req = get_aggregate_exprs_requirement(
-                &new_requirement,
-                &mut aggr_expr,
-                &group_by,
-                input_eq_properties,
-                &mode,
-            )?;
-            // println!("my req: {:?}", req);
-            new_requirement.extend(req);
-            new_requirement = collapse_lex_req(new_requirement);
-            let required_input_ordering =
-                (!new_requirement.is_empty()).then_some(new_requirement);
-
-            // println!(
-            //     "my required_input_ordering: {:?}",
-            //     required_input_ordering
-            // );
-            let filter_expr = aggr_exec.filter_expr().to_vec();
-
-            // let metrics = aggr_exec.metrics();
-
-            let p = AggregateExec {
-                mode,
-                group_by: group_by.clone(),
-                aggr_expr,
-                filter_expr,
-                input,
-                schema: aggr_exec.schema().clone(),
-                input_schema: aggr_exec.input_schema().clone(),
-                metrics: ExecutionPlanMetricsSet::new(),
-                required_input_ordering,
-                limit: None,
-                input_order_mode: aggr_exec.input_order_mode().clone(),
-                cache: aggr_exec.cache().clone(),
-            };
-
-            is_transformed = true;
-
-            Arc::new(p) as Arc<dyn ExecutionPlan>
-        } else {
-            aggr_exec.input().clone()
-        };
-
-        // TODO: modify the input of aggr_exec
-
-        // aggr_exec as Arc<dyn ExecutionPlan>
-
-        Arc::new(AggregateExec {
-            mode: aggr_exec.mode().clone(),
-            group_by: aggr_exec.group_by().clone(),
-            aggr_expr: aggr_exec.aggr_expr().to_vec(),
-            filter_expr: aggr_exec.filter_expr().to_vec(),
-            input,
-            schema: aggr_exec.schema().clone(),
-            input_schema: aggr_exec.input_schema().clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
-            required_input_ordering: aggr_exec.required_input_ordering()[0].clone(),
-            limit: aggr_exec.limit().clone(),
-            input_order_mode: aggr_exec.input_order_mode().clone(),
-            cache: aggr_exec.cache().clone(),
-        }) as Arc<dyn ExecutionPlan>
+    let new_c: Option<Transformed<Arc<dyn ExecutionPlan>>> = if children.is_empty() {
+        None
     } else {
-        plan
+        assert_eq!(children.len(), 1, "AggregateExec should have one child");
+        let c = children[0].clone();
+
+        // for c in children {
+        //     let new_c = get_common_requirement_of_aggregate_input(c.clone())?;
+        //     if new_c.transformed {
+        //         is_transformed = true;
+        //     }
+        // }
+
+        let new_c = get_common_requirement_of_aggregate_input(c)?;
+        Some(new_c)
     };
 
-    if is_transformed {
-        Ok(Transformed::yes(plan))
+    let plan = optimize_internal(plan)?;
+    // println!("t: {} plan: {:?}", plan.transformed, plan);
+
+    if let Some(c) = new_c {
+        if !c.transformed {
+            return Ok(plan);
+        }
+
+        let plan = plan.data;
+
+        // TODO: support more types of ExecutionPlan
+        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            let p = aggr_exec.clone_with_input(c.data);
+            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+        } else if let Some(coalesce_exec) =
+            plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+        {
+            let p = coalesce_exec.clone_with_input(c.data);
+            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+        } else if let Some(out_req_exec) =
+            plan.as_any().downcast_ref::<OutputRequirementExec>()
+        {
+            let p = out_req_exec.clone_with_input(c.data);
+            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+        } else {
+            return not_impl_err!("Unsupported ExecutionPlan type: {}", plan.name());
+        }
+    }
+
+    return Ok(plan);
+}
+
+fn optimize_internal(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if aggr_exec.mode() != &AggregateMode::Partial {
+            return Ok(Transformed::no(plan));
+        }
+
+        let input = aggr_exec.input().clone();
+        let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
+        let group_by = aggr_exec.group_by();
+        let mode = aggr_exec.mode();
+
+        let input_eq_properties = input.equivalence_properties();
+        let groupby_exprs = group_by.input_exprs();
+        // If existing ordering satisfies a prefix of the GROUP BY expressions,
+        // prefix requirements with this section. In this case, aggregation will
+        // work more efficiently.
+        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+        let mut new_requirement = indices
+            .iter()
+            .map(|&idx| PhysicalSortRequirement {
+                expr: groupby_exprs[idx].clone(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+
+        let req = get_aggregate_exprs_requirement(
+            &new_requirement,
+            &mut aggr_expr,
+            &group_by,
+            input_eq_properties,
+            mode,
+        )?;
+        new_requirement.extend(req);
+        new_requirement = collapse_lex_req(new_requirement);
+        let required_input_ordering =
+            (!new_requirement.is_empty()).then_some(new_requirement);
+
+        let p = aggr_exec.clone_with_required_input_ordering(required_input_ordering);
+
+        let res = Arc::new(p) as Arc<dyn ExecutionPlan>;
+        Ok(Transformed::yes(res))
     } else {
         Ok(Transformed::no(plan))
     }
@@ -388,4 +392,106 @@ fn get_aggregate_exprs_requirement(
         );
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
+}
+
+
+mod tests {
+    use super::*;
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use datafusion_physical_expr::{expressions::{col, OrderSensitiveArrayAgg}, PhysicalSortExpr};
+
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+
+        Ok(schema)
+    }
+
+    #[tokio::test]
+    async fn test_get_finest_requirements() -> Result<()> {
+        let test_schema = create_test_schema()?;
+        // Assume column a and b are aliases
+        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
+        let options1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+        let mut eq_properties = EquivalenceProperties::new(test_schema);
+        // Columns a and b are equal.
+        eq_properties.add_equal_conditions(col_a, col_b);
+        // Aggregate requirements are
+        // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
+        let order_by_exprs = vec![
+            None,
+            Some(vec![PhysicalSortExpr {
+                expr: col_a.clone(),
+                options: options1,
+            }]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_c.clone(),
+                    options: options1,
+                },
+            ]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: options1,
+                },
+            ]),
+        ];
+        let common_requirement = vec![
+            PhysicalSortExpr {
+                expr: col_a.clone(),
+                options: options1,
+            },
+            PhysicalSortExpr {
+                expr: col_c.clone(),
+                options: options1,
+            },
+        ];
+        let mut aggr_exprs = order_by_exprs
+            .into_iter()
+            .map(|order_by_expr| {
+                Arc::new(OrderSensitiveArrayAgg::new(
+                    col_a.clone(),
+                    "array_agg",
+                    DataType::Int32,
+                    false,
+                    vec![],
+                    order_by_expr.unwrap_or_default(),
+                )) as _
+            })
+            .collect::<Vec<_>>();
+        let group_by = PhysicalGroupBy::new_single(vec![]);
+        let res = get_aggregate_exprs_requirement(
+            &[],
+            &mut aggr_exprs,
+            &group_by,
+            &eq_properties,
+            &AggregateMode::Partial,
+        )?;
+        let res = PhysicalSortRequirement::to_sort_exprs(res);
+        assert_eq!(res, common_requirement);
+        Ok(())
+    }
 }
