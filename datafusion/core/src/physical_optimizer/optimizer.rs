@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use super::projection_pushdown::ProjectionPushdown;
+use super::simplify_ordering::SimplifyOrdering;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -126,6 +127,7 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            Arc::new(SimplifyOrdering::new()),
         ];
 
         Self::with_rules(rules)
