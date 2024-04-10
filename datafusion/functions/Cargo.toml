@@ -133,3 +133,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "upper"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "overlay"
+required-features = ["string_expressions"]

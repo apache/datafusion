@@ -116,6 +116,18 @@ where
     })
 }
 
+#[macro_export]
+macro_rules! create_adaptive_array_iter {
+    ($ARRAY:expr) => {{
+        let first_value = if $ARRAY.is_null(0) {
+            None
+        } else {
+            Some($ARRAY.value(0))
+        };
+        $ARRAY.iter().chain(std::iter::repeat(first_value))
+    }};
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test

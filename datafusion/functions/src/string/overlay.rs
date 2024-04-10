@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::Array;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
@@ -26,7 +27,9 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_physical_expr::functions::Hint;
 
+use crate::create_adaptive_array_iter;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
@@ -70,8 +73,24 @@ impl ScalarUDFImpl for OverlayFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(overlay::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(overlay::<i64>, vec![])(args),
+            DataType::Utf8 => make_scalar_function(
+                overlay::<i32>,
+                vec![
+                    Hint::Pad,
+                    Hint::AcceptsSingular,
+                    Hint::AcceptsSingular,
+                    Hint::AcceptsSingular,
+                ],
+            )(args),
+            DataType::LargeUtf8 => make_scalar_function(
+                overlay::<i64>,
+                vec![
+                    Hint::Pad,
+                    Hint::AcceptsSingular,
+                    Hint::AcceptsSingular,
+                    Hint::AcceptsSingular,
+                ],
+            )(args),
             other => exec_err!("Unsupported data type {other:?} for function overlay"),
         }
     }
@@ -88,10 +107,13 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
             let pos_num = as_int64_array(&args[2])?;
 
+            let characters_array_iter = create_adaptive_array_iter!(characters_array);
+            let pos_num_iter = create_adaptive_array_iter!(pos_num);
+
             let result = string_array
                 .iter()
-                .zip(characters_array.iter())
-                .zip(pos_num.iter())
+                .zip(characters_array_iter)
+                .zip(pos_num_iter)
                 .map(|((string, characters), start_pos)| {
                     match (string, characters, start_pos) {
                         (Some(string), Some(characters), Some(start_pos)) => {
@@ -126,11 +148,15 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let pos_num = as_int64_array(&args[2])?;
             let len_num = as_int64_array(&args[3])?;
 
+            let characters_array_iter = create_adaptive_array_iter!(characters_array);
+            let pos_num_iter = create_adaptive_array_iter!(pos_num);
+            let len_num_iter = create_adaptive_array_iter!(len_num);
+
             let result = string_array
                 .iter()
-                .zip(characters_array.iter())
-                .zip(pos_num.iter())
-                .zip(len_num.iter())
+                .zip(characters_array_iter)
+                .zip(pos_num_iter)
+                .zip(len_num_iter)
                 .map(|(((string, characters), start_pos), len)| {
                     match (string, characters, start_pos, len) {
                         (Some(string), Some(characters), Some(start_pos), Some(len)) => {
