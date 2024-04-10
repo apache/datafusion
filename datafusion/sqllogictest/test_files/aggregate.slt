@@ -123,7 +123,7 @@ LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
 query ?
 select array_agg(c1 order by c2 desc, c3) from agg_order;
 ----
-[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
 
 query TT
 explain select array_agg(c1 order by c2 desc, c3) from agg_order;
@@ -135,8 +135,9 @@ physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # test array_agg_order with list data type
 statement ok
@@ -151,8 +152,8 @@ CREATE TABLE array_agg_order_list_table AS VALUES
 query T? rowsort
 select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
 ----
-b [[4, 5, 6], [7, 8, 9]]
-w [[1, 2, 3], [9, 5, 2], [3, 2, 5]]
+b [[7, 8, 9], [4, 5, 6]]
+w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
 
 query T?? rowsort
 select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
@@ -163,7 +164,7 @@ w [3, 2, 5] [1, 2, 3]
 query T? rowsort
 select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
 ----
-b [7, 8, 9]
+b [4, 5, 6]
 w [9, 5, 2]
 
 statement ok
