@@ -465,9 +465,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
 
-                let res = self.optimize_internal(plan, session_state, |_, _| {});
-                println!("optimized done");
-                res
+                self.optimize_internal(plan, session_state, |_, _| {})
             }
         }
     }

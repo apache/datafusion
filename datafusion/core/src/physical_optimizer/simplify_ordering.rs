@@ -82,7 +82,7 @@ fn get_common_requirement_of_aggregate_input(
     let new_c: Option<Transformed<Arc<dyn ExecutionPlan>>> = if children.is_empty() {
         None
     } else {
-        assert_eq!(children.len(), 1, "AggregateExec should have one child");
+        assert_eq!(children.len(), 1, "children: {:?}", children);
         let c = children[0].clone();
 
         // for c in children {
