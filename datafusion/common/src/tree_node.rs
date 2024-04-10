@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides common traits for visiting or rewriting tree
-//! data structures easily.
+//! [`TreeNode`] for visiting and rewriting expression and plan trees
 
 use std::sync::Arc;
 
@@ -43,9 +42,24 @@ macro_rules! handle_transform_recursion_up {
     }};
 }
 
-/// Defines a visitable and rewriteable tree node. This trait is implemented
-/// for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as well as expression
-/// trees ([`PhysicalExpr`], [`Expr`]) in DataFusion.
+/// API for visiting (read only) and rewriting tree data structures .
+///
+/// Note: this trait is implemented for plans ([`ExecutionPlan`] and
+/// [`LogicalPlan`]) as well as expression trees ([`PhysicalExpr`], [`Expr`]).
+///
+/// # Common APIs:
+/// * [`Self::apply`] and [`Self::visit`] for inspecting (without modification) borrowed nodes
+/// * [`Self::transform`] and [`Self::rewrite`] for rewriting owned nodes
+///
+/// # Terminology
+/// The following terms are used in this trait
+///
+/// * `f_down`: Invoked before any children of the current node are visited.
+/// * `f_up`: Invoked after all children of the current node are visited.
+/// * `f`: closure that is applied to the current node.
+/// * `map_*`: applies a transformation to rewrite owned nodes
+/// * `apply_*`:  invokes a function on borrowed nodes
+/// * `transform_`: applies a transformation to rewrite owned nodes
 ///
 /// <!-- Since these are in the datafusion-common crate, can't use intra doc links) -->
 /// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
@@ -53,7 +67,7 @@ macro_rules! handle_transform_recursion_up {
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
 pub trait TreeNode: Sized {
-    /// Visit the tree node using the given [`TreeNodeVisitor`], performing a
+    /// Visit the tree node with a [`TreeNodeVisitor`], performing a
     /// depth-first walk of the node and its children.
     ///
     /// See also:
@@ -93,8 +107,8 @@ pub trait TreeNode: Sized {
             .visit_parent(|| visitor.f_up(self))
     }
 
-    /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
-    /// recursively transforming [`TreeNode`]s.
+    /// Rewrite the tree node with a [`TreeNodeRewriter`], performing a
+    /// depth-first walk of the node and its children.
     ///
     /// See also:
     /// *  [`Self::visit`] for inspecting (without modification) `TreeNode`s
@@ -129,12 +143,11 @@ pub trait TreeNode: Sized {
         })
     }
 
-    /// Applies `f` to the node and its children. `f` is applied in a pre-order
-    /// way, and it is controlled by [`TreeNodeRecursion`], which means result
-    /// of the `f` on a node can cause an early return.
+    /// Applies `f` to the node then each of its children, recursively (a
+    /// top-down, pre-order traversal).
     ///
-    /// The `f` closure can be used to collect some information from tree nodes
-    /// or run a check on the tree.
+    /// The return [`TreeNodeRecursion`] controls the recursion and can cause
+    /// an early return.
     fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: &mut F,
@@ -142,9 +155,15 @@ pub trait TreeNode: Sized {
         f(self)?.visit_children(|| self.apply_children(|c| c.apply(f)))
     }
 
-    /// Convenience utility for writing optimizer rules: Recursively apply the
-    /// given function `f` to the tree in a bottom-up (post-order) fashion. When
-    /// `f` does not apply to a given node, it is left unchanged.
+    /// Recursively rewrite the node's children and then the node  using `f`
+    /// (a bottom-up post-order traversal).
+    ///
+    /// A synonym of [`Self::transform_up`]. `f` is applied to the nodes
+    /// children first, and then to the node itself. See [`Self::transform_down`]
+    /// top-down (pre-order) traversal.
+    ///
+    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
+    /// down and up.
     fn transform<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -152,9 +171,13 @@ pub trait TreeNode: Sized {
         self.transform_up(f)
     }
 
-    /// Convenience utility for writing optimizer rules: Recursively apply the
-    /// given function `f` to a node and then to its children (pre-order traversal).
-    /// When `f` does not apply to a given node, it is left unchanged.
+    /// Recursively rewrite the tree using `f` in a top-down (pre-order)
+    /// fashion.
+    ///
+    /// `f` is applied to the nodes first, and then its children.
+    ///
+    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
+    /// down and up the tree.
     fn transform_down<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -162,9 +185,7 @@ pub trait TreeNode: Sized {
         handle_transform_recursion_down!(f(self), |c| c.transform_down(f))
     }
 
-    /// Convenience utility for writing optimizer rules: Recursively apply the
-    /// given mutable function `f` to a node and then to its children (pre-order
-    /// traversal). When `f` does not apply to a given node, it is left unchanged.
+    /// Same as [`Self::transform_down`] but with a mutable closure.
     fn transform_down_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
@@ -172,10 +193,13 @@ pub trait TreeNode: Sized {
         handle_transform_recursion_down!(f(self), |c| c.transform_down_mut(f))
     }
 
-    /// Convenience utility for writing optimizer rules: Recursively apply the
-    /// given function `f` to all children of a node, and then to the node itself
-    /// (post-order traversal). When `f` does not apply to a given node, it is
-    /// left unchanged.
+    /// Recursively rewrite the node using `f` in a bottom-up (post-order)
+    /// fashion.
+    ///
+    /// `f` is applied to children first, and then to the node itself.
+    ///
+    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
+    /// down and up the tree.
     fn transform_up<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -183,10 +207,8 @@ pub trait TreeNode: Sized {
         handle_transform_recursion_up!(self, |c| c.transform_up(f), f)
     }
 
-    /// Convenience utility for writing optimizer rules: Recursively apply the
-    /// given mutable function `f` to all children of a node, and then to the
-    /// node itself (post-order traversal). When `f` does not apply to a given
-    /// node, it is left unchanged.
+    /// Same as [`Self::transform_up`] but with a mutable closure.
+
     fn transform_up_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
@@ -194,14 +216,14 @@ pub trait TreeNode: Sized {
         handle_transform_recursion_up!(self, |c| c.transform_up_mut(f), f)
     }
 
-    /// Transforms the tree using `f_down` while traversing the tree top-down
+    /// Transforms the node using `f_down` while traversing the tree top-down
     /// (pre-order), and using `f_up` while traversing the tree bottom-up
     /// (post-order).
     ///
     /// Use this method if you want to start the `f_up` process right where `f_down` jumps.
     /// This can make the whole process faster by reducing the number of `f_up` steps.
     /// If you don't need this, it's just like using `transform_down_mut` followed by
-    /// `transform_up_mut` on the same tree.
+    /// `transform_up_mut` on the same node.
     ///
     /// Consider the following tree structure:
     /// ```text
@@ -298,7 +320,7 @@ pub trait TreeNode: Sized {
         )
     }
 
-    /// Returns true if `f` returns true for node in the tree.
+    /// Returns true if `f` returns true for any node in the tree.
     ///
     /// Stops recursion as soon as a matching node is found
     fn exists<F: FnMut(&Self) -> bool>(&self, mut f: F) -> bool {
@@ -315,16 +337,21 @@ pub trait TreeNode: Sized {
         found
     }
 
-    /// Apply the closure `F` to the node's children.
+    /// Apply `f` to inspect node's children (but not the node itself)
     ///
-    /// See `mutate_children` for rewriting in place
+    /// See [`Self::apply`] and [`Self::visit`] for APIs that include self.
+    ///
+    /// See [`Self::map_children`] for rewriting in place
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Apply transform `F` to potentially rewrite the node's children. Note
-    /// that the transform `F` might have a direction (pre-order or post-order).
+    /// Apply `f` to rewrite the node's children (but not the node itself).
+    ///
+    /// See [`Self::transform`] and [`Self::rewrite`] for APIs that include self
+    ///
+    /// See [`Self::apply_children`] for inspecting in place
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: F,
@@ -436,26 +463,26 @@ impl TreeNodeRecursion {
     }
 }
 
-/// This struct is used by tree transformation APIs such as
+/// Result of tree walk / transformation APIs
+///
+/// API users control the transformation by returning:
+/// - The resulting (possibly transformed) node,
+/// - `transformed`: flag indicating whether any change was made to the node
+/// - `tnr`: [`TreeNodeRecursion`] specifying how to proceed with the recursion.
+///
+/// At the end of the transformation, the return value will contain:
+/// - The final (possibly transformed) tree,
+/// - `transformed`: flag indicating whether any change was made to the node
+/// - `tnr`: [`TreeNodeRecursion`] specifying how the recursion ended.
+///
+/// Example APIs:
+/// - [`TreeNode`],
 /// - [`TreeNode::rewrite`],
 /// - [`TreeNode::transform_down`],
 /// - [`TreeNode::transform_down_mut`],
 /// - [`TreeNode::transform_up`],
 /// - [`TreeNode::transform_up_mut`],
 /// - [`TreeNode::transform_down_up`]
-///
-/// to control the transformation and return the transformed result.
-///
-/// Specifically, API users can provide transformation closures or [`TreeNodeRewriter`]
-/// implementations to control the transformation by returning:
-/// - The resulting (possibly transformed) node,
-/// - A flag indicating whether any change was made to the node, and
-/// - A flag specifying how to proceed with the recursion.
-///
-/// At the end of the transformation, the return value will contain:
-/// - The final (possibly transformed) tree,
-/// - A flag indicating whether any change was made to the tree, and
-/// - A flag specifying how the recursion ended.
 #[derive(PartialEq, Debug)]
 pub struct Transformed<T> {
     pub data: T,
@@ -637,6 +664,7 @@ impl<I: Iterator> TreeNodeIterator for I {
 
 /// Transformation helper to process a heterogeneous sequence of tree node containing
 /// expressions.
+///
 /// This macro is very similar to [TreeNodeIterator::map_until_stop_and_collect] to
 /// process nodes that are siblings, but it accepts an initial transformation (`F0`) and
 /// a sequence of pairs. Each pair is made of an expression (`EXPR`) and its
