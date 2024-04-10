@@ -1040,6 +1040,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
@@ -1047,7 +1048,6 @@ mod tests {
         ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
         Volatility,
     };
-    use datafusion_expr::expr::ScalarFunction;
 
     use async_trait::async_trait;
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
