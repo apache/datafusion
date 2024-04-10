@@ -172,17 +172,22 @@ pub trait TableProvider: Sync + Send {
     /// Here is an example of how this can be done:
     /// 
     /// ```rust
+    /// use datafusion::datasource::TableProvider;
     /// use datafusion::error::{Result, DataFusionError};
     /// use datafusion_expr::{Expr, TableProviderFilterPushDown};
     /// 
-    /// // Override the supports_filters_pushdown to evaluate which expressions 
-    /// // to accept as pushdown predicates.
-    /// fn supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
+    /// struct TestDataSource {}
+    /// 
+    /// impl TableProvider for TestDataSource {
+    /// 
+    ///     // Override the supports_filters_pushdown to evaluate which expressions 
+    ///     // to accept as pushdown predicates.
+    ///     fn supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
     ///
-    ///     let mut result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(&filters.len());
+    ///         let mut result_vec: Vec<TableProviderFilterPushDown> = Vec::with_capacity(filters.len());
     ///
-    ///     // Process each filter
-    ///     for i in 0..filters.len() {
+    ///         // Process each filter
+    ///         for i in 0..filters.len() {
     ///         let expr = *filters[i];
     ///
     ///         let table_provider_filter_pushdown = match expr {
@@ -190,25 +195,26 @@ pub trait TableProvider: Sync + Send {
     ///             Expr::Between(between_expr) => {
     ///                 between_expr.expr.try_into_col()
     ///                     .map(|column| {
-    ///                         if column.name = "c1".to_string() {
+    ///                         if column.name == "c1".to_string() {
     ///                             TableProviderFilterPushDown::Exact
     ///                         } else {
     ///                             TableProviderFilterPushDown::Unsupported
     ///                         }
     ///                     })
     ///                     // If there is no column in the expr set the filter to unsupported.
-    ///                     .unwrap_or(TableProviderFilterPushDown::Unsupported);
+    ///                     .unwrap_or(TableProviderFilterPushDown::Unsupported)
     ///                 }
-    ///             _ => {
-    ///                 // For all other cases return Unsupported.
-    ///                 TableProviderFilterPushDown::Unsupported
-    ///             }
-    ///         };
-    ///         result_vec.push(table_provider_filter_pushdown);
+    ///                 _ => {
+    ///                     // For all other cases return Unsupported.
+    ///                     TableProviderFilterPushDown::Unsupported
+    ///                 }
+    ///             };
+    ///             result_vec.push(table_provider_filter_pushdown);
+    ///         }
+    ///
+    ///         Ok(result_vec)
+    ///
     ///     }
-    ///
-    ///     Ok(result_vec)
-    ///
     /// }
     /// ```
     /// 
