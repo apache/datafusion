@@ -484,16 +484,19 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     }
 }
 
+/// (index, plan) since index is needed to order children to ensure consistent
+/// order in parent node plans.
+type ExecutionPlansWithIndex = Vec<(usize, Arc<dyn ExecutionPlan>)>;
+
 #[derive(Debug)]
 enum NodeState {
     ZeroOrOneChild,
-    /// If a node has multiple children, we lock it's ready children behind a Mutex
+    /// If a node has multiple children, we lock the ready children behind a Mutex
     /// such that concurrent tasks are able to append safely, and ultimately
     /// a single task will take all the ready children to build the plan.
     ///
-    /// Vec element is (index, plan) where index is needed to order
-    /// children to ensure consistent order in plan for parent nodes.
-    TwoOrMoreChildren(Mutex<Vec<(usize, Arc<dyn ExecutionPlan>)>>),
+    /// Wrapped in an Option to make it easier to take the Vec at the end.
+    TwoOrMoreChildren(Mutex<Option<ExecutionPlansWithIndex>>),
 }
 
 #[derive(Debug)]
@@ -547,7 +550,7 @@ impl DefaultPhysicalPlanner {
                 1 => NodeState::ZeroOrOneChild,
                 _ => {
                     let ready_children = Vec::with_capacity(node.inputs().len());
-                    let ready_children = Mutex::new(ready_children);
+                    let ready_children = Mutex::new(Some(ready_children));
                     NodeState::TwoOrMoreChildren(ready_children)
                 }
             };
@@ -622,21 +625,25 @@ impl DefaultPhysicalPlanner {
                 // See if we have all children to build the node.
                 NodeState::TwoOrMoreChildren(children) => {
                     let mut children = {
-                        let mut children = children.lock().unwrap();
+                        let mut guard = children.lock().unwrap();
+                        // Safe unwrap on option as only the last task reaching this
+                        // node will take the contents (which happens after this line).
+                        let children = guard.as_mut().unwrap();
                         // Add our contribution to this parent node.
                         children.push((current_index, plan));
                         if children.len() < node.node.inputs().len() {
                             // This node is not ready yet, still pending more children.
                             // This task is finished forever.
                             return Ok(None);
-                        } else {
-                            // With this task's contribution we have enough children.
-                            // This task is the only one building this node now, and thus
-                            // no other task will need the Mutex for this node.
-
-                            // TODO: How to do this without a clone? Take from the inner Mutex?
-                            children.clone()
                         }
+
+                        // With this task's contribution we have enough children.
+                        // This task is the only one building this node now, and thus
+                        // no other task will need the Mutex for this node, so take
+                        // all children.
+                        //
+                        // This take is the only place the Option becomes None.
+                        guard.take().unwrap()
                     };
 
                     // Indices refer to position in flat tree Vec, which means they are
