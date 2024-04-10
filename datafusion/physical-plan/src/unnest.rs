@@ -27,14 +27,22 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, GenericListArray,
-    LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, FixedSizeListArray,
+    GenericListArray, LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels;
+use arrow::compute::kernels::length::length;
+use arrow::compute::kernels::zip::zip;
+use arrow::compute::{binary, cast, is_not_null};
 use arrow::datatypes::{
     ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_array::{Int64Array, Scalar};
+use arrow_ord::cmp::lt;
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_list_array,
+};
 use datafusion_common::{exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -55,6 +63,8 @@ pub struct UnnestExec {
     schema: SchemaRef,
     /// The unnest column
     column: Column,
+    /// The unnest columns
+    columns: Vec<Column>,
     /// Options
     options: UnnestOptions,
     /// Execution metrics
@@ -75,6 +85,7 @@ impl UnnestExec {
         UnnestExec {
             input,
             schema,
+            columns: vec![column.clone()],
             column,
             options,
             metrics: Default::default(),
@@ -156,6 +167,7 @@ impl ExecutionPlan for UnnestExec {
             input,
             schema: self.schema.clone(),
             column: self.column.clone(),
+            columns: self.columns.clone(),
             options: self.options.clone(),
             metrics,
         }))
@@ -212,6 +224,8 @@ struct UnnestStream {
     schema: Arc<Schema>,
     /// The unnest column
     column: Column,
+    /// The unnest columns
+    columns: Vec<Column>,
     /// Options
     options: UnnestOptions,
     /// Metrics
@@ -249,7 +263,7 @@ impl UnnestStream {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
                     let result =
-                        build_batch(&batch, &self.schema, &self.column, &self.options);
+                        build_batch2(&batch, &self.schema, &self.column, &self.options);
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     if let Ok(ref batch) = result {
@@ -276,7 +290,56 @@ impl UnnestStream {
     }
 }
 
+/// For each row, find the longest list length among the given list arrays.
+/// TODO: add an example
+fn find_longest_length(
+    list_arrays: &Vec<ArrayRef>,
+    options: &UnnestOptions,
+) -> Result<ArrayRef> {
+    let list_lengths: Vec<ArrayRef> = list_arrays
+        .iter()
+        .map(|list_array| {
+            let mut length_array = length(list_array)?;
+            // Make sure length arrays have the same DataType, and Int64 is the most general one.
+            length_array = cast(&length_array, &DataType::Int64)?;
+            let null_length = if options.preserve_nulls {
+                Scalar::new(Int64Array::from_value(1, 1))
+            } else {
+                Scalar::new(Int64Array::from_value(0, 1))
+            };
+            length_array =
+                zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
+            Ok(length_array)
+        })
+        .collect::<Result<_>>()?;
+
+    let longest_length = list_lengths.iter().skip(1).try_fold(
+        list_lengths[0].clone(),
+        |longest, current| {
+            let is_lt = lt(&longest, &current)?;
+            zip(&is_lt, &current, &longest)
+        },
+    )?;
+
+    Ok(longest_length)
+}
+
 fn build_batch(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    columns: &Vec<Column>,
+    options: &UnnestOptions,
+) -> Result<()> {
+    let list_arrays: Vec<ArrayRef> = columns
+        .iter()
+        .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
+        .collect::<Result<_>>()?;
+    let unnested_length = find_longest_length(&list_arrays, options)?;
+
+    Ok(())
+}
+
+fn build_batch2(
     batch: &RecordBatch,
     schema: &SchemaRef,
     column: &Column,
@@ -688,6 +751,39 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_longest_list_length() -> datafusion_common::Result<()> {
+        let list_array = make_test_array();
+        let list_arrays = vec![Arc::new(list_array) as ArrayRef];
+        let options = UnnestOptions {
+            preserve_nulls: false,
+        };
+        let longest_length = longest_list_length(&list_arrays, &options)?;
+        let expected_array = Int64Array::from(vec![3, 0, 0, 1, 0, 2]);
+
+        assert_eq!(
+            longest_length
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap(),
+            &expected_array
+        );
+
+        let options = UnnestOptions {
+            preserve_nulls: true,
+        };
+        let longest_length = longest_list_length(&list_arrays, &options)?;
+        let expected_array = Int64Array::from(vec![3, 0, 1, 1, 1, 2]);
+        assert_eq!(
+            longest_length
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap(),
+            &expected_array
+        );
         Ok(())
     }
 }
