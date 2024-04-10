@@ -524,8 +524,9 @@ impl ChildrenContainer {
 
     fn vec(self) -> Vec<Arc<dyn ExecutionPlan>> {
         match self {
+            Self::None => vec![],
+            Self::One(p) => vec![p],
             Self::Multiple(v) => v,
-            _ => unreachable!(),
         }
     }
 }
