@@ -68,6 +68,11 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
+///
+/// # See also:
+/// * [`tree_node`]: visiting and rewriting API
+///
+/// [`tree_node`]: crate::logical_plan::tree_node
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -238,7 +243,10 @@ impl LogicalPlan {
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
-    /// logical plan node. This does not include expressions in any children
+    /// logical plan node. This does not include expressions in any children.
+    ///
+    /// Note this method `clone`s all the expressions. When possible, the
+    /// [`tree_node`] API should be used instead of this API.
     ///
     /// The returned expressions do not necessarily represent or even
     /// contributed to the output schema of this node. For example,
@@ -248,6 +256,8 @@ impl LogicalPlan {
     /// The expressions do contain all the columns that are used by this plan,
     /// so if there are columns not referenced by these expressions then
     /// DataFusion's optimizer attempts to optimize them away.
+    ///
+    /// [`tree_node`]: crate::logical_plan::tree_node
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
@@ -773,9 +783,15 @@ impl LogicalPlan {
     /// Returns a new `LogicalPlan` based on `self` with inputs and
     /// expressions replaced.
     ///
+    /// Note this method creates an entirely new node, which requires a large
+    /// amount of clone'ing. When possible, the [`tree_node`] API should be used
+    /// instead of this API.
+    ///
     /// The exprs correspond to the same order of expressions returned
     /// by [`Self::expressions`]. This function is used by optimizers
     /// to rewrite plans using the following pattern:
+    ///
+    /// [`tree_node`]: crate::logical_plan::tree_node
     ///
     /// ```text
     /// let new_inputs = optimize_children(..., plan, props);
@@ -1367,6 +1383,7 @@ macro_rules! handle_transform_recursion_up {
 }
 
 impl LogicalPlan {
+    /// Visits a plan similarly to [`Self::visit`], but including embedded subqueries.
     pub fn visit_with_subqueries<V: TreeNodeVisitor<Node = Self>>(
         &self,
         visitor: &mut V,
@@ -1380,6 +1397,7 @@ impl LogicalPlan {
             .visit_parent(|| visitor.f_up(self))
     }
 
+    /// Rewrites a plan similarly t [`Self::visit`], but including embedded subqueries.
     pub fn rewrite_with_subqueries<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
