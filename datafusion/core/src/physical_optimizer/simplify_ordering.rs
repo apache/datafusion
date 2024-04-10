@@ -79,53 +79,52 @@ fn get_common_requirement_of_aggregate_input(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let children = plan.children();
 
-    let new_c: Option<Transformed<Arc<dyn ExecutionPlan>>> = if children.is_empty() {
-        None
+    let mut is_transformed = false;
+    let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
+    for c in children.iter() {
+        let res = get_common_requirement_of_aggregate_input(c.clone())?;
+        if res.transformed {
+            is_transformed = true;
+        }
+        new_children.push(res.data);
+    }
+
+    let plan = if is_transformed {
+        plan.with_new_children(new_children)?
     } else {
-        assert_eq!(children.len(), 1, "children: {:?}", children);
-        let c = children[0].clone();
-
-        // for c in children {
-        //     let new_c = get_common_requirement_of_aggregate_input(c.clone())?;
-        //     if new_c.transformed {
-        //         is_transformed = true;
-        //     }
-        // }
-
-        let new_c = get_common_requirement_of_aggregate_input(c)?;
-        Some(new_c)
+        plan
     };
 
     let plan = optimize_internal(plan)?;
-    // println!("t: {} plan: {:?}", plan.transformed, plan);
+    Ok(plan)
 
-    if let Some(c) = new_c {
-        if !c.transformed {
-            return Ok(plan);
-        }
+    // if let Some(c) = new_c {
+    //     if !c.transformed {
+    //         return Ok(plan);
+    //     }
 
-        let plan = plan.data;
+    //     let plan = plan.data;
 
-        // TODO: support more types of ExecutionPlan
-        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-            let p = aggr_exec.clone_with_input(c.data);
-            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-        } else if let Some(coalesce_exec) =
-            plan.as_any().downcast_ref::<CoalescePartitionsExec>()
-        {
-            let p = coalesce_exec.clone_with_input(c.data);
-            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-        } else if let Some(out_req_exec) =
-            plan.as_any().downcast_ref::<OutputRequirementExec>()
-        {
-            let p = out_req_exec.clone_with_input(c.data);
-            return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-        } else {
-            return not_impl_err!("Unsupported ExecutionPlan type: {}", plan.name());
-        }
-    }
+    //     // TODO: support more types of ExecutionPlan
+    //     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+    //         let p = aggr_exec.clone_with_input(c.data);
+    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+    //     } else if let Some(coalesce_exec) =
+    //         plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    //     {
+    //         let p = coalesce_exec.clone_with_input(c.data);
+    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+    //     } else if let Some(out_req_exec) =
+    //         plan.as_any().downcast_ref::<OutputRequirementExec>()
+    //     {
+    //         let p = out_req_exec.clone_with_input(c.data);
+    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
+    //     } else {
+    //         return not_impl_err!("Unsupported ExecutionPlan type: {}", plan.name());
+    //     }
+    // }
 
-    return Ok(plan);
+    // return Ok(plan);
 }
 
 fn optimize_internal(

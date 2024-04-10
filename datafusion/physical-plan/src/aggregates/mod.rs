@@ -698,6 +698,9 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // let aggr_exec = self.clone_with_input(children[0].clone());
+        // Ok(Arc::new(aggr_exec))
+
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
             self.group_by.clone(),
@@ -706,7 +709,6 @@ impl ExecutionPlan for AggregateExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.schema.clone(),
-            //self.original_schema.clone(),
         )?;
         me.limit = self.limit;
         Ok(Arc::new(me))
