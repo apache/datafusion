@@ -338,8 +338,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         scalar.to_array().ok()
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        None
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let (c, _) = self.column(&column.name)?;
+        let scalar = ScalarValue::UInt64(Some(c.num_values() as u64));
+        scalar.to_array().ok()
     }
 
     fn contained(
@@ -1022,15 +1024,17 @@ mod tests {
         column_statistics: Vec<ParquetStatistics>,
     ) -> RowGroupMetaData {
         let mut columns = vec![];
+        let number_row = 1000;
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
                 .set_statistics(s.clone())
+                .set_num_values(number_row)
                 .build()
                 .unwrap();
             columns.push(column);
         }
         RowGroupMetaData::builder(schema_descr.clone())
-            .set_num_rows(1000)
+            .set_num_rows(number_row)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
             .build()

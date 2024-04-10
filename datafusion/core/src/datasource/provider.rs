@@ -161,20 +161,83 @@ pub trait TableProvider: Sync + Send {
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.
     ///
-    /// The return value must have one element for each filter expression passed
-    /// in. The value of each element indicates if the TableProvider can apply
-    /// that particular filter during the scan.
-    ///
     /// Some TableProviders can evaluate filters more efficiently than the
     /// `Filter` operator in DataFusion, for example by using an index.
     ///
-    /// By default, returns [`Unsupported`] for all filters, meaning no filters
-    /// will be provided to [`Self::scan`]. If the TableProvider can implement
-    /// filter pushdown, it should return either [`Exact`] or [`Inexact`].
+    /// # Parameters and Return Value
+    ///
+    /// The return `Vec` must have one element for each element of the `filters`
+    /// argument. The value of each element indicates if the TableProvider can
+    /// apply the corresponding filter during the scan. The position in the return
+    /// value corresponds to the expression in the `filters` parameter.
+    ///
+    /// If the length of the resulting `Vec` does not match the `filters` input
+    /// an error will be thrown.
+    ///
+    /// Each element in the resulting `Vec` is one of the following:
+    /// * [`Exact`] or [`Inexact`]: The TableProvider can apply the filter
+    /// during scan
+    /// * [`Unsupported`]: The TableProvider cannot apply the filter during scan
+    ///
+    /// By default, this function returns [`Unsupported`] for all filters,
+    /// meaning no filters will be provided to [`Self::scan`].
     ///
     /// [`Unsupported`]: TableProviderFilterPushDown::Unsupported
     /// [`Exact`]: TableProviderFilterPushDown::Exact
     /// [`Inexact`]: TableProviderFilterPushDown::Inexact
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::any::Any;
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::SchemaRef;
+    /// # use async_trait::async_trait;
+    /// # use datafusion::datasource::TableProvider;
+    /// # use datafusion::error::{Result, DataFusionError};
+    /// # use datafusion::execution::context::SessionState;
+    /// # use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// // Define a struct that implements the TableProvider trait
+    /// struct TestDataSource {}
+    ///
+    /// #[async_trait]
+    /// impl TableProvider for TestDataSource {
+    /// # fn as_any(&self) -> &dyn Any { todo!() }
+    /// # fn schema(&self) -> SchemaRef { todo!() }
+    /// # fn table_type(&self) -> TableType { todo!() }
+    /// # async fn scan(&self, s: &SessionState, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         todo!()
+    /// # }
+    ///     // Override the supports_filters_pushdown to evaluate which expressions
+    ///     // to accept as pushdown predicates.
+    ///     fn supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
+    ///         // Process each filter
+    ///         let support: Vec<_> = filters.iter().map(|expr| {
+    ///           match expr {
+    ///             // This example only supports a between expr with a single column named "c1".
+    ///             Expr::Between(between_expr) => {
+    ///                 between_expr.expr
+    ///                 .try_into_col()
+    ///                 .map(|column| {
+    ///                     if column.name == "c1" {
+    ///                         TableProviderFilterPushDown::Exact
+    ///                     } else {
+    ///                         TableProviderFilterPushDown::Unsupported
+    ///                     }
+    ///                 })
+    ///                 // If there is no column in the expr set the filter to unsupported.
+    ///                 .unwrap_or(TableProviderFilterPushDown::Unsupported)
+    ///             }
+    ///             _ => {
+    ///                 // For all other cases return Unsupported.
+    ///                 TableProviderFilterPushDown::Unsupported
+    ///             }
+    ///         }
+    ///     }).collect();
+    ///     Ok(support)
+    ///     }
+    /// }
+    /// ```
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
