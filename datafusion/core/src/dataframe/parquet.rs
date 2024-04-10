@@ -68,7 +68,12 @@ impl DataFrame {
             options.partition_by,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 }
 
