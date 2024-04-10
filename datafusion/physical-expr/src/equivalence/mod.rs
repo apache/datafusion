@@ -36,6 +36,10 @@ pub use properties::{join_equivalence_properties, EquivalenceProperties};
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
+///
+/// It will also filter out entries that are ordered if the next entry is;
+/// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
+/// `vec![a Some(ASC)]`.
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
     let mut output = Vec::<PhysicalSortRequirement>::new();
     for item in input {
@@ -43,12 +47,13 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    output
+    collapse_monotonic_lex_req(output)
 }
 
 /// This function constructs a normalized [`LexRequirement`] by filtering out entries
 /// that are ordered if the next entry is.
-pub(crate) fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
+/// Used in `collapse_lex_req`
+fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
     input
         .iter()
         .enumerate()

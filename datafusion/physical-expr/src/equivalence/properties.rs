@@ -36,7 +36,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use super::{collapse_monotonic_lex_req, ordering::collapse_lex_ordering};
+use super::ordering::collapse_lex_ordering;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -262,7 +262,7 @@ impl EquivalenceProperties {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let constants_normalized = self.eq_group.normalize_exprs(self.constants.clone());
         // Prune redundant sections in the requirement:
-        collapse_monotonic_lex_req(collapse_lex_req(
+        collapse_lex_req(
             normalized_sort_reqs
                 .iter()
                 .filter(|&order| {
@@ -270,7 +270,7 @@ impl EquivalenceProperties {
                 })
                 .cloned()
                 .collect(),
-        ))
+        )
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing
