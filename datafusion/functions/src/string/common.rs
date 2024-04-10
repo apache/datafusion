@@ -18,7 +18,9 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, GenericStringArray, OffsetSizeTrait,
+};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -77,6 +79,19 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         }
         2 => {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
+
+            if characters_array.len() == 1 {
+                if characters_array.is_null(0) {
+                    return Ok(new_null_array(args[0].data_type(), args[0].len()));
+                }
+
+                let characters = characters_array.value(0);
+                let result = string_array
+                    .iter()
+                    .map(|item| item.map(|string| func(string, characters)))
+                    .collect::<GenericStringArray<T>>();
+                return Ok(Arc::new(result) as ArrayRef);
+            }
 
             let result = string_array
                 .iter()

@@ -113,3 +113,8 @@ required-features = ["datetime_expressions"]
 harness = false
 name = "substr_index"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "ltrim"
+required-features = ["string_expressions"]
