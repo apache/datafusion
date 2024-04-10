@@ -1217,7 +1217,14 @@ fn ensure_distribution(
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
     } else {
-        plan.with_new_children(children_plans)?
+        let plan = plan.with_new_children(children_plans)?;
+        
+        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            let p = aggr_exec.rewrite_ordering()?;
+            Arc::new(p)
+        } else {
+            plan
+        }
     };
 
     Ok(Transformed::yes(DistributionContext::new(

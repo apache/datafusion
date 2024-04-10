@@ -345,7 +345,7 @@ impl AggregateExec {
         res.rewrite_ordering()
     }
 
-    fn rewrite_ordering(mut self) -> Result<Self> {
+    pub fn rewrite_ordering(&self) -> Result<Self> {
         let input = self.input();
         let group_by = self.group_by();
         let mut aggr_expr = self.aggr_expr().to_vec();
@@ -380,10 +380,25 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        self.aggr_expr = aggr_expr;
-        self.required_input_ordering = required_input_ordering;
+        Ok(Self {
+            mode: self.mode().clone(),
+            group_by: self.group_by().clone(),
+            aggr_expr,
+            filter_expr: self.filter_expr().to_vec(),
+            input: self.input().clone(),
+            schema: self.schema.clone(),
+            input_schema: self.input_schema.clone(),
+            metrics: self.metrics.clone(),
+            required_input_ordering,
+            limit: self.limit,
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+        })
 
-        Ok(self)
+        // self.aggr_expr = aggr_expr;
+        // self.required_input_ordering = required_input_ordering;
+
+        // Ok(())
     }
 
     /// Create a new hash aggregate execution plan with the given schema.
@@ -780,7 +795,7 @@ impl ExecutionPlan for AggregateExec {
         )?;
         me.limit = self.limit;
 
-        me = me.rewrite_ordering()?;
+        // let me = me.rewrite_ordering()?;
 
         Ok(Arc::new(me))
     }

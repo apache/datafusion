@@ -32,6 +32,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
@@ -283,7 +284,17 @@ fn require_top_ordering_helper(
         // be responsible for (i.e. the originator of) the global ordering.
         let (new_child, is_changed) =
             require_top_ordering_helper(children.swap_remove(0))?;
-        Ok((plan.with_new_children(vec![new_child])?, is_changed))
+
+        let plan = plan.with_new_children(vec![new_child])?;
+
+        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            let p = aggr_exec.rewrite_ordering()?;
+            Ok((Arc::new(p) as _, is_changed))
+        } else {
+            Ok((plan, is_changed))
+        }
+
+        // Ok((plan.with_new_children(vec![new_child])?, is_changed))
     } else {
         // Stop searching, there is no global ordering desired for the query.
         Ok((plan, false))

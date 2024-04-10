@@ -27,6 +27,7 @@ use crate::metrics::MetricsSet;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
+use aggregates::AggregateExec;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -673,7 +674,16 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
-        plan.with_new_children(children)
+        let plan = plan.with_new_children(children)?;
+
+        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            let p = aggr_exec.rewrite_ordering()?;
+            Ok(Arc::new(p))
+        } else {
+            Ok(plan)
+        }
+
+        
     } else {
         Ok(plan)
     }
