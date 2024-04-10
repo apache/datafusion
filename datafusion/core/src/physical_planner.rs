@@ -568,8 +568,7 @@ impl DefaultPhysicalPlanner {
         // Spawning tasks which will traverse leaf up to the root.
         let tasks = flat_tree_leaf_indices
             .into_iter()
-            .map(|index| self.task_helper(index, flat_tree.clone(), session_state))
-            .collect::<Vec<_>>();
+            .map(|index| self.task_helper(index, flat_tree.clone(), session_state));
         let mut outputs = futures::stream::iter(tasks)
             .buffer_unordered(max_concurrency)
             .try_collect::<Vec<_>>()
