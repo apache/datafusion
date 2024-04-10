@@ -30,6 +30,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
+use arrow::util::pretty::print_batches;
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -140,6 +141,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             None => Poll::Ready(Ok(())),
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
+                println!("----- merge input");
+                print_batches(&[batch.clone()]).unwrap();
+
                 self.cursors[idx] = Some(Cursor::new(cursor));
                 Poll::Ready(self.in_progress.push_batch(idx, batch))
             }
@@ -197,7 +201,16 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             self.produced += self.in_progress.len();
 
-            return Poll::Ready(self.in_progress.build_record_batch().transpose());
+            let batch = self.in_progress.build_record_batch().unwrap();
+            let batch = match batch {
+                Some(batch) => {
+                    println!("----- merge output");
+                    print_batches(&[batch.clone()]);
+                    Some(Ok(batch))
+                }
+                None => None,
+            };
+            return Poll::Ready(batch);
         }
     }
 

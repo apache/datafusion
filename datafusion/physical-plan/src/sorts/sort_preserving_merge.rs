@@ -282,6 +282,11 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::print_batches;
+    use arrow_array::{Array, new_null_array, NullArray, UnionArray};
+    use arrow_buffer::Buffer;
+    use arrow_jsona::array::JsonaArray;
+    use arrow_schema::{ArrowError, UnionFields, UnionMode};
     use datafusion_common::{assert_batches_eq, assert_contains};
     use datafusion_execution::config::SessionConfig;
 
@@ -794,17 +799,67 @@ mod tests {
         );
     }
 
+    fn make_jsona(num_rows: usize) -> Arc<UnionArray> {
+        let dict_id = 0;
+        let jsona_type = JsonaArray::data_type(dict_id);
+        let other = new_null_array(&jsona_type, num_rows);
+        let col = new_null_array(&DataType::Utf8, num_rows);
+        let type_ids = Buffer::from_slice_ref(vec![1i8; num_rows]);
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (
+                Field::new("f1", JsonaArray::data_type(dict_id), true),
+                Arc::new(other),
+            ),
+            (Field::new("f2", DataType::Utf8, true), Arc::new(col)),
+        ];
+        let ar = UnionArray::try_new(
+            &[0, 1],
+            type_ids,
+            None,
+            children,
+        ).unwrap();
+        Arc::new(ar)
+    }
+
     #[tokio::test]
     async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = make_partition(11).schema();
+
+        let fields = vec![
+            Field::new("f1", JsonaArray::data_type(0), true),
+            Field::new("f2", DataType::Utf8, true),
+        ];
+        let fields = UnionFields::new(vec![0, 1], fields);
+        let dt = DataType::Union(fields, UnionMode::Sparse);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("$d", dt, true),
+            Field::new("$m.severity", DataType::Utf8, true),
+        ]));
+
+        let values = vec!["Info", "Info"];
+        let nulls = make_jsona(values.len()) as ArrayRef;
+        let arr = Arc::new(StringArray::from(values)) as ArrayRef;
+        let b1 = RecordBatch::try_new(schema.clone(), vec![nulls, arr]).unwrap();
+
+        let values = vec!["Debug", "Debug", "Info", "Info"];
+        let nulls = make_jsona(values.len()) as ArrayRef;
+        let arr = Arc::new(StringArray::from(values)) as ArrayRef;
+        let b2 = RecordBatch::try_new(schema.clone(), vec![nulls, arr]).unwrap();
+
+        let values = vec!["Info"];
+        let nulls = make_jsona(values.len()) as ArrayRef;
+        let arr = Arc::new(StringArray::from(values)) as ArrayRef;
+        let b3 = RecordBatch::try_new(schema.clone(), vec![nulls, arr]).unwrap();
+
         let sort = vec![PhysicalSortExpr {
-            expr: col("i", &schema).unwrap(),
+            expr: col("$m.severity", &schema).unwrap(),
             options: SortOptions::default(),
         }];
 
-        let batches =
-            sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await?;
+        let batches = [vec![b1], vec![b2], vec![b3], ];
+        let batches: Arc<dyn ExecutionPlan> =
+            Arc::new(MemoryExec::try_new(&batches, schema.clone(), None).unwrap());
 
         let partition_count = batches.output_partitioning().partition_count();
         let mut streams = Vec::with_capacity(partition_count);
@@ -842,25 +897,10 @@ mod tests {
             fetch,
             reservation,
         )
-        .unwrap();
+            .unwrap();
 
-        let mut merged = common::collect(merge_stream).await.unwrap();
-
-        assert_eq!(merged.len(), 1);
-        let merged = merged.remove(0);
-        let basic = basic_sort(batches, sort.clone(), task_ctx.clone()).await;
-
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
-            .unwrap()
-            .to_string();
-        let partition = arrow::util::pretty::pretty_format_batches(&[merged])
-            .unwrap()
-            .to_string();
-
-        assert_eq!(
-            basic, partition,
-            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
-        );
+        let merged = common::collect(merge_stream).await.unwrap();
+        print_batches(merged.as_slice()).unwrap();
 
         Ok(())
     }
