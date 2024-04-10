@@ -287,12 +287,13 @@ fn require_top_ordering_helper(
 
         let plan = plan.with_new_children(vec![new_child])?;
 
-        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-            let p = aggr_exec.rewrite_ordering()?;
-            Ok((Arc::new(p) as _, is_changed))
-        } else {
-            Ok((plan, is_changed))
-        }
+        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        //     let p = aggr_exec.rewrite_ordering()?;
+        //     Ok((Arc::new(p) as _, is_changed))
+        // } else {
+        // }
+
+        Ok((plan, is_changed))
 
         // Ok((plan.with_new_children(vec![new_child])?, is_changed))
     } else {

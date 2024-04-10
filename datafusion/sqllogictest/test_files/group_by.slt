@@ -4249,6 +4249,9 @@ SELECT date_bin('15 minutes', ts) as time_chunks
 2018-12-13T12:00:00
 2018-11-13T17:00:00
 
+
+
+
 # Since extract is not a monotonic function, below query should not run.
 # when source is unbounded.
 query error

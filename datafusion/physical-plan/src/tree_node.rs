@@ -20,6 +20,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
+use crate::aggregates::AggregateExec;
 use crate::{displayable, with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
@@ -63,7 +64,17 @@ impl<T> PlanContext<T> {
 
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
+        let plan = with_new_children_if_necessary(self.plan, children_plans)?;
+
+        let plan = if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            let p = aggr_exec.rewrite_ordering()?;
+            Arc::new(p)
+        } else {
+            plan
+        };
+
+        self.plan = plan;
+
         Ok(self)
     }
 }

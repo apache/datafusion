@@ -676,12 +676,13 @@ pub fn with_new_children_if_necessary(
     {
         let plan = plan.with_new_children(children)?;
 
-        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-            let p = aggr_exec.rewrite_ordering()?;
-            Ok(Arc::new(p))
-        } else {
-            Ok(plan)
-        }
+        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        //     let p = aggr_exec.rewrite_ordering()?;
+        //     Ok(Arc::new(p))
+        // } else {
+        //     Ok(plan)
+        // }
+        Ok(plan)
 
         
     } else {

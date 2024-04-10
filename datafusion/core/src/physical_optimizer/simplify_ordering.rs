@@ -57,13 +57,13 @@ impl PhysicalOptimizerRule for SimplifyOrdering {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(plan)
-        // let res = plan
-        //     .transform_down(&get_common_requirement_of_aggregate_input)
-        //     .data();
+        // Ok(plan)
+        let res = plan
+            .transform_down(&get_common_requirement_of_aggregate_input)
+            .data();
 
-        // // println!("res: {:?}", res);
-        // res
+        // println!("res: {:?}", res);
+        res
     }
 
     fn name(&self) -> &str {
@@ -90,13 +90,33 @@ fn get_common_requirement_of_aggregate_input(
         new_children.push(res.data);
     }
 
+    let mode1 = plan.properties().execution_mode();
+    // println!("mode 1: {:?}", mode);
+
     let plan = if is_transformed {
+
+        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        //     let p = aggr_exec.clone_with_input(new_children[0].clone());
+        //     Arc::new(p) as Arc<dyn ExecutionPlan>
+        // } else {
+        //     plan.with_new_children(new_children)?
+        // }
         plan.with_new_children(new_children)?
+
     } else {
         plan
     };
 
+    let mode2 = plan.properties().execution_mode();
+    if mode1 != mode2 {
+        println!("mode1: {:?}, mode2: {:?}", mode1, mode2);
+    }
+
     let plan = optimize_internal(plan)?;
+    let mode3 = plan.data.properties().execution_mode();
+    if mode1 != mode3 {
+        println!("mode1: {:?}, mode3: {:?}", mode1, mode3);
+    }
     Ok(plan)
 
     // if let Some(c) = new_c {
@@ -132,9 +152,9 @@ fn optimize_internal(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        if aggr_exec.mode() != &AggregateMode::Partial {
-            return Ok(Transformed::no(plan));
-        }
+        // if aggr_exec.mode() != &AggregateMode::Partial {
+        //     return Ok(Transformed::no(plan));
+        // }
 
         let input = aggr_exec.input().clone();
         let mut aggr_expr = aggr_exec.aggr_expr().to_vec();

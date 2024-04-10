@@ -1219,12 +1219,13 @@ fn ensure_distribution(
     } else {
         let plan = plan.with_new_children(children_plans)?;
         
-        if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-            let p = aggr_exec.rewrite_ordering()?;
-            Arc::new(p)
-        } else {
-            plan
-        }
+        // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        //     let p = aggr_exec.rewrite_ordering()?;
+        //     Arc::new(p)
+        // } else {
+        //     plan
+        // }
+        plan
     };
 
     Ok(Transformed::yes(DistributionContext::new(

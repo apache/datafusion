@@ -81,6 +81,7 @@ impl PhysicalOptimizer {
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
             Arc::new(OutputRequirements::new_add_mode()),
+            Arc::new(SimplifyOrdering::new()),
             Arc::new(AggregateStatistics::new()),
             // Appears after AggregateExec is created
             Arc::new(SimplifyOrdering::new()),
@@ -112,6 +113,7 @@ impl PhysicalOptimizer {
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
+            Arc::new(SimplifyOrdering::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
