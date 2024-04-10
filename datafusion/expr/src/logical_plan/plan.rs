@@ -28,7 +28,7 @@ use crate::builder::change_redundant_column;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
 };
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::normalize_cols;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -684,84 +684,14 @@ impl LogicalPlan {
     }
 
     /// returns the first output expression of this `LogicalPlan` node.
+    #[deprecated(since = "37.0.0", note = "please use `apply_expressions` instead")]
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
-        match self {
-            LogicalPlan::Projection(projection) => {
-                Ok(Some(projection.expr.as_slice()[0].clone()))
-            }
-            LogicalPlan::Aggregate(agg) => {
-                if agg.group_expr.is_empty() {
-                    Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
-                } else {
-                    Ok(Some(agg.group_expr.as_slice()[0].clone()))
-                }
-            }
-            LogicalPlan::Distinct(Distinct::On(DistinctOn { select_expr, .. })) => {
-                Ok(Some(select_expr[0].clone()))
-            }
-            LogicalPlan::Filter(Filter { input, .. })
-            | LogicalPlan::Distinct(Distinct::All(input))
-            | LogicalPlan::Sort(Sort { input, .. })
-            | LogicalPlan::Limit(Limit { input, .. })
-            | LogicalPlan::Repartition(Repartition { input, .. })
-            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                join_type,
-                ..
-            }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                    if left.schema().fields().is_empty() {
-                        right.head_output_expr()
-                    } else {
-                        left.head_output_expr()
-                    }
-                }
-                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
-                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
-            },
-            LogicalPlan::CrossJoin(cross) => {
-                if cross.left.schema().fields().is_empty() {
-                    cross.right.head_output_expr()
-                } else {
-                    cross.left.head_output_expr()
-                }
-            }
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                static_term.head_output_expr()
-            }
-            LogicalPlan::Union(union) => Ok(Some(Expr::Column(Column::from(
-                union.schema.qualified_field(0),
-            )))),
-            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(Column::from(
-                table.projected_schema.qualified_field(0),
-            )))),
-            LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let expr_opt = subquery_alias.input.head_output_expr()?;
-                expr_opt
-                    .map(|expr| {
-                        Ok(Expr::Column(create_col_from_scalar_expr(
-                            &expr,
-                            subquery_alias.alias.to_string(),
-                        )?))
-                    })
-                    .map_or(Ok(None), |v| v.map(Some))
-            }
-            LogicalPlan::Subquery(_) => Ok(None),
-            LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Prepare(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Unnest(_) => Ok(None),
-        }
+        let mut output = None;
+        self.apply_expressions(|e| {
+            output = Some(e.clone());
+            Ok(TreeNodeRecursion::Stop)
+        })?;
+        Ok(output)
     }
 
     /// Returns a copy of this `LogicalPlan` with the new inputs
