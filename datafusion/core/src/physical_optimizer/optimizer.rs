@@ -143,7 +143,7 @@ impl PhysicalOptimizer {
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
             // Appears after AggregateExec is created
-            // Arc::new(SimplifyOrdering::new()),
+            Arc::new(SimplifyOrdering::new()),
         ];
 
         Self::with_rules(rules)

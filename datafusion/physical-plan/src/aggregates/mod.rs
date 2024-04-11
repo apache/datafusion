@@ -967,15 +967,21 @@ fn get_aggregate_exprs_requirement(
             )) {
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
-            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-            //     prefix_requirement,
-            //     &reverse_aggr_req,
-            // )) {
-            //     // Converting to LAST_VALUE enables more efficient execution
-            //     // given the existing ordering:
-            //     let mut last_value = first_value.convert_to_last();
-            //     last_value = last_value.with_requirement_satisfied(true);
-            //     *aggr_expr = Arc::new(last_value) as _;
+            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                prefix_requirement,
+                &reverse_aggr_req,
+            )) {
+                // Converting to LAST_VALUE enables more efficient execution
+                // given the existing ordering:
+                // let mut last_value = first_value.convert_to_last();
+                // last_value = last_value.with_requirement_satisfied(true);
+                // *aggr_expr = Arc::new(last_value) as _;
+
+
+                println!("can convertt {:?}", aggr_expr);
+
+                first_value = first_value.with_requirement_satisfied(false);
+                *aggr_expr = Arc::new(first_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 first_value = first_value.with_requirement_satisfied(false);

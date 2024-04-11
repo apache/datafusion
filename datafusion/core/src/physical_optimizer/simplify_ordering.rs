@@ -176,6 +176,9 @@ fn optimize_internal(
             input_eq_properties,
             mode,
         )?;
+
+        // println!("req: {:?}", req);
+
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
         let required_input_ordering =
