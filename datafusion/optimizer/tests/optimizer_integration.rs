@@ -25,7 +25,7 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -315,8 +315,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
     let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
-    optimizer.optimize(&plan, &config, |_, _| {})
+    optimizer.optimize(plan, &config, observe)
 }
+
+fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 #[derive(Default)]
 struct MyContextProvider {
