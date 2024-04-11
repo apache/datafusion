@@ -131,7 +131,7 @@ pub async fn exec_from_repl(
     rl.load_history(".history").ok();
 
     loop {
-        match rl.readline("❯ ") {
+        match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end())?;
                 let command = line.split_whitespace().collect::<Vec<_>>().join(" ");

@@ -2127,7 +2127,7 @@ pub struct Prepare {
 /// # Example output:
 ///
 /// ```sql
-/// ❯ describe traces;
+/// > describe traces;
 /// +--------------------+-----------------------------+-------------+
 /// | column_name        | data_type                   | is_nullable |
 /// +--------------------+-----------------------------+-------------+
