@@ -16,17 +16,26 @@
 # under the License.
 
 statement ok
-CREATE EXTERNAL TABLE agg_order (
+CREATE EXTERNAL TABLE convert_first_last_table (
 c1 INT NOT NULL,
 c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
 WITH HEADER ROW
-WITH ORDER (c1 ASC, c2 ASC)
+WITH ORDER (c1 ASC)
+WITH ORDER (c2 DESC)
 WITH ORDER (c3 ASC)
-LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+LOCATION '../core/tests/data/convert_first_last.csv';
 
-# test array_agg with order by multiple columns
+# test first to last
 query I
-select first_value(c1 order by c3 desc) from agg_order;
+select first_value(c1 order by c3 desc) from convert_first_last_table;
+----
+10
+
+# test last to first
+query I
+select last_value(c1 order by c2 asc) from convert_first_last_table;
+----
+1
