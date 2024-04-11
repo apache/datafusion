@@ -415,8 +415,7 @@ impl PartialEq<dyn Any> for InListExpr {
     }
 }
 
-/// Checks if the data types of two data types are logically equal, dictionary types are compared by
-/// their value types.
+/// Checks if two types are logically equal, dictionary types are compared by their value types.
 fn is_logically_eq(lhs: &DataType, rhs: &DataType) -> bool {
     match (lhs, rhs) {
         (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
