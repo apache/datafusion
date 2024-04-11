@@ -1600,7 +1600,6 @@ pub fn unnest_with_options(
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    println!("schema: {:?}", schema);
     Ok(LogicalPlan::Unnest(Unnest {
         input,
         columns,

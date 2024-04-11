@@ -169,7 +169,7 @@ query error DataFusion error: SQL error: ParserError\("Expected an expression:, 
 select * from unnest();
 
 
-## Unnest multiple expressions in select list
+## Unnest multiple expressions in select list. This form is only allowed in a query's FROM clause.
 query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest([1,2], [2,3]);
 
