@@ -104,7 +104,7 @@ Every expression in DataFusion has a name, which is used as the column name. For
 contains a single column with the name `"COUNT(aggregate_test_100.c9)"`:
 
 ```text
-❯ select count(c9) from aggregate_test_100;
+> select count(c9) from aggregate_test_100;
 +------------------------------+
 | COUNT(aggregate_test_100.c9) |
 +------------------------------+
@@ -116,7 +116,7 @@ These names are used to refer to the columns in both subqueries as well as inter
 to another. For example:
 
 ```text
-❯ select "COUNT(aggregate_test_100.c9)" + 1 from (select count(c9) from aggregate_test_100) as sq;
+> select "COUNT(aggregate_test_100.c9)" + 1 from (select count(c9) from aggregate_test_100) as sq;
 +--------------------------------------------+
 | sq.COUNT(aggregate_test_100.c9) + Int64(1) |
 +--------------------------------------------+
@@ -134,7 +134,7 @@ Here is a simple example of such a rewrite. The expression `1 + 2` can be intern
 displayed the same as `1 + 2`:
 
 ```text
-❯ select 1 + 2;
+> select 1 + 2;
 +---------------------+
 | Int64(1) + Int64(2) |
 +---------------------+
@@ -146,7 +146,7 @@ Looking at the `EXPLAIN` output we can see that the optimizer has effectively re
 `3 as "1 + 2"`:
 
 ```text
-❯ explain select 1 + 2;
+> explain select 1 + 2;
 +---------------+-------------------------------------------------+
 | plan_type     | plan                                            |
 +---------------+-------------------------------------------------+
@@ -289,7 +289,7 @@ The `EXPLAIN VERBOSE` command can be used to show the effect of each optimizatio
 In the following example, the `type_coercion` and `simplify_expressions` passes have simplified the plan so that it returns the constant `"3.2"` rather than doing a computation at execution time.
 
 ```text
-❯ explain verbose select cast(1 + 2.2 as string) as foo;
+> explain verbose select cast(1 + 2.2 as string) as foo;
 +------------------------------------------------------------+---------------------------------------------------------------------------+
 | plan_type                                                  | plan                                                                      |
 +------------------------------------------------------------+---------------------------------------------------------------------------+
