@@ -113,7 +113,7 @@ The good thing about open code and open development is that any issues in one ch
 
 ## Stale PRs
 
-Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that. 
+Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
 
 ## Getting Started
