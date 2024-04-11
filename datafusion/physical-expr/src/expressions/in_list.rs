@@ -553,7 +553,7 @@ mod tests {
             &schema
         );
 
-        // expression: "a in ("a", "b")"
+        // expression: "a in ("a", "b", null)"
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
@@ -564,7 +564,7 @@ mod tests {
             &schema
         );
 
-        // expression: "a not in ("a", "b")"
+        // expression: "a not in ("a", "b", null)"
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
@@ -1355,7 +1355,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         // expression: "a in ("a", "b")"
-        let lists = vec![
+        let lists = [
             vec![lit("a"), lit("b")],
             vec![
                 dict_lit(DataType::Int8, "a"),
@@ -1386,7 +1386,7 @@ mod tests {
         }
 
         // expression: "a in ("a", "b", null)"
-        let lists = vec![
+        let lists = [
             vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
             vec![
                 dict_lit(DataType::Int8, "a"),
