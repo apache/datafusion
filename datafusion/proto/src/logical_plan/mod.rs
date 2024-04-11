@@ -46,7 +46,7 @@ use datafusion::{
 };
 use datafusion_common::{
     context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
-    plan_datafusion_err, DataFusionError, OwnedTableReference, Result,
+    plan_datafusion_err, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     dml,
@@ -181,10 +181,10 @@ macro_rules! into_logical_plan {
     }};
 }
 
-fn from_owned_table_reference(
-    table_ref: Option<&protobuf::OwnedTableReference>,
+fn from_table_reference(
+    table_ref: Option<&protobuf::TableReference>,
     error_context: &str,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference> {
     let table_ref = table_ref.ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Protobuf deserialization error, {error_context} was missing required field name."
@@ -407,10 +407,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .get_file_statistic_cache(),
                 );
 
-                let table_name = from_owned_table_reference(
-                    scan.table_name.as_ref(),
-                    "ListingTableScan",
-                )?;
+                let table_name =
+                    from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
@@ -445,7 +443,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
 
                 let table_name =
-                    from_owned_table_reference(scan.table_name.as_ref(), "CustomScan")?;
+                    from_table_reference(scan.table_name.as_ref(), "CustomScan")?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
@@ -553,7 +551,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
-                    name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
+                    name: from_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
                     file_type: create_extern_table.file_type.clone(),
                     has_header: create_extern_table.has_header,
@@ -586,10 +584,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                    name: from_owned_table_reference(
-                        create_view.name.as_ref(),
-                        "CreateView",
-                    )?,
+                    name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
@@ -642,7 +637,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
                     into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
-                let alias = from_owned_table_reference(
+                let alias = from_table_reference(
                     aliased_relation.alias.as_ref(),
                     "SubqueryAlias",
                 )?;
@@ -819,7 +814,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let provider = ViewTable::try_new(input, definition)?;
 
                 let table_name =
-                    from_owned_table_reference(scan.table_name.as_ref(), "ViewScan")?;
+                    from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
                 LogicalPlanBuilder::scan(
                     table_name,
@@ -842,7 +837,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
                 datafusion_expr::DdlStatement::DropView(DropView {
-                    name: from_owned_table_reference(dropview.name.as_ref(), "DropView")?,
+                    name: from_table_reference(dropview.name.as_ref(), "DropView")?,
                     if_exists: dropview.if_exists,
                     schema: Arc::new(convert_required!(dropview.schema)?),
                 }),
@@ -1235,7 +1230,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: Some(alias.to_owned_reference().into()),
+                            alias: Some((*alias).clone().into()),
                         },
                     ))),
                 })

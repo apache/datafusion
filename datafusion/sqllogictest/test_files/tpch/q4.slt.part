@@ -40,18 +40,18 @@ order by
     o_orderpriority;
 ----
 logical_plan
-01)Sort: orders.o_orderpriority ASC NULLS LAST
-02)--Projection: orders.o_orderpriority, COUNT(*) AS order_count
-03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-04)------Projection: orders.o_orderpriority
-05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
-06)----------Projection: orders.o_orderkey, orders.o_orderpriority
-07)------------Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
-08)--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("8582"), orders.o_orderdate < Date32("8674")]
-09)----------SubqueryAlias: __correlated_sq_1
-10)------------Projection: lineitem.l_orderkey
-11)--------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
-12)----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
+Sort: orders.o_orderpriority ASC NULLS LAST
+--Projection: orders.o_orderpriority, COUNT(*) AS order_count
+----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+------Projection: orders.o_orderpriority
+--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
+----------Projection: orders.o_orderkey, orders.o_orderpriority
+------------Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
+--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("8582"), orders.o_orderdate < Date32("8674")]
+----------SubqueryAlias: __correlated_sq_1
+------------Projection: lineitem.l_orderkey
+--------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
+----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
 physical_plan
 01)SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 02)--SortExec: expr=[o_orderpriority@0 ASC NULLS LAST]

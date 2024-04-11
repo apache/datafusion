@@ -60,7 +60,7 @@ where
 }
 
 #[derive(Debug)]
-pub(super) struct ToHexFunc {
+pub struct ToHexFunc {
     signature: Signature,
 }
 impl ToHexFunc {

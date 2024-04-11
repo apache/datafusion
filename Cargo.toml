@@ -23,9 +23,11 @@ members = [
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
+    "datafusion/functions-aggregate",
     "datafusion/functions",
     "datafusion/functions-array",
     "datafusion/optimizer",
+    "datafusion/physical-expr-common",
     "datafusion/physical-expr",
     "datafusion/physical-plan",
     "datafusion/proto",
@@ -48,7 +50,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.72"
+rust-version = "1.73"
 version = "37.0.0"
 
 [workspace.dependencies]
@@ -77,9 +79,11 @@ datafusion-common-runtime = { path = "datafusion/common-runtime", version = "37.
 datafusion-execution = { path = "datafusion/execution", version = "37.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "37.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "37.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "37.0.0" }
 datafusion-functions-array = { path = "datafusion/functions-array", version = "37.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "37.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "37.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "37.0.0", default-features = false }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "37.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "37.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "37.0.0" }
@@ -97,7 +101,7 @@ object_store = { version = "0.9.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
-rstest = "0.18.0"
+rstest = "0.19.0"
 serde_json = "1"
 sqlparser = { version = "0.44.0", features = ["visitor"] }
 tempfile = "3"

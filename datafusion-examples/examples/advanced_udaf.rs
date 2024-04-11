@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::{Field, Schema};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion_physical_expr::NullState;
 use std::{any::Any, sync::Arc};
@@ -30,7 +31,8 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    function::AccumulatorArgs, Accumulator, AggregateUDF, AggregateUDFImpl,
+    GroupsAccumulator, Signature,
 };
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
@@ -85,13 +87,21 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     /// is supported, DataFusion will use this row oriented
     /// accumulator when the aggregate function is used as a window function
     /// or when there are only aggregates (no GROUP BY columns) in the plan.
-    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::Float64, DataType::UInt32])
+    fn state_fields(
+        &self,
+        _name: &str,
+        value_type: DataType,
+        _ordering_fields: Vec<arrow_schema::Field>,
+    ) -> Result<Vec<arrow_schema::Field>> {
+        Ok(vec![
+            Field::new("prod", value_type, true),
+            Field::new("n", DataType::UInt32, true),
+        ])
     }
 
     /// Tell DataFusion that this aggregate supports the more performant `GroupsAccumulator`
@@ -191,7 +201,6 @@ impl Accumulator for GeometricMean {
 
 // create local session context with an in-memory table
 fn create_context() -> Result<SessionContext> {
-    use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![

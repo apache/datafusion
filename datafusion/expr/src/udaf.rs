@@ -17,16 +17,17 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::function::AccumulatorArgs;
 use crate::groups_accumulator::GroupsAccumulator;
+use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
-use crate::{
-    AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
-};
-use arrow::datatypes::DataType;
+use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
+use std::vec;
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -90,14 +91,12 @@ impl AggregateUDF {
         signature: &Signature,
         return_type: &ReturnTypeFunction,
         accumulator: &AccumulatorFactoryFunction,
-        state_type: &StateTypeFunction,
     ) -> Self {
         Self::new_from_impl(AggregateUDFLegacyWrapper {
             name: name.to_owned(),
             signature: signature.clone(),
             return_type: return_type.clone(),
             accumulator: accumulator.clone(),
-            state_type: state_type.clone(),
         })
     }
 
@@ -131,10 +130,12 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
+        // TODO: Support dictinct, filter, order by and null_treatment
         Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,
+            None,
             None,
             None,
         ))
@@ -166,16 +167,23 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
-    /// Return an accumulator the given aggregate, given
-    /// its return datatype.
-    pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(return_type)
+    /// Return an accumulator the given aggregate, given its return datatype
+    pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(acc_args)
     }
 
-    /// Return the type of the intermediate state used by this aggregator, given
-    /// its return datatype. Supports multi-phase aggregations
-    pub fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
-        self.inner.state_type(return_type)
+    /// Return the fields used to store the intermediate state for this aggregator, given
+    /// the name of the aggregate, value type and ordering fields. See [`AggregateUDFImpl::state_fields`]
+    /// for more details.
+    ///
+    /// This is used to support multi-phase aggregations
+    pub fn state_fields(
+        &self,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        self.inner.state_fields(name, value_type, ordering_fields)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -206,15 +214,17 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-///
 /// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+///
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
-/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator};
+/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
+/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::AccumulatorArgs};
+/// # use arrow::datatypes::Schema;
+/// # use arrow::datatypes::Field;
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
 ///   signature: Signature
@@ -240,9 +250,12 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-///        Ok(vec![DataType::Float64, DataType::UInt32])
+///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn state_fields(&self, _name: &str, value_type: DataType, _ordering_fields: Vec<Field>) -> Result<Vec<Field>> {
+///        Ok(vec![
+///             Field::new("value", value_type, true),
+///             Field::new("ordering", DataType::UInt32, true)
+///        ])
 ///    }
 /// }
 ///
@@ -269,15 +282,58 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>>;
+    ///
+    /// acc_args: [`AccumulatorArgs`] contains information about how the
+    /// aggregate function was called.
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
-    /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
-    /// See [`Accumulator::state()`] for more details
-    fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
+    /// Return the fields used to store the intermediate state of this accumulator.
+    ///
+    /// # Arguments:
+    /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
+    /// 2. `value_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
+    /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
+    ///     Empty if no ordering expression is provided.
+    ///
+    /// # Notes:
+    ///
+    /// The default implementation returns a single state field named `name`
+    /// with the same type as `value_type`. This is suitable for aggregates such
+    /// as `SUM` or `MIN` where partial state can be combined by applying the
+    /// same aggregate.
+    ///
+    /// For aggregates such as `AVG` where the partial state is more complex
+    /// (e.g. a COUNT and a SUM), this method is used to define the additional
+    /// fields.
+    ///
+    /// The name of the fields must be unique within the query and thus should
+    /// be derived from `name`. See [`format_state_name`] for a utility function
+    /// to generate a unique name.
+    fn state_fields(
+        &self,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        let value_fields = vec![Field::new(
+            format_state_name(name, "value"),
+            value_type,
+            true,
+        )];
+
+        Ok(value_fields.into_iter().chain(ordering_fields).collect())
+    }
 
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
-    /// `[Self::create_groups_accumulator`] will be called.
+    /// `[Self::create_groups_accumulator]` will be called.
+    ///
+    /// # Notes
+    ///
+    /// Even if this function returns true, DataFusion will still use
+    /// `Self::accumulator` for certain queries, such as when this aggregate is
+    /// used as a window function or when there no GROUP BY columns in the
+    /// query.
     fn groups_accumulator_supported(&self) -> bool {
         false
     }
@@ -337,12 +393,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(arg)
-    }
-
-    fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
-        self.inner.state_type(return_type)
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(acc_args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -361,8 +413,6 @@ pub struct AggregateUDFLegacyWrapper {
     return_type: ReturnTypeFunction,
     /// actual implementation
     accumulator: AccumulatorFactoryFunction,
-    /// the accumulator's state's description as a function of the return type
-    state_type: StateTypeFunction,
 }
 
 impl Debug for AggregateUDFLegacyWrapper {
@@ -394,12 +444,7 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         Ok(res.as_ref().clone())
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(arg)
-    }
-
-    fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
-        let res = (self.state_type)(return_type)?;
-        Ok(res.as_ref().clone())
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        (self.accumulator)(acc_args)
     }
 }

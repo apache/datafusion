@@ -51,8 +51,14 @@ use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility}
 /// select arrow_cast(column_x, 'Float64')
 /// ```
 #[derive(Debug)]
-pub(super) struct ArrowCastFunc {
+pub struct ArrowCastFunc {
     signature: Signature,
+}
+
+impl Default for ArrowCastFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrowCastFunc {

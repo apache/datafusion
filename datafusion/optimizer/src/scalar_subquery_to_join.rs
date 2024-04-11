@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -427,7 +429,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -483,7 +485,7 @@ mod tests {
         \n                      TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -521,7 +523,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -557,7 +559,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -591,7 +593,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -730,7 +732,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -796,7 +798,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -835,7 +837,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -875,7 +877,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -908,7 +910,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -940,7 +942,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -971,7 +973,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1028,7 +1030,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1077,7 +1079,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())

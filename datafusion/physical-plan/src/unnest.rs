@@ -364,32 +364,31 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     options: &UnnestOptions,
 ) -> Result<Arc<dyn Array + 'static>> {
     let values = list_array.values();
-    if list_array.null_count() == 0 || !options.preserve_nulls {
-        Ok(values.clone())
-    } else {
-        let mut take_indicies_builder =
-            PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
-        let mut take_offset = 0;
+    if list_array.null_count() == 0 {
+        return Ok(values.clone());
+    }
 
-        list_array.iter().for_each(|elem| match elem {
-            Some(array) => {
-                for i in 0..array.len() {
-                    // take_offset + i is always positive
-                    let take_index = P::Native::from_usize(take_offset + i).unwrap();
-                    take_indicies_builder.append_value(take_index);
-                }
-                take_offset += array.len();
-            }
-            None => {
+    let mut take_indicies_builder =
+        PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
+    let offsets = list_array.value_offsets();
+    for row in 0..list_array.len() {
+        if list_array.is_null(row) {
+            if options.preserve_nulls {
                 take_indicies_builder.append_null();
             }
-        });
-        Ok(kernels::take::take(
-            &values,
-            &take_indicies_builder.finish(),
-            None,
-        )?)
+        } else {
+            let start = offsets[row].as_usize();
+            let end = offsets[row + 1].as_usize();
+            for idx in start..end {
+                take_indicies_builder.append_value(P::Native::from_usize(idx).unwrap());
+            }
+        }
     }
+    Ok(kernels::take::take(
+        &values,
+        &take_indicies_builder.finish(),
+        None,
+    )?)
 }
 
 fn build_batch_fixedsize_list(
@@ -595,4 +594,100 @@ where
         .collect::<Result<Vec<_>>>()?;
 
     Ok(RecordBatch::try_new(schema.clone(), arrays.to_vec())?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{
+        array::AsArray,
+        datatypes::{DataType, Field},
+    };
+    use arrow_array::StringArray;
+    use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+
+    // Create a ListArray with the following list values:
+    //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
+    fn make_test_array() -> ListArray {
+        let mut values = vec![];
+        let mut offsets = vec![0];
+        let mut valid = BooleanBufferBuilder::new(2);
+
+        // [A, B, C]
+        values.extend_from_slice(&[Some("A"), Some("B"), Some("C")]);
+        offsets.push(values.len() as i32);
+        valid.append(true);
+
+        // []
+        offsets.push(values.len() as i32);
+        valid.append(true);
+
+        // NULL with non-zero value length
+        // Issue https://github.com/apache/arrow-datafusion/issues/9932
+        values.push(Some("?"));
+        offsets.push(values.len() as i32);
+        valid.append(false);
+
+        // [D]
+        values.push(Some("D"));
+        offsets.push(values.len() as i32);
+        valid.append(true);
+
+        // Another NULL with zero value length
+        offsets.push(values.len() as i32);
+        valid.append(false);
+
+        // [NULL, F]
+        values.extend_from_slice(&[None, Some("F")]);
+        offsets.push(values.len() as i32);
+        valid.append(true);
+
+        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        ListArray::new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(StringArray::from(values)),
+            Some(NullBuffer::new(valid.finish())),
+        )
+    }
+
+    #[test]
+    fn test_unnest_generic_list() -> datafusion_common::Result<()> {
+        let list_array = make_test_array();
+
+        // Test with preserve_nulls = false
+        let options = UnnestOptions {
+            preserve_nulls: false,
+        };
+        let unnested_array =
+            unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
+        let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
+        assert_eq!(
+            strs,
+            vec![Some("A"), Some("B"), Some("C"), Some("D"), None, Some("F")]
+        );
+
+        // Test with preserve_nulls = true
+        let options = UnnestOptions {
+            preserve_nulls: true,
+        };
+        let unnested_array =
+            unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
+        let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
+        assert_eq!(
+            strs,
+            vec![
+                Some("A"),
+                Some("B"),
+                Some("C"),
+                None,
+                Some("D"),
+                None,
+                None,
+                Some("F")
+            ]
+        );
+
+        Ok(())
+    }
 }

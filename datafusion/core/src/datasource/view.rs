@@ -21,6 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
 use crate::{
@@ -92,13 +93,12 @@ impl TableProvider for ViewTable {
     fn get_table_definition(&self) -> Option<&str> {
         self.definition.as_deref()
     }
-
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         // A filter is added on the View when given
-        Ok(TableProviderFilterPushDown::Exact)
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
     async fn scan(
@@ -126,9 +126,9 @@ impl TableProvider for ViewTable {
                 let fields: Vec<Expr> = projection
                     .iter()
                     .map(|i| {
-                        Expr::Column(
-                            self.logical_plan.schema().field(*i).qualified_column(),
-                        )
+                        Expr::Column(Column::from(
+                            self.logical_plan.schema().qualified_field(*i),
+                        ))
                     })
                     .collect();
                 plan.project(fields)?

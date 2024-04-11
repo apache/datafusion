@@ -28,6 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use arrow_array::new_null_array;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -66,6 +67,7 @@ enum Scenario {
     Int,
     Int32Range,
     UInt,
+    UInt32Range,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
@@ -74,6 +76,7 @@ enum Scenario {
     DecimalLargePrecisionBloomFilter,
     ByteArray,
     PeriodsInColumnNames,
+    WithNullValues,
 }
 
 enum Unit {
@@ -455,6 +458,13 @@ fn make_int32_range(start: i32, end: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_uint32_range(start: u32, end: u32) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("u", DataType::UInt32, true)]));
+    let v = vec![start, end];
+    let array = Arc::new(UInt32Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with f64 vector
 ///
 /// Columns are named
@@ -622,6 +632,27 @@ fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![Arc::new(name), Arc::new(service_name)]).unwrap()
 }
 
+/// Return record batch with i8, i16, i32, and i64 sequences with all Null values
+fn make_all_null_values() -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i8", DataType::Int8, true),
+        Field::new("i16", DataType::Int16, true),
+        Field::new("i32", DataType::Int32, true),
+        Field::new("i64", DataType::Int64, true),
+    ]));
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            new_null_array(&DataType::Int8, 5),
+            new_null_array(&DataType::Int16, 5),
+            new_null_array(&DataType::Int32, 5),
+            new_null_array(&DataType::Int64, 5),
+        ],
+    )
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {
@@ -658,6 +689,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_uint_batches(5, 10),
                 make_uint_batches(250, 255),
             ]
+        }
+        Scenario::UInt32Range => {
+            vec![make_uint32_range(0, 10), make_uint32_range(200000, 300000)]
         }
         Scenario::Float64 => {
             vec![
@@ -786,6 +820,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                     "HTTP GET / DISPATCH",
                     vec!["backend", "backend", "backend", "backend", "backend"],
                 ),
+            ]
+        }
+        Scenario::WithNullValues => {
+            vec![
+                make_all_null_values(),
+                make_int_batches(1, 6),
+                make_all_null_values(),
             ]
         }
     }

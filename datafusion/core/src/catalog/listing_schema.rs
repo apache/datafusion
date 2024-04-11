@@ -28,7 +28,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{Constraints, DFSchema, DataFusionError, OwnedTableReference};
+use datafusion_common::{Constraints, DFSchema, DataFusionError, TableReference};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -129,7 +129,7 @@ impl ListingSchemaProvider {
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
-                let name = OwnedTableReference::bare(table_name.to_string());
+                let name = TableReference::bare(table_name);
                 let provider = self
                     .factory
                     .create(

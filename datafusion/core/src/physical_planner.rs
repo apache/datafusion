@@ -247,24 +247,20 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             distinct,
             args,
             filter,
-            order_by,
+            order_by: _,
             null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)
             }
             AggregateFunctionDefinition::UDF(fun) => {
-                // TODO: Add support for filter and order by in AggregateUDF
+                // TODO: Add support for filter by in AggregateUDF
                 if filter.is_some() {
                     return exec_err!(
                         "aggregate expression with filter is not supported"
                     );
                 }
-                if order_by.is_some() {
-                    return exec_err!(
-                        "aggregate expression with order_by is not supported"
-                    );
-                }
+
                 let names = args
                     .iter()
                     .map(|e| create_physical_name(e, false))
@@ -630,7 +626,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 }) => {
                     let name = table_name.table();
-                    let schema = session_state.schema_for_ref(table_name)?;
+                    let schema = session_state.schema_for_ref(table_name.clone())?;
                     if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
@@ -647,7 +643,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 }) => {
                     let name = table_name.table();
-                    let schema = session_state.schema_for_ref(table_name)?;
+                    let schema = session_state.schema_for_ref(table_name.clone())?;
                     if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
@@ -976,68 +972,17 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     let null_equals_null = *null_equals_null;
 
-                    // If join has expression equijoin keys, add physical projecton.
+                    // If join has expression equijoin keys, add physical projection.
                     let has_expr_join_key = keys.iter().any(|(l, r)| {
                         !(matches!(l, Expr::Column(_))
                             && matches!(r, Expr::Column(_)))
                     });
                     if has_expr_join_key {
-                        let left_keys = keys
-                            .iter()
-                            .map(|(l, _r)| l)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let right_keys = keys
-                            .iter()
-                            .map(|(_l, r)| r)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let (left, right, column_on, added_project) = {
-                            let (left, left_col_keys, left_projected) =
-                                wrap_projection_for_join_if_necessary(
-                                    left_keys.as_slice(),
-                                    left.as_ref().clone(),
-                                )?;
-                            let (right, right_col_keys, right_projected) =
-                                wrap_projection_for_join_if_necessary(
-                                    &right_keys,
-                                    right.as_ref().clone(),
-                                )?;
-                            (
-                                left,
-                                right,
-                                (left_col_keys, right_col_keys),
-                                left_projected || right_projected,
-                            )
-                        };
-
-                        let join_plan =
-                            LogicalPlan::Join(Join::try_new_with_project_input(
-                                logical_plan,
-                                Arc::new(left),
-                                Arc::new(right),
-                                column_on,
-                            )?);
-
-                        // Remove temporary projected columns
-                        let join_plan = if added_project {
-                            let final_join_result = join_schema
-                                .fields()
-                                .iter()
-                                .map(|field| {
-                                    Expr::Column(field.qualified_column())
-                                })
-                                .collect::<Vec<_>>();
-                            let projection =
-                                Projection::try_new(
-                                    final_join_result,
-                                    Arc::new(join_plan),
-                                )?;
-                            LogicalPlan::Projection(projection)
-                        } else {
-                            join_plan
-                        };
-
+                        // Logic extracted into a function here as subsequent recursive create_initial_plan()
+                        // call can cause a stack overflow for a large number of joins.
+                        //
+                        // See #9962 and #1047 for detailed explanation.
+                        let join_plan = project_expr_join_keys(keys,left,right,logical_plan,join_schema)?;
                         return self
                             .create_initial_plan(&join_plan, session_state)
                             .await;
@@ -1089,18 +1034,19 @@ impl DefaultPhysicalPlanner {
                             let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices.clone()
                                 .into_iter()
                                 .map(|i| (
-                                    left_df_schema.field(i).clone(),
+                                    left_df_schema.qualified_field(i),
                                     physical_left.schema().field(i).clone(),
                                 ))
                                 .chain(
                                     right_field_indices.clone()
                                         .into_iter()
                                         .map(|i| (
-                                            right_df_schema.field(i).clone(),
+                                            right_df_schema.qualified_field(i),
                                             physical_right.schema().field(i).clone(),
                                         ))
                                 )
                                 .unzip();
+                            let filter_df_fields = filter_df_fields.into_iter().map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone()))).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
@@ -1667,20 +1613,22 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let order_by = match order_by {
-                Some(e) => Some(create_physical_sort_exprs(
-                    e,
-                    logical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
-            };
+
             let ignore_nulls = null_treatment
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
-                    let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+                    let physical_sort_exprs = match order_by {
+                        Some(exprs) => Some(create_physical_sort_exprs(
+                            exprs,
+                            logical_input_schema,
+                            execution_props,
+                        )?),
+                        None => None,
+                    };
+                    let ordering_reqs: Vec<PhysicalSortExpr> =
+                        physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,
@@ -1690,16 +1638,30 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         name,
                         ignore_nulls,
                     )?;
-                    (agg_expr, filter, order_by)
+                    (agg_expr, filter, physical_sort_exprs)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
+                    let sort_exprs = order_by.clone().unwrap_or(vec![]);
+                    let physical_sort_exprs = match order_by {
+                        Some(exprs) => Some(create_physical_sort_exprs(
+                            exprs,
+                            logical_input_schema,
+                            execution_props,
+                        )?),
+                        None => None,
+                    };
+                    let ordering_reqs: Vec<PhysicalSortExpr> =
+                        physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
                         &args,
+                        &sort_exprs,
+                        &ordering_reqs,
                         physical_input_schema,
                         name,
-                    );
-                    (agg_expr?, filter, order_by)
+                        ignore_nulls,
+                    )?;
+                    (agg_expr, filter, physical_sort_exprs)
                 }
                 AggregateFunctionDefinition::Name(_) => {
                     return internal_err!(
@@ -1990,6 +1952,54 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
+/// Adding physical projection to join if has expression equijoin keys.
+fn project_expr_join_keys(
+    keys: &[(Expr, Expr)],
+    left: &Arc<LogicalPlan>,
+    right: &Arc<LogicalPlan>,
+    logical_plan: &LogicalPlan,
+    join_schema: &Arc<DFSchema>,
+) -> Result<LogicalPlan> {
+    let left_keys = keys.iter().map(|(l, _r)| l).cloned().collect::<Vec<_>>();
+    let right_keys = keys.iter().map(|(_l, r)| r).cloned().collect::<Vec<_>>();
+    let (left, right, column_on, added_project) = {
+        let (left, left_col_keys, left_projected) =
+            wrap_projection_for_join_if_necessary(
+                left_keys.as_slice(),
+                left.as_ref().clone(),
+            )?;
+        let (right, right_col_keys, right_projected) =
+            wrap_projection_for_join_if_necessary(&right_keys, right.as_ref().clone())?;
+        (
+            left,
+            right,
+            (left_col_keys, right_col_keys),
+            left_projected || right_projected,
+        )
+    };
+
+    let join_plan = LogicalPlan::Join(Join::try_new_with_project_input(
+        logical_plan,
+        Arc::new(left),
+        Arc::new(right),
+        column_on,
+    )?);
+
+    // Remove temporary projected columns
+    if added_project {
+        let final_join_result = join_schema
+            .iter()
+            .map(|(qualifier, field)| {
+                Expr::Column(datafusion_common::Column::from((qualifier, field.as_ref())))
+            })
+            .collect::<Vec<_>>();
+        let projection = Projection::try_new(final_join_result, Arc::new(join_plan))?;
+        Ok(LogicalPlan::Projection(projection))
+    } else {
+        Ok(join_plan)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -2012,9 +2022,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{
-        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
-    };
+    use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
@@ -2257,25 +2265,23 @@ mod tests {
             .await;
 
         let expected_error: &str = "Error during planning: \
-        Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-        LogicalPlan schema: DFSchema { fields: [\
-            DFField { qualifier: None, field: Field { \
-                name: \"a\", \
+            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
+            LogicalPlan schema: \
+            DFSchema { inner: Schema { fields: \
+                [Field { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} } }\
-        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
-        ExecutionPlan schema: Schema { fields: [\
-            Field { \
-                name: \"b\", \
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }, field_qualifiers: [None], \
+                functional_dependencies: FunctionalDependencies { deps: [] } }, \
+            ExecutionPlan schema: Schema { fields: \
+                [Field { name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} }\
-        ], metadata: {} }";
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
@@ -2539,8 +2545,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::new_with_metadata(
-                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
+                    DFSchema::from_unqualifed_fields(
+                        vec![Field::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )
                     .unwrap(),
@@ -2679,7 +2685,7 @@ mod tests {
             match ctx.read_csv(path, options).await?.into_optimized_plan()? {
                 LogicalPlan::TableScan(ref scan) => {
                     let mut scan = scan.clone();
-                    let table_reference = TableReference::from(name).to_owned_reference();
+                    let table_reference = TableReference::from(name);
                     scan.table_name = table_reference;
                     let new_schema = scan
                         .projected_schema

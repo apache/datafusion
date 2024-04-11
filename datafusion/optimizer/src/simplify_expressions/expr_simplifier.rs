@@ -1318,18 +1318,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
             },
 
-            // log
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
-                args,
-            }) => Transformed::yes(simpl_log(args, info)?),
-
-            // power
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
-                args,
-            }) => Transformed::yes(simpl_power(args, info)?),
-
             // concat
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
@@ -1729,7 +1717,7 @@ mod tests {
     use crate::test::test_table_scan_with_name;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFField, ToDFSchema};
+    use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -2666,68 +2654,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_log() {
-        // Log(c3, 1) ===> 0
-        {
-            let expr = log(col("c3_non_null"), lit(1));
-            let expected = lit(0i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, c3) ===> 1
-        {
-            let expr = log(col("c3_non_null"), col("c3_non_null"));
-            let expected = lit(1i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, Power(c3, c4)) ===> c4
-        {
-            let expr = log(
-                col("c3_non_null"),
-                power(col("c3_non_null"), col("c4_non_null")),
-            );
-            let expected = col("c4_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Log(c3, c4) ===> Log(c3, c4)
-        {
-            let expr = log(col("c3_non_null"), col("c4_non_null"));
-            let expected = log(col("c3_non_null"), col("c4_non_null"));
-            assert_eq!(simplify(expr), expected);
-        }
-    }
-
-    #[test]
-    fn test_simplify_power() {
-        // Power(c3, 0) ===> 1
-        {
-            let expr = power(col("c3_non_null"), lit(0));
-            let expected = lit(1i64);
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, 1) ===> c3
-        {
-            let expr = power(col("c3_non_null"), lit(1));
-            let expected = col("c3_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, Log(c3, c4)) ===> c4
-        {
-            let expr = power(
-                col("c3_non_null"),
-                log(col("c3_non_null"), col("c4_non_null")),
-            );
-            let expected = col("c4_non_null");
-            assert_eq!(simplify(expr), expected);
-        }
-        // Power(c3, c4) ===> Power(c3, c4)
-        {
-            let expr = power(col("c3_non_null"), col("c4_non_null"));
-            let expected = power(col("c3_non_null"), col("c4_non_null"));
-            assert_eq!(simplify(expr), expected);
-        }
-    }
-
-    #[test]
     fn test_simplify_concat_ws() {
         let null = lit(ScalarValue::Utf8(None));
         // the delimiter is not a literal
@@ -3085,17 +3011,18 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::new_with_metadata(
+            DFSchema::from_unqualifed_fields(
                 vec![
-                    DFField::new_unqualified("c1", DataType::Utf8, true),
-                    DFField::new_unqualified("c2", DataType::Boolean, true),
-                    DFField::new_unqualified("c3", DataType::Int64, true),
-                    DFField::new_unqualified("c4", DataType::UInt32, true),
-                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
-                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
-                    DFField::new_unqualified("c3_non_null", DataType::Int64, false),
-                    DFField::new_unqualified("c4_non_null", DataType::UInt32, false),
-                ],
+                    Field::new("c1", DataType::Utf8, true),
+                    Field::new("c2", DataType::Boolean, true),
+                    Field::new("c3", DataType::Int64, true),
+                    Field::new("c4", DataType::UInt32, true),
+                    Field::new("c1_non_null", DataType::Utf8, false),
+                    Field::new("c2_non_null", DataType::Boolean, false),
+                    Field::new("c3_non_null", DataType::Int64, false),
+                    Field::new("c4_non_null", DataType::UInt32, false),
+                ]
+                .into(),
                 HashMap::new(),
             )
             .unwrap(),

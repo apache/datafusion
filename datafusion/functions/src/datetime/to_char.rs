@@ -35,9 +35,15 @@ use datafusion_expr::{
 };
 
 #[derive(Debug)]
-pub(super) struct ToCharFunc {
+pub struct ToCharFunc {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ToCharFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToCharFunc {

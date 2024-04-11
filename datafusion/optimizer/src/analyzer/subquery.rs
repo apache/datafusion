@@ -140,13 +140,13 @@ fn check_inner_plan(
     is_aggregate: bool,
     can_contain_outer_ref: bool,
 ) -> Result<()> {
-    if !can_contain_outer_ref && contains_outer_reference(inner_plan) {
+    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, true, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -171,7 +171,7 @@ fn check_inner_plan(
         }
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -188,7 +188,7 @@ fn check_inner_plan(
         | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -201,7 +201,7 @@ fn check_inner_plan(
             ..
         }) => match join_type {
             JoinType::Inner => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.apply_children(|plan| {
                     check_inner_plan(
                         plan,
                         is_scalar,
@@ -221,7 +221,7 @@ fn check_inner_plan(
                 check_inner_plan(right, is_scalar, is_aggregate, can_contain_outer_ref)
             }
             JoinType::Full => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.apply_children(|plan| {
                     check_inner_plan(plan, is_scalar, is_aggregate, false)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
@@ -231,13 +231,6 @@ fn check_inner_plan(
         LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
-}
-
-fn contains_outer_reference(inner_plan: &LogicalPlan) -> bool {
-    inner_plan
-        .expressions()
-        .iter()
-        .any(|expr| expr.contains_outer())
 }
 
 fn check_aggregation_in_scalar_subquery(
@@ -283,7 +276,7 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
-    inner_plan.apply(&mut |plan| {
+    inner_plan.apply_with_subqueries(&mut |plan| {
         if let LogicalPlan::Filter(Filter { predicate, .. }) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()

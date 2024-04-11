@@ -107,7 +107,7 @@ message LogicalExprNodeCollection {
 
 message ListingTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 14;
+  TableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -126,7 +126,7 @@ message ListingTableScanNode {
 
 message ViewTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -136,7 +136,7 @@ message ViewTableScanNode {
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;
@@ -201,7 +201,7 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  OwnedTableReference name = 12;
+  TableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -238,14 +238,14 @@ message CreateCatalogNode {
 }
 
 message DropViewNode {
-  OwnedTableReference name = 1;
+  TableReference name = 1;
   bool if_exists = 2;
   DfSchema schema = 3;
 }
 
 message CreateViewNode {
   reserved 1; // was string name
-  OwnedTableReference name = 5;
+  TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -357,7 +357,7 @@ message SelectionExecNode {
 message SubqueryAliasNode {
   reserved 2; // Was string alias
   LogicalPlanNode input = 1;
-  OwnedTableReference alias = 3;
+  TableReference alias = 3;
 }
 
 // logical expressions
@@ -513,7 +513,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
-  repeated OwnedTableReference relation = 3;
+  repeated TableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -547,20 +547,20 @@ enum ScalarFunction {
   // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
-  Cos = 6;
+  // 6 was Cos
   // 7 was Digest
   Exp = 8;
-  Floor = 9;
+  // 9 was Floor
   // 10 was Ln
-  Log = 11;
+  // 11 was Log
   // 12 was Log10
   // 13 was Log2
-  Round = 14;
-  Signum = 15;
-  Sin = 16;
-  Sqrt = 17;
+  // 14 was Round
+  // 15 was Signum
+  // 16 was Sin
+  // 17 was Sqrt
   // Tan = 18;
-  Trunc = 19;
+  // 19 was Trunc
   // 20 was Array
   // RegexpMatch = 21;
   // 22 was BitLength
@@ -579,7 +579,7 @@ enum ScalarFunction {
   // 35 was MD5
   //  36 was NullIf
   // 37 was OctetLength 
-  Random = 38;
+  // 38 was Random
   // 39 was RegexpReplace
   // 40 was Repeat
   // 41 was Replace
@@ -605,7 +605,7 @@ enum ScalarFunction {
   // Trim = 61;
   // Upper = 62;
   Coalesce = 63;
-  Power = 64;
+  // 64 was Power
   // 65 was StructFun
   // 66 was FromUnixtime
   // 67 Atan2
@@ -614,19 +614,19 @@ enum ScalarFunction {
   // 70 was CurrentDate
   // 71 was CurrentTime
   // 72 was Uuid
-  Cbrt = 73;
+  // 73 was Cbrt
   // 74 Acosh
   // 75 was Asinh
   // 76 was Atanh
-  Sinh = 77;
-  Cosh = 78;
-  // Tanh = 79;
-  Pi = 80;
-  Degrees = 81;
-  Radians = 82;
+  // 77 was Sinh
+  // 78 was Cosh
+  // Tanh = 79
+  // 80 was Pi
+  // 81 was Degrees
+  // 82 was Radians
   Factorial = 83;
-  Lcm = 84;
-  Gcd = 85;
+  // 84 was Lcm
+  // 85 was Gcd
   // 86 was ArrayAppend
   // 87 was ArrayConcat
   // 88 was ArrayDims
@@ -642,7 +642,7 @@ enum ScalarFunction {
   // 98 was Cardinality
   // 99 was ArrayElement
   // 100 was ArraySlice
-  Cot = 103;
+  // 103 was Cot
   // 104 was ArrayHas
   // 105 was ArrayHasAny
   // 106 was ArrayHasAll
@@ -650,10 +650,10 @@ enum ScalarFunction {
   // 108 was ArrayReplaceN
   // 109 was ArrayRemoveAll
   // 110 was ArrayReplaceAll
-  Nanvl = 111;
+  // 111 was Nanvl
   // 112 was Flatten
   // 113 was IsNan
-  Iszero = 114;
+  // 114 was Iszero
   // 115 was ArrayEmpty
   // 116 was ArrayPopBack
   // 117 was StringToArray
@@ -1169,7 +1169,7 @@ message FullTableReference {
   string table = 3;
 }
 
-message OwnedTableReference {
+message TableReference {
   oneof table_reference_enum {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;

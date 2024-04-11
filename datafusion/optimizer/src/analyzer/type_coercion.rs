@@ -19,9 +19,8 @@
 
 use std::sync::Arc;
 
-use crate::analyzer::AnalyzerRule;
-
 use arrow::datatypes::{DataType, IntervalUnit};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
@@ -50,6 +49,8 @@ use datafusion_expr::{
     ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
+
+use crate::analyzer::AnalyzerRule;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -86,8 +87,10 @@ fn analyze_internal(
     let mut schema = merge_schema(new_inputs.iter().collect());
 
     if let LogicalPlan::TableScan(ts) = plan {
-        let source_schema =
-            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+        let source_schema = DFSchema::try_from_qualified_schema(
+            ts.table_name.clone(),
+            &ts.source.schema(),
+        )?;
         schema.merge(&source_schema);
     }
 
@@ -366,7 +369,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
-                            fun, new_expr, false, filter, order_by,
+                            fun,
+                            new_expr,
+                            false,
+                            filter,
+                            order_by,
+                            null_treatment,
                         ),
                     )))
                 }
@@ -751,24 +759,24 @@ mod test {
     use std::any::Any;
     use std::sync::{Arc, OnceLock};
 
-    use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
-    };
-    use crate::test::assert_analyzed_plan_eq;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
 
-    use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, lit,
-        AccumulatorFactoryFunction, AggregateFunction, AggregateUDF, BinaryExpr,
-        BuiltinScalarFunction, Case, ColumnarValue, Expr, ExprSchemable, Filter,
-        LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
-        Subquery, Volatility,
+        AccumulatorFactoryFunction, AggregateFunction, AggregateUDF, BinaryExpr, Case,
+        ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF,
+        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
+
+    use crate::analyzer::type_coercion::{
+        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+    };
+    use crate::test::assert_analyzed_plan_eq;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -781,8 +789,8 @@ mod test {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
-                DFSchema::new_with_metadata(
-                    vec![DFField::new_unqualified("a", data_type, true)],
+                DFSchema::from_unqualifed_fields(
+                    vec![Field::new("a", data_type, true)].into(),
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -868,14 +876,15 @@ mod test {
         // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Floor;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {});
         let scalar_function_expr =
-            Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
+            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
         )?);
-        let expected = "Projection: floor(CAST(Int64(10) AS Float64))\n  EmptyRelation";
+        let expected =
+            "Projection: TestScalarUDF(CAST(Int64(10) AS Float32))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
@@ -896,6 +905,7 @@ mod test {
             false,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
@@ -906,7 +916,6 @@ mod test {
     fn agg_udaf_invalid_input() -> Result<()> {
         let empty = empty();
         let return_type = DataType::Float64;
-        let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -914,12 +923,16 @@ mod test {
             Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
             return_type,
             accumulator,
-            state_type,
+            vec![
+                Field::new("count", DataType::UInt64, true),
+                Field::new("avg", DataType::Float64, true),
+            ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
             false,
+            None,
             None,
             None,
         ));
@@ -1042,12 +1055,8 @@ mod test {
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::new_with_metadata(
-                vec![DFField::new_unqualified(
-                    "a",
-                    DataType::Decimal128(12, 4),
-                    true,
-                )],
+            schema: Arc::new(DFSchema::from_unqualifed_fields(
+                vec![Field::new("a", DataType::Decimal128(12, 4), true)].into(),
                 std::collections::HashMap::new(),
             )?),
         }));
@@ -1251,8 +1260,8 @@ mod test {
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int64, true)],
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1262,8 +1271,8 @@ mod test {
         assert_eq!(expected, result);
 
         // eq
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int64, true)],
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1273,8 +1282,8 @@ mod test {
         assert_eq!(expected, result);
 
         // lt
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int64, true)],
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1346,26 +1355,27 @@ mod test {
 
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![
-                DFField::new_unqualified("boolean", DataType::Boolean, true),
-                DFField::new_unqualified("integer", DataType::Int32, true),
-                DFField::new_unqualified("float", DataType::Float32, true),
-                DFField::new_unqualified(
+                Field::new("boolean", DataType::Boolean, true),
+                Field::new("integer", DataType::Int32, true),
+                Field::new("float", DataType::Float32, true),
+                Field::new(
                     "timestamp",
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                     true,
                 ),
-                DFField::new_unqualified("date", DataType::Date32, true),
-                DFField::new_unqualified(
+                Field::new("date", DataType::Date32, true),
+                Field::new(
                     "interval",
                     DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
                     true,
                 ),
-                DFField::new_unqualified("binary", DataType::Binary, true),
-                DFField::new_unqualified("string", DataType::Utf8, true),
-                DFField::new_unqualified("decimal", DataType::Decimal128(10, 10), true),
-            ],
+                Field::new("binary", DataType::Binary, true),
+                Field::new("string", DataType::Utf8, true),
+                Field::new("decimal", DataType::Decimal128(10, 10), true),
+            ]
+            .into(),
             std::collections::HashMap::new(),
         )?);
 

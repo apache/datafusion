@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`SimplifyExpressions`] simplifies expressions in the logical plan,
+//! [`ExprSimplifier`] simplifies individual `Expr`s.
+
 pub mod expr_simplifier;
 mod guarantees;
 mod inlist_simplifier;

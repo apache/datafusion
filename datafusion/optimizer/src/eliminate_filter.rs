@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false or null` on a plan with an empty relation.
-//! This saves time in planning and executing the query.
-//! Note that this rule should be applied after simplify expressions optimizer rule.
+//! [`EliminateFilter`] replaces `where false` or `where null` with an empty relation.
+
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
@@ -27,7 +26,11 @@ use datafusion_expr::{
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-/// Optimization rule that eliminate the scalar value (true/false/null) filter with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that eliminate the scalar value (true/false/null) filter
+/// with an [LogicalPlan::EmptyRelation]
+///
+/// This saves time in planning and executing the query.
+/// Note that this rule should be applied after simplify expressions optimizer rule.
 #[derive(Default)]
 pub struct EliminateFilter;
 
@@ -88,7 +91,7 @@ mod tests {
 
     use crate::test::*;
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateFilter::new()), plan, expected)
     }
 
@@ -104,7 +107,7 @@ mod tests {
 
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -119,7 +122,7 @@ mod tests {
 
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -141,7 +144,7 @@ mod tests {
             \n  EmptyRelation\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -156,7 +159,7 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
         \n  TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -179,7 +182,7 @@ mod tests {
             \n    TableScan: test\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -202,6 +205,6 @@ mod tests {
         // Filter is removed
         let expected = "Projection: test.a\
             \n  EmptyRelation";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }

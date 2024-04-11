@@ -65,7 +65,7 @@ pub fn scan_empty(
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
-    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
     LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 
@@ -78,7 +78,7 @@ pub fn scan_empty_with_partitions(
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
-    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
     LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 

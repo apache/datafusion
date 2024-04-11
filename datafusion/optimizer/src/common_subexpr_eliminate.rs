@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Eliminate common sub-expression.
+//! [`CommonSubexprEliminate`] to avoid redundant computation of common sub-expressions
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
@@ -24,13 +24,13 @@ use std::sync::Arc;
 use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_err, qualified_name, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
@@ -126,7 +126,7 @@ type Identifier = String;
 /// same value
 ///
 /// Currently only common sub-expressions within a single `LogicalPlan` are
-/// be eliminated.
+/// eliminated.
 ///
 /// # Example
 ///
@@ -148,6 +148,12 @@ type Identifier = String;
 pub struct CommonSubexprEliminate {}
 
 impl CommonSubexprEliminate {
+    /// Rewrites `exprs_list` with common sub-expressions replaced with a new
+    /// column.
+    ///
+    /// `affected_id` is updated with any sub expressions that were replaced.
+    ///
+    /// Returns the rewritten expressions
     fn rewrite_exprs_list(
         &self,
         exprs_list: &[&[Expr]],
@@ -166,6 +172,14 @@ impl CommonSubexprEliminate {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// Rewrites the expression in `exprs_list` with common sub-expressions
+    /// replaced with a new colum and adds a ProjectionExec on top of `input`
+    /// which computes any replaced common sub-expressions.
+    ///
+    /// Returns a tuple of:
+    /// 1. The rewritten expressions
+    /// 2. A `LogicalPlan::Projection` with input of `input` that computes any
+    ///    common sub-expressions that were used
     fn rewrite_expr(
         &self,
         exprs_list: &[&[Expr]],
@@ -331,8 +345,10 @@ impl CommonSubexprEliminate {
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
                         let id = ExprSet::expr_identifier(&expr_rewritten);
-                        let out_name =
-                            expr_rewritten.to_field(&new_input_schema)?.qualified_name();
+                        let (qualifier, field) =
+                            expr_rewritten.to_field(&new_input_schema)?;
+                        let out_name = qualified_name(qualifier.as_ref(), field.name());
+
                         agg_exprs.push(expr_rewritten.alias(&id));
                         proj_exprs
                             .push(Expr::Column(Column::from_name(id)).alias(out_name));
@@ -456,7 +472,16 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
         .ok_or_else(|| DataFusionError::Internal("Failed to pop expression".to_string()))
 }
 
-/// Build the "intermediate" projection plan that evaluates the extracted common expressions.
+/// Build the "intermediate" projection plan that evaluates the extracted common
+/// expressions.
+///
+/// # Arguments
+/// input: the input plan
+///
+/// affected_id: which common subexpressions were used (and thus are added to
+/// intermediate projection)
+///
+/// expr_set: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
     affected_id: BTreeSet<Identifier>,
@@ -469,7 +494,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type, symbol)) => {
                 // todo: check `nullable`
-                let field = DFField::new_unqualified(&id, data_type.clone(), true);
+                let field = Field::new(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(symbol.as_str()));
             }
@@ -479,9 +504,9 @@ fn build_common_expr_project_plan(
         }
     }
 
-    for field in input.schema().fields() {
-        if fields_set.insert(field.qualified_name()) {
-            project_exprs.push(Expr::Column(field.qualified_column()));
+    for (qualifier, field) in input.schema().iter() {
+        if fields_set.insert(qualified_name(qualifier, field.name())) {
+            project_exprs.push(Expr::Column(Column::from((qualifier, field.as_ref()))));
         }
     }
 
@@ -491,18 +516,18 @@ fn build_common_expr_project_plan(
     )?))
 }
 
-/// Build the projection plan to eliminate unexpected columns produced by
+/// Build the projection plan to eliminate unnecessary columns produced by
 /// the "intermediate" projection plan built in [build_common_expr_project_plan].
 ///
-/// This is for those plans who don't keep its own output schema like `Filter` or `Sort`.
+/// This is required to keep the schema the same for plans that pass the input
+/// on to the output, such as `Filter` or `Sort`.
 fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
     let col_exprs = schema
-        .fields()
         .iter()
-        .map(|field| Expr::Column(field.qualified_column()))
+        .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field.as_ref()))))
         .collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
@@ -517,10 +542,14 @@ fn extract_expressions(
 ) -> Result<()> {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
-            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+            let (qualifier, field) = e.to_field(schema)?;
+            let col = Column::new(qualifier, field.name());
+            result.push(Expr::Column(col))
         }
     } else {
-        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+        let (qualifier, field) = expr.to_field(schema)?;
+        let col = Column::new(qualifier, field.name());
+        result.push(Expr::Column(col));
     }
 
     Ok(())
@@ -565,7 +594,7 @@ impl ExprMask {
     }
 }
 
-/// Go through an expression tree and generate identifier.
+/// Go through an expression tree and generate identifiers for each subexpression.
 ///
 /// An identifier contains information of the expression itself and its sub-expression.
 /// This visitor implementation use a stack `visit_stack` to track traversal, which
@@ -674,9 +703,10 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 }
 
-/// Rewrite expression by replacing detected common sub-expression with
-/// the corresponding temporary column name. That column contains the
-/// evaluate result of replaced expression.
+/// Rewrite expression by common sub-expression with a corresponding temporary
+/// column name that will compute the subexpression.
+///
+/// `affected_id` is updated with any sub expressions that were replaced
 struct CommonSubexprRewriter<'a> {
     expr_set: &'a ExprSet,
     /// Which identifier is replaced.
@@ -721,6 +751,8 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     }
 }
 
+/// Replace common sub-expression in `expr` with the corresponding temporary
+/// column name, updating `affected_id` with any replaced expressions
 fn replace_common_expr(
     expr: Expr,
     expr_set: &ExprSet,
@@ -801,7 +833,6 @@ mod test {
 
         let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type = vec![DataType::UInt32];
         let udf_agg = |inner: Expr| {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
@@ -809,10 +840,11 @@ mod test {
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
                     accumulator.clone(),
-                    state_type.clone(),
+                    vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
                 false,
+                None,
                 None,
                 None,
             ))
@@ -1037,8 +1069,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1104,8 +1136,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1181,12 +1213,13 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("c", DataType::Int32, false),
-            ],
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1199,11 +1232,12 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-            ],
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1215,8 +1249,8 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+        let schema = DFSchema::from_unqualifed_fields(
+            vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;
         extract_expressions(&col("a"), &schema, &mut result)?;

@@ -18,7 +18,13 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::ordering::collapse_lex_ordering;
+use arrow_schema::{SchemaRef, SortOptions};
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinSide, JoinType, Result};
+
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -30,12 +36,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, Result};
-
-use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
+use super::ordering::collapse_lex_ordering;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -132,6 +133,16 @@ impl EquivalenceProperties {
     /// Returns a reference to the constant expressions
     pub fn constants(&self) -> &[Arc<dyn PhysicalExpr>] {
         &self.constants
+    }
+
+    /// Returns the output ordering of the properties.
+    pub fn output_ordering(&self) -> Option<LexOrdering> {
+        let constants = self.constants();
+        let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
+        // Prune out constant expressions
+        output_ordering
+            .retain(|sort_expr| !physical_exprs_contains(constants, &sort_expr.expr));
+        (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
     /// Returns the normalized version of the ordering equivalence class within.
@@ -1286,7 +1297,13 @@ mod tests {
     use std::ops::Not;
     use std::sync::Arc;
 
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::{Fields, SortOptions, TimeUnit};
+    use itertools::Itertools;
+
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{Operator, ScalarUDF};
+
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, convert_to_sort_reqs,
@@ -1294,16 +1311,10 @@ mod tests {
         generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
     };
     use crate::expressions::{col, BinaryExpr, Column};
-    use crate::functions::create_physical_expr;
+    use crate::utils::tests::TestScalarUDF;
     use crate::PhysicalSortExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, SortOptions, TimeUnit};
-    use datafusion_common::Result;
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{BuiltinScalarFunction, Operator};
-
-    use itertools::Itertools;
+    use super::*;
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -1782,11 +1793,13 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let floor_a = create_physical_expr(
-                &BuiltinScalarFunction::Floor,
+            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+            let floor_a = crate::udf::create_physical_expr(
+                &test_fun,
                 &[col("a", &test_schema)?],
                 &test_schema,
-                &ExecutionProps::default(),
+                &[],
+                &DFSchema::empty(),
             )?;
             let a_plus_b = Arc::new(BinaryExpr::new(
                 col("a", &test_schema)?,

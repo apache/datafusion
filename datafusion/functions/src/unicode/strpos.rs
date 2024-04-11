@@ -31,7 +31,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 
 #[derive(Debug)]
-pub(super) struct StrposFunc {
+pub struct StrposFunc {
     signature: Signature,
     aliases: Vec<String>,
 }
