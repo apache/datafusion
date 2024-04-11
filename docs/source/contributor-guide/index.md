@@ -62,6 +62,11 @@ ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
+## Stale Issues
+
+Issues will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
+Commenting on the issue will remove the `stale` label.
+
 # Developer's guide
 
 ## Pull Request Overview
@@ -105,6 +110,11 @@ A "major" PR means there is a substantial change in design or a change in the AP
 4. Smaller non-controversial feature additions
 
 The good thing about open code and open development is that any issues in one change can almost always be fixed with a follow on PR.
+
+## Stale PRs
+
+Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that. 
+Commenting on the PR will remove the `stale` label.
 
 ## Getting Started
 
