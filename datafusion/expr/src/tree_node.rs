@@ -36,6 +36,7 @@ impl TreeNode for Expr {
     ) -> Result<TreeNodeRecursion> {
         let children = match self {
             Expr::Alias(Alias{expr,..})
+            | Expr::Unnest(Unnest{expr})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -60,7 +61,6 @@ impl TreeNode for Expr {
                     GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
             }
-            Expr::Unnest(Unnest { exprs }) |
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
             Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {

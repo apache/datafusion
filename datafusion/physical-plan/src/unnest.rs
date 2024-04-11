@@ -70,7 +70,7 @@ impl UnnestExec {
     /// Create a new [UnnestExec].
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        column: Column,
+        columns: Vec<Column>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
@@ -78,7 +78,7 @@ impl UnnestExec {
         UnnestExec {
             input,
             schema,
-            columns: vec![column],
+            columns,
             options,
             metrics: Default::default(),
             cache,
@@ -137,7 +137,7 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(UnnestExec::new(
             children[0].clone(),
-            self.columns[0].clone(),
+            self.columns.clone(),
             self.schema.clone(),
             self.options.clone(),
         )))

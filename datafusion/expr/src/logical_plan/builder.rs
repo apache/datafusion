@@ -1112,7 +1112,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        Ok(Self::from(unnest(self.plan, column.into())?))
+        Ok(Self::from(unnest(self.plan, vec![column.into()])?))
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1122,8 +1122,21 @@ impl LogicalPlanBuilder {
         options: UnnestOptions,
     ) -> Result<Self> {
         Ok(Self::from(unnest_with_options(
-            self.plan,
-            column.into(),
+            Arc::new(self.plan),
+            vec![column.into()],
+            options,
+        )?))
+    }
+
+    /// Unnest the given columns with the given [`UnnestOptions`]
+    pub fn unnest_columns_with_options(
+        self,
+        columns: Vec<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest_with_options(
+            Arc::new(self.plan),
+            columns,
             options,
         )?))
     }
@@ -1534,44 +1547,51 @@ impl TableSource for LogicalTableSource {
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan
-pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
-    unnest_with_options(input, column, UnnestOptions::new())
+pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
+    unnest_with_options(Arc::new(input), columns, UnnestOptions::new())
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
 pub fn unnest_with_options(
-    input: LogicalPlan,
-    column: Column,
+    input: Arc<LogicalPlan>,
+    columns: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let (unnest_qualifier, unnest_field) =
-        input.schema().qualified_field_from_column(&column)?;
-
     // Extract the type of the nested field in the list.
-    let unnested_field = match unnest_field.data_type() {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => Arc::new(Field::new(
-            unnest_field.name(),
-            field.data_type().clone(),
-            unnest_field.is_nullable(),
-        )),
-        _ => {
-            // If the unnest field is not a list type return the input plan.
-            return Ok(input);
-        }
-    };
+    let unnested_fields: HashMap<usize, Arc<Field>> = columns
+        .iter()
+        .map(|c| {
+            let index = input.schema().index_of_column(c)?;
+            let unnest_field = input.schema().field(index);
+            let unnested_field = match unnest_field.data_type() {
+                DataType::List(field)
+                | DataType::FixedSizeList(field, _)
+                | DataType::LargeList(field) => Arc::new(Field::new(
+                    unnest_field.name(),
+                    field.data_type().clone(),
+                    // Unnesting may produce NULLs even if the list is not null.
+                    // For example: unnset([1], []) -> 1, null
+                    true,
+                )),
+                _ => {
+                    return plan_err!(
+                        "Column {} is not a list type and cannot be unnested",
+                        unnest_field.name()
+                    );
+                }
+            };
+            Ok((index, unnested_field))
+        })
+        .collect::<Result<_>>()?;
 
-    // Update the schema with the unnest column type changed to contain the nested type.
+    // Update the schema with the unnest column types changed to contain the nested types.
     let input_schema = input.schema();
     let fields = input_schema
         .iter()
-        .map(|(q, f)| {
-            if f.as_ref() == unnest_field && q == unnest_qualifier {
-                (unnest_qualifier.cloned(), unnested_field.clone())
-            } else {
-                (q.cloned(), f.clone())
-            }
+        .enumerate()
+        .map(|(index, (q, f))| match unnested_fields.get(&index) {
+            Some(unnested_field) => (q.cloned(), unnested_field.clone()),
+            None => (q.cloned(), f.clone()),
         })
         .collect::<Vec<_>>();
 
@@ -1580,11 +1600,10 @@ pub fn unnest_with_options(
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    let column = Column::from((unnest_qualifier, unnested_field.as_ref()));
-
+    println!("schema: {:?}", schema);
     Ok(LogicalPlan::Unnest(Unnest {
-        input: Arc::new(input),
-        column,
+        input,
+        columns,
         schema,
         options,
     }))

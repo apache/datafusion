@@ -136,8 +136,20 @@ query error DataFusion error: Error during planning: unnest\(\) can only be appl
 select unnest(column3) from unnest_table;
 
 ## Multiple unnest functions in selection
-query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
+query II
 select unnest(column1), unnest(column2) from unnest_table;
+----
+1 7
+2 NULL
+3 NULL
+4 8
+5 9
+NULL 10
+6 11
+NULL 12
+12 NULL
+NULL 42
+NULL NULL
 
 ## Unnest scalar in select list
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
@@ -149,7 +161,7 @@ select * from unnest(1);
 
 
 ## Unnest empty expression in select list
-query error DataFusion error: Error during planning: unnest\(\) requires at least one argument
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest();
 
 ## Unnest empty expression in from clause
@@ -158,12 +170,15 @@ select * from unnest();
 
 
 ## Unnest multiple expressions in select list
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest([1,2], [2,3]);
 
 ## Unnest multiple expressions in from clause
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+query II
 select * from unnest([1,2], [2,3]);
+----
+1 2
+2 3
 
 
 ## Unnest struct expression in select list
