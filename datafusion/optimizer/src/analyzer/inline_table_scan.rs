@@ -48,9 +48,10 @@ impl AnalyzerRule for InlineTableScan {
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     // rewrite any subqueries in the plan first
-    let result = plan.map_subqueries(|plan| plan.transform_up(&analyze_internal))?;
+    let transformed_plan =
+        plan.map_subqueries(|plan| plan.transform_up(&analyze_internal))?;
 
-    let result = result.transform_data(|plan| {
+    let transformed_plan = transformed_plan.transform_data(|plan| {
         match plan {
             // Match only on scans without filter / projection / fetch
             // Views and DataFrames won't have those added
@@ -77,7 +78,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }
     })?;
 
-    Ok(result)
+    Ok(transformed_plan)
 }
 
 fn generate_projection_expr(
