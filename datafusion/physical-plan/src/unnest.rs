@@ -17,6 +17,7 @@
 
 //! Defines the unnest column plan for unnesting values in a column that contains a list
 //! type, conceptually is like joining each row with all the values in the list column.
+use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -27,23 +28,17 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, FixedSizeListArray,
-    GenericListArray, LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
+    PrimitiveArray,
 };
-use arrow::compute::kernels;
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{binary, cast, is_not_null};
-use arrow::datatypes::{
-    ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
-};
+use arrow::compute::{cast, is_not_null, kernels, sum};
+use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Int64Array, Scalar};
 use arrow_ord::cmp::lt;
-use datafusion_common::cast::{
-    as_fixed_size_list_array, as_large_list_array, as_list_array,
-};
-use datafusion_common::{exec_err, Result, UnnestOptions};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -61,8 +56,6 @@ pub struct UnnestExec {
     input: Arc<dyn ExecutionPlan>,
     /// The schema once the unnest is applied
     schema: SchemaRef,
-    /// The unnest column
-    column: Column,
     /// The unnest columns
     columns: Vec<Column>,
     /// Options
@@ -85,8 +78,7 @@ impl UnnestExec {
         UnnestExec {
             input,
             schema,
-            columns: vec![column.clone()],
-            column,
+            columns: vec![column],
             options,
             metrics: Default::default(),
             cache,
@@ -145,7 +137,7 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(UnnestExec::new(
             children[0].clone(),
-            self.column.clone(),
+            self.columns[0].clone(),
             self.schema.clone(),
             self.options.clone(),
         )))
@@ -166,7 +158,6 @@ impl ExecutionPlan for UnnestExec {
         Ok(Box::pin(UnnestStream {
             input,
             schema: self.schema.clone(),
-            column: self.column.clone(),
             columns: self.columns.clone(),
             options: self.options.clone(),
             metrics,
@@ -222,8 +213,6 @@ struct UnnestStream {
     input: SendableRecordBatchStream,
     /// Unnested schema
     schema: Arc<Schema>,
-    /// The unnest column
-    column: Column,
     /// The unnest columns
     columns: Vec<Column>,
     /// Options
@@ -263,7 +252,7 @@ impl UnnestStream {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
                     let result =
-                        build_batch2(&batch, &self.schema, &self.column, &self.options);
+                        build_batch(&batch, &self.schema, &self.columns, &self.options);
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     if let Ok(ref batch) = result {
@@ -290,23 +279,61 @@ impl UnnestStream {
     }
 }
 
+fn build_batch(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    columns: &[Column],
+    options: &UnnestOptions,
+) -> Result<RecordBatch> {
+    let list_arrays: Vec<ArrayRef> = columns
+        .iter()
+        .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
+        .collect::<Result<_>>()?;
+
+    let longest_length = find_longest_length(&list_arrays, options)?;
+    let unnest_length = longest_length.as_primitive::<Int64Type>();
+    let total_length = if unnest_length.is_empty() {
+        0
+    } else {
+        sum(unnest_length).ok_or_else(|| {
+            exec_datafusion_err!("Failed to calculate the total unnested length")
+        })? as usize
+    };
+    if total_length == 0 {
+        return Ok(RecordBatch::new_empty(schema.clone()));
+    }
+
+    // Unnest all the list arrays
+    let unnested_arrays = unnest_list_arrays(&list_arrays, unnest_length, total_length)?;
+    let unnested_array_map: HashMap<_, _> = unnested_arrays
+        .into_iter()
+        .zip(columns.iter())
+        .map(|(array, column)| (column.index(), array))
+        .collect();
+
+    let take_indicies = create_take_indicies(unnest_length, total_length);
+
+    batch_from_indices(batch, schema, &unnested_array_map, &take_indicies)
+}
+
 /// For each row, find the longest list length among the given list arrays.
 /// TODO: add an example
 fn find_longest_length(
-    list_arrays: &Vec<ArrayRef>,
+    list_arrays: &[ArrayRef],
     options: &UnnestOptions,
 ) -> Result<ArrayRef> {
+    // The length of a NULL list
+    let null_length = if options.preserve_nulls {
+        Scalar::new(Int64Array::from_value(1, 1))
+    } else {
+        Scalar::new(Int64Array::from_value(0, 1))
+    };
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
             let mut length_array = length(list_array)?;
-            // Make sure length arrays have the same DataType, and Int64 is the most general one.
+            // Make sure length arrays have the same type. Int64 is the most general one.
             length_array = cast(&length_array, &DataType::Int64)?;
-            let null_length = if options.preserve_nulls {
-                Scalar::new(Int64Array::from_value(1, 1))
-            } else {
-                Scalar::new(Int64Array::from_value(0, 1))
-            };
             length_array =
                 zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
             Ok(length_array)
@@ -320,86 +347,112 @@ fn find_longest_length(
             zip(&is_lt, &current, &longest)
         },
     )?;
-
     Ok(longest_length)
 }
 
-fn build_batch(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    columns: &Vec<Column>,
-    options: &UnnestOptions,
-) -> Result<()> {
-    let list_arrays: Vec<ArrayRef> = columns
-        .iter()
-        .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<_>>()?;
-    let unnested_length = find_longest_length(&list_arrays, options)?;
+trait ListArrayType: Array {
+    /// Returns a reference to the values of this list
+    fn values(&self) -> &ArrayRef;
 
-    Ok(())
+    /// Returns the start and end offsets of the values for the given row
+    fn value_offsets(&self, row: usize) -> (i64, i64);
 }
 
-fn build_batch2(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    column: &Column,
-    options: &UnnestOptions,
-) -> Result<RecordBatch> {
-    let list_array = column.evaluate(batch)?.into_array(batch.num_rows())?;
-    match list_array.data_type() {
-        DataType::List(_) => {
-            let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
-            build_batch_generic_list::<i32, Int32Type>(
-                batch,
-                schema,
-                column.index(),
-                list_array,
-                options,
-            )
-        }
-        DataType::LargeList(_) => {
-            let list_array = list_array
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .unwrap();
-            build_batch_generic_list::<i64, Int64Type>(
-                batch,
-                schema,
-                column.index(),
-                list_array,
-                options,
-            )
-        }
-        DataType::FixedSizeList(_, _) => {
-            let list_array = list_array
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .unwrap();
-            build_batch_fixedsize_list(batch, schema, column.index(), list_array, options)
-        }
-        _ => exec_err!("Invalid unnest column {column}"),
+impl ListArrayType for ListArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offsets = self.value_offsets();
+        (offsets[row].into(), offsets[row + 1].into())
     }
 }
 
-fn build_batch_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    unnest_column_idx: usize,
-    list_array: &GenericListArray<T>,
-    options: &UnnestOptions,
-) -> Result<RecordBatch> {
-    let unnested_array = unnest_generic_list::<T, P>(list_array, options)?;
+impl ListArrayType for LargeListArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
 
-    let take_indicies =
-        create_take_indicies_generic::<T, P>(list_array, unnested_array.len(), options);
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offsets = self.value_offsets();
+        (offsets[row], offsets[row + 1])
+    }
+}
 
-    batch_from_indices(
-        batch,
-        schema,
-        unnest_column_idx,
-        &unnested_array,
-        &take_indicies,
-    )
+impl ListArrayType for FixedSizeListArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let start = self.value_offset(row) as i64;
+        (start, start + self.value_length() as i64)
+    }
+}
+
+fn unnest_list_arrays(
+    list_arrays: &[ArrayRef],
+    length_array: &PrimitiveArray<Int64Type>,
+    capacity: usize,
+) -> Result<Vec<ArrayRef>> {
+    let typed_arrays = list_arrays
+        .iter()
+        .map(|list_array| match list_array.data_type() {
+            DataType::List(_) => Ok(list_array.as_list::<i32>() as &dyn ListArrayType),
+            DataType::LargeList(_) => {
+                Ok(list_array.as_list::<i64>() as &dyn ListArrayType)
+            }
+            DataType::FixedSizeList(_, _) => {
+                Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            other => exec_err!("Invalid unnest datatype {other }"),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // If we only have one list column to unnest and it doesn't contain NULL lists
+    if typed_arrays.len() == 1 && typed_arrays[0].null_count() == 0 {
+        Ok(vec![typed_arrays[0].values().clone()])
+    } else {
+        typed_arrays
+            .iter()
+            .map(|list_array| unnest_list_array(*list_array, length_array, capacity))
+            .collect::<Result<_>>()
+    }
+}
+
+/// Unnest each list according the length array.
+fn unnest_list_array(
+    list_array: &dyn ListArrayType,
+    length_array: &PrimitiveArray<Int64Type>,
+    capacity: usize,
+) -> Result<ArrayRef> {
+    let values = list_array.values();
+    let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
+    for row in 0..list_array.len() {
+        let mut value_length = 0;
+        if !list_array.is_null(row) {
+            let (start, end) = list_array.value_offsets(row);
+            value_length = end - start;
+            for i in start..end {
+                take_indicies_builder.append_value(i)
+            }
+        }
+        let target_length = length_array.value(row);
+        debug_assert!(
+            value_length <= target_length,
+            "value length is beyond the longest length"
+        );
+        // Padding with NULL values
+        for _ in value_length..target_length {
+            take_indicies_builder.append_null();
+        }
+    }
+    Ok(kernels::take::take(
+        &values,
+        &take_indicies_builder.finish(),
+        None,
+    )?)
 }
 
 /// Given this `GenericList` list_array:
@@ -422,58 +475,6 @@ fn build_batch_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T
 /// 0, null, 1, 2, 3, null, 4, 5
 /// ```
 ///
-fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
-    list_array: &GenericListArray<T>,
-    options: &UnnestOptions,
-) -> Result<Arc<dyn Array + 'static>> {
-    let values = list_array.values();
-    if list_array.null_count() == 0 {
-        return Ok(values.clone());
-    }
-
-    let mut take_indicies_builder =
-        PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
-    let offsets = list_array.value_offsets();
-    for row in 0..list_array.len() {
-        if list_array.is_null(row) {
-            if options.preserve_nulls {
-                take_indicies_builder.append_null();
-            }
-        } else {
-            let start = offsets[row].as_usize();
-            let end = offsets[row + 1].as_usize();
-            for idx in start..end {
-                take_indicies_builder.append_value(P::Native::from_usize(idx).unwrap());
-            }
-        }
-    }
-    Ok(kernels::take::take(
-        &values,
-        &take_indicies_builder.finish(),
-        None,
-    )?)
-}
-
-fn build_batch_fixedsize_list(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    unnest_column_idx: usize,
-    list_array: &FixedSizeListArray,
-    options: &UnnestOptions,
-) -> Result<RecordBatch> {
-    let unnested_array = unnest_fixed_list(list_array, options)?;
-
-    let take_indicies =
-        create_take_indicies_fixed(list_array, unnested_array.len(), options);
-
-    batch_from_indices(
-        batch,
-        schema,
-        unnest_column_idx,
-        &unnested_array,
-        &take_indicies,
-    )
-}
 
 /// Given this `FixedSizeListArray` list_array:
 ///
@@ -502,46 +503,8 @@ fn build_batch_fixedsize_list(
 /// 0, 1, 4, 5, 8, 9
 /// ```
 ///
-fn unnest_fixed_list(
-    list_array: &FixedSizeListArray,
-    options: &UnnestOptions,
-) -> Result<Arc<dyn Array + 'static>> {
-    let values = list_array.values();
 
-    if list_array.null_count() == 0 {
-        Ok(values.clone())
-    } else {
-        let len_without_nulls =
-            values.len() - list_array.null_count() * list_array.value_length() as usize;
-        let null_count = if options.preserve_nulls {
-            list_array.null_count()
-        } else {
-            0
-        };
-        let mut builder =
-            PrimitiveArray::<Int32Type>::builder(len_without_nulls + null_count);
-        let mut take_offset = 0;
-        let fixed_value_length = list_array.value_length() as usize;
-        list_array.iter().for_each(|elem| match elem {
-            Some(_) => {
-                for i in 0..fixed_value_length {
-                    //take_offset + i is always positive
-                    let take_index = take_offset + i;
-                    builder.append_value(take_index as i32);
-                }
-                take_offset += fixed_value_length;
-            }
-            None => {
-                if options.preserve_nulls {
-                    builder.append_null();
-                }
-                take_offset += fixed_value_length;
-            }
-        });
-        Ok(kernels::take::take(&values, &builder.finish(), None)?)
-    }
-}
-
+/// TODO: update doc
 /// Creates take indicies to be used to expand all other column's data.
 /// Every column value needs to be repeated as many times as many elements there is in each corresponding array value.
 ///
@@ -556,49 +519,21 @@ fn unnest_fixed_list(
 /// [1, null, 2, 2, 2, null, 4, 4]
 /// ```
 ///
-fn create_take_indicies_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
-    list_array: &GenericListArray<T>,
+fn create_take_indicies(
+    length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
-    options: &UnnestOptions,
-) -> PrimitiveArray<P> {
-    let mut builder = PrimitiveArray::<P>::builder(capacity);
-    let null_repeat: usize = if options.preserve_nulls { 1 } else { 0 };
-
-    for row in 0..list_array.len() {
-        let repeat = if list_array.is_null(row) {
-            null_repeat
-        } else {
-            list_array.value(row).len()
-        };
-
-        // `index` is a positive interger.
-        let index = P::Native::from_usize(row).unwrap();
-        (0..repeat).for_each(|_| builder.append_value(index));
+) -> PrimitiveArray<Int64Type> {
+    // `find_longest_length()` guarantees this
+    debug_assert!(
+        length_array.null_count() == 0,
+        "length array should not contain nulls"
+    );
+    let mut builder = PrimitiveArray::<Int64Type>::builder(capacity);
+    for (index, repeat) in length_array.iter().enumerate() {
+        // The length array should not contain nulls, so unwrap is safe
+        let repeat = repeat.unwrap();
+        (0..repeat).for_each(|_| builder.append_value(index as i64));
     }
-
-    builder.finish()
-}
-
-fn create_take_indicies_fixed(
-    list_array: &FixedSizeListArray,
-    capacity: usize,
-    options: &UnnestOptions,
-) -> PrimitiveArray<Int32Type> {
-    let mut builder = PrimitiveArray::<Int32Type>::builder(capacity);
-    let null_repeat: usize = if options.preserve_nulls { 1 } else { 0 };
-
-    for row in 0..list_array.len() {
-        let repeat = if list_array.is_null(row) {
-            null_repeat
-        } else {
-            list_array.value_length() as usize
-        };
-
-        // `index` is a positive interger.
-        let index = <Int32Type as ArrowPrimitiveType>::Native::from_usize(row).unwrap();
-        (0..repeat).for_each(|_| builder.append_value(index));
-    }
-
     builder.finish()
 }
 
@@ -633,26 +568,19 @@ fn create_take_indicies_fixed(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
-fn batch_from_indices<T>(
+fn batch_from_indices(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    unnest_column_idx: usize,
-    unnested_array: &ArrayRef,
-    indices: &PrimitiveArray<T>,
-) -> Result<RecordBatch>
-where
-    T: ArrowPrimitiveType,
-{
+    unnested_list_arrays: &HashMap<usize, ArrayRef>,
+    indices: &PrimitiveArray<Int64Type>,
+) -> Result<RecordBatch> {
     let arrays = batch
         .columns()
         .iter()
         .enumerate()
-        .map(|(col_idx, arr)| {
-            if col_idx == unnest_column_idx {
-                Ok(unnested_array.clone())
-            } else {
-                Ok(kernels::take::take(&arr, indices, None)?)
-            }
+        .map(|(col_idx, arr)| match unnested_list_arrays.get(&col_idx) {
+            Some(unnested_array) => Ok(unnested_array.clone()),
+            None => Ok(kernels::take::take(arr, indices, None)?),
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -663,7 +591,7 @@ where
 mod tests {
     use super::*;
     use arrow::{
-        array::AsArray,
+        // array::AsArray,
         datatypes::{DataType, Field},
     };
     use arrow_array::StringArray;
@@ -714,46 +642,45 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_unnest_generic_list() -> datafusion_common::Result<()> {
-        let list_array = make_test_array();
+    // #[test]
+    // fn test_unnest_generic_list() -> datafusion_common::Result<()> {
+    //     let list_array = make_test_array();
 
-        // Test with preserve_nulls = false
-        let options = UnnestOptions {
-            preserve_nulls: false,
-        };
-        let unnested_array =
-            unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
-        let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
-        assert_eq!(
-            strs,
-            vec![Some("A"), Some("B"), Some("C"), Some("D"), None, Some("F")]
-        );
+    //     // Test with preserve_nulls = false
+    //     let options = UnnestOptions {
+    //         preserve_nulls: false,
+    //     };
+    //     let unnested_array =
+    //         unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
+    //     let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
+    //     assert_eq!(
+    //         strs,
+    //         vec![Some("A"), Some("B"), Some("C"), Some("D"), None, Some("F")]
+    //     );
 
-        // Test with preserve_nulls = true
-        let options = UnnestOptions {
-            preserve_nulls: true,
-        };
-        let unnested_array =
-            unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
-        let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
-        assert_eq!(
-            strs,
-            vec![
-                Some("A"),
-                Some("B"),
-                Some("C"),
-                None,
-                Some("D"),
-                None,
-                None,
-                Some("F")
-            ]
-        );
+    //     // Test with preserve_nulls = true
+    //     let options = UnnestOptions {
+    //         preserve_nulls: true,
+    //     };
+    //     let unnested_array =
+    //         unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
+    //     let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
+    //     assert_eq!(
+    //         strs,
+    //         vec![
+    //             Some("A"),
+    //             Some("B"),
+    //             Some("C"),
+    //             None,
+    //             Some("D"),
+    //             None,
+    //             None,
+    //             Some("F")
+    //         ]
+    //     );
 
-        Ok(())
-    }
-
+    //     Ok(())
+    // }
     #[test]
     fn test_longest_list_length() -> datafusion_common::Result<()> {
         let list_array = make_test_array();
@@ -761,7 +688,7 @@ mod tests {
         let options = UnnestOptions {
             preserve_nulls: false,
         };
-        let longest_length = longest_list_length(&list_arrays, &options)?;
+        let longest_length = find_longest_length(&list_arrays, &options)?;
         let expected_array = Int64Array::from(vec![3, 0, 0, 1, 0, 2]);
 
         assert_eq!(
@@ -775,7 +702,7 @@ mod tests {
         let options = UnnestOptions {
             preserve_nulls: true,
         };
-        let longest_length = longest_list_length(&list_arrays, &options)?;
+        let longest_length = find_longest_length(&list_arrays, &options)?;
         let expected_array = Int64Array::from(vec![3, 0, 1, 1, 1, 2]);
         assert_eq!(
             longest_length
