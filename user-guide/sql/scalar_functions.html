@@ -5344,18 +5344,18 @@ Can be a constant, column or function, and any combination of arithmetic operato
 </section>
 <section id="id88">
 <h4>Example<a class="headerlink" href="#id88" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select make_date(2023, 1, 31);
-+-------------------------------------------+
-| make_date(Int64(2023),Int64(1),Int64(31)) |
-+-------------------------------------------+
-| 2023-01-31                                |
-+-------------------------------------------+
-❯ select make_date(&#39;2023&#39;, &#39;01&#39;, &#39;31&#39;);
-+-----------------------------------------------+
-| make_date(Utf8(&quot;2023&quot;),Utf8(&quot;01&quot;),Utf8(&quot;31&quot;)) |
-+-----------------------------------------------+
-| 2023-01-31                                    |
-+-----------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">make_date</span><span class="p">(</span><span class="mi">2023</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">31</span><span class="p">);</span>
+<span class="o">+-------------------------------------------+</span>
+<span class="o">|</span> <span class="n">make_date</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2023</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">31</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span>                                <span class="o">|</span>
+<span class="o">+-------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">make_date</span><span class="p">(</span><span class="s1">&#39;2023&#39;</span><span class="p">,</span> <span class="s1">&#39;01&#39;</span><span class="p">,</span> <span class="s1">&#39;31&#39;</span><span class="p">);</span>
+<span class="o">+-----------------------------------------------+</span>
+<span class="o">|</span> <span class="n">make_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;01&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;31&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-----------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span>                                    <span class="o">|</span>
+<span class="o">+-----------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs">here</a></p>
@@ -5380,12 +5380,12 @@ date, time, timestamp or duration.</p></li>
 </section>
 <section id="id90">
 <h4>Example<a class="headerlink" href="#id90" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ ❯ select to_char(&#39;2023-03-01&#39;::date, &#39;%d-%m-%Y&#39;);
-+----------------------------------------------+
-| to_char(Utf8(&quot;2023-03-01&quot;),Utf8(&quot;%d-%m-%Y&quot;)) |
-+----------------------------------------------+
-| 01-03-2023                                   |
-+----------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_char</span><span class="p">(</span><span class="s1">&#39;2023-03-01&#39;</span><span class="p">::</span><span class="n">date</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%d</span><span class="s1">-%m-%Y&#39;</span><span class="p">);</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_char</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-03-01&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%d</span><span class="s2">-%m-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">01</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">2023</span>                                   <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_char.rs">here</a></p>
@@ -5422,18 +5422,18 @@ an error will be returned.</p></li>
 </section>
 <section id="id93">
 <h4>Example<a class="headerlink" href="#id93" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select to_timestamp(&#39;2023-01-31T09:26:56.123456789-05:00&#39;);
-+-----------------------------------------------------------+
-| to_timestamp(Utf8(&quot;2023-01-31T09:26:56.123456789-05:00&quot;)) |
-+-----------------------------------------------------------+
-| 2023-01-31T14:26:56.123456789                             |
-+-----------------------------------------------------------+
-❯ select to_timestamp(&#39;03:59:00.123456789 05-17-2023&#39;, &#39;%c&#39;, &#39;%+&#39;, &#39;%H:%M:%S%.f %m-%d-%Y&#39;);
-+--------------------------------------------------------------------------------------------------------+
-| to_timestamp(Utf8(&quot;03:59:00.123456789 05-17-2023&quot;),Utf8(&quot;%c&quot;),Utf8(&quot;%+&quot;),Utf8(&quot;%H:%M:%S%.f %m-%d-%Y&quot;)) |
-+--------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456789                                                                          |
-+--------------------------------------------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp</span><span class="p">(</span><span class="s1">&#39;2023-01-31T09:26:56.123456789-05:00&#39;</span><span class="p">);</span>
+<span class="o">+-----------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-01-31T09:26:56.123456789-05:00&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-----------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="n">T14</span><span class="p">:</span><span class="mi">26</span><span class="p">:</span><span class="mf">56.123456789</span>                             <span class="o">|</span>
+<span class="o">+-----------------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp</span><span class="p">(</span><span class="s1">&#39;03:59:00.123456789 05-17-2023&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%c</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;%+&#39;</span><span class="p">,</span> <span class="s1">&#39;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s1">-%Y&#39;</span><span class="p">);</span>
+<span class="o">+--------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%c</span><span class="s2">&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s2">-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mf">00.123456789</span>                                                                          <span class="o">|</span>
+<span class="o">+--------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
@@ -5461,18 +5461,18 @@ an error will be returned.</p></li>
 </section>
 <section id="id95">
 <h4>Example<a class="headerlink" href="#id95" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select to_timestamp_millis(&#39;2023-01-31T09:26:56.123456789-05:00&#39;);
-+------------------------------------------------------------------+
-| to_timestamp_millis(Utf8(&quot;2023-01-31T09:26:56.123456789-05:00&quot;)) |
-+------------------------------------------------------------------+
-| 2023-01-31T14:26:56.123                                          |
-+------------------------------------------------------------------+
-❯ select to_timestamp_millis(&#39;03:59:00.123456789 05-17-2023&#39;, &#39;%c&#39;, &#39;%+&#39;, &#39;%H:%M:%S%.f %m-%d-%Y&#39;);
-+---------------------------------------------------------------------------------------------------------------+
-| to_timestamp_millis(Utf8(&quot;03:59:00.123456789 05-17-2023&quot;),Utf8(&quot;%c&quot;),Utf8(&quot;%+&quot;),Utf8(&quot;%H:%M:%S%.f %m-%d-%Y&quot;)) |
-+---------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123                                                                                       |
-+---------------------------------------------------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_millis</span><span class="p">(</span><span class="s1">&#39;2023-01-31T09:26:56.123456789-05:00&#39;</span><span class="p">);</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_millis</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-01-31T09:26:56.123456789-05:00&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="n">T14</span><span class="p">:</span><span class="mi">26</span><span class="p">:</span><span class="mf">56.123</span>                                          <span class="o">|</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_millis</span><span class="p">(</span><span class="s1">&#39;03:59:00.123456789 05-17-2023&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%c</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;%+&#39;</span><span class="p">,</span> <span class="s1">&#39;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s1">-%Y&#39;</span><span class="p">);</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_millis</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%c</span><span class="s2">&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s2">-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mf">00.123</span>                                                                                       <span class="o">|</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
@@ -5500,18 +5500,18 @@ an error will be returned.</p></li>
 </section>
 <section id="id97">
 <h4>Example<a class="headerlink" href="#id97" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select to_timestamp_micros(&#39;2023-01-31T09:26:56.123456789-05:00&#39;);
-+------------------------------------------------------------------+
-| to_timestamp_micros(Utf8(&quot;2023-01-31T09:26:56.123456789-05:00&quot;)) |
-+------------------------------------------------------------------+
-| 2023-01-31T14:26:56.123456                                       |
-+------------------------------------------------------------------+
-❯ select to_timestamp_micros(&#39;03:59:00.123456789 05-17-2023&#39;, &#39;%c&#39;, &#39;%+&#39;, &#39;%H:%M:%S%.f %m-%d-%Y&#39;);
-+---------------------------------------------------------------------------------------------------------------+
-| to_timestamp_micros(Utf8(&quot;03:59:00.123456789 05-17-2023&quot;),Utf8(&quot;%c&quot;),Utf8(&quot;%+&quot;),Utf8(&quot;%H:%M:%S%.f %m-%d-%Y&quot;)) |
-+---------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456                                                                                    |
-+---------------------------------------------------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_micros</span><span class="p">(</span><span class="s1">&#39;2023-01-31T09:26:56.123456789-05:00&#39;</span><span class="p">);</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_micros</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-01-31T09:26:56.123456789-05:00&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="n">T14</span><span class="p">:</span><span class="mi">26</span><span class="p">:</span><span class="mf">56.123456</span>                                       <span class="o">|</span>
+<span class="o">+------------------------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_micros</span><span class="p">(</span><span class="s1">&#39;03:59:00.123456789 05-17-2023&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%c</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;%+&#39;</span><span class="p">,</span> <span class="s1">&#39;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s1">-%Y&#39;</span><span class="p">);</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_micros</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%c</span><span class="s2">&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s2">-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mf">00.123456</span>                                                                                    <span class="o">|</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
@@ -5539,18 +5539,18 @@ an error will be returned.</p></li>
 </section>
 <section id="id99">
 <h4>Example<a class="headerlink" href="#id99" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select to_timestamp_nanos(&#39;2023-01-31T09:26:56.123456789-05:00&#39;);
-+-----------------------------------------------------------------+
-| to_timestamp_nanos(Utf8(&quot;2023-01-31T09:26:56.123456789-05:00&quot;)) |
-+-----------------------------------------------------------------+
-| 2023-01-31T14:26:56.123456789                                   |
-+-----------------------------------------------------------------+
-❯ select to_timestamp_nanos(&#39;03:59:00.123456789 05-17-2023&#39;, &#39;%c&#39;, &#39;%+&#39;, &#39;%H:%M:%S%.f %m-%d-%Y&#39;);
-+--------------------------------------------------------------------------------------------------------------+
-| to_timestamp_nanos(Utf8(&quot;03:59:00.123456789 05-17-2023&quot;),Utf8(&quot;%c&quot;),Utf8(&quot;%+&quot;),Utf8(&quot;%H:%M:%S%.f %m-%d-%Y&quot;)) |
-+--------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="s1">&#39;2023-01-31T09:26:56.123456789-05:00&#39;</span><span class="p">);</span>
+<span class="o">+-----------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-01-31T09:26:56.123456789-05:00&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-----------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="n">T14</span><span class="p">:</span><span class="mi">26</span><span class="p">:</span><span class="mf">56.123456789</span>                                   <span class="o">|</span>
+<span class="o">+-----------------------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="s1">&#39;03:59:00.123456789 05-17-2023&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%c</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;%+&#39;</span><span class="p">,</span> <span class="s1">&#39;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s1">-%Y&#39;</span><span class="p">);</span>
+<span class="o">+--------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%c</span><span class="s2">&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s2">-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mf">00.123456789</span>                                                                                <span class="o">|</span>
+<span class="o">+---------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
@@ -5578,18 +5578,18 @@ an error will be returned.</p></li>
 </section>
 <section id="id101">
 <h4>Example<a class="headerlink" href="#id101" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select to_timestamp_seconds(&#39;2023-01-31T09:26:56.123456789-05:00&#39;);
-+-------------------------------------------------------------------+
-| to_timestamp_seconds(Utf8(&quot;2023-01-31T09:26:56.123456789-05:00&quot;)) |
-+-------------------------------------------------------------------+
-| 2023-01-31T14:26:56                                               |
-+-------------------------------------------------------------------+
-❯ select to_timestamp_seconds(&#39;03:59:00.123456789 05-17-2023&#39;, &#39;%c&#39;, &#39;%+&#39;, &#39;%H:%M:%S%.f %m-%d-%Y&#39;);
-+----------------------------------------------------------------------------------------------------------------+
-| to_timestamp_seconds(Utf8(&quot;03:59:00.123456789 05-17-2023&quot;),Utf8(&quot;%c&quot;),Utf8(&quot;%+&quot;),Utf8(&quot;%H:%M:%S%.f %m-%d-%Y&quot;)) |
-+----------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00                                                                                            |
-+----------------------------------------------------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_seconds</span><span class="p">(</span><span class="s1">&#39;2023-01-31T09:26:56.123456789-05:00&#39;</span><span class="p">);</span>
+<span class="o">+-------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_seconds</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;2023-01-31T09:26:56.123456789-05:00&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="n">T14</span><span class="p">:</span><span class="mi">26</span><span class="p">:</span><span class="mi">56</span>                                               <span class="o">|</span>
+<span class="o">+-------------------------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">to_timestamp_seconds</span><span class="p">(</span><span class="s1">&#39;03:59:00.123456789 05-17-2023&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">%c</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;%+&#39;</span><span class="p">,</span> <span class="s1">&#39;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s1">-%Y&#39;</span><span class="p">);</span>
+<span class="o">+----------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">to_timestamp_seconds</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%c</span><span class="s2">&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;%H:%M:%S%.f %m-</span><span class="si">%d</span><span class="s2">-%Y&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">00</span>                                                                                            <span class="o">|</span>
+<span class="o">+----------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
@@ -5716,12 +5716,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id104">
 <h4>Example<a class="headerlink" href="#id104" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_append([1, 2, 3], 4);
-+--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_append</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="mi">4</span><span class="p">);</span>
+<span class="o">+--------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_append</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                         <span class="o">|</span>
+<span class="o">+--------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5751,12 +5751,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id107">
 <h4>Example<a class="headerlink" href="#id107" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_sort([3, 1, 2]);
-+-----------------------------+
-| array_sort(List([3,1,2]))   |
-+-----------------------------+
-| [1, 2, 3]                   |
-+-----------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_sort</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span>
+<span class="o">+-----------------------------+</span>
+<span class="o">|</span> <span class="n">array_sort</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">]))</span>   <span class="o">|</span>
+<span class="o">+-----------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>                   <span class="o">|</span>
+<span class="o">+-----------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5784,12 +5784,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id110">
 <h4>Example<a class="headerlink" href="#id110" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_resize([1, 2, 3], 5, 0);
-+-------------------------------------+
-| array_resize(List([1,2,3],5,0))     |
-+-------------------------------------+
-| [1, 2, 3, 0, 0]                     |
-+-------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_resize</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="o">+-------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_resize</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span><span class="mi">5</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>     <span class="o">|</span>
+<span class="o">+-------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>                     <span class="o">|</span>
+<span class="o">+-------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5820,12 +5820,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id113">
 <h4>Example<a class="headerlink" href="#id113" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_concat([1, 2], [3, 4], [5, 6]);
-+---------------------------------------------------+
-| array_concat(List([1,2]),List([3,4]),List([5,6])) |
-+---------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                |
-+---------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_concat</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]);</span>
+<span class="o">+---------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_concat</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+---------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]</span>                                <span class="o">|</span>
+<span class="o">+---------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5923,12 +5923,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id122">
 <h4>Example<a class="headerlink" href="#id122" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_dims([[1, 2, 3], [4, 5, 6]]);
-+---------------------------------+
-| array_dims(List([1,2,3,4,5,6])) |
-+---------------------------------+
-| [2, 3]                          |
-+---------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_dims</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]]);</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="n">array_dims</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>                          <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5954,12 +5954,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id125">
 <h4>Example<a class="headerlink" href="#id125" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_distinct</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                    <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5986,12 +5986,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id128">
 <h4>Example<a class="headerlink" href="#id128" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_element([1, 2, 3, 4], 3);
-+-----------------------------------------+
-| array_element(List([1,2,3,4]),Int64(3)) |
-+-----------------------------------------+
-| 3                                       |
-+-----------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_element</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">3</span><span class="p">);</span>
+<span class="o">+-----------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_element</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-----------------------------------------+</span>
+<span class="o">|</span> <span class="mi">3</span>                                       <span class="o">|</span>
+<span class="o">+-----------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6064,18 +6064,18 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id133">
 <h4>Example<a class="headerlink" href="#id133" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
-+----------------------------------------------------+
-| [3, 4]                                             |
-+----------------------------------------------------+
-❯ select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
-+----------------------------------------------------+
-| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
-+----------------------------------------------------+
-| []                                                 |
-+----------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>       <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                             <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]);</span>       <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[]</span>                                                 <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6107,12 +6107,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id136">
 <h4>Example<a class="headerlink" href="#id136" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_length([1, 2, 3, 4, 5]);
-+---------------------------------+
-| array_length(List([1,2,3,4,5])) |
-+---------------------------------+
-| 5                               |
-+---------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_length</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]);</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="n">array_length</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="mi">5</span>                               <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6138,12 +6138,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id139">
 <h4>Example<a class="headerlink" href="#id139" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_ndims([[1, 2, 3], [4, 5, 6]]);
-+----------------------------------+
-| array_ndims(List([1,2,3,4,5,6])) |
-+----------------------------------+
-| 2                                |
-+----------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_ndims</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]]);</span>
+<span class="o">+----------------------------------+</span>
+<span class="o">|</span> <span class="n">array_ndims</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+----------------------------------+</span>
+<span class="o">|</span> <span class="mi">2</span>                                <span class="o">|</span>
+<span class="o">+----------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6170,12 +6170,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id142">
 <h4>Example<a class="headerlink" href="#id142" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_prepend(1, [2, 3, 4]);
-+---------------------------------------+
-| array_prepend(Int64(1),List([2,3,4])) |
-+---------------------------------------+
-| [1, 2, 3, 4]                          |
-+---------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_prepend</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+---------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_prepend</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">List</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+---------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                          <span class="o">|</span>
+<span class="o">+---------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6203,12 +6203,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id145">
 <h4>Example<a class="headerlink" href="#id145" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_pop_front([1, 2, 3]);
-+-------------------------------+
-| array_pop_front(List([1,2,3])) |
-+-------------------------------+
-| [2, 3]                        |
-+-------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_pop_front</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span>
+<span class="o">+-------------------------------+</span>
+<span class="o">|</span> <span class="n">array_pop_front</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+-------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>                        <span class="o">|</span>
+<span class="o">+-------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6234,12 +6234,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id148">
 <h4>Example<a class="headerlink" href="#id148" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_pop_back([1, 2, 3]);
-+-------------------------------+
-| array_pop_back(List([1,2,3])) |
-+-------------------------------+
-| [1, 2]                        |
-+-------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_pop_back</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span>
+<span class="o">+-------------------------------+</span>
+<span class="o">|</span> <span class="n">array_pop_back</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+-------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>                        <span class="o">|</span>
+<span class="o">+-------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6268,12 +6268,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id151">
 <h4>Example<a class="headerlink" href="#id151" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_position([1, 2, 2, 3, 1, 4], 2);
-+----------------------------------------------+
-| array_position(List([1,2,2,3,1,4]),Int64(2)) |
-+----------------------------------------------+
-| 2                                            |
-+----------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_position</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_position</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">2</span>                                            <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6302,12 +6302,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id154">
 <h4>Example<a class="headerlink" href="#id154" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_positions([1, 2, 2, 3, 1, 4], 2);
-+-----------------------------------------------+
-| array_positions(List([1,2,2,3,1,4]),Int64(2)) |
-+-----------------------------------------------+
-| [2, 3]                                        |
-+-----------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_positions</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+-----------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_positions</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-----------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>                                        <span class="o">|</span>
+<span class="o">+-----------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6342,20 +6342,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id157">
 <h4>Example<a class="headerlink" href="#id157" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_repeat(1, 3);
-+---------------------------------+
-| array_repeat(Int64(1),Int64(3)) |
-+---------------------------------+
-| [1, 1, 1]                       |
-+---------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_repeat</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="n">array_repeat</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>                       <span class="o">|</span>
+<span class="o">+---------------------------------+</span>
 </pre></div>
 </div>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_repeat([1, 2], 2);
-+------------------------------------+
-| array_repeat(List([1,2]),Int64(2)) |
-+------------------------------------+
-| [[1, 2], [1, 2]]                   |
-+------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_repeat</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_repeat</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+------------------------------------+</span>
+<span class="o">|</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]]</span>                   <span class="o">|</span>
+<span class="o">+------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6382,12 +6382,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id160">
 <h4>Example<a class="headerlink" href="#id160" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
-+----------------------------------------------+
-| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
-+----------------------------------------------+
-| [1, 2, 3, 2, 1, 4]                           |
-+----------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_remove</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                           <span class="o">|</span>
+<span class="o">+----------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6415,12 +6415,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id163">
 <h4>Example<a class="headerlink" href="#id163" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
-+---------------------------------------------------------+
-| array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
-+---------------------------------------------------------+
-| [1, 3, 2, 1, 4]                                         |
-+---------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_remove_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+---------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_remove_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+---------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                         <span class="o">|</span>
+<span class="o">+---------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6447,12 +6447,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id166">
 <h4>Example<a class="headerlink" href="#id166" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
-+--------------------------------------------------+
-| array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
-+--------------------------------------------------+
-| [1, 3, 1, 4]                                     |
-+--------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_remove_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+--------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_remove_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                     <span class="o">|</span>
+<span class="o">+--------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6480,12 +6480,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id169">
 <h4>Example<a class="headerlink" href="#id169" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+--------------------------------------------------------+
-| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+--------------------------------------------------------+
-| [1, 5, 2, 3, 2, 1, 4]                                  |
-+--------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_replace</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span>
+<span class="o">+--------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_replace</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                  <span class="o">|</span>
+<span class="o">+--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6514,12 +6514,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id172">
 <h4>Example<a class="headerlink" href="#id172" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
-+-------------------------------------------------------------------+
-| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
-+-------------------------------------------------------------------+
-| [1, 5, 5, 3, 2, 1, 4]                                             |
-+-------------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_replace_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+<span class="o">+-------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_replace_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+-------------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                             <span class="o">|</span>
+<span class="o">+-------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6547,12 +6547,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id175">
 <h4>Example<a class="headerlink" href="#id175" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+------------------------------------------------------------+
-| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+------------------------------------------------------------+
-| [1, 5, 5, 3, 5, 1, 4]                                      |
-+------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_replace_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span>
+<span class="o">+------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_replace_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                                      <span class="o">|</span>
+<span class="o">+------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6578,12 +6578,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id178">
 <h4>Example<a class="headerlink" href="#id178" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_reverse([1, 2, 3, 4]);
-+------------------------------------------------------------+
-| array_reverse(List([1, 2, 3, 4]))                          |
-+------------------------------------------------------------+
-| [4, 3, 2, 1]                                               |
-+------------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_reverse</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_reverse</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]))</span>                          <span class="o">|</span>
+<span class="o">+------------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>                                               <span class="o">|</span>
+<span class="o">+------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6614,12 +6614,12 @@ If negative, it counts backward from the end of the array.</p></li>
 </section>
 <section id="id181">
 <h4>Example<a class="headerlink" href="#id181" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
-+--------------------------------------------------------+
-| array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
-+--------------------------------------------------------+
-| [3, 4, 5, 6]                                           |
-+--------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_slice</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">6</span><span class="p">);</span>
+<span class="o">+--------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_slice</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">6</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]</span>                                           <span class="o">|</span>
+<span class="o">+--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6646,12 +6646,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id184">
 <h4>Example<a class="headerlink" href="#id184" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], &#39;,&#39;);
-+----------------------------------------------------+
-| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(&quot;,&quot;)) |
-+----------------------------------------------------+
-| 1,2,3,4,5,6,7,8                                    |
-+----------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_to_string</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]],</span> <span class="s1">&#39;,&#39;</span><span class="p">);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_to_string</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="p">]),</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span>                                    <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6681,18 +6681,18 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id187">
 <h4>Example<a class="headerlink" href="#id187" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
-+----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                 |
-+----------------------------------------------------+
-❯ select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
-+----------------------------------------------------+
-| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
-+----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6, 7, 8]                           |
-+----------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>           <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]</span>                                 <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]);</span>           <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>                           <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6721,18 +6721,18 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id190">
 <h4>Example<a class="headerlink" href="#id190" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
-+----------------------------------------------------+
-| [1, 2]                                 |
-+----------------------------------------------------+
-❯ select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
-+----------------------------------------------------+
-| [1, 2]                                 |
-+----------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span>           <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>                                 <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">&gt;</span> <span class="n">select</span> <span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]);</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]);</span>           <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>                                 <span class="o">|</span>
+<span class="o">+----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6759,12 +6759,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id193">
 <h4>Example<a class="headerlink" href="#id193" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
-+--------------------------------------+
-| cardinality(List([1,2,3,4,5,6,7,8])) |
-+--------------------------------------+
-| 8                                    |
-+--------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">cardinality</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]]);</span>
+<span class="o">+--------------------------------------+</span>
+<span class="o">|</span> <span class="n">cardinality</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+--------------------------------------+</span>
+<span class="o">|</span> <span class="mi">8</span>                                    <span class="o">|</span>
+<span class="o">+--------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6784,12 +6784,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id195">
 <h4>Example<a class="headerlink" href="#id195" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select empty([1]);
-+------------------+
-| empty(List([1])) |
-+------------------+
-| 0                |
-+------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">empty</span><span class="p">([</span><span class="mi">1</span><span class="p">]);</span>
+<span class="o">+------------------+</span>
+<span class="o">|</span> <span class="n">empty</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">]))</span> <span class="o">|</span>
+<span class="o">+------------------+</span>
+<span class="o">|</span> <span class="mi">0</span>                <span class="o">|</span>
+<span class="o">+------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6817,12 +6817,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id198">
 <h4>Example<a class="headerlink" href="#id198" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select generate_series(1,3);
-+------------------------------------+
-| generate_series(Int64(1),Int64(3)) |
-+------------------------------------+
-| [1, 2, 3]                          |
-+------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">generate_series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+<span class="o">+------------------------------------+</span>
+<span class="o">|</span> <span class="n">generate_series</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>                          <span class="o">|</span>
+<span class="o">+------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6995,12 +6995,12 @@ string operators.</p></li>
 </section>
 <section id="id200">
 <h4>Example<a class="headerlink" href="#id200" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select make_array(1, 2, 3, 4, 5);
-+----------------------------------------------------------+
-| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
-+----------------------------------------------------------+
-| [1, 2, 3, 4, 5]                                          |
-+----------------------------------------------------------+
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span>
+<span class="o">+----------------------------------------------------------+</span>
+<span class="o">|</span> <span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+----------------------------------------------------------+</span>
+<span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>                                          <span class="o">|</span>
+<span class="o">+----------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7122,7 +7122,7 @@ a struct type of fields <code class="docutils literal notranslate"><span class="
 +---+---+
 
 -- use default names `c0`, `c1`
-❯ select struct(a, b) from t;
+&gt; select struct(a, b) from t;
 +-----------------+
 | struct(t.a,t.b) |
 +-----------------+
@@ -7318,17 +7318,17 @@ to cast to, as a string. The format is the same as that returned by [<code class
 </section>
 <section id="id216">
 <h4>Example<a class="headerlink" href="#id216" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select arrow_cast(-5, &#39;Int8&#39;) as a,
-  arrow_cast(&#39;foo&#39;, &#39;Dictionary(Int32, Utf8)&#39;) as b,
-  arrow_cast(&#39;bar&#39;, &#39;LargeUtf8&#39;) as c,
-  arrow_cast(&#39;2023-01-02T12:53:02&#39;, &#39;Timestamp(Microsecond, Some(&quot;+08:00&quot;))&#39;) as d
-  ;
-+----+-----+-----+---------------------------+
-| a  | b   | c   | d                         |
-+----+-----+-----+---------------------------+
-| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
-+----+-----+-----+---------------------------+
-1 row in set. Query took 0.001 seconds.
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_cast</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span> <span class="s1">&#39;Int8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">a</span><span class="p">,</span>
+  <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span> <span class="s1">&#39;Dictionary(Int32, Utf8)&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">b</span><span class="p">,</span>
+  <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;bar&#39;</span><span class="p">,</span> <span class="s1">&#39;LargeUtf8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">c</span><span class="p">,</span>
+  <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;2023-01-02T12:53:02&#39;</span><span class="p">,</span> <span class="s1">&#39;Timestamp(Microsecond, Some(&quot;+08:00&quot;))&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">d</span>
+  <span class="p">;</span>
+<span class="o">+----+-----+-----+---------------------------+</span>
+<span class="o">|</span> <span class="n">a</span>  <span class="o">|</span> <span class="n">b</span>   <span class="o">|</span> <span class="n">c</span>   <span class="o">|</span> <span class="n">d</span>                         <span class="o">|</span>
+<span class="o">+----+-----+-----+---------------------------+</span>
+<span class="o">|</span> <span class="o">-</span><span class="mi">5</span> <span class="o">|</span> <span class="n">foo</span> <span class="o">|</span> <span class="n">bar</span> <span class="o">|</span> <span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">02</span><span class="n">T12</span><span class="p">:</span><span class="mi">53</span><span class="p">:</span><span class="mi">02</span><span class="o">+</span><span class="mi">08</span><span class="p">:</span><span class="mi">00</span> <span class="o">|</span>
+<span class="o">+----+-----+-----+---------------------------+</span>
+<span class="mi">1</span> <span class="n">row</span> <span class="ow">in</span> <span class="nb">set</span><span class="o">.</span> <span class="n">Query</span> <span class="n">took</span> <span class="mf">0.001</span> <span class="n">seconds</span><span class="o">.</span>
 </pre></div>
 </div>
 </section>
@@ -7349,13 +7349,13 @@ string operators.</p></li>
 </section>
 <section id="id218">
 <h4>Example<a class="headerlink" href="#id218" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select arrow_typeof(&#39;foo&#39;), arrow_typeof(1);
-+---------------------------+------------------------+
-| arrow_typeof(Utf8(&quot;foo&quot;)) | arrow_typeof(Int64(1)) |
-+---------------------------+------------------------+
-| Utf8                      | Int64                  |
-+---------------------------+------------------------+
-1 row in set. Query took 0.001 seconds.
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+---------------------------+------------------------+</span>
+<span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;foo&quot;</span><span class="p">))</span> <span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">|</span>
+<span class="o">+---------------------------+------------------------+</span>
+<span class="o">|</span> <span class="n">Utf8</span>                      <span class="o">|</span> <span class="n">Int64</span>                  <span class="o">|</span>
+<span class="o">+---------------------------+------------------------+</span>
+<span class="mi">1</span> <span class="n">row</span> <span class="ow">in</span> <span class="nb">set</span><span class="o">.</span> <span class="n">Query</span> <span class="n">took</span> <span class="mf">0.001</span> <span class="n">seconds</span><span class="o">.</span>
 </pre></div>
 </div>
 </section>

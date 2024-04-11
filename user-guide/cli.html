@@ -637,7 +637,7 @@ $<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><sp
 <p>Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v17.0.0
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data.csv&#39;</span><span class="p">;</span>
+&gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data.csv&#39;</span><span class="p">;</span>
 +---+---+
 <span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
 +---+---+
@@ -653,7 +653,7 @@ data.csv<span class="w">   </span>data2.csv
 </div>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data_dir&#39;</span><span class="p">;</span>
+&gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data_dir&#39;</span><span class="p">;</span>
 +---+---+
 <span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
 +---+---+
@@ -786,9 +786,9 @@ $<span class="w"> </span><span class="nb">export</span><span class="w"> </span><
 
 $<span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
-❯<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+&gt;<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 <span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.374<span class="w"> </span>seconds.
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
+&gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
 +----------+----------+
 <span class="p">|</span><span class="w"> </span>column_1<span class="w"> </span><span class="p">|</span><span class="w"> </span>column_2<span class="w"> </span><span class="p">|</span>
 +----------+----------+
@@ -873,9 +873,9 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 
 $<span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
-❯<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;gs://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+&gt;<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;gs://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 <span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.374<span class="w"> </span>seconds.
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
+&gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
 +----------+----------+
 <span class="p">|</span><span class="w"> </span>column_1<span class="w"> </span><span class="p">|</span><span class="w"> </span>column_2<span class="w"> </span><span class="p">|</span>
 +----------+----------+
@@ -1122,7 +1122,7 @@ would set the <code class="docutils literal notranslate"><span class="pre">DATAF
 appropriately:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nv">DATAFUSION_EXECUTION_BATCH_SIZE</span><span class="o">=</span><span class="m">1024</span><span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v12.0.0
-❯<span class="w"> </span>show<span class="w"> </span>all<span class="p">;</span>
+&gt;<span class="w"> </span>show<span class="w"> </span>all<span class="p">;</span>
 +-------------------------------------------------+---------+
 <span class="p">|</span><span class="w"> </span>name<span class="w">                                            </span><span class="p">|</span><span class="w"> </span>value<span class="w">   </span><span class="p">|</span>
 +-------------------------------------------------+---------+
@@ -1140,7 +1140,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v12.0.0
 <p>You can change the configuration options using <code class="docutils literal notranslate"><span class="pre">SET</span></code> statement as well</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v13.0.0
-❯<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
+&gt;<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
 +---------------------------------+---------+
 <span class="p">|</span><span class="w"> </span>name<span class="w">                            </span><span class="p">|</span><span class="w"> </span>value<span class="w">   </span><span class="p">|</span>
 +---------------------------------+---------+
@@ -1148,10 +1148,10 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v13.0.0
 +---------------------------------+---------+
 <span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.011<span class="w"> </span>seconds.
 
-❯<span class="w"> </span><span class="nb">set</span><span class="w"> </span>datafusion.execution.batch_size<span class="w"> </span>to<span class="w"> </span><span class="m">1024</span><span class="p">;</span>
+&gt;<span class="w"> </span><span class="nb">set</span><span class="w"> </span>datafusion.execution.batch_size<span class="w"> </span>to<span class="w"> </span><span class="m">1024</span><span class="p">;</span>
 <span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.000<span class="w"> </span>seconds.
 
-❯<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
+&gt;<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
 +---------------------------------+---------+
 <span class="p">|</span><span class="w"> </span>name<span class="w">                            </span><span class="p">|</span><span class="w"> </span>value<span class="w">   </span><span class="p">|</span>
 +---------------------------------+---------+
