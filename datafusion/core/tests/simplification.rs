@@ -32,6 +32,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, ScalarUDF, Volatility,
 };
 use datafusion_functions::math;
+use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
@@ -109,14 +110,14 @@ fn test_table_scan() -> LogicalPlan {
         .expect("building plan")
 }
 
-fn get_optimized_plan_formatted(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
+fn get_optimized_plan_formatted(plan: LogicalPlan, date_time: &DateTime<Utc>) -> String {
     let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
-    let rule = SimplifyExpressions::new();
 
-    let optimized_plan = rule
-        .try_optimize(plan, &config)
-        .unwrap()
-        .expect("failed to optimize plan");
+    // Use Optimizer to do plan traversal
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+    let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
+    let optimized_plan = optimizer.optimize(plan, &config, observe).unwrap();
+
     format!("{optimized_plan:?}")
 }
 
@@ -238,7 +239,7 @@ fn to_timestamp_expr_folded() -> Result<()> {
     let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
         .to_string();
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -262,7 +263,7 @@ fn now_less_than_timestamp() -> Result<()> {
     // expression down to a single constant (true)
     let expected = "Filter: Boolean(true)\
                         \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
     Ok(())
@@ -290,7 +291,7 @@ fn select_date_plus_interval() -> Result<()> {
     // expression down to a single constant (true)
     let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
     Ok(())
@@ -308,7 +309,7 @@ fn simplify_project_scalar_fn() -> Result<()> {
     // after simplify:  t.f as "power(t.f, 1.0)"
     let expected = "Projection: test.f AS power(test.f,Float64(1))\
                       \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -330,7 +331,7 @@ fn simplify_scan_predicate() -> Result<()> {
     // before simplify: t.g = power(t.f, 1.0)
     // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
     let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -461,7 +462,7 @@ fn multiple_now() -> Result<()> {
         .build()?;
 
     // expect the same timestamp appears in both exprs
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
     let expected = format!(
         "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
