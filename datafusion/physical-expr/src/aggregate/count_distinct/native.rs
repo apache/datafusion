@@ -54,16 +54,11 @@ where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
 {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(data_type: &DataType) -> Self {
         Self {
             values: HashSet::default(),
-            data_type: T::DATA_TYPE,
+            data_type: data_type.clone(),
         }
-    }
-
-    pub(super) fn with_data_type(mut self, data_type: DataType) -> Self {
-        self.data_type = data_type;
-        self
     }
 }
 
