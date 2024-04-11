@@ -62,11 +62,6 @@ ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
-## Stale Issues
-
-Issues will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
-Commenting on the issue will remove the `stale` label.
-
 # Developer's guide
 
 ## Pull Request Overview
