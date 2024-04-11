@@ -40,19 +40,19 @@ order by
 limit 10;
 ----
 logical_plan
-Limit: skip=0, fetch=10
---Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
-----Projection: c_orders.c_count, COUNT(*) AS custdist
-------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---------SubqueryAlias: c_orders
-----------Projection: COUNT(orders.o_orderkey) AS c_count
-------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]
---------------Projection: customer.c_custkey, orders.o_orderkey
-----------------Left Join: customer.c_custkey = orders.o_custkey
-------------------TableScan: customer projection=[c_custkey]
-------------------Projection: orders.o_orderkey, orders.o_custkey
---------------------Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
-----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8("%special%requests%")]
+01)Limit: skip=0, fetch=10
+02)--Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
+03)----Projection: c_orders.c_count, COUNT(*) AS custdist
+04)------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)--------SubqueryAlias: c_orders
+06)----------Projection: COUNT(orders.o_orderkey) AS c_count
+07)------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]
+08)--------------Projection: customer.c_custkey, orders.o_orderkey
+09)----------------Left Join: customer.c_custkey = orders.o_custkey
+10)------------------TableScan: customer projection=[c_custkey]
+11)------------------Projection: orders.o_orderkey, orders.o_custkey
+12)--------------------Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
+13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8("%special%requests%")]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=10
 02)--SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
