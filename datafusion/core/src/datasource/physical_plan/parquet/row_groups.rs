@@ -1212,7 +1212,7 @@ mod tests {
         /// Return a test for data_index_bloom_encoding_stats.parquet
         /// Note the values in the `String` column are:
         /// ```sql
-        /// ❯ select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+        /// > select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
         /// +-----------+
         /// | String    |
         /// +-----------+
