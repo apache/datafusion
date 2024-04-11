@@ -63,7 +63,7 @@ LIMIT 10;
 Here are some interesting statistics about the data used in the queries
 Max length of `"SearchPhrase"` is 1113 characters
 ```sql
-❯ select min(length("SearchPhrase")) as "SearchPhrase_len_min", max(length("SearchPhrase")) "SearchPhrase_len_max" from 'hits.parquet' limit 10;
+> select min(length("SearchPhrase")) as "SearchPhrase_len_min", max(length("SearchPhrase")) "SearchPhrase_len_max" from 'hits.parquet' limit 10;
 +----------------------+----------------------+
 | SearchPhrase_len_min | SearchPhrase_len_max |
 +----------------------+----------------------+
@@ -74,7 +74,7 @@ Max length of `"SearchPhrase"` is 1113 characters
 
 Here is the schema of the data
 ```sql
-❯ describe 'hits.parquet';
+> describe 'hits.parquet';
 +-----------------------+-----------+-------------+
 | column_name           | data_type | is_nullable |
 +-----------------------+-----------+-------------+
