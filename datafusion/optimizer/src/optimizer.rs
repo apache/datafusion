@@ -27,7 +27,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -69,8 +69,12 @@ use crate::utils::log_plan;
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
 
 pub trait OptimizerRule {
-    /// Try and rewrite `plan` to an optimized form, returning None if the plan cannot be
-    /// optimized by this rule.
+    /// Try and rewrite `plan` to an optimized form, returning None if the plan
+    /// cannot be optimized by this rule.
+    ///
+    /// Note this API will be deprecated in the future as it requires `clone`ing
+    /// the input plan, which can be expensive. OptimizerRules should implement
+    /// [`Self::rewrite`] instead.
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -80,11 +84,30 @@ pub trait OptimizerRule {
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
+    /// How should the rule be applied by the optimizer? See comments on
+    /// [`ApplyOrder`] for details.
     ///
-    /// If a rule use default None, it should traverse recursively plan inside itself
+    /// If returns `None`, the default, the rule must handle recursion itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
+    }
+
+    /// Does this rule support rewriting owned plans (rather than by reference)?
+    fn supports_rewrite(&self) -> bool {
+        false
+    }
+
+    /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
+    /// if the plan was rewritten and `Transformed::no` if it was not.
+    ///
+    /// Note: this function is only called if [`Self::supports_rewrite`] returns
+    /// true. Otherwise the Optimizer calls  [`Self::try_optimize`]
+    fn rewrite(
+        &self,
+        _plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        internal_err!("rewrite is not implemented for {}", self.name())
     }
 }
 
@@ -298,12 +321,19 @@ fn optimize_plan_node(
     rule: &dyn OptimizerRule,
     config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    // TODO: add API to OptimizerRule to allow rewriting by ownership
-    rule.try_optimize(&plan, config)
-        .map(|maybe_plan| match maybe_plan {
-            Some(new_plan) => Transformed::yes(new_plan),
+    if rule.supports_rewrite() {
+        return rule.rewrite(plan, config);
+    }
+
+    rule.try_optimize(&plan, config).map(|maybe_plan| {
+        match maybe_plan {
+            Some(new_plan) => {
+                // if the node was rewritten by the optimizer, replace the node
+                Transformed::yes(new_plan)
+            }
             None => Transformed::no(plan),
-        })
+        }
+    })
 }
 
 impl Optimizer {
