@@ -287,9 +287,11 @@ impl EquivalenceProperties {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
+        // println!("normalized_reqs: {:?}", normalized_reqs);
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
             if !eq_properties.ordering_satisfy_single(&normalized_req) {
+                // println!("not single");
                 return false;
             }
             // Treat satisfied keys as constants in subsequent iterations. We
@@ -325,6 +327,7 @@ impl EquivalenceProperties {
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
         let ExprOrdering { expr, data, .. } = expr_ordering;
+        // println!("expr: {:?}, data: {:?}", expr, data);
         match data {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr { expr, options };

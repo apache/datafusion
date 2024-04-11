@@ -73,13 +73,13 @@ impl CoalescePartitionsExec {
         )
     }
 
-    pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
-        CoalescePartitionsExec {
-            input,
-            metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
-        }
-    }
+    // pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+    //     CoalescePartitionsExec {
+    //         input,
+    //         metrics: self.metrics.clone(),
+    //         cache: self.cache.clone(),
+    //     }
+    // }
 }
 
 impl DisplayAs for CoalescePartitionsExec {

@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::compute::kernels::aggregate;
+use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
     not_impl_err,
@@ -25,6 +24,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
+    equivalence::ProjectionMapping,
     expressions::{FirstValue, LastValue},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
     LexOrdering, LexRequirement, PhysicalSortRequirement,
@@ -32,13 +32,12 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
-    ExecutionPlan, ExecutionPlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
 };
+use std::sync::Arc;
 
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
-
-use crate::error::Result;
 
 use super::{output_requirements::OutputRequirementExec, PhysicalOptimizerRule};
 
@@ -80,12 +79,12 @@ fn get_common_requirement_of_aggregate_input(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let children = plan.children();
 
-    let mut is_transformed = false;
+    let mut is_child_transformed = false;
     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
     for c in children.iter() {
         let res = get_common_requirement_of_aggregate_input(c.clone())?;
         if res.transformed {
-            is_transformed = true;
+            is_child_transformed = true;
         }
         new_children.push(res.data);
     }
@@ -93,10 +92,12 @@ fn get_common_requirement_of_aggregate_input(
     let mode1 = plan.properties().execution_mode();
     // println!("mode 1: {:?}", mode);
 
-    let plan = if is_transformed {
+    println!("plan name: {:?}", plan.name());
+    println!("is_child_transformed: {:?}", is_child_transformed);
+    println!("new_children: {:?}", new_children);
 
+    let plan = if is_child_transformed {
         plan.with_new_children(new_children)?
-
     } else {
         plan
     };
@@ -107,11 +108,35 @@ fn get_common_requirement_of_aggregate_input(
     }
 
     let plan = optimize_internal(plan)?;
+
+    if plan.transformed {
+        println!("transformed plan: {:?}", plan.data.name());
+    } else {
+        println!("not transformed plan: {:?}", plan.data.name());
+    }
+
     let mode3 = plan.data.properties().execution_mode();
     if mode1 != mode3 {
         println!("mode1: {:?}, mode3: {:?}", mode1, mode3);
     }
-    Ok(plan)
+
+    if !plan.transformed {
+        let name = plan.data.name();
+        println!(
+            "not transformed plan: {:?} and is_child_transformed: {:?}",
+            name, is_child_transformed
+        );
+    }
+
+    // If one of the children is transformed, then the plan is considered transformed, then we update
+    // the children of the plan from bottom to top.
+    if plan.transformed || is_child_transformed {
+        Ok(Transformed::yes(plan.data))
+    } else {
+        Ok(Transformed::no(plan.data))
+    }
+
+    // Ok(plan)
 
     // if let Some(c) = new_c {
     //     if !c.transformed {
@@ -142,25 +167,52 @@ fn get_common_requirement_of_aggregate_input(
     // return Ok(plan);
 }
 
+fn try_get_updated_aggr_expr_from_child(
+    aggr_exec: &AggregateExec,
+) -> Vec<Arc<dyn AggregateExpr>> {
+    let input = aggr_exec.input();
+    if aggr_exec.mode() != &AggregateMode::Partial {
+        // Some aggregators may be modified during initialization for
+        // optimization purposes. For example, a FIRST_VALUE may turn
+        // into a LAST_VALUE with the reverse ordering requirement.
+        // To reflect such changes to subsequent stages, use the updated
+        // `AggregateExpr`/`PhysicalSortExpr` objects.
+        //
+        // The bottom up transformation is the mirror of LogicalPlan::Aggregate creation in [create_initial_plan]
+
+        if let Some(c_aggr_exec) = input.as_any().downcast_ref::<AggregateExec>() {
+            if c_aggr_exec.mode() == &AggregateMode::Partial {
+                // If the input is an AggregateExec in Partial mode, then the
+                // input is a CoalescePartitionsExec. In this case, the
+                // AggregateExec is the second stage of aggregation. The
+                // requirements of the second stage are the requirements of
+                // the first stage.
+                return c_aggr_exec.aggr_expr().to_vec();
+            }
+        }
+    }
+
+    aggr_exec.aggr_expr().to_vec()
+}
+
 fn optimize_internal(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        // if aggr_exec.mode() != &AggregateMode::Partial {
-        //     return Ok(Transformed::no(plan));
-        // }
+        println!("mode: {:?}", aggr_exec.mode());
 
-        let input = aggr_exec.input().clone();
-        let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
+        let input = aggr_exec.input();
+        let mut aggr_expr = try_get_updated_aggr_expr_from_child(aggr_exec);
         let group_by = aggr_exec.group_by();
         let mode = aggr_exec.mode();
 
         let input_eq_properties = input.equivalence_properties();
+        // println!("input_eq_properties: {:?}", input_eq_properties);
         let groupby_exprs = group_by.input_exprs();
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+        let indices = get_ordered_partition_by_indices(&groupby_exprs, input);
         let mut new_requirement = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
@@ -169,6 +221,7 @@ fn optimize_internal(
             })
             .collect::<Vec<_>>();
 
+        println!("1 aggr_expr: {:?}", aggr_expr);
         let req = get_aggregate_exprs_requirement(
             &new_requirement,
             &mut aggr_expr,
@@ -176,6 +229,7 @@ fn optimize_internal(
             input_eq_properties,
             mode,
         )?;
+        println!("2 aggr_expr: {:?}", aggr_expr);
 
         // println!("req: {:?}", req);
 
@@ -184,7 +238,48 @@ fn optimize_internal(
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let p = aggr_exec.clone_with_required_input_ordering(required_input_ordering);
+        println!("required_input_ordering: {:?}", required_input_ordering);
+        println!("agg_expr: {:?}", aggr_expr);
+
+        let input_order_mode =
+            if indices.len() == groupby_exprs.len() && !indices.is_empty() {
+                InputOrderMode::Sorted
+            } else if !indices.is_empty() {
+                InputOrderMode::PartiallySorted(indices)
+            } else {
+                InputOrderMode::Linear
+            };
+        let projection_mapping =
+            ProjectionMapping::try_new(&group_by.expr(), &input.schema())?;
+
+        let cache = AggregateExec::compute_properties(
+            &input,
+            plan.schema().clone(),
+            &projection_mapping,
+            &mode,
+            &input_order_mode,
+        );
+
+        // let p = AggregateExec {
+        //     mode: mode.clone(),
+        //     group_by: group_by.clone(),
+        //     aggr_expr,
+        //     filter_expr: aggr_exec.filter_expr().to_vec(),
+        //     input: input.clone(),
+        //     schema: aggr_exec.schema(),
+        //     input_schema: aggr_exec.input_schema(),
+        //     metrics: aggr_exec.metrics().clone(),
+        //     required_input_ordering,
+        //     limit: None,
+        //     input_order_mode,
+        //     cache,
+        // };
+        let p = aggr_exec.clone_with_required_input_ordering_and_aggr_expr(
+            required_input_ordering,
+            aggr_expr,
+            cache,
+            input_order_mode,
+        );
 
         let res = Arc::new(p) as Arc<dyn ExecutionPlan>;
         Ok(Transformed::yes(res))
@@ -306,16 +401,23 @@ fn get_aggregate_exprs_requirement(
 
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
+
+            // println!("prefix_requirement: {:?}", prefix_requirement);
+            // println!("aggr_req: {:?}", aggr_req);
+            // println!("reverse_aggr_req: {:?}", reverse_aggr_req);
+
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
             )) {
+                println!("1st step");
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
             } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
+                println!("2nd step");
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
                 let mut last_value = first_value.convert_to_last();
@@ -411,11 +513,13 @@ fn get_aggregate_exprs_requirement(
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
 
-
 mod tests {
     use super::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
-    use datafusion_physical_expr::{expressions::{col, OrderSensitiveArrayAgg}, PhysicalSortExpr};
+    use datafusion_physical_expr::{
+        expressions::{col, OrderSensitiveArrayAgg},
+        PhysicalSortExpr,
+    };
 
     fn create_test_schema() -> Result<SchemaRef> {
         let a = Field::new("a", DataType::Int32, true);

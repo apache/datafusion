@@ -42,11 +42,14 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::expressions::{FirstValue, LastValue};
-use datafusion_physical_expr::{physical_exprs_contains, reverse_order_bys, EquivalenceProperties, LexOrdering, PhysicalSortRequirement};
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping,
     expressions::{Column, Max, Min, UnKnownColumn},
     AggregateExpr, LexRequirement, PhysicalExpr,
+};
+use datafusion_physical_expr::{
+    physical_exprs_contains, reverse_order_bys, EquivalenceProperties, LexOrdering,
+    PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -271,42 +274,45 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
-        Self {
-            input,
-            // clone the rest of the fields
-            mode: self.mode,
-            group_by: self.group_by.clone(),
-            aggr_expr: self.aggr_expr.clone(),
-            filter_expr: self.filter_expr.clone(),
-            limit: self.limit,
-            schema: self.schema.clone(),
-            input_schema: self.input_schema.clone(),
-            metrics: self.metrics.clone(),
-            input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
-            required_input_ordering: self.required_input_ordering.clone(),
-        }
-    }
+    // pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+    //     Self {
+    //         input,
+    //         // clone the rest of the fields
+    //         mode: self.mode,
+    //         group_by: self.group_by.clone(),
+    //         aggr_expr: self.aggr_expr.clone(),
+    //         filter_expr: self.filter_expr.clone(),
+    //         limit: self.limit,
+    //         schema: self.schema.clone(),
+    //         input_schema: self.input_schema.clone(),
+    //         metrics: self.metrics.clone(),
+    //         input_order_mode: self.input_order_mode.clone(),
+    //         cache: self.cache.clone(),
+    //         required_input_ordering: self.required_input_ordering.clone(),
+    //     }
+    // }
 
-    pub fn clone_with_required_input_ordering(
+    pub fn clone_with_required_input_ordering_and_aggr_expr(
         &self,
         required_input_ordering: Option<LexRequirement>,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        cache: PlanProperties,
+        input_order_mode: InputOrderMode,
     ) -> Self {
         Self {
             required_input_ordering,
             // clone the rest of the fields
             mode: self.mode,
             group_by: self.group_by.clone(),
-            aggr_expr: self.aggr_expr.clone(),
+            aggr_expr,
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
             input: self.input.clone(),
             schema: self.schema.clone(),
             input_schema: self.input_schema.clone(),
-            metrics: self.metrics.clone(),
-            input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode,
+            cache,
         }
     }
 
@@ -432,7 +438,6 @@ impl AggregateExec {
         })
     }
 
-
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
@@ -555,7 +560,7 @@ impl AggregateExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
+    pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         projection_mapping: &ProjectionMapping,
@@ -960,6 +965,9 @@ fn get_aggregate_exprs_requirement(
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
+            println!("prefix_requirement {:?}", prefix_requirement);
+            println!("reverse_aggr_req {:?}", reverse_aggr_req);
+
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
@@ -967,21 +975,15 @@ fn get_aggregate_exprs_requirement(
             )) {
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to LAST_VALUE enables more efficient execution
-                // given the existing ordering:
-                // let mut last_value = first_value.convert_to_last();
-                // last_value = last_value.with_requirement_satisfied(true);
-                // *aggr_expr = Arc::new(last_value) as _;
-
-
-                println!("can convertt {:?}", aggr_expr);
-
-                first_value = first_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(first_value) as _;
+            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+            //     prefix_requirement,
+            //     &reverse_aggr_req,
+            // )) {
+            //     // Converting to LAST_VALUE enables more efficient execution
+            //     // given the existing ordering:
+            //     let mut last_value = first_value.convert_to_last();
+            //     last_value = last_value.with_requirement_satisfied(true);
+            //     *aggr_expr = Arc::new(last_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 first_value = first_value.with_requirement_satisfied(false);
@@ -1001,6 +1003,7 @@ fn get_aggregate_exprs_requirement(
             //     prefix_requirement,
             //     &reverse_aggr_req,
             // )) {
+            //     println!("last to first {:?}", aggr_expr);
             //     // Converting to FIRST_VALUE enables more efficient execution
             //     // given the existing ordering:
             //     let mut first_value = last_value.convert_to_first();
@@ -1294,7 +1297,7 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
@@ -2145,7 +2148,6 @@ mod tests {
         };
         Ok(())
     }
-
 
     #[test]
     fn test_agg_exec_same_schema() -> Result<()> {

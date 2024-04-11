@@ -76,6 +76,7 @@ impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
+            Arc::new(SimplifyOrdering::new()),
             // Appears after AggregateExec is created
             // Arc::new(SimplifyOrdering::new()),
             // If there is a output requirement of the query, make sure that
@@ -143,7 +144,6 @@ impl PhysicalOptimizer {
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
             // Appears after AggregateExec is created
-            Arc::new(SimplifyOrdering::new()),
         ];
 
         Self::with_rules(rules)
