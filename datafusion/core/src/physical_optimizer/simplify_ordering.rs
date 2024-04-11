@@ -171,7 +171,7 @@ fn try_get_updated_aggr_expr_from_child(
     aggr_exec: &AggregateExec,
 ) -> Vec<Arc<dyn AggregateExpr>> {
     let input = aggr_exec.input();
-    if aggr_exec.mode() != &AggregateMode::Partial {
+    if aggr_exec.mode() == &AggregateMode::Final || aggr_exec.mode() == &AggregateMode::FinalPartitioned {
         // Some aggregators may be modified during initialization for
         // optimization purposes. For example, a FIRST_VALUE may turn
         // into a LAST_VALUE with the reverse ordering requirement.
