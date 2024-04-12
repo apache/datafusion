@@ -1274,7 +1274,7 @@ fn build_is_null_column_expr(
                     })
                     .ok()
             } else {
-                return None;
+                None
             }
         } else {
             required_columns
