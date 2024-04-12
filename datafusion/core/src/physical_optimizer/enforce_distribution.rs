@@ -1080,11 +1080,6 @@ fn ensure_distribution(
         }
     };
 
-    // if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-    //     let p = aggr_exec.rewrite_ordering()?;
-    //     plan = Arc::new(p);
-    // }
-
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not

@@ -199,7 +199,6 @@ fn optimize_internal(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-        println!("mode: {:?}", aggr_exec.mode());
 
         let input = aggr_exec.input();
         let mut aggr_expr = try_get_updated_aggr_expr_from_child(aggr_exec);
@@ -207,7 +206,6 @@ fn optimize_internal(
         let mode = aggr_exec.mode();
 
         let input_eq_properties = input.equivalence_properties();
-        // println!("input_eq_properties: {:?}", input_eq_properties);
         let groupby_exprs = group_by.input_exprs();
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
@@ -221,7 +219,6 @@ fn optimize_internal(
             })
             .collect::<Vec<_>>();
 
-        println!("1 aggr_expr: {:?}", aggr_expr);
         let req = get_aggregate_exprs_requirement(
             &new_requirement,
             &mut aggr_expr,
@@ -229,9 +226,6 @@ fn optimize_internal(
             input_eq_properties,
             mode,
         )?;
-        println!("2 aggr_expr: {:?}", aggr_expr);
-
-        // println!("req: {:?}", req);
 
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
@@ -280,6 +274,12 @@ fn optimize_internal(
             cache,
             input_order_mode,
         );
+
+        // let aggr_exec = aggr_exec.to_owned().to_owned();
+        // aggr_exec.with_aggr_expr(aggr_expr);
+        // aggr_exec.with_required_input_ordering(required_input_ordering);
+        // aggr_exec.with_cache(cache);
+        // aggr_exec.with_input_order_mode(input_order_mode);
 
         let res = Arc::new(p) as Arc<dyn ExecutionPlan>;
         Ok(Transformed::yes(res))

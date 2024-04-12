@@ -274,24 +274,6 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    // pub fn clone_with_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
-    //     Self {
-    //         input,
-    //         // clone the rest of the fields
-    //         mode: self.mode,
-    //         group_by: self.group_by.clone(),
-    //         aggr_expr: self.aggr_expr.clone(),
-    //         filter_expr: self.filter_expr.clone(),
-    //         limit: self.limit,
-    //         schema: self.schema.clone(),
-    //         input_schema: self.input_schema.clone(),
-    //         metrics: self.metrics.clone(),
-    //         input_order_mode: self.input_order_mode.clone(),
-    //         cache: self.cache.clone(),
-    //         required_input_ordering: self.required_input_ordering.clone(),
-    //     }
-    // }
-
     pub fn clone_with_required_input_ordering_and_aggr_expr(
         &self,
         required_input_ordering: Option<LexRequirement>,
@@ -436,6 +418,29 @@ impl AggregateExec {
             input_order_mode,
             cache,
         })
+    }
+
+    pub fn with_cache(mut self, cache: PlanProperties) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    pub fn with_input_order_mode(mut self, input_order_mode: InputOrderMode) -> Self {
+        self.input_order_mode = input_order_mode;
+        self
+    }
+
+    pub fn with_required_input_ordering(
+        mut self,
+        required_input_ordering: Option<LexRequirement>,
+    ) -> Self {
+        self.required_input_ordering = required_input_ordering;
+        self
+    }
+
+    pub fn with_aggr_expr(mut self, aggr_expr: Vec<Arc<dyn AggregateExpr>>) -> Self {
+        self.aggr_expr = aggr_expr;
+        self
     }
 
     /// Aggregation mode (full, partial)

@@ -114,6 +114,7 @@ impl PhysicalOptimizer {
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
+            Arc::new(SimplifyOrdering::new()),
             // Arc::new(SimplifyOrdering::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
