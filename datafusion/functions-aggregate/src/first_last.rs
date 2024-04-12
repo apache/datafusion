@@ -632,7 +632,6 @@ impl AggregateUDFImpl for LastValue {
     }
 }
 
-
 /// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
 #[derive(Debug, Clone)]
 pub struct LastValuePhysicalExpr {
