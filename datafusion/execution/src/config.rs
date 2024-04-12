@@ -483,11 +483,11 @@ impl SessionConfig {
     /// let ext1b = Arc::new(Ext1(11));
     /// let ext2 = Arc::new(Ext2(2));
     ///
-    /// let cfg = SessionConfig::default()
-    ///     // will only remember the last Ext1
-    ///     .with_extension(Arc::clone(&ext1a))
-    ///     .with_extension(Arc::clone(&ext1b))
-    ///     .with_extension(Arc::clone(&ext2));
+    /// let mut cfg = SessionConfig::default();
+    /// // will only remember the last Ext1
+    /// cfg.with_extension(Arc::clone(&ext1a))
+    ///    .with_extension(Arc::clone(&ext1b))
+    ///    .with_extension(Arc::clone(&ext2));
     ///
     /// let ext1_received = cfg.get_extension::<Ext1>().unwrap();
     /// assert!(!Arc::ptr_eq(&ext1_received, &ext1a));
