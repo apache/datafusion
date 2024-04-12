@@ -277,14 +277,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
-    fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
-        let args_name = self
-            .args
-            .iter()
-            .map(|arg| format!("{}", arg))
-            .collect::<Vec<_>>();
-        self.fun.reverse_expr(args_name)
-    }
+    // fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
+    //     let args_name = self
+    //         .args
+    //         .iter()
+    //         .map(|arg| format!("{}", arg))
+    //         .collect::<Vec<_>>();
+    //     self.fun.reverse_expr(args_name)
+    // }
 }
 
 impl PartialEq<dyn Any> for AggregateFunctionExpr {

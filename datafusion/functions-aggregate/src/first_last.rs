@@ -216,10 +216,10 @@ impl AggregateUDFImpl for FirstValue {
         &self.aliases
     }
 
-    fn reverse_expr(&self, args_name: Vec<String>) -> Option<AggregateFunction> {
-        // First value only take one argument
-        Some(Arc::new(self.clone().convert_to_last(args_name[0])))
-    }
+    // fn reverse_expr(&self, args_name: Vec<String>) -> Option<AggregateFunction> {
+    //     // First value only take one argument
+    //     Some(Arc::new(self.clone().convert_to_last(args_name[0])))
+    // }
 }
 
 #[derive(Debug)]
