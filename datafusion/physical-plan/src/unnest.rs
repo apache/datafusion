@@ -642,7 +642,7 @@ mod tests {
         )
     }
 
-    // Create a FixedListArray with the following list values:
+    // Create a FixedSizeListArray with the following list values:
     //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
     fn make_fixed_list() -> FixedSizeListArray {
         let values = Arc::new(StringArray::from_iter([
