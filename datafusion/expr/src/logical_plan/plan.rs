@@ -810,8 +810,8 @@ impl LogicalPlan {
                 columns, options, ..
             }) => {
                 // Update schema with unnested column type.
-                let input = Arc::new(inputs.swap_remove(0));
-                unnest_with_options(input.clone(), columns.clone(), options.clone())
+                let input = inputs.swap_remove(0);
+                unnest_with_options(input, columns.clone(), options.clone())
             }
         }
     }

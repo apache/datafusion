@@ -504,6 +504,13 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().apply_until_stop(f)
             }
+            LogicalPlan::Unnest(Unnest { columns, .. }) => {
+                let exprs = columns
+                    .iter()
+                    .map(|c| Expr::Column(c.clone()))
+                    .collect::<Vec<_>>();
+                exprs.iter().apply_until_stop(f)
+            }
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
                 select_expr,
@@ -516,7 +523,6 @@ impl LogicalPlan {
                 .apply_until_stop(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
