@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use datafusion_physical_expr::functions::Hint;
+use itertools::Either;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -116,16 +117,28 @@ where
     })
 }
 
-#[macro_export]
-macro_rules! create_adaptive_array_iter {
-    ($ARRAY:expr) => {{
-        let first_value = if $ARRAY.is_null(0) {
-            None
-        } else {
-            Some($ARRAY.value(0))
-        };
-        $ARRAY.iter().chain(std::iter::repeat(first_value))
-    }};
+/// Create an adaptive iterator. When the `hints` args of `make_scalar_function`
+/// includes `Hint::AcceptsSingular`, this function can be used to wrap an `ArrayIter`
+/// that contains only one value into an `Iterator` that contains multiple values,
+/// facilitating `zip` operations.
+/// NOTE:
+/// 1. When using this function, be sure to ensure that the corresponding `Hint` for
+/// `array_iter` must be `Hint::AcceptsSingular`.
+/// 2. You cannot call this function on all `args` of `inner` at the same time; there
+/// is a risk of never being able to exit the iteration!
+pub(super) fn adaptive_array_iter<'a, T>(
+    mut array_iter: ArrayIter<T>,
+) -> impl Iterator<Item = Option<T::Item>> + 'a
+where
+    T: ArrayAccessor + 'a,
+    T::Item: Copy,
+{
+    if array_iter.len() == 1 {
+        let value = array_iter.next().expect("Contains a value");
+        Either::Left(std::iter::repeat(value).into_iter())
+    } else {
+        Either::Right(array_iter.into_iter())
+    }
 }
 
 #[cfg(test)]

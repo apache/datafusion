@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::Array;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
@@ -29,8 +28,7 @@ use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_physical_expr::functions::Hint;
 
-use crate::create_adaptive_array_iter;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::{adaptive_array_iter, make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct OverlayFunc {
@@ -107,8 +105,8 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
             let pos_num = as_int64_array(&args[2])?;
 
-            let characters_array_iter = create_adaptive_array_iter!(characters_array);
-            let pos_num_iter = create_adaptive_array_iter!(pos_num);
+            let characters_array_iter = adaptive_array_iter(characters_array.iter());
+            let pos_num_iter = adaptive_array_iter(pos_num.iter());
 
             let result = string_array
                 .iter()
@@ -148,9 +146,9 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let pos_num = as_int64_array(&args[2])?;
             let len_num = as_int64_array(&args[3])?;
 
-            let characters_array_iter = create_adaptive_array_iter!(characters_array);
-            let pos_num_iter = create_adaptive_array_iter!(pos_num);
-            let len_num_iter = create_adaptive_array_iter!(len_num);
+            let characters_array_iter = adaptive_array_iter(characters_array.iter());
+            let pos_num_iter = adaptive_array_iter(pos_num.iter());
+            let len_num_iter = adaptive_array_iter(len_num.iter());
 
             let result = string_array
                 .iter()
