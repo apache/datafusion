@@ -404,7 +404,6 @@ impl AggregateExec {
             &input_order_mode,
         );
 
-        // let required_input_ordering = None;
         Ok(AggregateExec {
             mode,
             group_by,
@@ -711,9 +710,6 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // let aggr_exec = self.clone_with_input(children[0].clone());
-        // Ok(Arc::new(aggr_exec))
-
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
             self.group_by.clone(),
@@ -724,8 +720,6 @@ impl ExecutionPlan for AggregateExec {
             self.schema.clone(),
         )?;
         me.limit = self.limit;
-
-        // let me = me.rewrite_ordering()?;
 
         Ok(Arc::new(me))
     }

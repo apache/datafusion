@@ -63,8 +63,7 @@ impl<T> PlanContext<T> {
 
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
-        let plan = with_new_children_if_necessary(self.plan, children_plans)?;
-        self.plan = plan;
+        self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
 
         Ok(self)
     }
