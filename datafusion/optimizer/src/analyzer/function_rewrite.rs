@@ -64,7 +64,7 @@ impl ApplyFunctionRewrites {
             let original_name = name_preserver.save(&expr)?;
 
             // recursively transform the expression, applying the rewrites at each step
-            let result = expr.transform_up(&|expr| {
+            let transformed_expr = expr.transform_up(&|expr| {
                 let mut result = Transformed::no(expr);
                 for rewriter in self.function_rewrites.iter() {
                     result = result.transform_data(|expr| {
@@ -74,7 +74,7 @@ impl ApplyFunctionRewrites {
                 Ok(result)
             })?;
 
-            result.map_data(|expr| original_name.restore(expr))
+            transformed_expr.map_data(|expr| original_name.restore(expr))
         })
     }
 }
