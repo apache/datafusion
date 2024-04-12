@@ -41,7 +41,6 @@ default = [
     "encoding_expressions",
     "math_expressions",
     "regex_expressions",
-    "crypto_expressions",
     "string_expressions",
     "unicode_expressions",
 ]
