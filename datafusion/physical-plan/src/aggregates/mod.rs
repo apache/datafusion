@@ -48,8 +48,7 @@ use datafusion_physical_expr::{
     AggregateExpr, LexRequirement, PhysicalExpr,
 };
 use datafusion_physical_expr::{
-    physical_exprs_contains, EquivalenceProperties, LexOrdering,
-    PhysicalSortRequirement,
+    physical_exprs_contains, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -246,19 +245,19 @@ impl From<StreamType> for SendableRecordBatchStream {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    pub mode: AggregateMode,
+    mode: AggregateMode,
     /// Group by expressions
-    pub group_by: PhysicalGroupBy,
+    group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    pub aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
-    pub filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
-    pub limit: Option<usize>,
+    limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
-    pub schema: SchemaRef,
+    schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate, i.e., partial and final aggregates have same `input_schema`.
@@ -266,11 +265,11 @@ pub struct AggregateExec {
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
     /// Execution metrics
-    pub metrics: ExecutionPlanMetricsSet,
-    pub required_input_ordering: Option<LexRequirement>,
+    metrics: ExecutionPlanMetricsSet,
+    required_input_ordering: Option<LexRequirement>,
     /// Describes how the input is ordered relative to the group by columns
-    pub input_order_mode: InputOrderMode,
-    pub cache: PlanProperties,
+    input_order_mode: InputOrderMode,
+    cache: PlanProperties,
 }
 
 impl AggregateExec {
@@ -282,19 +281,19 @@ impl AggregateExec {
         input_order_mode: InputOrderMode,
     ) -> Self {
         Self {
+            aggr_expr,
             required_input_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode,
+            cache,
             // clone the rest of the fields
             mode: self.mode,
             group_by: self.group_by.clone(),
-            aggr_expr,
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
             input: self.input.clone(),
             schema: self.schema.clone(),
             input_schema: self.input_schema.clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
-            input_order_mode,
-            cache,
         }
     }
 
@@ -921,7 +920,7 @@ fn get_aggregate_expr_req(
 /// An `Option<LexOrdering>` representing the computed finer lexical ordering,
 /// or `None` if there is no finer ordering; e.g. the existing requirement and
 /// the aggregator requirement is incompatible.
-fn finer_ordering(
+pub fn finer_ordering(
     existing_req: &LexOrdering,
     aggr_expr: &Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
@@ -933,7 +932,7 @@ fn finer_ordering(
 }
 
 /// Concatenates the given slices.
-fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
+pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
     [lhs, rhs].concat()
 }
 
@@ -1298,9 +1297,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, Median,
-    };
+    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
         PhysicalSortExpr,
