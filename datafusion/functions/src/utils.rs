@@ -124,8 +124,8 @@ where
 /// NOTE:
 /// 1. When using this function, be sure to ensure that the corresponding `Hint` for
 /// `array_iter` must be `Hint::AcceptsSingular`.
-/// 2. You cannot call this function on all `args` of `inner` at the same time; there
-/// is a risk of never being able to exit the iteration!
+/// 2. You cannot call this function on all `args` of `inner` of `make_scalar_function`
+/// at the same time; there is a risk of never being able to exit the iteration!
 pub(super) fn adaptive_array_iter<'a, T>(
     mut array_iter: ArrayIter<T>,
 ) -> impl Iterator<Item = Option<T::Item>> + 'a
@@ -135,9 +135,9 @@ where
 {
     if array_iter.len() == 1 {
         let value = array_iter.next().expect("Contains a value");
-        Either::Left(std::iter::repeat(value).into_iter())
+        Either::Left(std::iter::repeat(value))
     } else {
-        Either::Right(array_iter.into_iter())
+        Either::Right(array_iter)
     }
 }
 
