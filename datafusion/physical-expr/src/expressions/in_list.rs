@@ -511,7 +511,21 @@ mod tests {
     macro_rules! in_list {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
-            let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
+            in_list_raw!(
+                $BATCH,
+                cast_list_exprs,
+                $NEGATED,
+                $EXPECTED,
+                cast_expr,
+                $SCHEMA
+            );
+        }};
+    }
+
+    // applies the in_list expr to an input batch and list without cast
+    macro_rules! in_list_raw {
+        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
+            let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
             let result = expr
                 .evaluate(&$BATCH)?
                 .into_array($BATCH.num_rows())
@@ -1362,7 +1376,7 @@ mod tests {
             ],
         ];
         for list in lists.iter() {
-            in_list!(
+            in_list_raw!(
                 batch,
                 list.clone(),
                 &false,
@@ -1374,7 +1388,7 @@ mod tests {
 
         // expression: "a not in ("a", "b")"
         for list in lists.iter() {
-            in_list!(
+            in_list_raw!(
                 batch,
                 list.clone(),
                 &true,
@@ -1394,7 +1408,7 @@ mod tests {
             ],
         ];
         for list in lists.iter() {
-            in_list!(
+            in_list_raw!(
                 batch,
                 list.clone(),
                 &false,
@@ -1406,7 +1420,7 @@ mod tests {
 
         // expression: "a not in ("a", "b", null)"
         for list in lists.iter() {
-            in_list!(
+            in_list_raw!(
                 batch,
                 list.clone(),
                 &true,
