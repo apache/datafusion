@@ -1578,7 +1578,7 @@ pub fn unnest_with_options(
             }
         };
         qualified_columns.push(Column::from((unnest_qualifier, unnested_field.as_ref())));
-        unnested_fields.insert(index, (unnest_qualifier, unnested_field));
+        unnested_fields.insert(index, unnested_field);
     }
 
     // Update the schema with the unnest column types changed to contain the nested types.
@@ -1587,7 +1587,7 @@ pub fn unnest_with_options(
         .iter()
         .enumerate()
         .map(|(index, (q, f))| match unnested_fields.get(&index) {
-            Some((_, unnested_field)) => (q.cloned(), unnested_field.clone()),
+            Some(unnested_field) => (q.cloned(), unnested_field.clone()),
             None => (q.cloned(), f.clone()),
         })
         .collect::<Vec<_>>();
