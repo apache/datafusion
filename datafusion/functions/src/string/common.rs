@@ -19,10 +19,10 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, BufferBuilder, GenericStringArray,
-    GenericStringBuilder, OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
+    OffsetSizeTrait,
 };
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -160,84 +160,44 @@ where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
 {
+    const PRE_ALLOC_BYTES: usize = 8;
+
     let string_array = as_generic_string_array::<O>(array)?;
-    let item_len = string_array.len();
-
-    // Find the first nonascii string at the beginning.
-    let find_the_first_nonascii = || {
-        for (i, item) in string_array.iter().enumerate() {
-            if let Some(str) = item {
-                if !str.as_bytes().is_ascii() {
-                    return i;
-                }
-            }
-        }
-        item_len
-    };
-    let the_first_nonascii_index = find_the_first_nonascii();
-
-    // Case1: maybe optimization
-    if the_first_nonascii_index == 0 {
-        let iter = string_array.iter().map(|string| string.map(&op));
-        let capacity = string_array.value_data().len() + 8;
-        let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
-        builder.extend(iter);
-        return Ok(Arc::new(builder.finish()));
-    }
-
-    // Case2: full optimization
-    if the_first_nonascii_index == item_len {
-        return case_conversion_ascii_array::<O, _>(array, op);
-    }
-
-    // Case3: partial optimization
     let value_data = string_array.value_data();
-    let offsets = string_array.offsets();
-    let nulls = string_array.nulls().cloned();
 
-    // Init new offsets buffer builder
-    let mut offsets_builder = BufferBuilder::<O>::new(item_len + 1);
-    offsets_builder.append_slice(&offsets.as_ref()[..the_first_nonascii_index + 1]);
-
-    // convert ascii
-    let end: O = unsafe { *offsets.get_unchecked(the_first_nonascii_index) };
-    let end = end.as_usize();
-    let ascii = unsafe { std::str::from_utf8_unchecked(&value_data[..end]) };
-    let mut converted_values = op(ascii);
-    // To avoid repeatedly allocating memory, perform a reserve in advance.
-    converted_values.reserve(value_data.len() - end + 8);
-
-    // Convert remaining items
-    for j in the_first_nonascii_index..item_len {
-        if string_array.is_valid(j) {
-            let item = unsafe { string_array.value_unchecked(j) };
-            // Memory will be continuously allocated here, but it is unavoidable.
-            let converted = op(item);
-            converted_values.push_str(&converted);
-        }
-        offsets_builder
-            .append(O::from_usize(converted_values.len()).expect("offset overflow"));
+    // All values are ASCII.
+    if value_data.is_ascii() {
+        return case_conversion_ascii_array::<O, _>(string_array, op);
     }
-    let offsets_buffer = offsets_builder.finish();
 
-    // Build result
-    let bytes = converted_values.into_bytes();
-    let values = Buffer::from_vec(bytes);
-    let offsets = OffsetBuffer::new(ScalarBuffer::new(offsets_buffer, 0, item_len + 1));
-    // SAFETY: offsets and nulls are consistent with the input array.
-    Ok(Arc::new(unsafe {
-        GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
-    }))
+    // Values contain non-ASCII.
+    let item_len = string_array.len();
+    let capacity = string_array.value_data().len() + PRE_ALLOC_BYTES;
+    let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+
+    if !string_array.is_nullable() || string_array.null_count() == 0 {
+        let iter =
+            (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
+        builder.extend(iter);
+    } else {
+        let iter = string_array.iter().map(|string| string.map(&op));
+        builder.extend(iter);
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
-fn case_conversion_ascii_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+/// All values of string_array are ASCII, and when converting case, there is no changes in the byte
+/// array length. Therefore, the StringArray can be treated as a complete ASCII string for
+/// case conversion, and we can reuse the offsets buffer and the nulls buffer.
+fn case_conversion_ascii_array<'a, O, F>(
+    string_array: &'a GenericStringArray<O>,
+    op: F,
+) -> Result<ArrayRef>
 where
     O: OffsetSizeTrait,
     F: Fn(&'a str) -> String,
 {
-    let string_array = as_generic_string_array::<O>(array)?;
     let value_data = string_array.value_data();
-
     // SAFETY: all items stored in value_data satisfy UTF8.
     // ref: impl ByteArrayNativeType for str {...}
     let str_values = unsafe { std::str::from_utf8_unchecked(value_data) };

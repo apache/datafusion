@@ -24,11 +24,19 @@ use datafusion_expr::ColumnarValue;
 use datafusion_functions::string;
 use std::sync::Arc;
 
+/// Create an array of args containing a StringArray, where all the values in the
+/// StringArray are ASCII.
+/// * `size` - the length of the StringArray, and
+/// * `str_len` - the length of the strings within the StringArray.
 fn create_args1(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
     vec![ColumnarValue::Array(array)]
 }
 
+/// Create an array of args containing a StringArray, where the first value in the
+/// StringArray is non-ASCII.
+/// * `size` - the length of the StringArray, and
+/// * `str_len` - the length of the strings within the StringArray.
 fn create_args2(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     items.push("农历新年".to_string());
@@ -39,6 +47,10 @@ fn create_args2(size: usize) -> Vec<ColumnarValue> {
     vec![ColumnarValue::Array(array)]
 }
 
+/// Create an array of args containing a StringArray, where the middle value of the
+/// StringArray is non-ASCII.
+/// * `size` - the length of the StringArray, and
+/// * `str_len` - the length of the strings within the StringArray.
 fn create_args3(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     let half = size / 2;
@@ -57,19 +69,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
-        c.bench_function(&format!("lower full optimization: {}", size), |b| {
+        c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
             b.iter(|| black_box(lower.invoke(&args)))
         });
 
         let args = create_args2(size);
-        c.bench_function(&format!("lower maybe optimization: {}", size), |b| {
-            b.iter(|| black_box(lower.invoke(&args)))
-        });
+        c.bench_function(
+            &format!("lower_the_first_value_is_nonascii: {}", size),
+            |b| b.iter(|| black_box(lower.invoke(&args))),
+        );
 
         let args = create_args3(size);
-        c.bench_function(&format!("lower partial optimization: {}", size), |b| {
-            b.iter(|| black_box(lower.invoke(&args)))
-        });
+        c.bench_function(
+            &format!("lower_the_middle_value_is_nonascii: {}", size),
+            |b| b.iter(|| black_box(lower.invoke(&args))),
+        );
     }
 }
 

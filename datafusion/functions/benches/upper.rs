@@ -23,6 +23,10 @@ use datafusion_expr::ColumnarValue;
 use datafusion_functions::string;
 use std::sync::Arc;
 
+/// Create an array of args containing a StringArray, where all the values in the
+/// StringArray are ASCII.
+/// * `size` - the length of the StringArray, and
+/// * `str_len` - the length of the strings within the StringArray.
 fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
     vec![ColumnarValue::Array(array)]
@@ -32,7 +36,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     let upper = string::upper();
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);
-        c.bench_function("upper", |b| b.iter(|| black_box(upper.invoke(&args))));
+        c.bench_function("upper_all_values_are_ascii", |b| {
+            b.iter(|| black_box(upper.invoke(&args)))
+        });
     }
 }
 
