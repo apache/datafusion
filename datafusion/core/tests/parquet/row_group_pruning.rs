@@ -1296,7 +1296,7 @@ async fn test_row_group_with_null_values() {
         .test_row_group_prune()
         .await;
 
-    // After pruning, only row group 2should be selected
+    // After pruning, only row group 2 should be selected
     RowGroupPruningTest::new()
         .with_scenario(Scenario::WithNullValues)
         .with_query("SELECT * FROM t WHERE \"i16\" is Not Null")

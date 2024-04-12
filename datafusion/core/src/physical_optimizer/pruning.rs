@@ -335,7 +335,7 @@ pub trait PruningStatistics {
 /// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
 /// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
 /// `x IS NULL`  | `x_null_count > 0`
-/// `x IS NOT NULL`  | `x_null_count = 0`
+/// `x IS NOT NULL`  | `!(x_null_count = row_count)`
 /// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
 ///
 /// ## Predicate Evaluation
@@ -1241,9 +1241,11 @@ fn build_single_column_expr(
 /// if the column may contain null, and false if definitely does not
 /// contain null.
 /// If set `with_not` to true: which means is not null
+/// because datafusion use false flag of expr result to prune unit (row group, page ..)
 /// Given an expression reference to `expr`, if `expr` is a column expression,
 /// returns a pruning expression in terms of IsNotNull that will evaluate to true
-/// if the column not contain any null, and false if definitely contain null.
+/// if the column may contain any non-null values, and false if definitely does not contain
+/// non-null values null as all null values.
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
@@ -1254,26 +1256,39 @@ fn build_is_null_column_expr(
         let field = schema.field_with_name(col.name()).ok()?;
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
-        required_columns
-            .null_count_column_expr(col, expr, null_count_field)
-            .map(|null_count_column_expr| {
-                if with_not {
-                    // IsNotNull(column) => null_count = 0
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        null_count_column_expr,
-                        Operator::Eq,
-                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
-                    )) as _
-                } else {
+        if with_not {
+            if let Ok(row_count_expr) =
+                required_columns.row_count_column_expr(col, expr, null_count_field)
+            {
+                required_columns
+                    .null_count_column_expr(col, expr, null_count_field)
+                    .map(|null_count_column_expr| {
+                        // IsNotNull(column) => null_count == row_count
+                        // but use false to prune the whole unit so need add the negate
+                        let equal_expr = Arc::new(phys_expr::BinaryExpr::new(
+                            null_count_column_expr,
+                            Operator::Eq,
+                            row_count_expr,
+                        ));
+                        Arc::new(phys_expr::NotExpr::new(equal_expr)) as _
+                    })
+                    .ok()
+            } else {
+                return None;
+            }
+        } else {
+            required_columns
+                .null_count_column_expr(col, expr, null_count_field)
+                .map(|null_count_column_expr| {
                     // IsNull(column) => null_count > 0
                     Arc::new(phys_expr::BinaryExpr::new(
                         null_count_column_expr,
                         Operator::Gt,
                         Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
                     )) as _
-                }
-            })
-            .ok()
+                })
+                .ok()
+        }
     } else {
         None
     }

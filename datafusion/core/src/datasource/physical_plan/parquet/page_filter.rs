@@ -27,6 +27,7 @@ use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use itertools::Itertools;
 use log::{debug, trace};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -314,6 +315,7 @@ fn prune_pages_in_one_row_group(
             col_page_indexes,
             col_offset_indexes,
             target_type: &target_type,
+            num_rows_in_row_group: group.num_rows(),
         };
 
         match predicate.prune(&pruning_stats) {
@@ -385,6 +387,7 @@ struct PagesPruningStatistics<'a> {
     // target_type means the logical type in schema: like 'DECIMAL' is the logical type, but the
     // real physical type in parquet file may be `INT32, INT64, FIXED_LEN_BYTE_ARRAY`
     target_type: &'a Option<DataType>,
+    num_rows_in_row_group: i64,
 }
 
 // Extract the min or max value calling `func` from page idex
@@ -548,7 +551,20 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     }
 
     fn row_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        None
+        // see https://github.com/apache/arrow-rs/blob/91f0b1771308609ca27db0fb1d2d49571b3980d8/parquet/src/file/metadata.rs#L979-L982
+        let mut first_row_index = self
+            .col_offset_indexes
+            .iter()
+            .map(|i| i.first_row_index)
+            .collect_vec();
+        first_row_index.push(self.num_rows_in_row_group);
+
+        let row_count_per_page: Vec<_> = first_row_index
+            .windows(2)
+            .map(|window| Some(window[1] - window[0]))
+            .collect();
+
+        Some(Arc::new(Int64Array::from_iter(row_count_per_page)))
     }
 
     fn contained(
