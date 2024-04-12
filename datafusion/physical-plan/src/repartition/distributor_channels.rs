@@ -56,16 +56,7 @@ pub fn channels<T>(
     n: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
     let channels = (0..n)
-        .map(|id| {
-            Arc::new(Channel {
-                n_senders: AtomicUsize::new(1),
-                id,
-                state: Mutex::new(ChannelState {
-                    data: Some(VecDeque::default()),
-                    recv_wakers: Some(Vec::default()),
-                }),
-            })
-        })
+        .map(|id| Arc::new(Channel::new_with_one_sender(id)))
         .collect::<Vec<_>>();
     let gate = Arc::new(Gate {
         empty_channels: AtomicUsize::new(n),
@@ -160,6 +151,7 @@ impl<T> Clone for DistributionSender<T> {
 impl<T> Drop for DistributionSender<T> {
     fn drop(&mut self) {
         let n_senders_pre = self.channel.n_senders.fetch_sub(1, Ordering::SeqCst);
+        // is the the last copy of the sender side?
         if n_senders_pre > 1 {
             return;
         }
@@ -167,7 +159,20 @@ impl<T> Drop for DistributionSender<T> {
         let receivers = {
             let mut state = self.channel.state.lock();
 
-            // Note: the recv_alive check is so that we don't double-clear the status
+            // During the shutdown of a empty channel, both the sender and the receiver side will be dropped. However we
+            // only want to decrement the "empty channels" counter once.
+            //
+            // We are within a critical section here, so we we can safely assume that either the last sender or the
+            // receiver (there's only one) will be dropped first.
+            //
+            // If the last sender is dropped first, `state.data` will still exists and the sender side decrements the
+            // signal. The receiver side then MUST check the `n_senders` counter during the section and if it is zero,
+            // it inferres that it is dropped afterwards and MUST NOT decrement the counter.
+            //
+            // If the receiver end is dropped first, it will inferr -- based on `n_senders` -- that there are still
+            // senders and it will decrement the `empty_channels` counter. It will also set `data` to `None`. The sender
+            // side will then see that `data` is `None` and can therefore inferr that the receiver end was dropped, and
+            // hence it MUST NOT decrement the `empty_channels` counter.
             if state
                 .data
                 .as_ref()
@@ -231,14 +236,7 @@ impl<'a, T> Future for SendFuture<'a, T> {
 
             if was_empty {
                 this.gate.decr_empty_channels();
-
-                let to_wake = guard_channel_state
-                    .recv_wakers
-                    .as_mut()
-                    .expect("not closed");
-                let mut tmp = Vec::with_capacity(to_wake.capacity());
-                std::mem::swap(to_wake, &mut tmp);
-                tmp
+                guard_channel_state.take_recv_wakers()
             } else {
                 Vec::with_capacity(0)
             }
@@ -278,7 +276,8 @@ impl<T> Drop for DistributionReceiver<T> {
         let mut guard_channel_state = self.channel.state.lock();
         let data = guard_channel_state.data.take().expect("not dropped yet");
 
-        // Note: n_senders check is here so we don't double-clear the signal
+        // See `DistributedSender::drop` for an explanation of the drop order and when the "empty channels" counter is
+        // decremented.
         if data.is_empty() && (self.channel.n_senders.load(Ordering::SeqCst) > 0) {
             // channel is gone, so we need to clear our signal
             self.gate.decr_empty_channels();
@@ -317,7 +316,14 @@ impl<'a, T> Future for RecvFuture<'a, T> {
 
                     // open gate?
                     let to_wake = if old_counter == 0 {
-                        this.gate.send_wakers.lock().take().unwrap_or_default()
+                        let mut guard = this.gate.send_wakers.lock();
+
+                        // check after lock to see if we should still change the state
+                        if this.gate.empty_channels.load(Ordering::SeqCst) > 0 {
+                            guard.take().unwrap_or_default()
+                        } else {
+                            Vec::with_capacity(0)
+                        }
                     } else {
                         Vec::with_capacity(0)
                     };
@@ -361,18 +367,47 @@ struct Channel<T> {
     state: Mutex<ChannelState<T>>,
 }
 
+impl<T> Channel<T> {
+    /// Create new channel with one sender (so we don't need to [fetch-add](AtomicUsize::fetch_add) directly afterwards).
+    fn new_with_one_sender(id: usize) -> Self {
+        Channel {
+            n_senders: AtomicUsize::new(1),
+            id,
+            state: Mutex::new(ChannelState {
+                data: Some(VecDeque::default()),
+                recv_wakers: Some(Vec::default()),
+            }),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ChannelState<T> {
     /// Buffered data.
     ///
-    /// This is `None` when the receiver is gone.
+    /// This is [`None`] when the receiver is gone.
     data: Option<VecDeque<T>>,
 
     /// Wakers for the receiver side.
     ///
     /// The receiver will be pending if the [buffer](Self::data) is empty and
-    /// there are senders left (otherwise this is set to `None`).
+    /// there are senders left (otherwise this is set to [`None`]).
     recv_wakers: Option<Vec<Waker>>,
+}
+
+impl<T> ChannelState<T> {
+    /// Get all [`recv_wakers`](Self::recv_wakers) and replace with identically-sized buffer.
+    ///
+    /// The wakers should be woken AFTER the lock to [this state](Self) was dropped.
+    ///
+    /// # Panics
+    /// Assumes that channel is NOT closed yet, i.e. that [`recv_wakers`](Self::recv_wakers) is not [`None`].
+    fn take_recv_wakers(&mut self) -> Vec<Waker> {
+        let to_wake = self.recv_wakers.as_mut().expect("not closed");
+        let mut tmp = Vec::with_capacity(to_wake.capacity());
+        std::mem::swap(to_wake, &mut tmp);
+        tmp
+    }
 }
 
 /// Shared channel.
@@ -425,7 +460,9 @@ impl Gate {
 
         if old_count == 1 {
             let mut guard = self.send_wakers.lock();
-            if guard.is_none() {
+
+            // double-check state during lock
+            if self.empty_channels.load(Ordering::SeqCst) == 0 && guard.is_none() {
                 *guard = Some(Vec::new());
             }
         }
@@ -644,6 +681,52 @@ mod tests {
         assert_eq!(counter.strong_count(), 0);
     }
 
+    /// Ensure that polling "pending" futures work even when you poll them too often (which happens under some circumstances).
+    #[test]
+    fn test_poll_empty_channel_twice() {
+        let (txs, mut rxs) = channels(1);
+
+        let mut recv_fut = rxs[0].recv();
+        let waker_1a = poll_pending(&mut recv_fut);
+        let waker_1b = poll_pending(&mut recv_fut);
+
+        let mut recv_fut = rxs[0].recv();
+        let waker_2 = poll_pending(&mut recv_fut);
+
+        poll_ready(&mut txs[0].send("a")).unwrap();
+        assert!(waker_1a.woken());
+        assert!(waker_1b.woken());
+        assert!(waker_2.woken());
+        assert_eq!(poll_ready(&mut recv_fut), Some("a"),);
+
+        poll_ready(&mut txs[0].send("b")).unwrap();
+        let mut send_fut = txs[0].send("c");
+        let waker_3 = poll_pending(&mut send_fut);
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("b"),);
+        assert!(waker_3.woken());
+        poll_ready(&mut send_fut).unwrap();
+        assert_eq!(poll_ready(&mut rxs[0].recv()), Some("c"));
+
+        let mut recv_fut = rxs[0].recv();
+        let waker_4 = poll_pending(&mut recv_fut);
+
+        let mut recv_fut = rxs[0].recv();
+        let waker_5 = poll_pending(&mut recv_fut);
+
+        poll_ready(&mut txs[0].send("d")).unwrap();
+        let mut send_fut = txs[0].send("e");
+        let waker_6a = poll_pending(&mut send_fut);
+        let waker_6b = poll_pending(&mut send_fut);
+
+        assert!(waker_4.woken());
+        assert!(waker_5.woken());
+        assert_eq!(poll_ready(&mut recv_fut), Some("d"),);
+
+        assert!(waker_6a.woken());
+        assert!(waker_6b.woken());
+        poll_ready(&mut send_fut).unwrap();
+    }
+
     #[test]
     #[should_panic(expected = "polled ready future")]
     fn test_panic_poll_send_future_after_ready_ok() {
@@ -703,6 +786,7 @@ mod tests {
         poll_pending(&mut fut);
     }
 
+    /// Test [`poll_pending`] (i.e. the testing utils, not the actual library code).
     #[test]
     fn test_meta_poll_pending_waker() {
         let (tx, mut rx) = futures::channel::oneshot::channel();
