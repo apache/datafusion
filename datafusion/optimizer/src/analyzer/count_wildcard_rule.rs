@@ -89,6 +89,7 @@ mod tests {
         max, out_ref_col, scalar_subquery, wildcard, AggregateFunction, Expr,
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
+    use std::sync::Arc;
 
     fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
