@@ -278,17 +278,20 @@ instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
 of the following crates:
 
-- [datafusion](https://crates.io/crates/datafusion)
-- [datafusion-cli](https://crates.io/crates/datafusion-cli)
 - [datafusion-common](https://crates.io/crates/datafusion-common)
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
-- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
-- [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-execution](https://crates.io/crates/datafusion-execution)
-- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
+- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
+- [datafusion-functions](https://crates.io/crates/datafusion-functions)
+- [datafusion-functions-array](https://crates.io/crates/datafusion-functions-array)
 - [datafusion-sql](https://crates.io/crates/datafusion-sql)
 - [datafusion-optimizer](https://crates.io/crates/datafusion-optimizer)
+- [datafusion-common-runtime](https://crates.io/crates/datafusion-common-runtime)
+- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
+- [datafusion](https://crates.io/crates/datafusion)
+- [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-substrait](https://crates.io/crates/datafusion-substrait)
+- [datafusion-cli](https://crates.io/crates/datafusion-cli)
 
 Download and unpack the official release tarball
 
@@ -311,10 +314,13 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```shell
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
-(cd datafusion/sql && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
-(cd datafusion/optimizer && cargo publish)
 (cd datafusion/execution && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
+(cd datafusion/functions && cargo publish)
+(cd datafusion/functions-array && cargo publish)
+(cd datafusion/sql && cargo publish)
+(cd datafusion/optimizer && cargo publish)
+(cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)

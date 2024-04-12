@@ -25,17 +25,14 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::change_redundant_column;
-use crate::expr::{
-    Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
-};
+use crate::expr::{Alias, Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
-    split_conjunction,
+    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
@@ -45,7 +42,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
@@ -66,6 +63,11 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
+///
+/// # See also:
+/// * [`tree_node`]: visiting and rewriting API
+///
+/// [`tree_node`]: crate::logical_plan::tree_node
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -236,7 +238,10 @@ impl LogicalPlan {
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
-    /// logical plan node. This does not include expressions in any children
+    /// logical plan node. This does not include expressions in any children.
+    ///
+    /// Note this method `clone`s all the expressions. When possible, the
+    /// [`tree_node`] API should be used instead of this API.
     ///
     /// The returned expressions do not necessarily represent or even
     /// contributed to the output schema of this node. For example,
@@ -246,11 +251,13 @@ impl LogicalPlan {
     /// The expressions do contain all the columns that are used by this plan,
     /// so if there are columns not referenced by these expressions then
     /// DataFusion's optimizer attempts to optimize them away.
+    ///
+    /// [`tree_node`]: crate::logical_plan::tree_node
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
-        self.inspect_expressions(|e| {
+        self.apply_expressions(|e| {
             exprs.push(e.clone());
-            Ok(()) as Result<()>
+            Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK
         .unwrap();
@@ -261,13 +268,13 @@ impl LogicalPlan {
     /// logical plan nodes and all its descendant nodes.
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
-        self.inspect_expressions(|e| {
+        self.apply_expressions(|e| {
             find_out_reference_exprs(e).into_iter().for_each(|e| {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }
             });
-            Ok(()) as Result<(), DataFusionError>
+            Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK
         .unwrap();
@@ -282,96 +289,30 @@ impl LogicalPlan {
         exprs
     }
 
-    /// Calls `f` on all expressions (non-recursively) in the current
-    /// logical plan node. This does not include expressions in any
-    /// children.
+    #[deprecated(since = "37.0.0", note = "Use `apply_expressions` instead")]
     pub fn inspect_expressions<F, E>(self: &LogicalPlan, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Expr) -> Result<(), E>,
     {
-        match self {
-            LogicalPlan::Projection(Projection { expr, .. }) => {
-                expr.iter().try_for_each(f)
+        let mut err = Ok(());
+        self.apply_expressions(|e| {
+            if let Err(e) = f(e) {
+                // save the error for later (it may not be a DataFusionError
+                err = Err(e);
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
             }
-            LogicalPlan::Values(Values { values, .. }) => {
-                values.iter().flatten().try_for_each(f)
-            }
-            LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
-            LogicalPlan::Repartition(Repartition {
-                partitioning_scheme,
-                ..
-            }) => match partitioning_scheme {
-                Partitioning::Hash(expr, _) => expr.iter().try_for_each(f),
-                Partitioning::DistributeBy(expr) => expr.iter().try_for_each(f),
-                Partitioning::RoundRobinBatch(_) => Ok(()),
-            },
-            LogicalPlan::Window(Window { window_expr, .. }) => {
-                window_expr.iter().try_for_each(f)
-            }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => group_expr.iter().chain(aggr_expr.iter()).try_for_each(f),
-            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
-            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
-            // 2. the second part is non-equijoin(filter).
-            LogicalPlan::Join(Join { on, filter, .. }) => {
-                on.iter()
-                    // it not ideal to create an expr here to analyze them, but could cache it on the Join itself
-                    .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
-                    .try_for_each(|e| f(&e))?;
+        })
+        // The closure always returns OK, so this will always too
+        .expect("no way to return error during recursion");
 
-                if let Some(filter) = filter.as_ref() {
-                    f(filter)
-                } else {
-                    Ok(())
-                }
-            }
-            LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().try_for_each(f),
-            LogicalPlan::Extension(extension) => {
-                // would be nice to avoid this copy -- maybe can
-                // update extension to just observer Exprs
-                extension.node.expressions().iter().try_for_each(f)
-            }
-            LogicalPlan::TableScan(TableScan { filters, .. }) => {
-                filters.iter().try_for_each(f)
-            }
-            LogicalPlan::Unnest(Unnest { column, .. }) => {
-                f(&Expr::Column(column.clone()))
-            }
-            LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                on_expr,
-                select_expr,
-                sort_expr,
-                ..
-            })) => on_expr
-                .iter()
-                .chain(select_expr.iter())
-                .chain(sort_expr.clone().unwrap_or(vec![]).iter())
-                .try_for_each(f),
-            // plans without expressions
-            LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(Distinct::All(_))
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_) => Ok(()),
-        }
+        err
     }
 
-    /// returns all inputs of this `LogicalPlan` node. Does not
-    /// include inputs to inputs, or subqueries.
+    /// Returns all inputs / children of this `LogicalPlan` node.
+    ///
+    /// Note does not include inputs to inputs, or subqueries.
     pub fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
@@ -417,7 +358,7 @@ impl LogicalPlan {
     pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
-        self.apply(&mut |plan| {
+        self.apply_with_subqueries(&mut |plan| {
             if let LogicalPlan::Join(Join {
                 join_constraint: JoinConstraint::Using,
                 on,
@@ -529,9 +470,15 @@ impl LogicalPlan {
     /// Returns a new `LogicalPlan` based on `self` with inputs and
     /// expressions replaced.
     ///
+    /// Note this method creates an entirely new node, which requires a large
+    /// amount of clone'ing. When possible, the [`tree_node`] API should be used
+    /// instead of this API.
+    ///
     /// The exprs correspond to the same order of expressions returned
     /// by [`Self::expressions`]. This function is used by optimizers
     /// to rewrite plans using the following pattern:
+    ///
+    /// [`tree_node`]: crate::logical_plan::tree_node
     ///
     /// ```text
     /// let new_inputs = optimize_children(..., plan, props);
@@ -1077,61 +1024,24 @@ impl LogicalPlan {
             | LogicalPlan::Extension(_) => None,
         }
     }
+
+    /// If this node's expressions contains any references to an outer subquery
+    pub fn contains_outer_reference(&self) -> bool {
+        let mut contains = false;
+        self.apply_expressions(|expr| {
+            Ok(if expr.contains_outer() {
+                contains = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+        contains
+    }
 }
 
 impl LogicalPlan {
-    /// applies `op` to any subqueries in the plan
-    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> Result<()>
-    where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
-    {
-        self.inspect_expressions(|expr| {
-            // recursively look for subqueries
-            inspect_expr_pre(expr, |expr| {
-                match expr {
-                    Expr::Exists(Exists { subquery, .. })
-                    | Expr::InSubquery(InSubquery { subquery, .. })
-                    | Expr::ScalarSubquery(subquery) => {
-                        // use a synthetic plan so the collector sees a
-                        // LogicalPlan::Subquery (even though it is
-                        // actually a Subquery alias)
-                        let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                        synthetic_plan.apply(op)?;
-                    }
-                    _ => {}
-                }
-                Ok::<(), DataFusionError>(())
-            })
-        })?;
-        Ok(())
-    }
-
-    /// applies visitor to any subqueries in the plan
-    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> Result<()>
-    where
-        V: TreeNodeVisitor<Node = LogicalPlan>,
-    {
-        self.inspect_expressions(|expr| {
-            // recursively look for subqueries
-            inspect_expr_pre(expr, |expr| {
-                match expr {
-                    Expr::Exists(Exists { subquery, .. })
-                    | Expr::InSubquery(InSubquery { subquery, .. })
-                    | Expr::ScalarSubquery(subquery) => {
-                        // use a synthetic plan so the visitor sees a
-                        // LogicalPlan::Subquery (even though it is
-                        // actually a Subquery alias)
-                        let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                        synthetic_plan.visit(v)?;
-                    }
-                    _ => {}
-                }
-                Ok::<(), DataFusionError>(())
-            })
-        })?;
-        Ok(())
-    }
-
     /// Return a `LogicalPlan` with all placeholders (e.g $1 $2,
     /// ...) replaced with corresponding values provided in
     /// `params_values`
@@ -1165,8 +1075,8 @@ impl LogicalPlan {
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
-        self.apply(&mut |plan| {
-            plan.inspect_expressions(|expr| {
+        self.apply_with_subqueries(&mut |plan| {
+            plan.apply_expressions(|expr| {
                 expr.apply(&mut |expr| {
                     if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);
@@ -1183,13 +1093,10 @@ impl LogicalPlan {
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
-                })?;
-                Ok::<(), DataFusionError>(())
-            })?;
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-
-        Ok(param_types)
+                })
+            })
+        })
+        .map(|_| param_types)
     }
 
     /// Return an Expr with all placeholders replaced with their
@@ -1218,10 +1125,11 @@ impl LogicalPlan {
         })
         .data()
     }
-}
 
-// Various implementations for printing out LogicalPlans
-impl LogicalPlan {
+    // ------------
+    // Various implementations for printing out LogicalPlans
+    // ------------
+
     /// Return a `format`able structure that produces a single line
     /// per node.
     ///
@@ -1257,7 +1165,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.visit(&mut visitor) {
+                match self.0.visit_with_subqueries(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -1300,7 +1208,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.visit(&mut visitor) {
+                match self.0.visit_with_subqueries(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -1320,7 +1228,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = PgJsonVisitor::new(f);
                 visitor.with_schema(true);
-                match self.0.visit(&mut visitor) {
+                match self.0.visit_with_subqueries(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -1369,12 +1277,16 @@ impl LogicalPlan {
                 visitor.start_graph()?;
 
                 visitor.pre_visit_plan("LogicalPlan")?;
-                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0
+                    .visit_with_subqueries(&mut visitor)
+                    .map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 visitor.set_with_schema(true);
                 visitor.pre_visit_plan("Detailed LogicalPlan")?;
-                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0
+                    .visit_with_subqueries(&mut visitor)
+                    .map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 visitor.end_graph()?;
@@ -2215,7 +2127,7 @@ pub struct Prepare {
 /// # Example output:
 ///
 /// ```sql
-/// ❯ describe traces;
+/// > describe traces;
 /// +--------------------+-----------------------------+-------------+
 /// | column_name        | data_type                   | is_nullable |
 /// +--------------------+-----------------------------+-------------+
@@ -2908,7 +2820,7 @@ digraph {
     fn visit_order() {
         let mut visitor = OkVisitor::default();
         let plan = test_plan();
-        let res = plan.visit(&mut visitor);
+        let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2984,7 +2896,7 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor);
+        let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -3000,7 +2912,7 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor);
+        let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -3051,7 +2963,7 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor).unwrap_err();
+        let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
         assert_eq!(
             "This feature is not implemented: Error in pre_visit",
             res.strip_backtrace()
@@ -3069,7 +2981,7 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor).unwrap_err();
+        let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
         assert_eq!(
             "This feature is not implemented: Error in post_visit",
             res.strip_backtrace()

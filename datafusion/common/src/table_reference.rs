@@ -18,7 +18,7 @@
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use std::sync::Arc;
 
-/// A resolved path to a table of the form "catalog.schema.table"
+/// A fully resolved path to a table of the form "catalog.schema.table"
 #[derive(Debug, Clone)]
 pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
@@ -35,17 +35,20 @@ impl std::fmt::Display for ResolvedTableReference {
     }
 }
 
-/// [`TableReference`]s represent a multi part identifier (path) to a
-/// table that may require further resolution.
+/// A multi part identifier (path) to a table that may require further
+/// resolution (e.g. `foo.bar`).
+///
+/// [`TableReference`]s are cheap to `clone()` as they are implemented with
+/// `Arc`.
+///
+/// See [`ResolvedTableReference`] for a fully resolved table reference.
 ///
 /// # Creating [`TableReference`]
 ///
-/// When converting strings to [`TableReference`]s, the string is
-/// parsed as though it were a SQL identifier, normalizing (convert to
-/// lowercase) any unquoted identifiers.
-///
-/// See [`TableReference::bare`] to create references without applying
-/// normalization semantics
+/// When converting strings to [`TableReference`]s, the string is parsed as
+/// though it were a SQL identifier, normalizing (convert to lowercase) any
+/// unquoted identifiers.  [`TableReference::bare`] creates references without
+/// applying normalization semantics.
 ///
 /// # Examples
 /// ```
@@ -116,7 +119,7 @@ impl TableReference {
 
     /// Convenience method for creating a [`TableReference::Bare`]
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at
+    /// As described on [`TableReference`] this does *NO* normalization at
     /// all, so "Foo.Bar" stays as a reference to the table named
     /// "Foo.Bar" (rather than "foo"."bar")
     pub fn bare(table: impl Into<Arc<str>>) -> TableReference {
@@ -127,7 +130,7 @@ impl TableReference {
 
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at all.
+    /// Note: *NO* normalization is applied to the schema or table name.
     pub fn partial(
         schema: impl Into<Arc<str>>,
         table: impl Into<Arc<str>>,
@@ -140,7 +143,8 @@ impl TableReference {
 
     /// Convenience method for creating a [`TableReference::Full`]
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at all.
+    /// Note: *NO* normalization is applied to the catalog, schema or table
+    /// name.
     pub fn full(
         catalog: impl Into<Arc<str>>,
         schema: impl Into<Arc<str>>,
@@ -153,7 +157,7 @@ impl TableReference {
         }
     }
 
-    /// Retrieve the actual table name, regardless of qualification
+    /// Retrieve the table name, regardless of qualification.
     pub fn table(&self) -> &str {
         match self {
             Self::Full { table, .. }
@@ -162,7 +166,8 @@ impl TableReference {
         }
     }
 
-    /// Retrieve the schema name if in the `Partial` or `Full` qualification
+    /// Retrieve the schema name if [`Self::Partial]` or [`Self::`Full`],
+    /// `None` otherwise.
     pub fn schema(&self) -> Option<&str> {
         match self {
             Self::Full { schema, .. } | Self::Partial { schema, .. } => Some(schema),
@@ -170,7 +175,7 @@ impl TableReference {
         }
     }
 
-    /// Retrieve the catalog name if in the `Full` qualification
+    /// Retrieve the catalog name if  [`Self::Full`], `None` otherwise.
     pub fn catalog(&self) -> Option<&str> {
         match self {
             Self::Full { catalog, .. } => Some(catalog),
@@ -179,7 +184,7 @@ impl TableReference {
     }
 
     /// Compare with another [`TableReference`] as if both are resolved.
-    /// This allows comparing across variants, where if a field is not present
+    /// This allows comparing across variants. If a field is not present
     /// in both variants being compared then it is ignored in the comparison.
     ///
     /// e.g. this allows a [`TableReference::Bare`] to be considered equal to a
@@ -203,7 +208,8 @@ impl TableReference {
         }
     }
 
-    /// Given a default catalog and schema, ensure this table reference is fully resolved
+    /// Given a default catalog and schema, ensure this table reference is fully
+    /// resolved
     pub fn resolve(
         self,
         default_catalog: &str,

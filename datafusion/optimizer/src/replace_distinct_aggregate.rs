@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ReplaceDistinctWithAggregate`] replaces `DISTINCT ...` with `GROUP BY ...`
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -171,7 +172,7 @@ mod tests {
 
         assert_optimized_plan_eq(
             Arc::new(ReplaceDistinctWithAggregate::new()),
-            &plan,
+            plan,
             expected,
         )
     }
@@ -194,7 +195,7 @@ mod tests {
 
         assert_optimized_plan_eq(
             Arc::new(ReplaceDistinctWithAggregate::new()),
-            &plan,
+            plan,
             expected,
         )
     }

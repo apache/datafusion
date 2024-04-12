@@ -940,7 +940,8 @@ SELECT str, n, substring_index(str, '.', n) AS c FROM
   (VALUES
     ROW('arrow.apache.org'),
     ROW('.'),
-    ROW('...')
+    ROW('...'),
+    ROW(NULL)
   ) AS strings(str),
   (VALUES
     ROW(1),
@@ -954,6 +955,14 @@ SELECT str, n, substring_index(str, '.', n) AS c FROM
   ) AS occurrences(n)
 ORDER BY str DESC, n;
 ----
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
 arrow.apache.org -100 arrow.apache.org
 arrow.apache.org -3 arrow.apache.org
 arrow.apache.org -2 apache.org

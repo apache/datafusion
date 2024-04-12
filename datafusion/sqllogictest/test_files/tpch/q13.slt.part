@@ -43,7 +43,7 @@ logical_plan
 Limit: skip=0, fetch=10
 --Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
 ----Projection: c_orders.c_count, COUNT(*) AS custdist
-------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 --------SubqueryAlias: c_orders
 ----------Projection: COUNT(orders.o_orderkey) AS c_count
 ------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]

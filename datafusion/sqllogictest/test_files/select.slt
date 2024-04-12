@@ -1373,7 +1373,7 @@ ORDER BY c1, c2)
 GROUP BY c2;
 ----
 logical_plan
-Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 --Projection: aggregate_test_100.c2
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
 ------Projection: aggregate_test_100.c2, aggregate_test_100.c1

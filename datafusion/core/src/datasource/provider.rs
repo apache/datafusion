@@ -96,6 +96,10 @@ pub trait TableProvider: Sync + Send {
     /// which *all* of the `Expr`s evaluate to `true` must be returned (aka the
     /// expressions are `AND`ed together).
     ///
+    /// To enable filter pushdown you must override
+    /// [`Self::supports_filters_pushdown`] as the default implementation does
+    /// not and `filters` will be empty.
+    ///
     /// DataFusion pushes filtering into the scans whenever possible
     /// ("Filter Pushdown"), and depending on the format and the
     /// implementation of the format, evaluating the predicate during the scan
@@ -154,28 +158,94 @@ pub trait TableProvider: Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Tests whether the table provider can make use of a filter expression
-    /// to optimise data retrieval.
-    #[deprecated(since = "20.0.0", note = "use supports_filters_pushdown instead")]
-    fn supports_filter_pushdown(
-        &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Unsupported)
-    }
-
-    /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
-    /// Note:  the returned vector much have the same size as the filters argument.
-    #[allow(deprecated)]
+    /// Specify if DataFusion should provide filter expressions to the
+    /// TableProvider to apply *during* the scan.
+    ///
+    /// Some TableProviders can evaluate filters more efficiently than the
+    /// `Filter` operator in DataFusion, for example by using an index.
+    ///
+    /// # Parameters and Return Value
+    ///
+    /// The return `Vec` must have one element for each element of the `filters`
+    /// argument. The value of each element indicates if the TableProvider can
+    /// apply the corresponding filter during the scan. The position in the return
+    /// value corresponds to the expression in the `filters` parameter.
+    ///
+    /// If the length of the resulting `Vec` does not match the `filters` input
+    /// an error will be thrown.
+    ///
+    /// Each element in the resulting `Vec` is one of the following:
+    /// * [`Exact`] or [`Inexact`]: The TableProvider can apply the filter
+    /// during scan
+    /// * [`Unsupported`]: The TableProvider cannot apply the filter during scan
+    ///
+    /// By default, this function returns [`Unsupported`] for all filters,
+    /// meaning no filters will be provided to [`Self::scan`].
+    ///
+    /// [`Unsupported`]: TableProviderFilterPushDown::Unsupported
+    /// [`Exact`]: TableProviderFilterPushDown::Exact
+    /// [`Inexact`]: TableProviderFilterPushDown::Inexact
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::any::Any;
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::SchemaRef;
+    /// # use async_trait::async_trait;
+    /// # use datafusion::datasource::TableProvider;
+    /// # use datafusion::error::{Result, DataFusionError};
+    /// # use datafusion::execution::context::SessionState;
+    /// # use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// // Define a struct that implements the TableProvider trait
+    /// struct TestDataSource {}
+    ///
+    /// #[async_trait]
+    /// impl TableProvider for TestDataSource {
+    /// # fn as_any(&self) -> &dyn Any { todo!() }
+    /// # fn schema(&self) -> SchemaRef { todo!() }
+    /// # fn table_type(&self) -> TableType { todo!() }
+    /// # async fn scan(&self, s: &SessionState, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         todo!()
+    /// # }
+    ///     // Override the supports_filters_pushdown to evaluate which expressions
+    ///     // to accept as pushdown predicates.
+    ///     fn supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
+    ///         // Process each filter
+    ///         let support: Vec<_> = filters.iter().map(|expr| {
+    ///           match expr {
+    ///             // This example only supports a between expr with a single column named "c1".
+    ///             Expr::Between(between_expr) => {
+    ///                 between_expr.expr
+    ///                 .try_into_col()
+    ///                 .map(|column| {
+    ///                     if column.name == "c1" {
+    ///                         TableProviderFilterPushDown::Exact
+    ///                     } else {
+    ///                         TableProviderFilterPushDown::Unsupported
+    ///                     }
+    ///                 })
+    ///                 // If there is no column in the expr set the filter to unsupported.
+    ///                 .unwrap_or(TableProviderFilterPushDown::Unsupported)
+    ///             }
+    ///             _ => {
+    ///                 // For all other cases return Unsupported.
+    ///                 TableProviderFilterPushDown::Unsupported
+    ///             }
+    ///         }
+    ///     }).collect();
+    ///     Ok(support)
+    ///     }
+    /// }
+    /// ```
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        filters
-            .iter()
-            .map(|f| self.supports_filter_pushdown(f))
-            .collect()
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
     }
 
     /// Get statistics for this table, if available

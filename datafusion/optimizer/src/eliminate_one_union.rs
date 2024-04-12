@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to eliminate one union.
+//! [`EliminateOneUnion`]  eliminates single element `Union`
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{LogicalPlan, Union};
@@ -76,7 +76,7 @@ mod tests {
         ])
     }
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_with_rules(
             vec![Arc::new(EliminateOneUnion::new())],
             plan,
@@ -97,7 +97,7 @@ mod tests {
         Union\
         \n  TableScan: table\
         \n  TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -113,6 +113,6 @@ mod tests {
         });
 
         let expected = "TableScan: table";
-        assert_optimized_plan_equal(&single_union_plan, expected)
+        assert_optimized_plan_equal(single_union_plan, expected)
     }
 }

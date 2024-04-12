@@ -19,13 +19,13 @@ use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
+use datafusion::common::config::{
+    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
+};
 use datafusion::common::{exec_datafusion_err, exec_err, internal_err};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::{
-    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
-};
 
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;

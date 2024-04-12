@@ -41,7 +41,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
-use datafusion_common::FileType;
+use datafusion::common::FileType;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -131,7 +131,7 @@ pub async fn exec_from_repl(
     rl.load_history(".history").ok();
 
     loop {
-        match rl.readline("❯ ") {
+        match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end())?;
                 let command = line.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -350,8 +350,8 @@ pub(crate) async fn register_object_store_and_config_extensions(
 mod tests {
     use super::*;
 
-    use datafusion_common::config::FormatOptions;
-    use datafusion_common::plan_err;
+    use datafusion::common::config::FormatOptions;
+    use datafusion::common::plan_err;
 
     use url::Url;
 

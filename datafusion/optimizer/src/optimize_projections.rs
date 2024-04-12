@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to prune unnecessary columns from intermediate schemas
-//! inside the [`LogicalPlan`]. This rule:
-//! - Removes unnecessary columns that do not appear at the output and/or are
-//!   not used during any computation step.
-//! - Adds projections to decrease table column size before operators that
-//!   benefit from a smaller memory footprint at its input.
-//! - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
+//! [`OptimizeProjections`] identifies and eliminates unused columns
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,11 +34,17 @@ use datafusion_expr::{
     Expr, Projection, TableScan, Window,
 };
 
-use datafusion_expr::utils::inspect_expr_pre;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
-/// A rule for optimizing logical plans by removing unused columns/fields.
+/// Optimizer rule to prune unnecessary columns from intermediate schemas
+/// inside the [`LogicalPlan`]. This rule:
+/// - Removes unnecessary columns that do not appear at the output and/or are
+///   not used during any computation step.
+/// - Adds projections to decrease table column size before operators that
+///   benefit from a smaller memory footprint at its input.
+/// - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
 ///
 /// `OptimizeProjections` is an optimizer rule that identifies and eliminates
 /// columns from a logical plan that are not used by downstream operations.
@@ -613,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(&mut |expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());
@@ -632,7 +632,7 @@ fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
             }
             _ => {}
         };
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // unwrap: closure above never returns Err, so can not be Err here
     .unwrap();
@@ -941,7 +941,7 @@ mod tests {
         UserDefinedLogicalNodeCore,
     };
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
     }
 
@@ -1090,7 +1090,7 @@ mod tests {
 
         let expected = "Projection: Int32(1) + test.a\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1104,7 +1104,7 @@ mod tests {
 
         let expected = "Projection: Int32(1) + test.a\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1117,7 +1117,7 @@ mod tests {
 
         let expected = "Projection: test.a AS alias\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1130,7 +1130,7 @@ mod tests {
 
         let expected = "Projection: test.a AS alias\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1152,7 +1152,7 @@ mod tests {
         \n  Projection: \
         \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n      TableScan: ?table? projection=[]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1175,7 +1175,7 @@ mod tests {
             .build()?;
         let expected = "Projection: (?table?.s)[x]\
         \n  TableScan: ?table? projection=[s]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1187,7 +1187,7 @@ mod tests {
 
         let expected = "Projection: (- test.a)\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1199,7 +1199,7 @@ mod tests {
 
         let expected = "Projection: test.a IS NULL\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1211,7 +1211,7 @@ mod tests {
 
         let expected = "Projection: test.a IS NOT NULL\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1223,7 +1223,7 @@ mod tests {
 
         let expected = "Projection: test.a IS TRUE\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1235,7 +1235,7 @@ mod tests {
 
         let expected = "Projection: test.a IS NOT TRUE\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1247,7 +1247,7 @@ mod tests {
 
         let expected = "Projection: test.a IS FALSE\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1259,7 +1259,7 @@ mod tests {
 
         let expected = "Projection: test.a IS NOT FALSE\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1271,7 +1271,7 @@ mod tests {
 
         let expected = "Projection: test.a IS UNKNOWN\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1283,7 +1283,7 @@ mod tests {
 
         let expected = "Projection: test.a IS NOT UNKNOWN\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1295,7 +1295,7 @@ mod tests {
 
         let expected = "Projection: NOT test.a\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1307,7 +1307,7 @@ mod tests {
 
         let expected = "Projection: TRY_CAST(test.a AS Float64)\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
 
         let expected = "Projection: test.a SIMILAR TO Utf8(\"[0-9]\")\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1335,7 +1335,7 @@ mod tests {
 
         let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // Test outer projection isn't discarded despite the same schema as inner
@@ -1356,7 +1356,7 @@ mod tests {
         let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
         \n  Projection: test.a, Int32(0) AS d\
         \n    TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // Since only column `a` is referred at the output. Scan should only contain projection=[a].
@@ -1377,7 +1377,7 @@ mod tests {
         let expected = "Projection: test.a, Int32(0) AS d\
         \n  NoOpUserDefined\
         \n    TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // Only column `a` is referred at the output. However, User defined node itself uses column `b`
@@ -1404,7 +1404,7 @@ mod tests {
         let expected = "Projection: test.a, Int32(0) AS d\
         \n  NoOpUserDefined\
         \n    TableScan: test projection=[a, b]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // Only column `a` is referred at the output. However, User defined node itself uses expression `b+c`
@@ -1439,7 +1439,7 @@ mod tests {
         let expected = "Projection: test.a, Int32(0) AS d\
         \n  NoOpUserDefined\
         \n    TableScan: test projection=[a, b, c]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // Columns `l.a`, `l.c`, `r.a` is referred at the output.
@@ -1464,6 +1464,6 @@ mod tests {
         \n  UserDefinedCrossJoin\
         \n    TableScan: l projection=[a, c]\
         \n    TableScan: r projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }

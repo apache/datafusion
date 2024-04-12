@@ -26,7 +26,7 @@ license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.72"
+rust-version = "1.73"
 readme = "README.md"
 
 [dependencies]
@@ -45,7 +45,6 @@ datafusion = { path = "../datafusion/core", version = "37.0.0", features = [
     "unicode_expressions",
     "compression",
 ] }
-datafusion-common = { path = "../datafusion/common" }
 dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"

@@ -1135,6 +1135,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-functions-array",
  "datafusion-optimizer",
  "datafusion-physical-expr",
@@ -1177,7 +1178,6 @@ dependencies = [
  "clap",
  "ctor",
  "datafusion",
- "datafusion-common",
  "dirs",
  "env_logger",
  "futures",
@@ -1273,10 +1273,24 @@ dependencies = [
  "itertools",
  "log",
  "md-5",
+ "rand",
  "regex",
  "sha2",
  "unicode-segmentation",
  "uuid",
+]
+
+[[package]]
+name = "datafusion-functions-aggregate"
+version = "37.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr-common",
+ "log",
+ "paste",
 ]
 
 [[package]]
@@ -1331,6 +1345,8 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-aggregate",
+ "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.3",
  "hex",
@@ -1340,9 +1356,17 @@ dependencies = [
  "md-5",
  "paste",
  "petgraph",
- "rand",
  "regex",
  "sha2",
+]
+
+[[package]]
+name = "datafusion-physical-expr-common"
+version = "37.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
 ]
 
 [[package]]
@@ -1360,7 +1384,9 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
  "futures",
  "half",
  "hashbrown 0.14.3",

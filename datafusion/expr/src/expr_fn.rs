@@ -24,7 +24,6 @@ use crate::expr::{
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
-use crate::udaf::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
@@ -298,16 +297,6 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     ))
 }
 
-/// Returns an approximate value of π
-pub fn pi() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
-}
-
-/// Returns a random value in the range 0.0 <= x < 1.0
-pub fn random() -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
-}
-
 /// Returns the approximate number of distinct input values.
 /// This function provides an approximation of count(DISTINCT x).
 /// Zero is returned if all input values are null.
@@ -536,31 +525,15 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Cot, cot, num, "cotangent of a number");
 scalar_expr!(Factorial, factorial, num, "factorial");
-scalar_expr!(
-    Floor,
-    floor,
-    num,
-    "nearest integer less than or equal to argument"
-);
 scalar_expr!(
     Ceil,
     ceil,
     num,
     "nearest integer greater than or equal to argument"
 );
-nary_scalar_expr!(Round, round, "round to nearest integer");
-nary_scalar_expr!(
-    Trunc,
-    trunc,
-    "truncate toward zero, with optional precision"
-);
+
 scalar_expr!(Exp, exp, num, "exponential");
-scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
-scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
-scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
@@ -572,13 +545,6 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
-scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
-scalar_expr!(
-    Iszero,
-    iszero,
-    num,
-    "returns true if a given number is +0.0 or -0.0 otherwise returns false"
-);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -708,17 +674,6 @@ pub fn create_udaf(
     ))
 }
 
-/// Creates a new UDAF with a specific signature, state type and return type.
-/// The signature and state type must match the `Accumulator's implementation`.
-/// TOOD: We plan to move aggregate function to its own crate. This function will be deprecated then.
-pub fn create_first_value(
-    name: &str,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-) -> AggregateUDF {
-    AggregateUDF::from(FirstValue::new(name, signature, accumulator))
-}
-
 /// Implements [`AggregateUDFImpl`] for functions that have a single signature and
 /// return type.
 pub struct SimpleAggregateUDF {
@@ -813,78 +768,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     }
 }
 
-pub struct FirstValue {
-    name: String,
-    signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
-}
-
-impl Debug for FirstValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
-}
-
-impl FirstValue {
-    pub fn new(
-        name: impl Into<String>,
-        signature: Signature,
-        accumulator: AccumulatorFactoryFunction,
-    ) -> Self {
-        let name = name.into();
-        Self {
-            name,
-            signature,
-            accumulator,
-        }
-    }
-}
-
-impl AggregateUDFImpl for FirstValue {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
-    }
-
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(acc_args)
-    }
-
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        let mut fields = vec![Field::new(
-            format_state_name(name, "first_value"),
-            value_type,
-            true,
-        )];
-        fields.extend(ordering_fields);
-        fields.push(Field::new("is_set", DataType::Boolean, true));
-        Ok(fields)
-    }
-}
-
 /// Creates a new UDWF with a specific signature, state type and return type.
 ///
 /// The signature and state type must match the [`PartitionEvaluator`]'s implementation`.
@@ -971,12 +854,6 @@ impl WindowUDFImpl for SimpleWindowUDF {
 }
 
 /// Calls a named built in function
-/// ```
-/// use datafusion_expr::{col, lit, call_fn};
-///
-/// // create the expression trunc(x) < 0.2
-/// let expr = call_fn("trunc", vec![col("x")]).unwrap().lt(lit(0.2));
-/// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
@@ -1034,42 +911,12 @@ mod test {
     };
 }
 
-    macro_rules! test_nary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-        let expected = [$(stringify!($arg)),*];
-        let result = $FUNC(
-            vec![
-                $(
-                    col(stringify!($arg.to_string()))
-                ),*
-            ]
-        );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
-            let name = built_in_function::BuiltinScalarFunction::$ENUM;
-            assert_eq!(name, fun);
-            assert_eq!(expected.len(), args.len());
-        } else {
-            assert!(false, "unexpected: {:?}", result);
-        }
-    };
-}
-
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_nary_scalar_expr!(Round, round, input);
-        test_nary_scalar_expr!(Round, round, input, decimal_places);
-        test_nary_scalar_expr!(Trunc, trunc, num);
-        test_nary_scalar_expr!(Trunc, trunc, num, precision);
         test_unary_scalar_expr!(Exp, exp);
-        test_scalar_expr!(Nanvl, nanvl, x, y);
-        test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
-        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
     }

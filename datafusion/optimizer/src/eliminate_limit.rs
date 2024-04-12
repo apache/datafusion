@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `LIMIT 0` or
-//! `LIMIT whose ancestor LIMIT's skip is greater than or equal to current's fetch`
-//! on a plan with an empty relation.
-//! This rule also removes OFFSET 0 from the [LogicalPlan]
-//! This saves time in planning and executing the query.
+//! [`EliminateLimit`] eliminates `LIMIT` when possible
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
 
-/// Optimization rule that eliminate LIMIT 0 or useless LIMIT(skip:0, fetch:None).
-/// It can cooperate with `propagate_empty_relation` and `limit_push_down`.
+/// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
+/// greater than or equal to current's fetch
+///
+/// It can cooperate with `propagate_empty_relation` and `limit_push_down`. on a
+/// plan with an empty relation.
+///
+/// This rule also removes OFFSET 0 from the [LogicalPlan]
 #[derive(Default)]
 pub struct EliminateLimit;
 
@@ -93,24 +94,19 @@ mod tests {
 
     use crate::push_down_limit::PushDownLimit;
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+    fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateLimit::new())]);
-        let optimized_plan = optimizer
-            .optimize_recursively(
-                optimizer.rules.first().unwrap(),
-                plan,
-                &OptimizerContext::new(),
-            )?
-            .unwrap_or_else(|| plan.clone());
+        let optimized_plan =
+            optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
 
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
         Ok(())
     }
 
     fn assert_optimized_plan_eq_with_pushdown(
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         expected: &str,
     ) -> Result<()> {
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
@@ -124,7 +120,6 @@ mod tests {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
         Ok(())
     }
 
@@ -137,7 +132,7 @@ mod tests {
             .build()?;
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -157,7 +152,7 @@ mod tests {
             \n  EmptyRelation\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -171,7 +166,7 @@ mod tests {
 
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
-        assert_optimized_plan_eq_with_pushdown(&plan, expected)
+        assert_optimized_plan_eq_with_pushdown(plan, expected)
     }
 
     #[test]
@@ -191,7 +186,7 @@ mod tests {
         \n    Limit: skip=0, fetch=2\
         \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
         \n        TableScan: test";
-        assert_optimized_plan_eq_with_pushdown(&plan, expected)
+        assert_optimized_plan_eq_with_pushdown(plan, expected)
     }
 
     #[test]
@@ -209,7 +204,7 @@ mod tests {
             \n    Limit: skip=0, fetch=2\
             \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n        TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -227,7 +222,7 @@ mod tests {
         \n    Limit: skip=2, fetch=1\
         \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
         \n        TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -249,7 +244,7 @@ mod tests {
             \n    Limit: skip=2, fetch=1\
             \n      TableScan: test\
             \n    TableScan: test1";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -262,6 +257,6 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
             \n  TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_eq(plan, expected)
     }
 }

@@ -587,7 +587,7 @@ FROM t1
 ----
 11 11 11
 
-# subsequent inner join 
+# subsequent inner join
 query III rowsort
 SELECT t1.t1_id, t2.t2_id, t3.t3_id
 FROM t1

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`EliminateJoin`] rewrites `INNER JOIN` with `true`/`null`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
@@ -24,7 +25,7 @@ use datafusion_expr::{
     CrossJoin, Expr,
 };
 
-/// Eliminates joins when inner join condition is false.
+/// Eliminates joins when join condition is false.
 /// Replaces joins when inner join condition is true with a cross join.
 #[derive(Default)]
 pub struct EliminateJoin;
@@ -82,7 +83,7 @@ mod tests {
     use datafusion_expr::{logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan};
     use std::sync::Arc;
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateJoin::new()), plan, expected)
     }
 
@@ -97,7 +98,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -114,6 +115,6 @@ mod tests {
         CrossJoin:\
         \n  EmptyRelation\
         \n  EmptyRelation";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }
