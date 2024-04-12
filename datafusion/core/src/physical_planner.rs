@@ -74,7 +74,6 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
-use async_trait::async_trait;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
@@ -95,6 +94,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
+use async_trait::async_trait;
 use datafusion_common::config::FormatOptions;
 use datafusion_physical_expr::LexOrdering;
 use futures::future::BoxFuture;
@@ -464,9 +464,6 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                 let plan = self
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
-
-                // println!("first plan: {:#?}", plan);
-
                 self.optimize_internal(plan, session_state, |_, _| {})
             }
         }

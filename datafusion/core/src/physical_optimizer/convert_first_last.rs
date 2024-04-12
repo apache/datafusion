@@ -38,6 +38,15 @@ use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 
 use super::PhysicalOptimizerRule;
 
+/// The optimizer rule check the ordering requirements of the aggregate expressions.
+/// And convert between FIRST_VALUE and LAST_VALUE if possible.
+/// For example, If we have an ascending values and we want LastValue from the descending requirement,
+/// it is equivalent to FirstValue with the current ascending ordering.
+///
+/// The concrete example is that, says we have values c1 with [1, 2, 3], which is an ascending order.
+/// If we want LastValue(c1 order by desc), which is the first value of reversed c1 [3, 2, 1],
+/// so we can convert the aggregate expression to FirstValue(c1 order by asc),
+/// since the current ordering is already satisfied, it saves our time!
 #[derive(Default)]
 pub struct ConvertFirstLast {}
 
@@ -53,11 +62,8 @@ impl PhysicalOptimizerRule for ConvertFirstLast {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let res = plan
-            .transform_down(&get_common_requirement_of_aggregate_input)
-            .data();
-
-        res
+        plan.transform_down(&get_common_requirement_of_aggregate_input)
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -156,7 +162,7 @@ fn optimize_internal(
         let req = get_aggregate_exprs_requirement(
             &new_requirement,
             &mut aggr_expr,
-            &group_by,
+            group_by,
             input_eq_properties,
             mode,
         )?;
@@ -175,13 +181,13 @@ fn optimize_internal(
                 InputOrderMode::Linear
             };
         let projection_mapping =
-            ProjectionMapping::try_new(&group_by.expr(), &input.schema())?;
+            ProjectionMapping::try_new(group_by.expr(), &input.schema())?;
 
         let cache = AggregateExec::compute_properties(
-            &input,
+            input,
             plan.schema().clone(),
             &projection_mapping,
-            &mode,
+            mode,
             &input_order_mode,
         );
 
@@ -192,8 +198,9 @@ fn optimize_internal(
             input_order_mode,
         );
 
-        let res = Arc::new(aggr_exec) as Arc<dyn ExecutionPlan>;
-        Ok(Transformed::yes(res))
+        Ok(Transformed::yes(
+            Arc::new(aggr_exec) as Arc<dyn ExecutionPlan>
+        ))
     } else {
         Ok(Transformed::no(plan))
     }
@@ -216,6 +223,9 @@ fn optimize_internal(
 ///
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
+///
+/// Similar to the one in datafusion/physical-plan/src/aggregates/mod.rs, but this
+/// function care about the possible of optimization of FIRST_VALUE and LAST_VALUE
 fn get_aggregate_exprs_requirement(
     prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],

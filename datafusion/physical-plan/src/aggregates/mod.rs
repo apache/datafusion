@@ -273,7 +273,7 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    /// Function used in `ConvertFirstLast` optimizer rule, 
+    /// Function used in `ConvertFirstLast` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     pub fn new_with_aggr_expr_and_ordering_info(
         &self,
@@ -419,29 +419,6 @@ impl AggregateExec {
             input_order_mode,
             cache,
         })
-    }
-
-    pub fn with_cache(mut self, cache: PlanProperties) -> Self {
-        self.cache = cache;
-        self
-    }
-
-    pub fn with_input_order_mode(mut self, input_order_mode: InputOrderMode) -> Self {
-        self.input_order_mode = input_order_mode;
-        self
-    }
-
-    pub fn with_required_input_ordering(
-        mut self,
-        required_input_ordering: Option<LexRequirement>,
-    ) -> Self {
-        self.required_input_ordering = required_input_ordering;
-        self
-    }
-
-    pub fn with_aggr_expr(mut self, aggr_expr: Vec<Arc<dyn AggregateExpr>>) -> Self {
-        self.aggr_expr = aggr_expr;
-        self
     }
 
     /// Aggregation mode (full, partial)
@@ -965,10 +942,7 @@ fn get_aggregate_exprs_requirement(
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
         let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        // let reverse_aggr_req = reverse_order_bys(aggr_req);
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-        // let reverse_aggr_req =
-        //     PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
@@ -978,15 +952,6 @@ fn get_aggregate_exprs_requirement(
             )) {
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
-            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-            //     prefix_requirement,
-            //     &reverse_aggr_req,
-            // )) {
-            //     // Converting to LAST_VALUE enables more efficient execution
-            //     // given the existing ordering:
-            //     let mut last_value = first_value.convert_to_last();
-            //     last_value = last_value.with_requirement_satisfied(true);
-            //     *aggr_expr = Arc::new(last_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 first_value = first_value.with_requirement_satisfied(false);
@@ -1002,16 +967,6 @@ fn get_aggregate_exprs_requirement(
             )) {
                 last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
-            // } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-            //     prefix_requirement,
-            //     &reverse_aggr_req,
-            // )) {
-            //     println!("last to first {:?}", aggr_expr);
-            //     // Converting to FIRST_VALUE enables more efficient execution
-            //     // given the existing ordering:
-            //     let mut first_value = last_value.convert_to_first();
-            //     first_value = first_value.with_requirement_satisfied(true);
-            //     *aggr_expr = Arc::new(first_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
                 last_value = last_value.with_requirement_satisfied(false);
