@@ -500,7 +500,7 @@ impl SessionConfig {
     /// ```
     ///
     /// [^1]: Compare that to [`ConfigOptions`] which only supports [`ScalarValue`] payloads.
-    pub fn with_extension<T>(mut self, ext: Arc<T>) -> Self
+    pub fn with_extension<T>(&mut self, ext: Arc<T>) -> &mut Self
     where
         T: Send + Sync + 'static,
     {
