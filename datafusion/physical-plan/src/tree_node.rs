@@ -17,11 +17,9 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
-use core::panic;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::aggregates::AggregateExec;
 use crate::{displayable, with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use super::projection_pushdown::ProjectionPushdown;
-use super::simplify_ordering::ConvertFirstLast;
+use super::convert_first_last::ConvertFirstLast;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;

@@ -34,7 +34,7 @@ pub mod pipeline_checker;
 mod projection_pushdown;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;
-mod simplify_ordering;
+mod convert_first_last;
 mod sort_pushdown;
 pub mod topk_aggregation;
 mod utils;

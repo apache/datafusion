@@ -273,7 +273,9 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    pub fn clone_with_required_input_ordering_and_aggr_expr(
+    /// Function used in `ConvertFirstLast` optimizer rule, 
+    /// where we need parts of the new value, others cloned from the old one
+    pub fn new_with_aggr_expr_and_ordering_info(
         &self,
         required_input_ordering: Option<LexRequirement>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,

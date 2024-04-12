@@ -185,20 +185,14 @@ fn optimize_internal(
             &input_order_mode,
         );
 
-        let p = aggr_exec.clone_with_required_input_ordering_and_aggr_expr(
+        let aggr_exec = aggr_exec.new_with_aggr_expr_and_ordering_info(
             required_input_ordering,
             aggr_expr,
             cache,
             input_order_mode,
         );
 
-        // let aggr_exec = aggr_exec.to_owned().to_owned();
-        // aggr_exec.with_aggr_expr(aggr_expr);
-        // aggr_exec.with_required_input_ordering(required_input_ordering);
-        // aggr_exec.with_cache(cache);
-        // aggr_exec.with_input_order_mode(input_order_mode);
-
-        let res = Arc::new(p) as Arc<dyn ExecutionPlan>;
+        let res = Arc::new(aggr_exec) as Arc<dyn ExecutionPlan>;
         Ok(Transformed::yes(res))
     } else {
         Ok(Transformed::no(plan))
@@ -345,6 +339,7 @@ fn get_aggregate_exprs_requirement(
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -354,7 +349,7 @@ mod tests {
         PhysicalSortExpr,
     };
 
-    fn create_test_schema_v4() -> Result<SchemaRef> {
+    fn create_test_schema() -> Result<SchemaRef> {
         let a = Field::new("a", DataType::Int32, true);
         let b = Field::new("b", DataType::Int32, true);
         let c = Field::new("c", DataType::Int32, true);
@@ -367,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_finest_requirements() -> Result<()> {
-        let test_schema = create_test_schema_v4()?;
+        let test_schema = create_test_schema()?;
         // Assume column a and b are aliases
         // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
         let options1 = SortOptions {

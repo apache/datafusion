@@ -26,7 +26,6 @@ use super::{
     work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::aggregates::AggregateExec;
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
