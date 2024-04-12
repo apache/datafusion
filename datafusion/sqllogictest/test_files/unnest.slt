@@ -93,6 +93,20 @@ NULL
 42
 NULL
 
+## Unnest single column and filter out null lists
+query I
+select unnest(column2) from unnest_table where column2 is not null;
+----
+7
+8
+9
+10
+11
+12
+NULL
+42
+NULL
+
 ## Unnest with additional column
 ## Issue: https://github.com/apache/arrow-datafusion/issues/9349
 query II
@@ -137,18 +151,21 @@ select unnest(column3) from unnest_table;
 
 ## Multiple unnest functions in selection
 query IIII
-select unnest(column1), unnest(column2), column3 * 10, unnest(array_remove(column1, '4')) from unnest_table;
+select 
+    unnest(column1), unnest(column2) + 2, 
+    column3 * 10, unnest(array_remove(column1, '4')) 
+from unnest_table;
 ----
-1 7 10 1
+1 9 10 1
 2 NULL 10 2
 3 NULL 10 3
-4 8 20 5
-5 9 20 NULL
-NULL 10 20 NULL
-6 11 30 6
-NULL 12 30 NULL
+4 10 20 5
+5 11 20 NULL
+NULL 12 20 NULL
+6 13 30 6
+NULL 14 30 NULL
 12 NULL NULL 12
-NULL 42 NULL NULL
+NULL 44 NULL NULL
 NULL NULL NULL NULL
 
 ## Unnest scalar in select list
@@ -185,6 +202,10 @@ select * from unnest(
 1 a 4 NULL
 2 b NULL NULL
 NULL c NULL NULL
+
+query ?I
+select * from unnest([], NULL::int[]);
+----
 
 
 ## Unnest struct expression in select list

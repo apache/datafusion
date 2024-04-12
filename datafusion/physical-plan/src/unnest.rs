@@ -16,7 +16,7 @@
 // under the License.
 
 //! Define a plan for unnesting values in columns that contain a list type.
-//! Conceptually, this is like joining each row with all the values in the list columns.
+
 use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
@@ -279,6 +279,11 @@ impl UnnestStream {
     }
 }
 
+/// For each row in a `RecordBatch`, some list columns need to be unnested.
+/// We will expand the values in each list into multiple rows,
+/// taking the longest length among these lists, and shorter lists are padded with NULLs.
+//
+/// For columns that don't need to be unnested, repeat their values until reaching the longest length.
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
@@ -291,11 +296,11 @@ fn build_batch(
         .collect::<Result<_>>()?;
 
     let longest_length = find_longest_length(&list_arrays, options)?;
-    let unnest_length = longest_length.as_primitive::<Int64Type>();
-    let total_length = if unnest_length.is_empty() {
+    let unnested_length = longest_length.as_primitive::<Int64Type>();
+    let total_length = if unnested_length.is_empty() {
         0
     } else {
-        sum(unnest_length).ok_or_else(|| {
+        sum(unnested_length).ok_or_else(|| {
             exec_datafusion_err!("Failed to calculate the total unnested length")
         })? as usize
     };
@@ -304,14 +309,16 @@ fn build_batch(
     }
 
     // Unnest all the list arrays
-    let unnested_arrays = unnest_list_arrays(&list_arrays, unnest_length, total_length)?;
+    let unnested_arrays =
+        unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
     let unnested_array_map: HashMap<_, _> = unnested_arrays
         .into_iter()
         .zip(columns.iter())
         .map(|(array, column)| (column.index(), array))
         .collect();
 
-    let take_indicies = create_take_indicies(unnest_length, total_length);
+    // Create the take indices array for other columns
+    let take_indicies = create_take_indicies(unnested_length, total_length);
 
     batch_from_indices(batch, schema, &unnested_array_map, &take_indicies)
 }
@@ -516,7 +523,7 @@ fn create_take_indicies(
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
 ) -> PrimitiveArray<Int64Type> {
-    // `find_longest_length()` guarantees this
+    // `find_longest_length()` guarantees this.
     debug_assert!(
         length_array.null_count() == 0,
         "length array should not contain nulls"
@@ -530,7 +537,7 @@ fn create_take_indicies(
     builder.finish()
 }
 
-/// Create the final batch given the unnested column array and a `indices` array
+/// Create the final batch given the unnested column arrays and a `indices` array
 /// that is used by the take kernel to copy values.
 ///
 /// For example if we have the following `RecordBatch`:
@@ -583,51 +590,51 @@ fn batch_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{
-        // array::AsArray,
-        datatypes::{DataType, Field},
-    };
-    use arrow_array::StringArray;
+    use arrow::datatypes::{DataType, Field};
+    use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
-    // Create a ListArray with the following list values:
+    // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
-    fn make_test_array() -> ListArray {
+    fn make_generic_array<OffsetSize>() -> GenericListArray<OffsetSize>
+    where
+        OffsetSize: OffsetSizeTrait,
+    {
         let mut values = vec![];
-        let mut offsets = vec![0];
-        let mut valid = BooleanBufferBuilder::new(2);
+        let mut offsets: Vec<OffsetSize> = vec![OffsetSize::zero()];
+        let mut valid = BooleanBufferBuilder::new(6);
 
         // [A, B, C]
         values.extend_from_slice(&[Some("A"), Some("B"), Some("C")]);
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
         // []
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
         // NULL with non-zero value length
         // Issue https://github.com/apache/arrow-datafusion/issues/9932
         values.push(Some("?"));
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(false);
 
         // [D]
         values.push(Some("D"));
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
         // Another NULL with zero value length
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(false);
 
         // [NULL, F]
         values.extend_from_slice(&[None, Some("F")]);
-        offsets.push(values.len() as i32);
+        offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
         let field = Arc::new(Field::new("item", DataType::Utf8, true));
-        ListArray::new(
+        GenericListArray::<OffsetSize>::new(
             field,
             OffsetBuffer::new(offsets.into()),
             Arc::new(StringArray::from(values)),
@@ -635,75 +642,141 @@ mod tests {
         )
     }
 
-    // #[test]
-    // fn test_unnest_generic_list() -> datafusion_common::Result<()> {
-    //     let list_array = make_test_array();
+    // Create a FixedListArray with the following list values:
+    //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
+    fn make_fixed_list() -> FixedSizeListArray {
+        let values = Arc::new(StringArray::from_iter([
+            Some("A"),
+            Some("B"),
+            None,
+            None,
+            Some("C"),
+            Some("D"),
+            None,
+            None,
+            None,
+            Some("F"),
+            None,
+            None,
+        ]));
+        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let valid = NullBuffer::from(vec![true, false, true, false, true, true]);
+        FixedSizeListArray::new(field, 2, values, Some(valid))
+    }
 
-    //     // Test with preserve_nulls = false
-    //     let options = UnnestOptions {
-    //         preserve_nulls: false,
-    //     };
-    //     let unnested_array =
-    //         unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
-    //     let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
-    //     assert_eq!(
-    //         strs,
-    //         vec![Some("A"), Some("B"), Some("C"), Some("D"), None, Some("F")]
-    //     );
+    fn verify_unnest_list_array(
+        list_array: &dyn ListArrayType,
+        lengths: Vec<i64>,
+        expected: Vec<Option<&str>>,
+    ) -> datafusion_common::Result<()> {
+        let length_array = Int64Array::from(lengths);
+        let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
+        let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
+        assert_eq!(strs, expected);
+        Ok(())
+    }
 
-    //     // Test with preserve_nulls = true
-    //     let options = UnnestOptions {
-    //         preserve_nulls: true,
-    //     };
-    //     let unnested_array =
-    //         unnest_generic_list::<i32, Int32Type>(&list_array, &options)?;
-    //     let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
-    //     assert_eq!(
-    //         strs,
-    //         vec![
-    //             Some("A"),
-    //             Some("B"),
-    //             Some("C"),
-    //             None,
-    //             Some("D"),
-    //             None,
-    //             None,
-    //             Some("F")
-    //         ]
-    //     );
+    #[test]
+    fn test_unnest_list_array() -> datafusion_common::Result<()> {
+        // [A, B, C], [], NULL, [D], NULL, [NULL, F]
+        let list_array = make_generic_array::<i32>();
+        verify_unnest_list_array(
+            &list_array,
+            vec![3, 2, 1, 2, 0, 3],
+            vec![
+                Some("A"),
+                Some("B"),
+                Some("C"),
+                None,
+                None,
+                None,
+                Some("D"),
+                None,
+                None,
+                Some("F"),
+                None,
+            ],
+        )?;
 
-    //     Ok(())
-    // }
+        // [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
+        let list_array = make_fixed_list();
+        verify_unnest_list_array(
+            &list_array,
+            vec![3, 1, 2, 0, 2, 3],
+            vec![
+                Some("A"),
+                Some("B"),
+                None,
+                None,
+                Some("C"),
+                Some("D"),
+                None,
+                Some("F"),
+                None,
+                None,
+                None,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn verify_longest_length(
+        list_arrays: &[ArrayRef],
+        preserve_nulls: bool,
+        expected: Vec<i64>,
+    ) -> datafusion_common::Result<()> {
+        let options = UnnestOptions { preserve_nulls };
+        let longest_length = find_longest_length(list_arrays, &options)?;
+        let expected_array = Int64Array::from(expected);
+        assert_eq!(
+            longest_length
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap(),
+            &expected_array
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_longest_list_length() -> datafusion_common::Result<()> {
-        let list_array = make_test_array();
-        let list_arrays = vec![Arc::new(list_array) as ArrayRef];
-        let options = UnnestOptions {
-            preserve_nulls: false,
-        };
-        let longest_length = find_longest_length(&list_arrays, &options)?;
-        let expected_array = Int64Array::from(vec![3, 0, 0, 1, 0, 2]);
+        // Test with single ListArray
+        //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
+        let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
+        verify_longest_length(&[list_array.clone()], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[list_array.clone()], true, vec![3, 0, 1, 1, 1, 2])?;
 
-        assert_eq!(
-            longest_length
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap(),
-            &expected_array
-        );
+        // Test with single LargeListArray
+        //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
+        let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
+        verify_longest_length(&[list_array.clone()], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[list_array.clone()], true, vec![3, 0, 1, 1, 1, 2])?;
 
-        let options = UnnestOptions {
-            preserve_nulls: true,
-        };
-        let longest_length = find_longest_length(&list_arrays, &options)?;
-        let expected_array = Int64Array::from(vec![3, 0, 1, 1, 1, 2]);
-        assert_eq!(
-            longest_length
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap(),
-            &expected_array
-        );
+        // Test with single FixedSizeListArray
+        //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
+        let list_array = Arc::new(make_fixed_list()) as ArrayRef;
+        verify_longest_length(&[list_array.clone()], false, vec![2, 0, 2, 0, 2, 2])?;
+        verify_longest_length(&[list_array.clone()], true, vec![2, 1, 2, 1, 2, 2])?;
+
+        // Test with multiple list arrays
+        //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
+        //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
+        let list1 = Arc::new(make_generic_array::<i32>()) as ArrayRef;
+        let list2 = Arc::new(make_fixed_list()) as ArrayRef;
+        let list_arrays = vec![list1.clone(), list2.clone()];
+        verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
+        verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_take_indicies() -> datafusion_common::Result<()> {
+        let length_array = Int64Array::from(vec![2, 3, 1]);
+        let take_indicies = create_take_indicies(&length_array, 6);
+        let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);
+        assert_eq!(take_indicies, expected);
         Ok(())
     }
 }
