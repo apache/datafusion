@@ -15,23 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::kernels::aggregate;
 use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
     not_impl_err,
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
+use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::ProjectionMapping,
-    expressions::{FirstValue, LastValue},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
     LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
-    coalesce_partitions::CoalescePartitionsExec,
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
 };
 use std::sync::Arc;
@@ -39,29 +37,28 @@ use std::sync::Arc;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 
-use super::{output_requirements::OutputRequirementExec, PhysicalOptimizerRule};
+use super::PhysicalOptimizerRule;
 
 #[derive(Default)]
-pub struct SimplifyOrdering {}
+pub struct ConvertFirstLast {}
 
-impl SimplifyOrdering {
+impl ConvertFirstLast {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl PhysicalOptimizerRule for SimplifyOrdering {
+impl PhysicalOptimizerRule for ConvertFirstLast {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Ok(plan)
+
         let res = plan
             .transform_down(&get_common_requirement_of_aggregate_input)
             .data();
 
-        // println!("res: {:?}", res);
         res
     }
 
@@ -89,44 +86,13 @@ fn get_common_requirement_of_aggregate_input(
         new_children.push(res.data);
     }
 
-    let mode1 = plan.properties().execution_mode();
-    // println!("mode 1: {:?}", mode);
-
-    println!("plan name: {:?}", plan.name());
-    println!("is_child_transformed: {:?}", is_child_transformed);
-    println!("new_children: {:?}", new_children);
-
     let plan = if is_child_transformed {
         plan.with_new_children(new_children)?
     } else {
         plan
     };
 
-    let mode2 = plan.properties().execution_mode();
-    if mode1 != mode2 {
-        println!("mode1: {:?}, mode2: {:?}", mode1, mode2);
-    }
-
     let plan = optimize_internal(plan)?;
-
-    if plan.transformed {
-        println!("transformed plan: {:?}", plan.data.name());
-    } else {
-        println!("not transformed plan: {:?}", plan.data.name());
-    }
-
-    let mode3 = plan.data.properties().execution_mode();
-    if mode1 != mode3 {
-        println!("mode1: {:?}, mode3: {:?}", mode1, mode3);
-    }
-
-    if !plan.transformed {
-        let name = plan.data.name();
-        println!(
-            "not transformed plan: {:?} and is_child_transformed: {:?}",
-            name, is_child_transformed
-        );
-    }
 
     // If one of the children is transformed, then the plan is considered transformed, then we update
     // the children of the plan from bottom to top.
@@ -135,36 +101,6 @@ fn get_common_requirement_of_aggregate_input(
     } else {
         Ok(Transformed::no(plan.data))
     }
-
-    // Ok(plan)
-
-    // if let Some(c) = new_c {
-    //     if !c.transformed {
-    //         return Ok(plan);
-    //     }
-
-    //     let plan = plan.data;
-
-    //     // TODO: support more types of ExecutionPlan
-    //     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
-    //         let p = aggr_exec.clone_with_input(c.data);
-    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-    //     } else if let Some(coalesce_exec) =
-    //         plan.as_any().downcast_ref::<CoalescePartitionsExec>()
-    //     {
-    //         let p = coalesce_exec.clone_with_input(c.data);
-    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-    //     } else if let Some(out_req_exec) =
-    //         plan.as_any().downcast_ref::<OutputRequirementExec>()
-    //     {
-    //         let p = out_req_exec.clone_with_input(c.data);
-    //         return Ok(Transformed::yes(Arc::new(p) as Arc<dyn ExecutionPlan>));
-    //     } else {
-    //         return not_impl_err!("Unsupported ExecutionPlan type: {}", plan.name());
-    //     }
-    // }
-
-    // return Ok(plan);
 }
 
 fn try_get_updated_aggr_expr_from_child(
@@ -231,9 +167,6 @@ fn optimize_internal(
         new_requirement = collapse_lex_req(new_requirement);
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
-
-        println!("required_input_ordering: {:?}", required_input_ordering);
-        println!("agg_expr: {:?}", aggr_expr);
 
         let input_order_mode =
             if indices.len() == groupby_exprs.len() && !indices.is_empty() {
@@ -402,22 +335,17 @@ fn get_aggregate_exprs_requirement(
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
 
-            // println!("prefix_requirement: {:?}", prefix_requirement);
-            // println!("aggr_req: {:?}", aggr_req);
-            // println!("reverse_aggr_req: {:?}", reverse_aggr_req);
-
+            println!("reverse_aggr_req: {:?}", reverse_aggr_req);
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
             )) {
-                println!("1st step");
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
             } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
-                println!("2nd step");
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
                 let mut last_value = first_value.convert_to_last();

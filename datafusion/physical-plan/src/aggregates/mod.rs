@@ -48,7 +48,7 @@ use datafusion_physical_expr::{
     AggregateExpr, LexRequirement, PhysicalExpr,
 };
 use datafusion_physical_expr::{
-    physical_exprs_contains, reverse_order_bys, EquivalenceProperties, LexOrdering,
+    physical_exprs_contains, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
 
@@ -964,15 +964,12 @@ fn get_aggregate_exprs_requirement(
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
         let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let reverse_aggr_req = reverse_order_bys(aggr_req);
+        // let reverse_aggr_req = reverse_order_bys(aggr_req);
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-        let reverse_aggr_req =
-            PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+        // let reverse_aggr_req =
+        //     PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
-            println!("prefix_requirement {:?}", prefix_requirement);
-            println!("reverse_aggr_req {:?}", reverse_aggr_req);
-
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
@@ -1302,11 +1299,11 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, Median,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
-        PhysicalSortExpr, PhysicalSortRequirement,
+        PhysicalSortExpr,
     };
 
     use futures::{FutureExt, Stream};

@@ -325,7 +325,6 @@ impl EquivalenceProperties {
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
         let ExprOrdering { expr, data, .. } = expr_ordering;
-        // println!("expr: {:?}, data: {:?}", expr, data);
         match data {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr { expr, options };
