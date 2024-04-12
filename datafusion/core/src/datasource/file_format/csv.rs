@@ -31,7 +31,7 @@ use crate::datasource::physical_plan::{
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
@@ -267,7 +267,7 @@ impl FileFormat for CsvFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(conf, writer_options));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,

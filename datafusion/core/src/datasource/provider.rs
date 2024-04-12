@@ -269,10 +269,10 @@ pub trait TableProvider: Sync + Send {
     ///
     /// # See Also
     ///
-    /// See [`FileSinkExec`] for the common pattern of inserting a
+    /// See [`DataSinkExec`] for the common pattern of inserting a
     /// streams of `RecordBatch`es as files to an ObjectStore.
     ///
-    /// [`FileSinkExec`]: crate::physical_plan::insert::FileSinkExec
+    /// [`DataSinkExec`]: crate::physical_plan::insert::DataSinkExec
     async fn insert_into(
         &self,
         _state: &SessionState,
