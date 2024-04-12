@@ -34,7 +34,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{Accumulator, ColumnarValue};
-use std::{any::Any, iter, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
@@ -284,7 +284,9 @@ impl ApproxPercentileAccumulator {
     }
 
     pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
-        self.digest = TDigest::merge_digests(digests);
+        let mut input_digests = digests.to_vec();
+        input_digests.push(self.digest.clone());
+        self.digest = TDigest::merge_digests(input_digests.as_slice());
     }
 
     pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
@@ -425,7 +427,6 @@ impl Accumulator for ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()
                     .map(|state| TDigest::from_scalar_state(&state))
             })
-            .chain(iter::once(Ok(self.digest.clone())))
             .collect::<Result<Vec<_>>>()?;
 
         self.merge_digests(&states);
