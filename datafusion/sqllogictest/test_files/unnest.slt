@@ -22,12 +22,12 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3], [7], 1),
-    ([4,5], [8,9,10], 2),
-    ([6], [11,12], 3),
-    ([12], [null, 42, null], null),
+    ([1,2,3], [7], 1, [13, 14]),
+    ([4,5], [8,9,10], 2, [15, 16]),
+    ([6], [11,12], 3, null),
+    ([12], [null, 42, null], null, null),
     -- null array to verify the `preserve_nulls` option
-    (null, null, 4)
+    (null, null, 4, [17, 18])
 ;
 
 ## Basic unnest expression in select list
@@ -150,6 +150,26 @@ query error DataFusion error: Error during planning: unnest\(\) can only be appl
 select unnest(column3) from unnest_table;
 
 ## Multiple unnest functions in selection
+query ?I
+select unnest([]), unnest(NULL::int[]);
+----
+
+query III
+select
+    unnest(column1),
+    unnest(arrow_cast(column2, 'LargeList(Int64)')),
+    unnest(arrow_cast(column4, 'FixedSizeList(2, Int64)'))
+from unnest_table where column4 is not null;
+----
+1 7 13
+2 NULL 14
+3 NULL NULL
+4 8 15
+5 9 16
+NULL 10 NULL
+NULL NULL 17
+NULL NULL 18
+
 query IIII
 select 
     unnest(column1), unnest(column2) + 2, 
