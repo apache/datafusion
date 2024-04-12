@@ -136,20 +136,20 @@ query error DataFusion error: Error during planning: unnest\(\) can only be appl
 select unnest(column3) from unnest_table;
 
 ## Multiple unnest functions in selection
-query II
-select unnest(column1), unnest(column2) from unnest_table;
+query IIII
+select unnest(column1), unnest(column2), column3 * 10, unnest(array_remove(column1, '4')) from unnest_table;
 ----
-1 7
-2 NULL
-3 NULL
-4 8
-5 9
-NULL 10
-6 11
-NULL 12
-12 NULL
-NULL 42
-NULL NULL
+1 7 10 1
+2 NULL 10 2
+3 NULL 10 3
+4 8 20 5
+5 9 20 NULL
+NULL 10 20 NULL
+6 11 30 6
+NULL 12 30 NULL
+12 NULL NULL 12
+NULL 42 NULL NULL
+NULL NULL NULL NULL
 
 ## Unnest scalar in select list
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
@@ -174,11 +174,17 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest([1,2], [2,3]);
 
 ## Unnest multiple expressions in from clause
-query II
-select * from unnest([1,2], [2,3]);
+query ITII
+select * from unnest(
+    [1,2],
+    arrow_cast(['a','b', 'c'], 'LargeList(Utf8)'),
+    arrow_cast([4, NULL], 'FixedSizeList(2, Int64)'),
+    NULL::int[]
+) as t(a, b, c, d);
 ----
-1 2
-2 3
+1 a 4 NULL
+2 b NULL NULL
+NULL c NULL NULL
 
 
 ## Unnest struct expression in select list

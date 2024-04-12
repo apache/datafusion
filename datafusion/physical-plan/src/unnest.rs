@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the unnest column plan for unnesting values in a column that contains a list
-//! type, conceptually is like joining each row with all the values in the list column.
+//! Define a plan for unnesting values in columns that contain a list type.
+//! Conceptually, this is like joining each row with all the values in the list columns.
 use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use log::trace;
 
-/// Unnest the given column by joining the row with each value in the
+/// Unnest the given columns by joining the row with each value in the
 /// nested type.
 ///
 /// See [`UnnestOptions`] for more details and an example.
@@ -316,8 +316,28 @@ fn build_batch(
     batch_from_indices(batch, schema, &unnested_array_map, &take_indicies)
 }
 
-/// For each row, find the longest list length among the given list arrays.
-/// TODO: add an example
+/// Find the longest list length among the given list arrays for each row.
+///
+/// For example if we have the following two list arrays:
+///
+/// ```ignore
+/// l1: [1, 2, 3], null, [], [3]
+/// l2: [4,5], [], null, [6, 7]
+/// ```
+///
+/// If `preserve_nulls` is false, the longest length array will be:
+///
+/// ```ignore
+/// longest_length: [3, 0, 0, 2]
+/// ```
+///
+/// whereas if `preserve_nulls` is true, the longest length array will be:
+///
+///
+/// ```ignore
+/// longest_length: [3, 1, 1, 2]
+/// ```
+///
 fn find_longest_length(
     list_arrays: &[ArrayRef],
     options: &UnnestOptions,
@@ -350,11 +370,12 @@ fn find_longest_length(
     Ok(longest_length)
 }
 
+/// Trait defining common methods used for unnesting, implemented by list array types.
 trait ListArrayType: Array {
-    /// Returns a reference to the values of this list
+    /// Returns a reference to the values of this list.
     fn values(&self) -> &ArrayRef;
 
-    /// Returns the start and end offsets of the values for the given row
+    /// Returns the start and end offset of the values for the given row.
     fn value_offsets(&self, row: usize) -> (i64, i64);
 }
 
@@ -391,6 +412,7 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+/// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
     length_array: &PrimitiveArray<Int64Type>,
@@ -410,7 +432,8 @@ fn unnest_list_arrays(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // If we only have one list column to unnest and it doesn't contain NULL lists
+    // If there is only one list column to unnest and it doesn't contain any NULL lists,
+    // we can return the values array directly without any copying.
     if typed_arrays.len() == 1 && typed_arrays[0].null_count() == 0 {
         Ok(vec![typed_arrays[0].values().clone()])
     } else {
@@ -421,7 +444,27 @@ fn unnest_list_arrays(
     }
 }
 
-/// Unnest each list according the length array.
+/// Unnest a list array according the target length array.
+///
+/// Consider a list array like this:
+///
+/// ```ignore
+/// [1], [2, 3, 4], null, [5], [],
+/// ```
+///
+/// and the length array is:
+///
+/// ```ignore
+/// [2, 3, 2, 1, 2]
+/// ```
+///
+/// If the length of a certain list is less than the target length, pad with NULLs.
+/// So the unnested array will look like this:
+///
+/// ```ignore
+/// [1, null, 2, 3, 4, null, null, 5, null, null]
+/// ```
+///
 fn unnest_list_array(
     list_array: &dyn ListArrayType,
     length_array: &PrimitiveArray<Int64Type>,
@@ -443,7 +486,7 @@ fn unnest_list_array(
             value_length <= target_length,
             "value length is beyond the longest length"
         );
-        // Padding with NULL values
+        // Pad with NULL values
         for _ in value_length..target_length {
             take_indicies_builder.append_null();
         }
@@ -455,68 +498,18 @@ fn unnest_list_array(
     )?)
 }
 
-/// Given this `GenericList` list_array:
+/// Creates take indicies that will be used to expand all columns except for the unnest [`columns`](UnnestExec::columns).
+/// Every column value needs to be repeated multiple times according to the length array.
+///
+/// If the length array looks like this:
 ///
 /// ```ignore
-/// [1], null, [2, 3, 4], null, [5, 6]
+/// [2, 3, 1]
 /// ```
-/// Its values array is represented like this:
+/// Then `create_take_indicies` will return an array like this
 ///
 /// ```ignore
-/// [1, 2, 3, 4, 5, 6]
-/// ```
-///
-/// So if there are no null values or `UnnestOptions.preserve_nulls` is false
-/// we can return the values array without any copying.
-///
-/// Otherwise we'll transfrom the values array using the take kernel and the following take indicies:
-///
-/// ```ignore
-/// 0, null, 1, 2, 3, null, 4, 5
-/// ```
-///
-
-/// Given this `FixedSizeListArray` list_array:
-///
-/// ```ignore
-/// [1, 2], null, [3, 4], null, [5, 6]
-/// ```
-/// Its values array is represented like this:
-///
-/// ```ignore
-/// [1, 2, null, null 3, 4, null, null, 5, 6]
-/// ```
-///
-/// So if there are no null values
-/// we can return the values array without any copying.
-///
-/// Otherwise we'll transfrom the values array using the take kernel.
-///
-/// If `UnnestOptions.preserve_nulls` is true the take indicies will look like this:
-///
-/// ```ignore
-/// 0, 1, null, 4, 5, null, 8, 9
-/// ```
-/// Otherwise we drop the nulls and take indicies will look like this:
-///
-/// ```ignore
-/// 0, 1, 4, 5, 8, 9
-/// ```
-///
-
-/// TODO: update doc
-/// Creates take indicies to be used to expand all other column's data.
-/// Every column value needs to be repeated as many times as many elements there is in each corresponding array value.
-///
-/// If the column being unnested looks like this:
-///
-/// ```ignore
-/// [1], null, [2, 3, 4], null, [5, 6]
-/// ```
-/// Then `create_take_indicies_generic` will return an array like this
-///
-/// ```ignore
-/// [1, null, 2, 2, 2, null, 4, 4]
+/// [0, 0, 1, 1, 1, 2]
 /// ```
 ///
 fn create_take_indicies(
@@ -547,8 +540,8 @@ fn create_take_indicies(
 /// c2: 'a', 'b',  'c', null, 'd'
 /// ```
 ///
-/// then the `unnested_array` contains the unnest column that will replace `c1` in
-/// the final batch:
+/// then the `unnested_list_arrays` contains the unnest column that will replace `c1` in
+/// the final batch if `preserve_nulls` is true:
 ///
 /// ```ignore
 /// c1: 1, null, 2, 3, 4, null, 5, 6
