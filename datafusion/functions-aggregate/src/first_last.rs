@@ -29,6 +29,7 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature, TypeSignature, Volatility};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -41,23 +42,6 @@ use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
-
-pub fn create_first_value_expr(
-    args: Vec<Expr>,
-    distinct: bool,
-    filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
-    null_treatment: Option<NullTreatment>,
-) -> Expr {
-    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-        first_value_udaf(),
-        args,
-        distinct,
-        filter,
-        order_by,
-        null_treatment,
-    ))
-}
 
 make_udaf_function!(
     FirstValue,

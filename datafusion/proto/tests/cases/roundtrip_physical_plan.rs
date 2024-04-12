@@ -34,9 +34,7 @@ use datafusion::datasource::physical_plan::{
     FileSinkConfig, ParquetExec,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{
-    create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
-};
+use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
@@ -601,31 +599,6 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         None,
         Default::default(),
     )))
-}
-
-#[test]
-fn roundtrip_builtin_scalar_function() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-
-    let input = Arc::new(EmptyExec::new(schema.clone()));
-
-    let fun_def = ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Trunc);
-
-    let expr = ScalarFunctionExpr::new(
-        "trunc",
-        fun_def,
-        vec![col("a", &schema)?],
-        DataType::Float64,
-        Some(vec![Some(true)]),
-        false,
-    );
-
-    let project =
-        ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
-
-    roundtrip_test(Arc::new(project))
 }
 
 #[test]

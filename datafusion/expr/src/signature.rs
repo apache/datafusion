@@ -51,7 +51,7 @@ pub enum Volatility {
     Stable,
     /// A volatile function may change the return value from evaluation to evaluation.
     /// Multiple invocations of a volatile function may return different results when used in the
-    /// same query. An example of this is [super::BuiltinScalarFunction::Random]. DataFusion
+    /// same query. An example of this is the random() function. DataFusion
     /// can not evaluate such functions during planning.
     /// In the query `select col1, random() from t1`, `random()` function will be evaluated
     /// for each output row, resulting in a unique random value for each row.

@@ -25,11 +25,13 @@ use datafusion_common::cast::as_int32_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, BuiltinScalarFunction, Cast, ColumnarValue, Expr, ExprSchemable,
-    LogicalPlan, LogicalPlanBuilder, ScalarUDF, Volatility,
+    expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
+    LogicalPlanBuilder, ScalarUDF, Volatility,
 };
+use datafusion_functions::math;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
@@ -295,6 +297,45 @@ fn select_date_plus_interval() -> Result<()> {
 }
 
 #[test]
+fn simplify_project_scalar_fn() -> Result<()> {
+    // Issue https://github.com/apache/arrow-datafusion/issues/5996
+    let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
+    let plan = table_scan(Some("test"), &schema, None)?
+        .project(vec![power(col("f"), lit(1.0))])?
+        .build()?;
+
+    // before simplify: power(t.f, 1.0)
+    // after simplify:  t.f as "power(t.f, 1.0)"
+    let expected = "Projection: test.f AS power(test.f,Float64(1))\
+                      \n  TableScan: test";
+    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[test]
+fn simplify_scan_predicate() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("f", DataType::Float64, false),
+        Field::new("g", DataType::Float64, false),
+    ]);
+    let plan = table_scan_with_filters(
+        Some("test"),
+        &schema,
+        None,
+        vec![col("g").eq(power(col("f"), lit(1.0)))],
+    )?
+    .build()?;
+
+    // before simplify: t.g = power(t.f, 1.0)
+    // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
+    let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
+    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[test]
 fn test_const_evaluator() {
     // true --> true
     test_evaluate(lit(true), lit(true));
@@ -343,17 +384,17 @@ fn test_const_evaluator_scalar_functions() {
 
     // volatile / stable functions should not be evaluated
     // rand() + (1 + 2) --> rand() + 3
-    let fun = BuiltinScalarFunction::Random;
-    assert_eq!(fun.volatility(), Volatility::Volatile);
-    let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
+    let fun = math::random();
+    assert_eq!(fun.signature().volatility, Volatility::Volatile);
+    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
     let expr = rand.clone() + (lit(1) + lit(2));
     let expected = rand + lit(3);
     test_evaluate(expr, expected);
 
     // parenthesization matters: can't rewrite
     // (rand() + 1) + 2 --> (rand() + 1) + 2)
-    let fun = BuiltinScalarFunction::Random;
-    let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
+    let fun = math::random();
+    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
     let expr = (rand + lit(1)) + lit(2);
     test_evaluate(expr.clone(), expr);
 }
@@ -430,4 +471,100 @@ fn multiple_now() -> Result<()> {
 
     assert_eq!(expected, actual);
     Ok(())
+}
+
+// ------------------------------
+// --- Simplifier tests -----
+// ------------------------------
+
+fn expr_test_schema() -> DFSchemaRef {
+    Schema::new(vec![
+        Field::new("c1", DataType::Utf8, true),
+        Field::new("c2", DataType::Boolean, true),
+        Field::new("c3", DataType::Int64, true),
+        Field::new("c4", DataType::UInt32, true),
+        Field::new("c1_non_null", DataType::Utf8, false),
+        Field::new("c2_non_null", DataType::Boolean, false),
+        Field::new("c3_non_null", DataType::Int64, false),
+        Field::new("c4_non_null", DataType::UInt32, false),
+    ])
+    .to_dfschema_ref()
+    .unwrap()
+}
+
+fn test_simplify(input_expr: Expr, expected_expr: Expr) {
+    let info: MyInfo = MyInfo {
+        schema: expr_test_schema(),
+        execution_props: ExecutionProps::new(),
+    };
+    let simplifier = ExprSimplifier::new(info);
+    let simplified_expr = simplifier
+        .simplify(input_expr.clone())
+        .expect("successfully evaluated");
+
+    assert_eq!(
+        simplified_expr, expected_expr,
+        "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
+    );
+}
+
+#[test]
+fn test_simplify_log() {
+    // Log(c3, 1) ===> 0
+    {
+        let expr = log(col("c3_non_null"), lit(1));
+        test_simplify(expr, lit(0i64));
+    }
+    // Log(c3, c3) ===> 1
+    {
+        let expr = log(col("c3_non_null"), col("c3_non_null"));
+        let expected = lit(1i64);
+        test_simplify(expr, expected);
+    }
+    // Log(c3, Power(c3, c4)) ===> c4
+    {
+        let expr = log(
+            col("c3_non_null"),
+            power(col("c3_non_null"), col("c4_non_null")),
+        );
+        let expected = col("c4_non_null");
+        test_simplify(expr, expected);
+    }
+    // Log(c3, c4) ===> Log(c3, c4)
+    {
+        let expr = log(col("c3_non_null"), col("c4_non_null"));
+        let expected = log(col("c3_non_null"), col("c4_non_null"));
+        test_simplify(expr, expected);
+    }
+}
+
+#[test]
+fn test_simplify_power() {
+    // Power(c3, 0) ===> 1
+    {
+        let expr = power(col("c3_non_null"), lit(0));
+        let expected = lit(1i64);
+        test_simplify(expr, expected)
+    }
+    // Power(c3, 1) ===> c3
+    {
+        let expr = power(col("c3_non_null"), lit(1));
+        let expected = col("c3_non_null");
+        test_simplify(expr, expected)
+    }
+    // Power(c3, Log(c3, c4)) ===> c4
+    {
+        let expr = power(
+            col("c3_non_null"),
+            log(col("c3_non_null"), col("c4_non_null")),
+        );
+        let expected = col("c4_non_null");
+        test_simplify(expr, expected)
+    }
+    // Power(c3, c4) ===> Power(c3, c4)
+    {
+        let expr = power(col("c3_non_null"), col("c4_non_null"));
+        let expected = power(col("c3_non_null"), col("c4_non_null"));
+        test_simplify(expr, expected)
+    }
 }

@@ -28,6 +28,9 @@ use datafusion_expr::{
 //     physical_expr::PhysicalExpr,
 //     sort_expr::{LexOrdering, PhysicalSortExpr},
 // };
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 

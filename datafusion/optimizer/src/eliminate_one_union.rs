@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to eliminate one union.
+//! [`EliminateOneUnion`]  eliminates single element `Union`
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{LogicalPlan, Union};

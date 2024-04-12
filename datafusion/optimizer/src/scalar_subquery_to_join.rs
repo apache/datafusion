@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 

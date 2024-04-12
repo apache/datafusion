@@ -518,12 +518,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Floor {
                 expr,
                 field: _field,
-            } => self.sql_named_function_to_expr(
-                *expr,
-                BuiltinScalarFunction::Floor,
-                schema,
-                planner_context,
-            ),
+            } => self.sql_fn_name_to_expr(*expr, "floor", schema, planner_context),
             SQLExpr::Ceil {
                 expr,
                 field: _field,

@@ -67,7 +67,7 @@ use datafusion_common::{
     alias::AliasGenerator,
     config::{ConfigExtension, TableOptions},
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+    tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
@@ -2298,7 +2298,7 @@ impl SQLOptions {
     /// Return an error if the [`LogicalPlan`] has any nodes that are
     /// incompatible with this [`SQLOptions`].
     pub fn verify_plan(&self, plan: &LogicalPlan) -> Result<()> {
-        plan.visit(&mut BadPlanVisitor::new(self))?;
+        plan.visit_with_subqueries(&mut BadPlanVisitor::new(self))?;
         Ok(())
     }
 }

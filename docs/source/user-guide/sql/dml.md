@@ -35,7 +35,20 @@ TO '<i><b>file_name</i></b>'
 [ OPTIONS( <i><b>option</i></b> [, ... ] ) ]
 </pre>
 
+`STORED AS` specifies the file format the `COPY` command will write. If this
+clause is not specified, it will be inferred from the file extension if possible.
+
+`PARTITIONED BY` specifies the columns to use for partitioning the output files into
+separate hive-style directories.
+
+The output format is determined by the first match of the following rules:
+
+1. Value of `STORED AS`
+2. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
+
 For a detailed list of valid OPTIONS, see [Write Options](write_options).
+
+### Examples
 
 Copy the contents of `source_table` to `file_name.json` in JSON format:
 
@@ -72,6 +85,23 @@ of hive-style partitioned parquet files:
 +-------+
 ```
 
+If the the data contains values of `x` and `y` in column1 and only `a` in
+column2, output files will appear in the following directory structure:
+
+```
+dir_name/
+  column1=x/
+    column2=a/
+      <file>.parquet
+      <file>.parquet
+      ...
+  column1=y/
+    column2=a/
+      <file>.parquet
+      <file>.parquet
+      ...
+```
+
 Run the query `SELECT * from source ORDER BY time` and write the
 results (maintaining the order) to a parquet file named
 `output.parquet` with a maximum parquet row group size of 10MB:
@@ -85,13 +115,9 @@ results (maintaining the order) to a parquet file named
 +-------+
 ```
 
-The output format is determined by the first match of the following rules:
-
-1. Value of `STORED AS`
-2. Value of the `OPTION (FORMAT ..)`
-3. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
-
 ## INSERT
+
+### Examples
 
 Insert values into a table.
 

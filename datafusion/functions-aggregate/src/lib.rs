@@ -59,9 +59,7 @@ pub mod first_last;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::
-    AggregateUDF
-;
+use datafusion_expr::AggregateUDF;
 use log::debug;
 use std::sync::Arc;
 

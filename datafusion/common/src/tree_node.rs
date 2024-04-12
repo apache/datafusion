@@ -25,10 +25,9 @@ use crate::Result;
 /// These macros are used to determine continuation during transforming traversals.
 macro_rules! handle_transform_recursion {
     ($F_DOWN:expr, $F_CHILD:expr, $F_UP:expr) => {{
-        #[allow(clippy::redundant_closure_call)]
         $F_DOWN?
             .transform_children(|n| n.map_children($F_CHILD))?
-            .transform_parent(|n| $F_UP(n))
+            .transform_parent($F_UP)
     }};
 }
 
@@ -291,6 +290,23 @@ pub trait TreeNode: Sized {
             |c| c.transform_down_up(f_down, f_up),
             f_up
         )
+    }
+
+    /// Returns true if `f` returns true for node in the tree.
+    ///
+    /// Stops recursion as soon as a matching node is found
+    fn exists<F: FnMut(&Self) -> bool>(&self, mut f: F) -> bool {
+        let mut found = false;
+        self.apply(&mut |n| {
+            Ok(if f(n) {
+                found = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+        found
     }
 
     /// Apply the closure `F` to the node's children.
