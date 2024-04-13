@@ -173,6 +173,10 @@ impl AggregateUDF {
         self.inner.accumulator(acc_args)
     }
 
+    // pub fn reverse_expr_v2(&self, sort_exprs: Vec<Expr>) -> Option<AggregateFunction> {
+    //     self.inner.reverse_expr_v2(sort_exprs)
+    // }
+
     /// Return the fields used to store the intermediate state for this aggregator, given
     /// the name of the aggregate, value type and ordering fields. See [`AggregateUDFImpl::state_fields`]
     /// for more details.
@@ -365,7 +369,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
-    fn reverse_expr(&self, args_name: Vec<String>) -> Option<AggregateFunction> {
+    fn reverse_expr(&self, _args_name: Vec<String>) -> Option<AggregateFunction> {
         None
     }
 }

@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
-    tree_node::{Transformed, TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode}, Column,
 };
-use datafusion_physical_expr::expressions::{FirstValue, LastValue};
+use datafusion_common::Result;
+use datafusion_expr::{expr::Sort, Expr};
+use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, reverse_order_bys, AggregateExpr,
-    EquivalenceProperties, LexRequirement, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::col, reverse_order_bys, AggregateExpr, EquivalenceProperties, LexRequirement, PhysicalSortRequirement
 };
-use datafusion_physical_plan::aggregates::{concat_slices, optimize_for_finer_ordering};
+use datafusion_physical_plan::{aggregates::{concat_slices, optimize_for_finer_ordering}, udaf::AggregateFunctionExpr};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -234,29 +234,68 @@ fn get_aggregate_exprs_requirement(
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
-        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let reverse_aggr_req = reverse_order_bys(aggr_req);
-        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
+        let aggr_fun_expr = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>();
+        let aggr_sort_expr = aggr_expr.order_bys().unwrap_or(&[]);
+        let reversed_ordering = reverse_order_bys(aggr_sort_expr);
+        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_sort_expr);
         let reverse_aggr_req =
-            PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+            PhysicalSortRequirement::from_sort_exprs(&reversed_ordering);
 
-        if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
-            let mut first_value = first_value.clone();
+
+        if aggr_fun_expr.is_some_and(|e| e.fun().name() == "FIRST_VALUE") {
+            let mut first_value = aggr_fun_expr.unwrap().clone();
 
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
             )) {
+
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
             } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
+                let name = first_value.name();
+
+                let name = if name.starts_with("FIRST") {
+                    format!("LAST{}", &name[5..])
+                } else {
+                    let expr = first_value.expressions().swap_remove(0);
+                    format!("LAST_VALUE({})", expr)
+                };
+                // println!("convert to last, aggr_sort_expr: {:?}", aggr_sort_expr);
+                println!("convert to last, reverse_sort_expr: {:?}", reversed_ordering);
+
+                let sort_exprs = first_value.sort_exprs();
+                let reversed_sort_exprs = sort_exprs.iter().map(|e| {
+                    if let Expr::Sort(s) = e {
+                        Expr::Sort(s.reverse())
+                    } else {
+                        e.clone()
+                    }
+                }).collect::<Vec<_>>();
+
+                // let sort_exprs = vec![Expr::Sort( Sort{
+                //     expr: Box::new(Expr::Column(Column::new(Some("sales_global"), "amount"))),
+                //     asc: false,
+                //     nulls_first: false,
+                // })];
+
+                // println!("expected sort_exprs: {:?}", sort_exprs);
+                // println!("reversed_sort_exprs: {:?}", reversed_sort_exprs);
+
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
-                let mut last_value = first_value.convert_to_last();
-                last_value = last_value.with_requirement_satisfied(true);
+                let last_value = first_value
+                    .with_name(name)
+                    .with_fun(LastValue::new().into())
+                    .with_sort_exprs(reversed_sort_exprs)
+                    .with_ordering_req(reversed_ordering)
+                    .with_requirement_satisfied(true);
+
+                // let mut last_value = first_value.convert_to_last();
+                // last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.
@@ -265,8 +304,9 @@ fn get_aggregate_exprs_requirement(
             }
             continue;
         }
-        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
-            let mut last_value = last_value.clone();
+        if aggr_fun_expr.is_some_and(|e| e.fun().name() == "LAST_VALUE") {
+        // if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
+            let mut last_value = aggr_fun_expr.unwrap().clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
@@ -279,8 +319,33 @@ fn get_aggregate_exprs_requirement(
             )) {
                 // Converting to FIRST_VALUE enables more efficient execution
                 // given the existing ordering:
-                let mut first_value = last_value.convert_to_first();
-                first_value = first_value.with_requirement_satisfied(true);
+
+                let name = last_value.name();
+
+                let name = if name.starts_with("LAST") {
+                    format!("FIRST{}", &name[4..])
+                } else {
+                    let expr = last_value.expressions().swap_remove(0);
+                    format!("FIRST_VALUE({})", expr)
+                };
+
+                let sort_exprs = last_value.sort_exprs();
+                let reversed_sort_exprs = sort_exprs.iter().map(|e| {
+                    if let Expr::Sort(s) = e {
+                        Expr::Sort(s.reverse())
+                    } else {
+                        e.clone()
+                    }
+                }).collect::<Vec<_>>();
+
+
+                let first_value = last_value
+                    .with_name(name)
+                    .with_fun(FirstValue::new().into())
+                    .with_sort_exprs(reversed_sort_exprs)
+                    .with_ordering_req(reversed_ordering)
+                    .with_requirement_satisfied(true);
+
                 *aggr_expr = Arc::new(first_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.

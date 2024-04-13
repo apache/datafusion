@@ -28,8 +28,10 @@ use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature, TypeSignature, Volatility};
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    TypeSignature, Volatility,
+};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -58,6 +60,23 @@ make_udaf_function!(
     "Returns the last value in a group of values.",
     last_value_udaf
 );
+
+pub fn create_first_value_expr(
+    args: Vec<Expr>,
+    distinct: bool,
+    filter: Option<Box<Expr>>,
+    order_by: Option<Vec<Expr>>,
+    null_treatment: Option<NullTreatment>,
+) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        first_value_udaf(),
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    ))
+}
 
 pub struct FirstValue {
     signature: Signature,
@@ -95,30 +114,30 @@ impl FirstValue {
         }
     }
 
-    pub fn convert_to_last(self, arg_name: String) -> LastValue {
-        let name = if self.name().starts_with("FIRST") {
-            format!("LAST{}", &self.name()[5..])
-        } else {
-            format!("LAST_VALUE({})", arg_name)
-        };
+    // pub fn convert_to_last(self, arg_name: String) -> LastValue {
+    //     let name = if self.name().starts_with("FIRST") {
+    //         format!("LAST{}", &self.name()[5..])
+    //     } else {
+    //         format!("LAST_VALUE({})", arg_name)
+    //     };
 
-        let FirstValue { signature, aliases }
+    //     let FirstValue { signature, aliases }
 
-        let FirstValuePhysicalExpr {
-            expr,
-            input_data_type,
-            ordering_req,
-            order_by_data_types,
-            ..
-        } = self;
-        LastValuePhysicalExpr::new(
-            expr,
-            name,
-            input_data_type,
-            reverse_order_bys(&ordering_req),
-            order_by_data_types,
-        )
-    }
+    //     let FirstValuePhysicalExpr {
+    //         expr,
+    //         input_data_type,
+    //         ordering_req,
+    //         order_by_data_types,
+    //         ..
+    //     } = self;
+    //     LastValuePhysicalExpr::new(
+    //         expr,
+    //         name,
+    //         input_data_type,
+    //         reverse_order_bys(&ordering_req),
+    //         order_by_data_types,
+    //     )
+    // }
 }
 
 impl AggregateUDFImpl for FirstValue {

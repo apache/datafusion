@@ -293,9 +293,13 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median | AggregateFunction::NthValue => {
-            Ok(input_types.to_vec())
-        }
+        AggregateFunction::Median
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
+        AggregateFunction::NthValue => Ok(input_types.to_vec()),
+        // AggregateFunction::Median | AggregateFunction::NthValue => {
+        //     Ok(input_types.to_vec())
+        // }
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
         AggregateFunction::StringAgg => {
             if !is_string_agg_supported_arg_type(&input_types[0]) {

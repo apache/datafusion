@@ -24,13 +24,6 @@ use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
-// use datafusion_physical_expr_common::{
-//     physical_expr::PhysicalExpr,
-//     sort_expr::{LexOrdering, PhysicalSortExpr},
-// };
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -62,6 +55,11 @@ pub fn create_aggregate_expr(
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
 
+    let requirement_satisfied = ordering_req.is_empty();
+
+    println!("sort_exprs: {:?}", sort_exprs);
+    println!("ordering_req: {:?}", ordering_req);
+
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
@@ -72,6 +70,7 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
+        requirement_satisfied,
     }))
 }
 
@@ -150,10 +149,14 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
     }
+
+    fn sort_exprs(&self) -> &[Expr] {
+        &[]
+    }
 }
 
 /// Physical aggregate expression of a UDAF.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
@@ -167,12 +170,42 @@ pub struct AggregateFunctionExpr {
     ordering_req: LexOrdering,
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
+    requirement_satisfied: bool,
 }
 
 impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
+    }
+
+    pub fn requirement_satisfied(&self) -> bool {
+        self.requirement_satisfied
+    }
+
+    pub fn with_requirement_satisfied(mut self, satisfied: bool) -> Self {
+        self.requirement_satisfied = satisfied;
+        self
+    }
+
+    pub fn with_sort_exprs(mut self, sort_exprs: Vec<Expr>) -> Self {
+        self.sort_exprs = sort_exprs;
+        self
+    }
+
+    pub fn with_ordering_req(mut self, ordering_req: Vec<PhysicalSortExpr>) -> Self {
+        self.ordering_req = ordering_req;
+        self
+    }
+
+    pub fn with_fun(mut self, fun: AggregateUDF) -> Self {
+        self.fun = fun;
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 }
 
@@ -279,6 +312,14 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
+
+    fn sort_exprs(&self) -> &[Expr] {
+        &self.sort_exprs
+    }
+
+    // fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+    //     self.fun.reverse_expr(args_name)
+    // }
 
     // fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
     //     let args_name = self
