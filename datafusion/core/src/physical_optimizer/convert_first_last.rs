@@ -110,6 +110,9 @@ fn get_common_requirement_of_aggregate_input(
 /// In `create_initial_plan` for LogicalPlan::Aggregate, we have a nested AggregateExec where the first layer
 /// is in Partial mode and the second layer is in Final or Finalpartitioned mode.
 /// If the first layer of aggregate plan is transformed, we need to update the child of the layer with final mode.
+/// Therefore, we check it and get the updated aggregate expressions.
+///
+/// If AggregateExec is created from elsewhere, we skip the check and return the original aggregate expressions.
 fn try_get_updated_aggr_expr_from_child(
     aggr_exec: &AggregateExec,
 ) -> Vec<Arc<dyn AggregateExpr>> {

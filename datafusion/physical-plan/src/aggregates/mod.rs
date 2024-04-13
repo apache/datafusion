@@ -988,7 +988,6 @@ fn optimize_for_finer_ordering(
     {
         // There is a requirement that both satisfies existing requirement and current
         // aggregate requirement. Use updated requirement
-        // return (Some(finer_ordering), None);
         *requirement = finer_ordering;
         return Ok(());
     }
@@ -1002,7 +1001,6 @@ fn optimize_for_finer_ordering(
         ) {
             // There is a requirement that both satisfies existing requirement and reverse
             // aggregate requirement. Use updated requirement
-            // return (Some(finer_ordering), Some(reverse_aggr_expr));
             *requirement = finer_ordering;
             *aggr_expr = reverse_aggr_expr;
             return Ok(());
