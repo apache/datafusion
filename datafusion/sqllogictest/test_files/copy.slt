@@ -146,11 +146,11 @@ query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-DataSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
@@ -160,11 +160,11 @@ query TT
 EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' STORED AS PARQUET
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-DataSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Copy more files to directory via query
 query IT
