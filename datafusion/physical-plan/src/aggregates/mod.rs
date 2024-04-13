@@ -987,7 +987,7 @@ fn get_finer_aggregate_exprs_requirement(
         // conflicting requirements.
         return not_impl_err!(
             "Conflicting ordering requirements in aggregate functions is not supported"
-        )
+        );
     }
 
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
