@@ -335,7 +335,7 @@ pub trait PruningStatistics {
 /// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
 /// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
 /// `x IS NULL`  | `x_null_count > 0`
-/// `x IS NOT NULL`  | `!(x_null_count = row_count)`
+/// `x IS NOT NULL`  | `x_null_count != row_count`
 /// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
 ///
 /// ## Predicate Evaluation
