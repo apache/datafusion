@@ -883,7 +883,8 @@ async fn test_pages_with_null_values() {
         Scenario::WithNullValuesPageLevel,
         "SELECT * FROM t where i8 <= 6",
         Some(0),
-        // expect prune two pages which 10 rows
+        // expect prune pages with all null or pages that have only values greater than 6
+        // (row_group1, page2), (row_group4, page2)
         Some(10),
         22,
     )
