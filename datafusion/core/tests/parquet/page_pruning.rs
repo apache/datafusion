@@ -893,7 +893,7 @@ async fn test_pages_with_null_values() {
         Scenario::WithNullValuesPageLevel,
         "SELECT * FROM t where \"i16\" is not null",
         Some(0),
-        // expect prune two pages which 10 rows
+        // expect prune (row_group1, page2) and (row_group4, page2) = 10 rows
         Some(10),
         29,
     )
