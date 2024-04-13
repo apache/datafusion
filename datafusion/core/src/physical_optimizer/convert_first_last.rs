@@ -46,15 +46,15 @@ use super::PhysicalOptimizerRule;
 /// so we can convert the aggregate expression to FirstValue(c1 order by asc),
 /// since the current ordering is already satisfied, it saves our time!
 #[derive(Default)]
-pub struct ConvertFirstLast {}
+pub struct OptimizeAggregateOrder {}
 
-impl ConvertFirstLast {
+impl OptimizeAggregateOrder {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl PhysicalOptimizerRule for ConvertFirstLast {
+impl PhysicalOptimizerRule for OptimizeAggregateOrder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -65,7 +65,7 @@ impl PhysicalOptimizerRule for ConvertFirstLast {
     }
 
     fn name(&self) -> &str {
-        "SimpleOrdering"
+        "OptimizeAggregateOrder"
     }
 
     fn schema_check(&self) -> bool {
@@ -74,75 +74,6 @@ impl PhysicalOptimizerRule for ConvertFirstLast {
 }
 
 fn get_common_requirement_of_aggregate_input(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    // Optimize children
-    let children = plan.children();
-    let mut is_child_transformed = false;
-    let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
-    for c in children.iter() {
-        let res = optimize_internal(c.clone())?;
-        if res.transformed {
-            is_child_transformed = true;
-        }
-        new_children.push(res.data);
-    }
-
-    // Update children if transformed
-    let plan = if is_child_transformed {
-        plan.with_new_children(new_children)?
-    } else {
-        plan
-    };
-
-    // Update itself
-    let plan = optimize_internal(plan)?;
-
-    // If one of the children is transformed, then the plan is considered transformed, then we update
-    // the children of the plan from bottom to top.
-    if plan.transformed || is_child_transformed {
-        Ok(Transformed::yes(plan.data))
-    } else {
-        Ok(Transformed::no(plan.data))
-    }
-}
-
-/// In `create_initial_plan` for LogicalPlan::Aggregate, we have a nested AggregateExec where the first layer
-/// is in Partial mode and the second layer is in Final or Finalpartitioned mode.
-/// If the first layer of aggregate plan is transformed, we need to update the child of the layer with final mode.
-/// Therefore, we check it and get the updated aggregate expressions.
-///
-/// If AggregateExec is created from elsewhere, we skip the check and return the original aggregate expressions.
-fn try_get_updated_aggr_expr_from_child(
-    aggr_exec: &AggregateExec,
-) -> Vec<Arc<dyn AggregateExpr>> {
-    let input = aggr_exec.input();
-    if aggr_exec.mode() == &AggregateMode::Final
-        || aggr_exec.mode() == &AggregateMode::FinalPartitioned
-    {
-        // Some aggregators may be modified during initialization for
-        // optimization purposes. For example, a FIRST_VALUE may turn
-        // into a LAST_VALUE with the reverse ordering requirement.
-        // To reflect such changes to subsequent stages, use the updated
-        // `AggregateExpr`/`PhysicalSortExpr` objects.
-        //
-        // The bottom up transformation is the mirror of LogicalPlan::Aggregate creation in [create_initial_plan]
-        if let Some(c_aggr_exec) = input.as_any().downcast_ref::<AggregateExec>() {
-            if c_aggr_exec.mode() == &AggregateMode::Partial {
-                // If the input is an AggregateExec in Partial mode, then the
-                // input is a CoalescePartitionsExec. In this case, the
-                // AggregateExec is the second stage of aggregation. The
-                // requirements of the second stage are the requirements of
-                // the first stage.
-                return c_aggr_exec.aggr_expr().to_vec();
-            }
-        }
-    }
-
-    aggr_exec.aggr_expr().to_vec()
-}
-
-fn optimize_internal(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
@@ -205,6 +136,41 @@ fn optimize_internal(
     } else {
         Ok(Transformed::no(plan))
     }
+}
+
+/// In `create_initial_plan` for LogicalPlan::Aggregate, we have a nested AggregateExec where the first layer
+/// is in Partial mode and the second layer is in Final or Finalpartitioned mode.
+/// If the first layer of aggregate plan is transformed, we need to update the child of the layer with final mode.
+/// Therefore, we check it and get the updated aggregate expressions.
+///
+/// If AggregateExec is created from elsewhere, we skip the check and return the original aggregate expressions.
+fn try_get_updated_aggr_expr_from_child(
+    aggr_exec: &AggregateExec,
+) -> Vec<Arc<dyn AggregateExpr>> {
+    let input = aggr_exec.input();
+    if aggr_exec.mode() == &AggregateMode::Final
+        || aggr_exec.mode() == &AggregateMode::FinalPartitioned
+    {
+        // Some aggregators may be modified during initialization for
+        // optimization purposes. For example, a FIRST_VALUE may turn
+        // into a LAST_VALUE with the reverse ordering requirement.
+        // To reflect such changes to subsequent stages, use the updated
+        // `AggregateExpr`/`PhysicalSortExpr` objects.
+        //
+        // The bottom up transformation is the mirror of LogicalPlan::Aggregate creation in [create_initial_plan]
+        if let Some(c_aggr_exec) = input.as_any().downcast_ref::<AggregateExec>() {
+            if c_aggr_exec.mode() == &AggregateMode::Partial {
+                // If the input is an AggregateExec in Partial mode, then the
+                // input is a CoalescePartitionsExec. In this case, the
+                // AggregateExec is the second stage of aggregation. The
+                // requirements of the second stage are the requirements of
+                // the first stage.
+                return c_aggr_exec.aggr_expr().to_vec();
+            }
+        }
+    }
+
+    aggr_exec.aggr_expr().to_vec()
 }
 
 /// Get the common requirement that satisfies all the aggregate expressions.
