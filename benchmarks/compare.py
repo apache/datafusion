@@ -24,14 +24,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Any
 from pathlib import Path
 from argparse import ArgumentParser
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-except ImportError:
-    print("Try `pip install rich` for using this script.")
-    raise
-
+from rich.console import Console
+from rich.table import Table
 
 @dataclass
 class QueryResult:

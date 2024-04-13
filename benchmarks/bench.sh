@@ -440,6 +440,9 @@ compare_benchmarks() {
     fi
 
     echo "Comparing ${BRANCH1} and ${BRANCH2}"
+    python3 -m venv ./${SCRIPT_DIR}/venv
+    source ./${SCRIPT_DIR}/venv/bin/activate
+    pip3 install rich
     for bench in `ls ${BASE_RESULTS_DIR}/${BRANCH1}` ; do
         RESULTS_FILE1="${BASE_RESULTS_DIR}/${BRANCH1}/${bench}"
         RESULTS_FILE2="${BASE_RESULTS_DIR}/${BRANCH2}/${bench}"
@@ -448,11 +451,12 @@ compare_benchmarks() {
             echo "Benchmark ${bench}"
             echo "--------------------"
             python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
     done
-
+    rm -r ./${SCRIPT_DIR}/venv
 }
 
 # And start the process up
