@@ -24,7 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
@@ -113,31 +113,6 @@ impl FirstValue {
             ),
         }
     }
-
-    // pub fn convert_to_last(self, arg_name: String) -> LastValue {
-    //     let name = if self.name().starts_with("FIRST") {
-    //         format!("LAST{}", &self.name()[5..])
-    //     } else {
-    //         format!("LAST_VALUE({})", arg_name)
-    //     };
-
-    //     let FirstValue { signature, aliases }
-
-    //     let FirstValuePhysicalExpr {
-    //         expr,
-    //         input_data_type,
-    //         ordering_req,
-    //         order_by_data_types,
-    //         ..
-    //     } = self;
-    //     LastValuePhysicalExpr::new(
-    //         expr,
-    //         name,
-    //         input_data_type,
-    //         reverse_order_bys(&ordering_req),
-    //         order_by_data_types,
-    //     )
-    // }
 }
 
 impl AggregateUDFImpl for FirstValue {
@@ -161,19 +136,37 @@ impl AggregateUDFImpl for FirstValue {
         let mut all_sort_orders = vec![];
 
         // Construct PhysicalSortExpr objects from Expr objects:
+        // TODO: Reuse `create_physical_sort_expr`
         let mut sort_exprs = vec![];
         for expr in acc_args.sort_exprs {
-            if let Expr::Sort(sort) = expr {
-                if let Expr::Column(col) = sort.expr.as_ref() {
+            if let Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) = expr
+            {
+                if let Expr::Column(col) = expr.as_ref() {
                     let name = &col.name;
                     let e = expressions::column::col(name, acc_args.schema)?;
                     sort_exprs.push(PhysicalSortExpr {
                         expr: e,
                         options: SortOptions {
-                            descending: !sort.asc,
-                            nulls_first: sort.nulls_first,
+                            descending: !asc,
+                            nulls_first: *nulls_first,
                         },
                     });
+                } else if let Expr::Alias(alias) = expr.as_ref() {
+                    if let Expr::Column(col) = alias.expr.as_ref() {
+                        let name = &col.name;
+                        let e = expressions::column::col(name, acc_args.schema)?;
+                        sort_exprs.push(PhysicalSortExpr {
+                            expr: e,
+                            options: SortOptions {
+                                descending: !asc,
+                                nulls_first: *nulls_first,
+                            },
+                        });
+                    }
                 }
             }
         }

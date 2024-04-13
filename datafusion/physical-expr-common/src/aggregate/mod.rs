@@ -57,8 +57,8 @@ pub fn create_aggregate_expr(
 
     let requirement_satisfied = ordering_req.is_empty();
 
-    println!("sort_exprs: {:?}", sort_exprs);
-    println!("ordering_req: {:?}", ordering_req);
+    // println!("sort_exprs: {:?}", sort_exprs);
+    // println!("ordering_req: {:?}", ordering_req);
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
