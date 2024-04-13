@@ -1240,12 +1240,10 @@ fn build_single_column_expr(
 /// returns a pruning expression in terms of IsNull that will evaluate to true
 /// if the column may contain null, and false if definitely does not
 /// contain null.
-/// If set `with_not` to true: which means is not null
-/// because datafusion use false flag of expr result to prune unit (row group, page ..)
-/// Given an expression reference to `expr`, if `expr` is a column expression,
-/// returns a pruning expression in terms of IsNotNull that will evaluate to true
-/// if the column may contain any non-null values, and false if definitely does not contain
-/// non-null values null as all null values.
+/// If `with_not` is true, build a pruning expression for `col IS NOT NULL`: `col_count != col_null_count`
+/// The pruning expression evaluates to true ONLY if the column definitely CONTAINS
+/// at least one NULL value.  In this case we can know that `IS NOT NULL` can not be true and
+/// thus can prune the row group / value
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,

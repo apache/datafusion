@@ -27,6 +27,7 @@ use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use futures::stream::iter;
 use itertools::Itertools;
 use log::{debug, trace};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -559,10 +560,9 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
             .collect_vec();
         first_row_index.push(self.num_rows_in_row_group);
 
-        let row_count_per_page: Vec<_> = first_row_index
-            .windows(2)
-            .map(|window| Some(window[1] - window[0]))
-            .collect();
+        let row_count_per_page = self.col_offset_indexes.windows(2).map(|location| {
+            Some(location[1].first_row_index - location[0].first_row_index)
+        });
 
         Some(Arc::new(Int64Array::from_iter(row_count_per_page)))
     }
