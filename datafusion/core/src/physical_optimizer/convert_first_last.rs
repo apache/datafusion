@@ -18,7 +18,6 @@
 use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
-    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_physical_expr::expressions::{FirstValue, LastValue};
@@ -26,7 +25,7 @@ use datafusion_physical_expr::{
     equivalence::ProjectionMapping, reverse_order_bys, AggregateExpr,
     EquivalenceProperties, LexRequirement, PhysicalSortRequirement,
 };
-use datafusion_physical_plan::aggregates::{concat_slices, finer_ordering};
+use datafusion_physical_plan::aggregates::{concat_slices, optimize_for_finer_ordering};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -290,61 +289,14 @@ fn get_aggregate_exprs_requirement(
             }
             continue;
         }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
-                // Requirement is satisfied by existing ordering
-                requirement = finer_ordering;
-                continue;
-            }
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
-                    // Reverse requirement is satisfied by exiting ordering.
-                    // Hence reverse the aggregator
-                    requirement = finer_ordering;
-                    *aggr_expr = reverse_aggr_expr;
-                    continue;
-                }
-            }
-        }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            // There is a requirement that both satisfies existing requirement and current
-            // aggregate requirement. Use updated requirement
-            requirement = finer_ordering;
-            continue;
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                // There is a requirement that both satisfies existing requirement and reverse
-                // aggregate requirement. Use updated requirement
-                requirement = finer_ordering;
-                *aggr_expr = reverse_aggr_expr;
-                continue;
-            }
-        }
-        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
-        // requirements are conflicting. Currently, we do not support
-        // conflicting requirements.
-        return not_impl_err!(
-            "Conflicting ordering requirements in aggregate functions is not supported"
-        );
+
+        optimize_for_finer_ordering(
+            &mut requirement,
+            aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        )?;
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }

@@ -41,7 +41,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
-use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping,
     expressions::{Column, Max, Min, UnKnownColumn},
@@ -371,7 +370,6 @@ impl AggregateExec {
             .collect::<Vec<_>>();
 
         let req = get_aggregate_exprs_requirement(
-            &new_requirement,
             &mut aggr_expr,
             &group_by,
             input_eq_properties,
@@ -927,7 +925,6 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
 fn get_aggregate_exprs_requirement(
-    prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -935,97 +932,89 @@ fn get_aggregate_exprs_requirement(
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
-        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-
-        if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
-            let mut first_value = first_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
-            } else {
-                // Requirement is not satisfied with existing ordering.
-                first_value = first_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(first_value) as _;
-            }
-            continue;
-        }
-        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
-            let mut last_value = last_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
-            } else {
-                // Requirement is not satisfied with existing ordering.
-                last_value = last_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(last_value) as _;
-            }
-            continue;
-        }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
-                // Requirement is satisfied by existing ordering
-                requirement = finer_ordering;
-                continue;
-            }
-        }
-        println!("try reverse expr {:#?}", aggr_expr);
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
-                    // Reverse requirement is satisfied by exiting ordering.
-                    // Hence reverse the aggregator
-                    requirement = finer_ordering;
-                    *aggr_expr = reverse_aggr_expr;
-                    continue;
-                }
-            }
-        }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-        {
-            // There is a requirement that both satisfies existing requirement and current
-            // aggregate requirement. Use updated requirement
-            requirement = finer_ordering;
-            continue;
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                // There is a requirement that both satisfies existing requirement and reverse
-                // aggregate requirement. Use updated requirement
-                requirement = finer_ordering;
-                *aggr_expr = reverse_aggr_expr;
-                continue;
-            }
-        }
-        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
-        // requirements are conflicting. Currently, we do not support
-        // conflicting requirements.
-        return not_impl_err!(
-            "Conflicting ordering requirements in aggregate functions is not supported"
-        );
+        optimize_for_finer_ordering(
+            &mut requirement,
+            aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        )?;
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
+}
+
+/// Optimize the requirement for finer ordering based on various parameters.
+///
+/// This function takes in a mutable reference to a `LexOrdering`, a mutable reference to an `AggregateExpr`,
+/// a `PhysicalGroupBy`, an `EquivalenceProperties`, and an `AggregateMode`, and attempts to optimize the
+/// requirement for finer ordering. It checks if the finer ordering satisfies existing requirements or
+/// if a reverse ordering satisfies them, updating the references accordingly. If neither satisfies the
+/// requirements, it returns an error indicating conflicting ordering requirements.
+pub fn optimize_for_finer_ordering(
+    requirement: &mut LexOrdering,
+    aggr_expr: &mut Arc<dyn AggregateExpr>,
+    group_by: &PhysicalGroupBy,
+    eq_properties: &EquivalenceProperties,
+    agg_mode: &AggregateMode,
+) -> Result<()> {
+    if let Some(finer_ordering) =
+        finer_ordering(requirement, aggr_expr, group_by, eq_properties, agg_mode)
+    {
+        if eq_properties.ordering_satisfy(&finer_ordering) {
+            // Requirement is satisfied by existing ordering
+            *requirement = finer_ordering;
+            return Ok(());
+        }
+    }
+    if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+        if let Some(finer_ordering) = finer_ordering(
+            requirement,
+            &reverse_aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        ) {
+            if eq_properties.ordering_satisfy(&finer_ordering) {
+                // Reverse requirement is satisfied by exiting ordering.
+                // Hence reverse the aggregator
+                *requirement = finer_ordering;
+                *aggr_expr = reverse_aggr_expr;
+                return Ok(());
+            }
+        }
+    }
+    if let Some(finer_ordering) =
+        finer_ordering(requirement, aggr_expr, group_by, eq_properties, agg_mode)
+    {
+        // There is a requirement that both satisfies existing requirement and current
+        // aggregate requirement. Use updated requirement
+        // return (Some(finer_ordering), None);
+        *requirement = finer_ordering;
+        return Ok(());
+    }
+    if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+        if let Some(finer_ordering) = finer_ordering(
+            requirement,
+            &reverse_aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        ) {
+            // There is a requirement that both satisfies existing requirement and reverse
+            // aggregate requirement. Use updated requirement
+            // return (Some(finer_ordering), Some(reverse_aggr_expr));
+            *requirement = finer_ordering;
+            *aggr_expr = reverse_aggr_expr;
+            return Ok(());
+        }
+    }
+
+    // Neither the existing requirement and current aggregate requirement satisfy the other, this means
+    // requirements are conflicting. Currently, we do not support
+    // conflicting requirements.
+    not_impl_err!(
+        "Conflicting ordering requirements in aggregate functions is not supported"
+    )
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
@@ -1250,9 +1239,8 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
     };
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
         PhysicalSortExpr,
