@@ -74,9 +74,8 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     ) -> Result<u64>;
 }
 
-#[allow(dead_code)]
 #[deprecated(since = "38.0.0", note = "Use [`DataSinkExec`] instead")]
-type FileSinkExec = DataSinkExec;
+pub type FileSinkExec = DataSinkExec;
 
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
