@@ -122,7 +122,7 @@ impl ExecutionPlan for EmptyExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+        Ok(self)
     }
 
     fn execute(

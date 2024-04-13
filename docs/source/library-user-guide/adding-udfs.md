@@ -536,7 +536,7 @@ Because we're returning a `TableProvider`, in this example we'll use the `MemTab
 While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4] for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata` in the CLI to read the metadata from a Parquet file.
 
 ```console
-❯ select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
+> select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
 +--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
 | filename                       | row_group_id | row_group_num_rows | row_group_bytes | stats_min | stats_max |
 +--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
