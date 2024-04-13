@@ -18,7 +18,6 @@
 use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
-    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_physical_expr::expressions::{FirstValue, LastValue};
@@ -26,7 +25,7 @@ use datafusion_physical_expr::{
     equivalence::ProjectionMapping, reverse_order_bys, AggregateExpr,
     EquivalenceProperties, LexRequirement, PhysicalSortRequirement,
 };
-use datafusion_physical_plan::aggregates::{concat_slices, finer_ordering, optimize_for_finer_ordering};
+use datafusion_physical_plan::aggregates::{concat_slices, optimize_for_finer_ordering};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -291,7 +290,13 @@ fn get_aggregate_exprs_requirement(
             continue;
         }
 
-        optimize_for_finer_ordering(&mut requirement, aggr_expr, group_by, eq_properties, agg_mode)?;
+        optimize_for_finer_ordering(
+            &mut requirement,
+            aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        )?;
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }

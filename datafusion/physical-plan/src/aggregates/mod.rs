@@ -41,7 +41,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
-use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping,
     expressions::{Column, Max, Min, UnKnownColumn},
@@ -371,7 +370,6 @@ impl AggregateExec {
             .collect::<Vec<_>>();
 
         let req = get_aggregate_exprs_requirement(
-            &new_requirement,
             &mut aggr_expr,
             &group_by,
             input_eq_properties,
@@ -927,7 +925,6 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
 fn get_aggregate_exprs_requirement(
-    prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -935,9 +932,6 @@ fn get_aggregate_exprs_requirement(
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
-        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-
         optimize_for_finer_ordering(
             &mut requirement,
             aggr_expr,
@@ -955,7 +949,7 @@ fn get_aggregate_exprs_requirement(
 /// a `PhysicalGroupBy`, an `EquivalenceProperties`, and an `AggregateMode`, and attempts to optimize the
 /// requirement for finer ordering. It checks if the finer ordering satisfies existing requirements or
 /// if a reverse ordering satisfies them, updating the references accordingly. If neither satisfies the
-/// requirements, it returns an error indicating conflicting ordering requirements. 
+/// requirements, it returns an error indicating conflicting ordering requirements.
 pub fn optimize_for_finer_ordering(
     requirement: &mut LexOrdering,
     aggr_expr: &mut Arc<dyn AggregateExpr>,
@@ -964,7 +958,7 @@ pub fn optimize_for_finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Result<()> {
     if let Some(finer_ordering) =
-        finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        finer_ordering(requirement, aggr_expr, group_by, eq_properties, agg_mode)
     {
         if eq_properties.ordering_satisfy(&finer_ordering) {
             // Requirement is satisfied by existing ordering
@@ -974,7 +968,7 @@ pub fn optimize_for_finer_ordering(
     }
     if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
         if let Some(finer_ordering) = finer_ordering(
-            &requirement,
+            requirement,
             &reverse_aggr_expr,
             group_by,
             eq_properties,
@@ -990,7 +984,7 @@ pub fn optimize_for_finer_ordering(
         }
     }
     if let Some(finer_ordering) =
-        finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        finer_ordering(requirement, aggr_expr, group_by, eq_properties, agg_mode)
     {
         // There is a requirement that both satisfies existing requirement and current
         // aggregate requirement. Use updated requirement
@@ -1000,7 +994,7 @@ pub fn optimize_for_finer_ordering(
     }
     if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
         if let Some(finer_ordering) = finer_ordering(
-            &requirement,
+            requirement,
             &reverse_aggr_expr,
             group_by,
             eq_properties,
@@ -1018,9 +1012,9 @@ pub fn optimize_for_finer_ordering(
     // Neither the existing requirement and current aggregate requirement satisfy the other, this means
     // requirements are conflicting. Currently, we do not support
     // conflicting requirements.
-    return not_impl_err!(
+    not_impl_err!(
         "Conflicting ordering requirements in aggregate functions is not supported"
-    );
+    )
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
@@ -1244,7 +1238,9 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
+    use datafusion_physical_expr::expressions::{
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
+    };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
         PhysicalSortExpr,
