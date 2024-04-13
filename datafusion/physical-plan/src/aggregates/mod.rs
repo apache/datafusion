@@ -891,7 +891,7 @@ fn get_aggregate_expr_req(
 /// An `Option<LexOrdering>` representing the computed finer lexical ordering,
 /// or `None` if there is no finer ordering; e.g. the existing requirement and
 /// the aggregator requirement is incompatible.
-pub fn finer_ordering(
+fn finer_ordering(
     existing_req: &LexOrdering,
     aggr_expr: &Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
@@ -950,7 +950,7 @@ fn get_aggregate_exprs_requirement(
 /// requirement for finer ordering. It checks if the finer ordering satisfies existing requirements or
 /// if a reverse ordering satisfies them, updating the references accordingly. If neither satisfies the
 /// requirements, it returns an error indicating conflicting ordering requirements.
-pub fn optimize_for_finer_ordering(
+fn optimize_for_finer_ordering(
     requirement: &mut LexOrdering,
     aggr_expr: &mut Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
@@ -1239,7 +1239,7 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
@@ -1247,6 +1247,18 @@ mod tests {
     };
 
     use futures::{FutureExt, Stream};
+
+    // Generate a schema which consists of 5 columns (a, b, c, d, e)
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+
+        Ok(schema)
+    }
 
     /// some mock data to aggregates
     fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
@@ -2088,6 +2100,89 @@ mod tests {
             ];
             assert_batches_eq!(expected, &result);
         };
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_finest_requirements() -> Result<()> {
+        let test_schema = create_test_schema()?;
+        // Assume column a and b are aliases
+        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
+        let options1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+        let mut eq_properties = EquivalenceProperties::new(test_schema);
+        // Columns a and b are equal.
+        eq_properties.add_equal_conditions(col_a, col_b);
+        // Aggregate requirements are
+        // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
+        let order_by_exprs = vec![
+            None,
+            Some(vec![PhysicalSortExpr {
+                expr: col_a.clone(),
+                options: options1,
+            }]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_c.clone(),
+                    options: options1,
+                },
+            ]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: options1,
+                },
+            ]),
+        ];
+        let common_requirement = vec![
+            PhysicalSortExpr {
+                expr: col_a.clone(),
+                options: options1,
+            },
+            PhysicalSortExpr {
+                expr: col_c.clone(),
+                options: options1,
+            },
+        ];
+        let mut aggr_exprs = order_by_exprs
+            .into_iter()
+            .map(|order_by_expr| {
+                Arc::new(OrderSensitiveArrayAgg::new(
+                    col_a.clone(),
+                    "array_agg",
+                    DataType::Int32,
+                    false,
+                    vec![],
+                    order_by_expr.unwrap_or_default(),
+                )) as _
+            })
+            .collect::<Vec<_>>();
+        let group_by = PhysicalGroupBy::new_single(vec![]);
+        let res = get_aggregate_exprs_requirement(
+            &mut aggr_exprs,
+            &group_by,
+            &eq_properties,
+            &AggregateMode::Partial,
+        )?;
+        let res = PhysicalSortRequirement::to_sort_exprs(res);
+        assert_eq!(res, common_requirement);
         Ok(())
     }
 
