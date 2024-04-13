@@ -19,22 +19,8 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use self::from_proto::parse_physical_window_expr;
-use self::to_proto::serialize_physical_expr;
-
-use crate::common::{byte_to_string, proto_error, str_to_byte};
-use crate::convert_required;
-use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_protobuf_file_scan_config,
-};
-use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
-use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{
-    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
-};
+use prost::bytes::BufMut;
+use prost::Message;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -79,8 +65,22 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ScalarUDF;
 
-use prost::bytes::BufMut;
-use prost::Message;
+use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::convert_required;
+use crate::physical_plan::from_proto::{
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_physical_window_expr_ext, parse_protobuf_file_scan_config,
+    parse_protobuf_file_scan_config_ext,
+};
+use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::physical_plan_node::PhysicalPlanType;
+use crate::protobuf::repartition_exec_node::PartitionMethod;
+use crate::protobuf::{
+    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
+};
+
+use self::to_proto::serialize_physical_expr;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -188,9 +188,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                parse_protobuf_file_scan_config(
+                parse_protobuf_file_scan_config_ext(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
+                    extension_codec,
                 )?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter, "delimiter")?,
@@ -230,12 +231,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Default::default(),
                 )))
             }
-            PhysicalPlanType::AvroScan(scan) => {
-                Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
+            PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
+                parse_protobuf_file_scan_config_ext(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
-                )?)))
-            }
+                    extension_codec,
+                )?,
+            ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &coalesce_batches.input,
@@ -334,10 +336,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .window_expr
                     .iter()
                     .map(|window_expr| {
-                        parse_physical_window_expr(
+                        parse_physical_window_expr_ext(
                             window_expr,
                             registry,
                             input_schema.as_ref(),
+                            extension_codec,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
