@@ -165,7 +165,7 @@ fn optimize_internal(
             })
             .collect::<Vec<_>>();
 
-        get_aggregate_exprs_requirement(
+        try_convert_first_last_if_better(
             &requirement,
             &mut aggr_expr,
             input_eq_properties,
@@ -227,7 +227,7 @@ fn optimize_internal(
 ///
 /// Similar to the one in datafusion/physical-plan/src/aggregates/mod.rs, but this
 /// function care only the possible conversion between FIRST_VALUE and LAST_VALUE
-fn get_aggregate_exprs_requirement(
+fn try_convert_first_last_if_better(
     prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     eq_properties: &EquivalenceProperties,
