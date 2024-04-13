@@ -74,10 +74,13 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     ) -> Result<u64>;
 }
 
+#[deprecated(since = "38.0.0", note = "Use [`DataSinkExec`] instead")]
+pub type FileSinkExec = DataSinkExec;
+
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written
-pub struct FileSinkExec {
+pub struct DataSinkExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
     /// Sink to which to write
@@ -91,13 +94,13 @@ pub struct FileSinkExec {
     cache: PlanProperties,
 }
 
-impl fmt::Debug for FileSinkExec {
+impl fmt::Debug for DataSinkExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "FileSinkExec schema: {:?}", self.count_schema)
+        write!(f, "DataSinkExec schema: {:?}", self.count_schema)
     }
 }
 
-impl FileSinkExec {
+impl DataSinkExec {
     /// Create a plan to write to `sink`
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
@@ -190,7 +193,7 @@ impl FileSinkExec {
     }
 }
 
-impl DisplayAs for FileSinkExec {
+impl DisplayAs for DataSinkExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -198,16 +201,16 @@ impl DisplayAs for FileSinkExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "FileSinkExec: sink=")?;
+                write!(f, "DataSinkExec: sink=")?;
                 self.sink.fmt_as(t, f)
             }
         }
     }
 }
 
-impl ExecutionPlan for FileSinkExec {
+impl ExecutionPlan for DataSinkExec {
     fn name(&self) -> &'static str {
-        "FileSinkExec"
+        "DataSinkExec"
     }
 
     /// Return a reference to Any that can be used for downcasting
@@ -269,7 +272,7 @@ impl ExecutionPlan for FileSinkExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
-            return internal_err!("FileSinkExec can only be called on partition 0!");
+            return internal_err!("DataSinkExec can only be called on partition 0!");
         }
         let data = self.execute_input_stream(0, context.clone())?;
 
