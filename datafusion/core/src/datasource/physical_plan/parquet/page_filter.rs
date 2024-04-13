@@ -27,8 +27,6 @@ use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use futures::stream::iter;
-use itertools::Itertools;
 use log::{debug, trace};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -553,16 +551,16 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
 
     fn row_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         // see https://github.com/apache/arrow-rs/blob/91f0b1771308609ca27db0fb1d2d49571b3980d8/parquet/src/file/metadata.rs#L979-L982
-        let mut first_row_index = self
-            .col_offset_indexes
-            .iter()
-            .map(|i| i.first_row_index)
-            .collect_vec();
-        first_row_index.push(self.num_rows_in_row_group);
 
         let row_count_per_page = self.col_offset_indexes.windows(2).map(|location| {
             Some(location[1].first_row_index - location[0].first_row_index)
         });
+
+        // append the last page row count
+        let row_count_per_page = row_count_per_page.chain(std::iter::once(Some(
+            self.num_rows_in_row_group
+                - self.col_offset_indexes.last().unwrap().first_row_index,
+        )));
 
         Some(Arc::new(Int64Array::from_iter(row_count_per_page)))
     }
