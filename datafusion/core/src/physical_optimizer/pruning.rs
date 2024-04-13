@@ -1261,14 +1261,12 @@ fn build_is_null_column_expr(
                 required_columns
                     .null_count_column_expr(col, expr, null_count_field)
                     .map(|null_count_column_expr| {
-                        // IsNotNull(column) => null_count == row_count
-                        // but use false to prune the whole unit so need add the negate
-                        let equal_expr = Arc::new(phys_expr::BinaryExpr::new(
+                        // IsNotNull(column) => null_count != row_count
+                        Arc::new(phys_expr::BinaryExpr::new(
                             null_count_column_expr,
-                            Operator::Eq,
+                            Operator::NotEq,
                             row_count_expr,
-                        ));
-                        Arc::new(phys_expr::NotExpr::new(equal_expr)) as _
+                        )) as _
                     })
                     .ok()
             } else {
