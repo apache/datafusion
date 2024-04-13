@@ -149,7 +149,7 @@ logical_plan
 CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
 --TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
+DataSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
@@ -163,7 +163,7 @@ logical_plan
 CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
 --TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
+DataSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Copy more files to directory via query

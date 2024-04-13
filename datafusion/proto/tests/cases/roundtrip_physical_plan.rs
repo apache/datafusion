@@ -48,7 +48,7 @@ use datafusion::physical_plan::expressions::{
     NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::insert::FileSinkExec;
+use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
 };
@@ -861,7 +861,7 @@ fn roundtrip_json_sink() -> Result<()> {
         }),
     )];
 
-    roundtrip_test(Arc::new(FileSinkExec::new(
+    roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
         schema.clone(),
@@ -896,7 +896,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         }),
     )];
 
-    let roundtrip_plan = roundtrip_test_and_return(Arc::new(FileSinkExec::new(
+    let roundtrip_plan = roundtrip_test_and_return(Arc::new(DataSinkExec::new(
         input,
         data_sink,
         schema.clone(),
@@ -906,7 +906,7 @@ fn roundtrip_csv_sink() -> Result<()> {
 
     let roundtrip_plan = roundtrip_plan
         .as_any()
-        .downcast_ref::<FileSinkExec>()
+        .downcast_ref::<DataSinkExec>()
         .unwrap();
     let csv_sink = roundtrip_plan
         .sink()
@@ -948,7 +948,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         }),
     )];
 
-    roundtrip_test(Arc::new(FileSinkExec::new(
+    roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
         schema.clone(),
