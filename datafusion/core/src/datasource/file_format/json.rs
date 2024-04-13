@@ -31,7 +31,7 @@ use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, SendableRecordBatchStream, Statistics,
 };
@@ -177,7 +177,7 @@ impl FileFormat for JsonFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(JsonSink::new(conf, writer_options));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,
