@@ -23,20 +23,20 @@
 
 [DataFusion](https://arrow.apache.org/datafusion/) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-The DataFusion CLI is a command line utility that runs SQL queries using the DataFusion engine.
+DataFusion CLI (`datafusion-cli`) is a small command line utility that runs SQL queries using the DataFusion engine.
 
 # Frequently Asked Questions
 
 ## Where can I find more information?
 
-Answer: See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
+See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
 
 ## How do I make my IDE work with `datafusion-cli`?
 
-Answer: "open" the `datafusion/datafusion-cli` project as its own top level
+"open" the `datafusion/datafusion-cli` project as its own top level
 project in my IDE (rather than opening `datafusion`)
 
-The reason `datafusion-cli` is not listed as part of the workspace in the main
+The reason `datafusion-cli` is not part of the main workspace in
 [`datafusion Cargo.toml`] file is that `datafusion-cli` is a binary and has a
 checked in `Cargo.lock` file to ensure reproducible builds.
 
