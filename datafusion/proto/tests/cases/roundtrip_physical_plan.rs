@@ -37,7 +37,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::NthValueAgg;
+use datafusion::physical_expr::expressions::{Count, NthValueAgg};
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -739,7 +739,8 @@ fn roundtrip_scalar_udf_extension_codec() {
 
     let field_text = Field::new("text", DataType::Utf8, true);
     let field_published = Field::new("published", DataType::Boolean, false);
-    let schema = Arc::new(Schema::new(vec![field_text, field_published]));
+    let field_author = Field::new("author", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_text, field_published, field_author]));
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     let pattern = ".*";
@@ -758,17 +759,28 @@ fn roundtrip_scalar_udf_extension_codec() {
             Arc::new(BinaryExpr::new(
                 col("published", &schema).expect("published"),
                 Operator::And,
-                udf_expr,
+                udf_expr.clone(),
             )),
             input,
         )
         .expect("filter"),
     );
 
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new(vec![], vec![], vec![]),
+            vec![Arc::new(Count::new(udf_expr, "count", DataType::Boolean))],
+            vec![None],
+            filter,
+            schema.clone(),
+        )
+        .expect("aggregate"),
+    );
+
     let ctx = SessionContext::new();
     let codec = ScalarUDFExtensionCodec {};
-    ctx.register_udf(udf);
-    roundtrip_test_and_return(filter, &ctx, &codec).unwrap();
+    roundtrip_test_and_return(aggregate, &ctx, &codec).unwrap();
 }
 
 #[test]
