@@ -175,7 +175,7 @@ where
     let capacity = string_array.value_data().len() + PRE_ALLOC_BYTES;
     let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
 
-    if !string_array.is_nullable() || string_array.null_count() == 0 {
+    if string_array.null_count() == 0 {
         let iter =
             (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
         builder.extend(iter);
