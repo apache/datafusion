@@ -282,17 +282,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
-    pub(super) fn sql_named_function_to_expr(
-        &self,
-        expr: SQLExpr,
-        fun: BuiltinScalarFunction,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
-        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
-    }
-
     pub(super) fn find_window_func(
         &self,
         name: &str,

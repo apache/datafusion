@@ -1407,9 +1407,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Exp => Self::Exp,
-            BuiltinScalarFunction::Factorial => Self::Factorial,
-            BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,

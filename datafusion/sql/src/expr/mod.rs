@@ -28,9 +28,8 @@ use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Literal, Operator,
-    TryCast,
+    col, expr, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
+    GetFieldAccess, GetIndexedField, Like, Literal, Operator, TryCast,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -522,12 +521,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Ceil {
                 expr,
                 field: _field,
-            } => self.sql_named_function_to_expr(
-                *expr,
-                BuiltinScalarFunction::Ceil,
-                schema,
-                planner_context,
-            ),
+            } => self.sql_fn_name_to_expr(*expr, "ceil", schema, planner_context),
             SQLExpr::Overlay {
                 expr,
                 overlay_what,
