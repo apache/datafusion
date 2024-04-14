@@ -17,14 +17,9 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::vec;
 
-    use crate::optimize_projections::OptimizeProjections;
-    use crate::optimizer::Optimizer;
     use crate::test::*;
-    use crate::{OptimizerContext, OptimizerRule};
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::builder::table_scan_with_filters;
