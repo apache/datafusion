@@ -632,7 +632,7 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
 ///
 /// Not all operators support dictionaries, if `preserve_dictionaries` is true
 /// dictionaries will be preserved if possible
-fn dictionary_coercion(
+pub(crate) fn dictionary_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_dictionaries: bool,
