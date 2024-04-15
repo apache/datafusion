@@ -149,6 +149,10 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(column3) from unnest_table;
 
+## Unnest doesn't work with untyped nulls
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+select unnest(null) from unnest_table;
+
 ## Multiple unnest functions in selection
 query ?I
 select unnest([]), unnest(NULL::int[]);
