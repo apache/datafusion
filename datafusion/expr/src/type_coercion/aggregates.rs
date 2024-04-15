@@ -331,8 +331,7 @@ pub fn check_arg_count(
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
             if input_types.len() != *agg_count {
                 return plan_err!(
-                    "The function {:?} expects {:?} arguments, but {:?} were provided",
-                    func_name,
+                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
                     agg_count,
                     input_types.len()
                 );
@@ -341,8 +340,7 @@ pub fn check_arg_count(
         TypeSignature::Exact(types) => {
             if types.len() != input_types.len() {
                 return plan_err!(
-                    "The function {:?} expects {:?} arguments, but {:?} were provided",
-                    func_name,
+                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
                     types.len(),
                     input_types.len()
                 );
@@ -354,8 +352,7 @@ pub fn check_arg_count(
                 .any(|v| check_arg_count(func_name, input_types, v).is_ok());
             if !ok {
                 return plan_err!(
-                    "The function {:?} does not accept {:?} function arguments.",
-                    func_name,
+                    "The function {func_name} does not accept {:?} function arguments.",
                     input_types.len()
                 );
             }
@@ -363,7 +360,7 @@ pub fn check_arg_count(
         TypeSignature::VariadicAny => {
             if input_types.is_empty() {
                 return plan_err!(
-                    "The function {func_name:?} expects at least one argument"
+                    "The function {func_name} expects at least one argument"
                 );
             }
         }
@@ -593,7 +590,7 @@ mod tests {
         let input_types = vec![DataType::Int64, DataType::Int32];
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
+        assert_eq!("Error during planning: The function MIN expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
 
         // test input args is invalid data type for sum or avg
         let fun = AggregateFunction::Sum;
