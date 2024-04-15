@@ -525,16 +525,6 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(Factorial, factorial, num, "factorial");
-scalar_expr!(
-    Ceil,
-    ceil,
-    num,
-    "nearest integer greater than or equal to argument"
-);
-
-scalar_expr!(Exp, exp, num, "exponential");
-
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
@@ -877,22 +867,6 @@ mod test {
         );
     }
 
-    macro_rules! test_unary_scalar_expr {
-        ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                args,
-            }) = $FUNC(col("tableA.a"))
-            {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(1, args.len());
-            } else {
-                assert!(false, "unexpected");
-            }
-        }};
-    }
-
     macro_rules! test_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
         let expected = [$(stringify!($arg)),*];
@@ -913,10 +887,6 @@ mod test {
 
     #[test]
     fn scalar_function_definitions() {
-        test_unary_scalar_expr!(Factorial, factorial);
-        test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Exp, exp);
-
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
     }

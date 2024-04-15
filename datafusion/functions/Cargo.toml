@@ -83,6 +83,7 @@ unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
@@ -116,4 +117,14 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "ltrim"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "lower"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "upper"
 required-features = ["string_expressions"]
