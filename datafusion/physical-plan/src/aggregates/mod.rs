@@ -842,10 +842,11 @@ fn get_aggregate_expr_req(
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
-    // If the aggregation function is order in-sensitive, or the aggregation
+    // If the aggregation function is ordering requirement is not absolutely necessary, or the aggregation
     // is performing a "second stage" calculation, then ignore the ordering
     // requirement.
-    if aggr_expr.order_sensitivity().is_order_insensitive() || !agg_mode.is_first_stage()
+    if !aggr_expr.order_sensitivity().is_order_hard_required()
+        || !agg_mode.is_first_stage()
     {
         return vec![];
     }
