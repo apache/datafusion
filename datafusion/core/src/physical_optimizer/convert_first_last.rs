@@ -222,8 +222,8 @@ fn try_convert_first_last_if_better(
             )) {
                 let name = first_value.name();
 
-                let name = if name.starts_with("FIRST") {
-                    format!("LAST{}", &name[5..])
+                let name = if let Some(n) = name.strip_prefix("FIRST") {
+                    format!("LAST{}", n)
                 } else {
                     let expr = first_value.expressions().swap_remove(0);
                     format!("LAST_VALUE({})", expr)
@@ -276,8 +276,8 @@ fn try_convert_first_last_if_better(
 
                 let name = last_value.name();
 
-                let name = if name.starts_with("LAST") {
-                    format!("FIRST{}", &name[4..])
+                let name = if let Some(n) = name.strip_prefix("LAST") {
+                    format!("FIRST{}", n)
                 } else {
                     let expr = last_value.expressions().swap_remove(0);
                     format!("FIRST_VALUE({})", expr)

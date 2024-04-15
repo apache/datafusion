@@ -101,8 +101,8 @@ datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-array = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
