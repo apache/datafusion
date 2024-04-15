@@ -80,7 +80,6 @@ fn get_common_requirement_of_aggregate_input(
         let input = aggr_exec.input();
         let mut aggr_expr = try_get_updated_aggr_expr_from_child(aggr_exec);
         let group_by = aggr_exec.group_by();
-        let mode = aggr_exec.mode();
 
         let input_eq_properties = input.equivalence_properties();
         let groupby_exprs = group_by.input_exprs();
@@ -102,33 +101,7 @@ fn get_common_requirement_of_aggregate_input(
             input_eq_properties,
         )?;
 
-        let required_input_ordering = (!requirement.is_empty()).then_some(requirement);
-
-        let input_order_mode =
-            if indices.len() == groupby_exprs.len() && !indices.is_empty() {
-                InputOrderMode::Sorted
-            } else if !indices.is_empty() {
-                InputOrderMode::PartiallySorted(indices)
-            } else {
-                InputOrderMode::Linear
-            };
-        let projection_mapping =
-            ProjectionMapping::try_new(group_by.expr(), &input.schema())?;
-
-        let cache = AggregateExec::compute_properties(
-            input,
-            plan.schema().clone(),
-            &projection_mapping,
-            mode,
-            &input_order_mode,
-        );
-
-        let aggr_exec = aggr_exec.new_with_aggr_expr_and_ordering_info(
-            required_input_ordering,
-            aggr_expr,
-            cache,
-            input_order_mode,
-        );
+        let aggr_exec = aggr_exec.new_with_aggr_expr_and_ordering_info(aggr_expr);
 
         Ok(Transformed::yes(
             Arc::new(aggr_exec) as Arc<dyn ExecutionPlan>

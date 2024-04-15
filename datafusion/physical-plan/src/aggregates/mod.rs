@@ -276,17 +276,14 @@ impl AggregateExec {
     /// where we need parts of the new value, others cloned from the old one
     pub fn new_with_aggr_expr_and_ordering_info(
         &self,
-        required_input_ordering: Option<LexRequirement>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        cache: PlanProperties,
-        input_order_mode: InputOrderMode,
     ) -> Self {
         Self {
             aggr_expr,
-            required_input_ordering,
+            required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
-            input_order_mode,
-            cache,
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
             // clone the rest of the fields
             mode: self.mode,
             group_by: self.group_by.clone(),
