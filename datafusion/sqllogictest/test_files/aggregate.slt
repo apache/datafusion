@@ -3455,3 +3455,45 @@ SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
 
 statement ok
 DROP TABLE t;
+
+# Test Convert FirstLast optimizer rule
+statement ok
+CREATE EXTERNAL TABLE convert_first_last_table (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c1 ASC)
+WITH ORDER (c2 DESC)
+WITH ORDER (c3 ASC)
+LOCATION '../core/tests/data/convert_first_last.csv';
+
+# test first to last, the result does not show difference, we need to check the conversion by `explain`
+query TT
+explain select first_value(c1 order by c3 desc) from convert_first_last_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[FIRST_VALUE(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 DESC NULLS FIRST]]]
+02)--TableScan: convert_first_last_table projection=[c1, c3]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(convert_first_last_table.c1)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[LAST_VALUE(convert_first_last_table.c1)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], has_header=true
+
+# test last to first
+query TT
+explain select last_value(c1 order by c2 asc) from convert_first_last_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[LAST_VALUE(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 ASC NULLS LAST]]]
+02)--TableScan: convert_first_last_table projection=[c1, c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[LAST_VALUE(convert_first_last_table.c1)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(convert_first_last_table.c1)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
