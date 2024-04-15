@@ -272,10 +272,7 @@ fn func_order_in_one_dimension(
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{
-            Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array,
-            StringArray, UInt64Array,
-        },
+        array::{Array, ArrayRef, BooleanArray, Int32Array, StringArray, UInt64Array},
         datatypes::Field,
         record_batch::RecordBatch,
     };
@@ -402,46 +399,6 @@ mod tests {
             &str,
             Utf8,
             StringArray
-        );
-        test_function!(
-            Exp,
-            &[lit(ScalarValue::Int32(Some(1)))],
-            Ok(Some((1.0_f64).exp())),
-            f64,
-            Float64,
-            Float64Array
-        );
-        test_function!(
-            Exp,
-            &[lit(ScalarValue::UInt32(Some(1)))],
-            Ok(Some((1.0_f64).exp())),
-            f64,
-            Float64,
-            Float64Array
-        );
-        test_function!(
-            Exp,
-            &[lit(ScalarValue::UInt64(Some(1)))],
-            Ok(Some((1.0_f64).exp())),
-            f64,
-            Float64,
-            Float64Array
-        );
-        test_function!(
-            Exp,
-            &[lit(ScalarValue::Float64(Some(1.0)))],
-            Ok(Some((1.0_f64).exp())),
-            f64,
-            Float64,
-            Float64Array
-        );
-        test_function!(
-            Exp,
-            &[lit(ScalarValue::Float32(Some(1.0)))],
-            Ok(Some((1.0_f32).exp())),
-            f32,
-            Float32,
-            Float32Array
         );
         test_function!(
             InitCap,

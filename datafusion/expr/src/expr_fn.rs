@@ -867,22 +867,6 @@ mod test {
         );
     }
 
-    macro_rules! test_unary_scalar_expr {
-        ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                args,
-            }) = $FUNC(col("tableA.a"))
-            {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(1, args.len());
-            } else {
-                assert!(false, "unexpected");
-            }
-        }};
-    }
-
     macro_rules! test_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
         let expected = [$(stringify!($arg)),*];

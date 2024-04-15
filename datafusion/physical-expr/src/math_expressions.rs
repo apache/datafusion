@@ -81,7 +81,7 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use arrow::array::Float64Array;
 
-    use datafusion_common::cast::{as_boolean_array, as_int64_array};
+    use datafusion_common::cast::as_boolean_array;
 
     use super::*;
 

@@ -95,7 +95,6 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::Float64Array;
 
     use datafusion_common::cast::as_int64_array;
 
