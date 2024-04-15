@@ -1876,18 +1876,22 @@ select
   arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
   arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
   arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
+  arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
+  arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
+  arrow_cast(column1, 'Timestamp(Second, Some("UTC"))') as secs_utc,
   column2 as names,
   column3 as tag
 from t_source;
 
 # Demonstate the contents
-query PPPPTT
+query PPPPPPPPTT
 select * from t;
 ----
-2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 X
-2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 X
-NULL NULL NULL NULL Row 2 Y
-2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 Y
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 2018-11-13T17:11:10.011375885Z 2018-11-13T17:11:10.011375Z 2018-11-13T17:11:10.011Z 2018-11-13T17:11:10Z Row 0 X
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123Z 2011-12-13T11:13:10Z Row 1 X
+NULL NULL NULL NULL NULL NULL NULL NULL Row 2 Y
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10Z Row 3 Y
 
 
 # aggregate_timestamps_sum
@@ -1933,6 +1937,17 @@ SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag 
 X 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10
 Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
 
+# aggregate_timestamps_count_distinct_with_tz
+query IIII
+SELECT count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t;
+----
+3 3 3 3
+
+query TIIII
+SELECT tag, count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2 2 2
+Y 1 1 1 1
 
 # aggregate_timestamps_avg
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
@@ -2284,6 +2299,18 @@ select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 ----
 A 110.0045 Decimal128(14, 7)
 B -100.0045 Decimal128(14, 7)
+
+# aggregate_decimal_count_distinct
+query I
+select count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table
+----
+4
+
+query TI
+select c2, count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table GROUP BY c2 ORDER BY c2
+----
+A 2
+B 2
 
 # Use PostgresSQL dialect
 statement ok
