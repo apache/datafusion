@@ -40,6 +40,7 @@ use datafusion_common::utils::array_into_list_array;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr_common::aggregate::AggregateOrderSensitivity;
 
 /// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
@@ -129,6 +130,10 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::OrderRequiring
     }
 
     fn name(&self) -> &str {

@@ -35,6 +35,7 @@ use arrow_schema::{DataType, Field, Fields};
 use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr_common::aggregate::AggregateOrderSensitivity;
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
@@ -123,6 +124,10 @@ impl AggregateExpr for NthValueAgg {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::OrderRequiring
     }
 
     fn name(&self) -> &str {

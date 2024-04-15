@@ -135,7 +135,7 @@ fn try_convert_reverse_if_better(
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
-        if aggr_expr.is_order_sensitive() || aggr_req.is_empty() {
+        if aggr_expr.order_sensitivity().is_order_hard_required() || aggr_req.is_empty() {
             // If ordering for the aggregator is absolute requirement
             // or there is no requirement for the aggregator, shouldn't update the aggregator
             continue;

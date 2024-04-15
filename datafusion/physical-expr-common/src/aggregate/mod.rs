@@ -66,6 +66,24 @@ pub fn create_aggregate_expr(
     }))
 }
 
+/// Defines how input ordering effects the aggregator
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum AggregateOrderSensitivity {
+    OrderInsensitive,
+    OrderRequiring,
+    OrderBeneficial,
+}
+
+impl AggregateOrderSensitivity {
+    pub fn is_order_beneficial(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::OrderBeneficial)
+    }
+
+    pub fn is_order_hard_required(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::OrderRequiring)
+    }
+}
+
 /// An aggregate expression that:
 /// * knows its resulting field
 /// * knows how to create its accumulator
@@ -104,8 +122,8 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     }
 
     /// Indicates whether aggregator can produce correct result with any arbitrary ordering or not.
-    fn is_order_sensitive(&self) -> bool {
-        true
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::OrderInsensitive
     }
 
     /// Indicates whether requirement of the aggregators is satisfied at the input.
@@ -115,12 +133,17 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         self: Arc<Self>,
         _requirement_satisfied: bool,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        if self.order_bys().is_some() && !self.is_order_sensitive() {
+        if self.order_bys().is_some() && self.order_sensitivity().is_order_beneficial() {
             return Err(exec_datafusion_err!(
                 "Should implement with satisfied for aggregator :{:?}",
                 self.name()
             ));
         }
+        println!(
+            "self.order_sensitivity(): {:?}, aggregator :{:?}",
+            self.order_sensitivity(),
+            self.name()
+        );
         unreachable!()
     }
 

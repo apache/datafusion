@@ -31,7 +31,9 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
-use datafusion_physical_expr_common::aggregate::AggregateExpr;
+use datafusion_physical_expr_common::aggregate::{
+    AggregateExpr, AggregateOrderSensitivity,
+};
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -479,8 +481,8 @@ impl AggregateExpr for FirstValuePhysicalExpr {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
-    fn is_order_sensitive(&self) -> bool {
-        false
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::OrderBeneficial
     }
 
     fn with_requirement_satisfied(
@@ -667,8 +669,8 @@ impl AggregateExpr for LastValuePhysicalExpr {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
-    fn is_order_sensitive(&self) -> bool {
-        false
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::OrderBeneficial
     }
 
     fn with_requirement_satisfied(
