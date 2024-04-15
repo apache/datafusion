@@ -629,4 +629,20 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_coerced_from_dictionary() {
+        let type_into =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+    }
 }
