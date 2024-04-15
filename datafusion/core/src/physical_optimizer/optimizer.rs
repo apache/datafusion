@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use super::convert_first_last::ConvertFirstLast;
+use super::convert_first_last::OptimizeAggregateOrder;
 use super::projection_pushdown::ProjectionPushdown;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -90,8 +90,6 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
-            // Run once before PartialFinalAggregation is rewritten to ensure the rule is applied correctly
-            Arc::new(ConvertFirstLast::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
@@ -105,7 +103,7 @@ impl PhysicalOptimizer {
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
             // Run once after the local sorting requirement is changed
-            Arc::new(ConvertFirstLast::new()),
+            Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
