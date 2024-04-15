@@ -143,11 +143,6 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
                 self.name()
             ));
         }
-        println!(
-            "self.order_sensitivity(): {:?}, aggregator :{:?}",
-            self.order_sensitivity(),
-            self.name()
-        );
         unreachable!()
     }
 
