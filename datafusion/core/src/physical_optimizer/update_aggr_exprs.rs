@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use super::PhysicalOptimizerRule;
-use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
+use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::{
     reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalSortRequirement,
 };
@@ -134,6 +134,11 @@ fn try_convert_aggregate_if_better(
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+        let err_fn = || {
+            plan_datafusion_err!(
+                "Expects beneficial mode aggregator to implement with_requirement API."
+            )
+        };
 
         // If ordering for the aggregator is beneficial and there is a requirement for the aggregator,
         // try update the aggregator in case there is a more beneficial version with existing ordering
@@ -144,7 +149,10 @@ fn try_convert_aggregate_if_better(
                 &aggr_req,
             )) {
                 // Existing ordering satisfy the requirement of the aggregator
-                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(true)?;
+                *aggr_expr = aggr_expr
+                    .clone()
+                    .with_requirement_satisfied(true)?
+                    .ok_or_else(err_fn)?;
             } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &reverse_aggr_req,
@@ -157,12 +165,18 @@ fn try_convert_aggregate_if_better(
                     // If reverse execution is not possible, cannot update current aggregate expression.
                     continue;
                 }
-                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(true)?;
+                *aggr_expr = aggr_expr
+                    .clone()
+                    .with_requirement_satisfied(true)?
+                    .ok_or_else(err_fn)?;
                 // Requirement is not satisfied with existing ordering.
             } else {
                 // Requirement is not satisfied for the aggregator (Please note that: Aggregator can still work in this case, guaranteed by order sensitive flag being false.
                 // However, It will be inefficient compared to version where requirement is satisfied).
-                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(false)?;
+                *aggr_expr = aggr_expr
+                    .clone()
+                    .with_requirement_satisfied(false)?
+                    .ok_or_else(err_fn)?;
             }
         }
     }

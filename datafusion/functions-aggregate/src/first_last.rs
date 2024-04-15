@@ -482,16 +482,18 @@ impl AggregateExpr for FirstValuePhysicalExpr {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        // Can generate correct result, even if the ordering requirement is not satisfied at the input
+        // (less efficient compared to ordering satisfied version)
         AggregateOrderSensitivity::Beneficial
     }
 
     fn with_requirement_satisfied(
         self: Arc<Self>,
         requirement_satisfied: bool,
-    ) -> Result<Arc<dyn AggregateExpr>> {
-        let mut res = self.as_ref().clone();
-        res.requirement_satisfied = requirement_satisfied;
-        Ok(Arc::new(res))
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        let mut new_self = self.as_ref().clone();
+        new_self.requirement_satisfied = requirement_satisfied;
+        Ok(Some(Arc::new(new_self)))
     }
 
     fn name(&self) -> &str {
@@ -670,16 +672,18 @@ impl AggregateExpr for LastValuePhysicalExpr {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        // Can generate correct result, even if the ordering requirement is not satisfied at the input
+        // (less efficient compared to ordering satisfied version)
         AggregateOrderSensitivity::Beneficial
     }
 
     fn with_requirement_satisfied(
         self: Arc<Self>,
         requirement_satisfied: bool,
-    ) -> Result<Arc<dyn AggregateExpr>> {
-        let mut res = self.as_ref().clone();
-        res.requirement_satisfied = requirement_satisfied;
-        Ok(Arc::new(res))
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        let mut new_self = self.as_ref().clone();
+        new_self.requirement_satisfied = requirement_satisfied;
+        Ok(Some(Arc::new(new_self)))
     }
 
     fn name(&self) -> &str {

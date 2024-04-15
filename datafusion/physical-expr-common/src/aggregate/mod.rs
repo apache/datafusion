@@ -66,14 +66,20 @@ pub fn create_aggregate_expr(
     }))
 }
 
-/// Defines how input ordering effects the aggregator
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+/// Represents the sensitivity of an aggregate expression to ordering.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum AggregateOrderSensitivity {
+    /// Indicates that the aggregate expression is insensitive to ordering. Ordering at the input
+    /// is not important for the result of the aggregator
     Insensitive,
+    /// Indicates that the aggregate expression has a hard requirement on ordering. Aggregator cannot produce
+    /// correct result unless its ordering requirement is satisfied.
     HardRequirement,
+    /// Indicates that ordering is beneficial for the aggregate expression. Aggregator can produce its result efficiently
+    /// when its required ordering is satisfied. However, it can still produce correct result (less efficiently)
+    /// when its required ordering is not satisfied.
     Beneficial,
 }
-
 impl AggregateOrderSensitivity {
     pub fn is_order_insensitive(&self) -> bool {
         self.eq(&AggregateOrderSensitivity::Insensitive)
@@ -126,24 +132,25 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     }
 
     /// Indicates whether aggregator can produce correct result with any arbitrary ordering or not.
+    /// By default we assume aggregate expression is order insensitive.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
 
     /// Indicates whether requirement of the aggregators is satisfied at the input.
-    /// If this is not the case some order in-sensitive aggregators can still produce
+    /// If this is not the case: Aggregators with order sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
     /// correct result with possibly more work internally.
     fn with_requirement_satisfied(
         self: Arc<Self>,
         _requirement_satisfied: bool,
-    ) -> Result<Arc<dyn AggregateExpr>> {
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
         if self.order_bys().is_some() && self.order_sensitivity().is_order_beneficial() {
             return Err(exec_datafusion_err!(
                 "Should implement with satisfied for aggregator :{:?}",
                 self.name()
             ));
         }
-        unreachable!()
+        Ok(None)
     }
 
     /// Human readable name such as `"MIN(c2)"`. The default
