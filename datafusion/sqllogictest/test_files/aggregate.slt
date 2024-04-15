@@ -129,15 +129,15 @@ query TT
 explain select array_agg(c1 order by c2 desc, c3) from agg_order;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
---TableScan: agg_order projection=[c1, c2, c3]
+01)Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+02)--TableScan: agg_order projection=[c1, c2, c3]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
-------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+01)AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
+04)------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # test array_agg_order with list data type
 statement ok
@@ -2611,21 +2611,21 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-------TableScan: aggregate_test_100 projection=[c3]
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=5
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
-------------CoalescePartitionsExec
---------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
-----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
@@ -2640,16 +2640,16 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
 ----
 logical_plan
-Limit: skip=4, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
-----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=4, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=4, fetch=5
---AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=4, fetch=5
+02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -2665,26 +2665,26 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
 ----
 logical_plan
-Limit: skip=0, fetch=4
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Projection: aggregate_test_100.c3
-------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
---------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
-----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
+01)Limit: skip=0, fetch=4
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
+06)----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
 physical_plan
-GlobalLimitExec: skip=0, fetch=4
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------ProjectionExec: expr=[c3@1 as c3]
-------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
---------------CoalescePartitionsExec
-----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
-----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=4
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
@@ -2699,18 +2699,18 @@ query TT
 EXPLAIN SELECT max(c1), c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5;
 ----
 logical_plan
-Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
---Limit: skip=0, fetch=5
-----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[MAX(aggregate_test_100.c1)]]
-------TableScan: aggregate_test_100 projection=[c1, c2, c3]
+01)Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=5
+03)----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[MAX(aggregate_test_100.c1)]]
+04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
-ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
---GlobalLimitExec: skip=0, fetch=5
-----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
-------CoalescePartitionsExec
---------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+01)ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
 # in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
@@ -2718,23 +2718,23 @@ query TT
 EXPLAIN SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
 ----
 logical_plan
-Limit: skip=10, fetch=3
---Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
-----Projection: aggregate_test_100.c3, aggregate_test_100.c2
-------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
---------TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=10, fetch=3
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3, aggregate_test_100.c2
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=10, fetch=3
---AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
-------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
---------------CoalescePartitionsExec
-----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=10, fetch=3
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
@@ -2747,16 +2747,16 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-Limit: skip=0, fetch=3
---Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=0, fetch=3
+02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=3
---AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=3
+02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -2774,21 +2774,21 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-------TableScan: aggregate_test_100 projection=[c3]
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=5
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
-------------CoalescePartitionsExec
---------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
-----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 statement ok
 set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
@@ -3288,21 +3288,21 @@ query TT
 EXPLAIN SELECT MIN(col0) FROM empty;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
---TableScan: empty projection=[col0]
+01)Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
+02)--TableScan: empty projection=[col0]
 physical_plan
-ProjectionExec: expr=[NULL as MIN(empty.col0)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[NULL as MIN(empty.col0)]
+02)--PlaceholderRowExec
 
 query TT
 EXPLAIN SELECT MAX(col0) FROM empty;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
---TableScan: empty projection=[col0]
+01)Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
+02)--TableScan: empty projection=[col0]
 physical_plan
-ProjectionExec: expr=[NULL as MAX(empty.col0)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[NULL as MAX(empty.col0)]
+02)--PlaceholderRowExec
 
 statement ok
 DROP TABLE empty;

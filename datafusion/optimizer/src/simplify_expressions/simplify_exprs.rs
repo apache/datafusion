@@ -53,7 +53,7 @@ impl OptimizerRule for SimplifyExpressions {
         _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called SimplifyExpressions::try_optimize_owned")
+        internal_err!("Should have called SimplifyExpressions::rewrite")
     }
 
     fn name(&self) -> &str {

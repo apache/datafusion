@@ -546,10 +546,10 @@ enum ScalarFunction {
   //  2 was Asin
   // 3 was Atan
   // 4 was Ascii
-  Ceil = 5;
+  // 5 was Ceil
   // 6 was Cos
   // 7 was Digest
-  Exp = 8;
+  // 8 was Exp
   // 9 was Floor
   // 10 was Ln
   // 11 was Log
@@ -624,7 +624,7 @@ enum ScalarFunction {
   // 80 was Pi
   // 81 was Degrees
   // 82 was Radians
-  Factorial = 83;
+  // 83 was Factorial
   // 84 was Lcm
   // 85 was Gcd
   // 86 was ArrayAppend

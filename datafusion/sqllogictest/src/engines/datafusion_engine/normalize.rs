@@ -96,14 +96,18 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         // form new rows with each additional line
         let new_lines: Vec<_> = lines
             .into_iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(idx, l)| {
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
                 // See https://github.com/apache/arrow-datafusion/issues/6328
                 let content = l.trim_start();
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("{new_prefix}{content}")]
+                // maintain for each line a number, so
+                // reviewing explain result changes is easier
+                let line_num = idx + 1;
+                vec![format!("{line_num:02}){new_prefix}{content}")]
             })
             .collect();
 
