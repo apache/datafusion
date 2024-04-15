@@ -354,11 +354,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
-
-    // Construct an expression that calculates the aggregate in reverse.
-    // fn reverse_expr(&self, _args_name: Vec<String>) -> Option<AggregateFunction> {
-    //     None
-    // }
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to

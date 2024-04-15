@@ -259,7 +259,6 @@ fn try_convert_first_last_if_better(
             continue;
         }
         if aggr_fun_expr.is_some_and(|e| e.fun().name() == "LAST_VALUE") {
-            // if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
             let mut last_value = aggr_fun_expr.unwrap().clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
