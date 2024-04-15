@@ -69,8 +69,7 @@ use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr_ext, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_config_ext,
+    parse_physical_window_expr, parse_protobuf_file_scan_config,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -190,7 +189,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 }
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                parse_protobuf_file_scan_config_ext(
+                parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
@@ -213,6 +212,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let base_config = parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
+                    extension_codec,
                 )?;
                 let predicate = scan
                     .predicate
@@ -233,13 +233,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Default::default(),
                 )))
             }
-            PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                parse_protobuf_file_scan_config_ext(
+            PhysicalPlanType::AvroScan(scan) => {
+                Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?,
-            ))),
+                )?)))
+            }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &coalesce_batches.input,
@@ -338,7 +338,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     .window_expr
                     .iter()
                     .map(|window_expr| {
-                        parse_physical_window_expr_ext(
+                        parse_physical_window_expr(
                             window_expr,
                             registry,
                             input_schema.as_ref(),

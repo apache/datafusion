@@ -70,17 +70,9 @@ use crate::protobuf::{
     PhysicalSortExprNodeCollection, ScalarValue,
 };
 
-use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
+use super::PhysicalExtensionCodec;
 
-impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
-    type Error = DataFusionError;
-
-    fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self> {
-        serialize_physical_aggr_expr(a, &DefaultPhysicalExtensionCodec {})
-    }
-}
-
-pub(crate) fn serialize_physical_aggr_expr(
+pub fn serialize_physical_aggr_expr(
     aggr_expr: Arc<dyn AggregateExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
@@ -123,15 +115,7 @@ pub(crate) fn serialize_physical_aggr_expr(
     })
 }
 
-impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
-    type Error = DataFusionError;
-
-    fn try_from(window_expr: Arc<dyn WindowExpr>) -> Result<Self> {
-        serialize_physical_window_expr(window_expr, &DefaultPhysicalExtensionCodec {})
-    }
-}
-
-pub(crate) fn serialize_physical_window_expr(
+pub fn serialize_physical_window_expr(
     window_expr: Arc<dyn WindowExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
@@ -454,7 +438,7 @@ pub fn serialize_physical_expr(
                                 .when_then_expr()
                                 .iter()
                                 .map(|(when_expr, then_expr)| {
-                                    try_parse_when_then_expr(when_expr, then_expr, codec)
+                                    serialize_when_then_expr(when_expr, then_expr, codec)
                                 })
                                 .collect::<Result<
                                     Vec<protobuf::PhysicalWhenThen>,
@@ -621,7 +605,7 @@ pub fn serialize_physical_expr(
     }
 }
 
-fn try_parse_when_then_expr(
+fn serialize_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
@@ -744,15 +728,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
     }
 }
 
-impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
-    type Error = DataFusionError;
-
-    fn try_from(conf: &FileScanConfig) -> Result<protobuf::FileScanExecConf> {
-        serialize_file_scan_config(conf, &DefaultPhysicalExtensionCodec {})
-    }
-}
-
-pub(crate) fn serialize_file_scan_config(
+pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::FileScanExecConf> {
@@ -815,15 +791,7 @@ impl From<JoinSide> for protobuf::JoinSide {
     }
 }
 
-impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
-    type Error = DataFusionError;
-
-    fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self> {
-        serialize_maybe_filter(expr, &DefaultPhysicalExtensionCodec {})
-    }
-}
-
-pub(crate) fn serialize_maybe_filter(
+pub fn serialize_maybe_filter(
     expr: Option<Arc<dyn PhysicalExpr>>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::MaybeFilter> {
@@ -832,28 +800,6 @@ pub(crate) fn serialize_maybe_filter(
         Some(expr) => Ok(protobuf::MaybeFilter {
             expr: Some(serialize_physical_expr(expr, codec)?),
         }),
-    }
-}
-
-impl TryFrom<Option<Vec<PhysicalSortExpr>>> for protobuf::MaybePhysicalSortExprs {
-    type Error = DataFusionError;
-
-    fn try_from(sort_exprs: Option<Vec<PhysicalSortExpr>>) -> Result<Self> {
-        let codec = DefaultPhysicalExtensionCodec {};
-        Ok(protobuf::MaybePhysicalSortExprs {
-            sort_expr: serialize_physical_sort_exprs(
-                sort_exprs.unwrap_or_default(),
-                &codec,
-            )?,
-        })
-    }
-}
-
-impl TryFrom<PhysicalSortExpr> for PhysicalSortExprNode {
-    type Error = DataFusionError;
-
-    fn try_from(sort_expr: PhysicalSortExpr) -> Result<Self> {
-        serialize_physical_sort_expr(sort_expr, &DefaultPhysicalExtensionCodec {})
     }
 }
 

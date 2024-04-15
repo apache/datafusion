@@ -21,13 +21,11 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
-use crate::common::proto_error;
-use crate::convert_required;
-use crate::logical_plan::{self, csv_writer_options_from_proto};
-use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::{self, copy_to_node};
-
 use arrow::compute::SortOptions;
+use chrono::{TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -57,13 +55,15 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
-
-use chrono::{TimeZone, Utc};
 use datafusion_expr::ScalarFunctionDefinition;
-use object_store::path::Path;
-use object_store::ObjectMeta;
 
-use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
+use crate::common::proto_error;
+use crate::convert_required;
+use crate::logical_plan::{self, csv_writer_options_from_proto};
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::{self, copy_to_node};
+
+use super::PhysicalExtensionCodec;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -130,21 +130,8 @@ pub fn parse_physical_sort_exprs(
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///                    when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
-    proto: &protobuf::PhysicalWindowExprNode,
-    registry: &dyn FunctionRegistry,
-    input_schema: &Schema,
-) -> Result<Arc<dyn WindowExpr>> {
-    parse_physical_window_expr_ext(
-        proto,
-        registry,
-        input_schema,
-        &DefaultPhysicalExtensionCodec {},
-    )
-}
-
-// TODO: Make this the public function on next major release.
-pub(crate) fn parse_physical_window_expr_ext(
     proto: &protobuf::PhysicalWindowExprNode,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
@@ -463,20 +450,6 @@ pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
-) -> Result<Option<Partitioning>> {
-    parse_protobuf_hash_partitioning_ext(
-        partitioning,
-        registry,
-        input_schema,
-        &DefaultPhysicalExtensionCodec {},
-    )
-}
-
-// TODO: Make this the public function on next major release.
-fn parse_protobuf_hash_partitioning_ext(
-    partitioning: Option<&protobuf::PhysicalHashRepartition>,
-    registry: &dyn FunctionRegistry,
-    input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
@@ -498,18 +471,6 @@ fn parse_protobuf_hash_partitioning_ext(
 }
 
 pub fn parse_protobuf_file_scan_config(
-    proto: &protobuf::FileScanExecConf,
-    registry: &dyn FunctionRegistry,
-) -> Result<FileScanConfig> {
-    parse_protobuf_file_scan_config_ext(
-        proto,
-        registry,
-        &DefaultPhysicalExtensionCodec {},
-    )
-}
-
-// TODO: Make this the public function on next major release.
-pub(crate) fn parse_protobuf_file_scan_config_ext(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
