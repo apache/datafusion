@@ -69,18 +69,22 @@ pub fn create_aggregate_expr(
 /// Defines how input ordering effects the aggregator
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum AggregateOrderSensitivity {
-    OrderInsensitive,
-    OrderRequiring,
-    OrderBeneficial,
+    Insensitive,
+    HardRequirement,
+    Beneficial,
 }
 
 impl AggregateOrderSensitivity {
+    pub fn is_order_insensitive(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::Insensitive)
+    }
+
     pub fn is_order_beneficial(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::OrderBeneficial)
+        self.eq(&AggregateOrderSensitivity::Beneficial)
     }
 
     pub fn is_order_hard_required(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::OrderRequiring)
+        self.eq(&AggregateOrderSensitivity::HardRequirement)
     }
 }
 
@@ -123,7 +127,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
     /// Indicates whether aggregator can produce correct result with any arbitrary ordering or not.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::OrderInsensitive
+        AggregateOrderSensitivity::Insensitive
     }
 
     /// Indicates whether requirement of the aggregators is satisfied at the input.

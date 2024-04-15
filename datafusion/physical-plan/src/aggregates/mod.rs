@@ -39,7 +39,6 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping,
@@ -843,11 +842,11 @@ fn get_aggregate_expr_req(
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
-    // If the aggregation function is not order sensitive, or the aggregation
-    // is performing a "second stage" calculation, or all aggregate function
-    // requirements are inside the GROUP BY expression, then ignore the ordering
+    // If the aggregation function is order in-sensitive, or the aggregation
+    // is performing a "second stage" calculation, then ignore the ordering
     // requirement.
-    if !is_order_sensitive(aggr_expr) || !agg_mode.is_first_stage() {
+    if aggr_expr.order_sensitivity().is_order_insensitive() || !agg_mode.is_first_stage()
+    {
         return vec![];
     }
 

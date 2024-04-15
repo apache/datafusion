@@ -133,7 +133,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::OrderRequiring
+        AggregateOrderSensitivity::HardRequirement
     }
 
     fn name(&self) -> &str {

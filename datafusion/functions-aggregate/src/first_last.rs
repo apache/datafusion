@@ -482,7 +482,7 @@ impl AggregateExpr for FirstValuePhysicalExpr {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::OrderBeneficial
+        AggregateOrderSensitivity::Beneficial
     }
 
     fn with_requirement_satisfied(
@@ -670,7 +670,7 @@ impl AggregateExpr for LastValuePhysicalExpr {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::OrderBeneficial
+        AggregateOrderSensitivity::Beneficial
     }
 
     fn with_requirement_satisfied(
