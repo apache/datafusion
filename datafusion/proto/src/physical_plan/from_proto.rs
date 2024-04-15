@@ -352,7 +352,7 @@ pub fn parse_physical_expr(
             // TODO Do not create new the ExecutionProps
             let execution_props = ExecutionProps::new();
 
-            functions::create_physical_expr(
+            functions::create_builtin_physical_expr(
                 &(&scalar_function).into(),
                 &args,
                 input_schema,

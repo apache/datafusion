@@ -276,7 +276,7 @@ pub(crate) mod tests {
 
     #[derive(Debug, Clone)]
     pub struct TestScalarUDF {
-        signature: Signature,
+        pub(crate) signature: Signature,
     }
 
     impl TestScalarUDF {

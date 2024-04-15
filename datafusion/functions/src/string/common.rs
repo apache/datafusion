@@ -19,10 +19,10 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
-    OffsetSizeTrait,
+    new_null_array, Array, ArrayDataBuilder, ArrayRef, GenericStringArray,
+    GenericStringBuilder, OffsetSizeTrait, StringArray,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -152,6 +152,95 @@ where
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
+    }
+}
+
+pub(crate) enum ColumnarValueRef<'a> {
+    Scalar(&'a [u8]),
+    NullableArray(&'a StringArray),
+    NonNullableArray(&'a StringArray),
+}
+
+impl<'a> ColumnarValueRef<'a> {
+    #[inline]
+    pub fn is_valid(&self, i: usize) -> bool {
+        match &self {
+            Self::Scalar(_) | Self::NonNullableArray(_) => true,
+            Self::NullableArray(array) => array.is_valid(i),
+        }
+    }
+
+    #[inline]
+    pub fn nulls(&self) -> Option<NullBuffer> {
+        match &self {
+            Self::Scalar(_) | Self::NonNullableArray(_) => None,
+            Self::NullableArray(array) => array.nulls().cloned(),
+        }
+    }
+}
+
+/// Optimized version of the StringBuilder in Arrow that:
+/// 1. Precalculating the expected length of the result, avoiding reallocations.
+/// 2. Avoids creating / incrementally creating a `NullBufferBuilder`
+pub(crate) struct StringArrayBuilder {
+    offsets_buffer: MutableBuffer,
+    value_buffer: MutableBuffer,
+}
+
+impl StringArrayBuilder {
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let mut offsets_buffer = MutableBuffer::with_capacity(
+            (item_capacity + 1) * std::mem::size_of::<i32>(),
+        );
+        // SAFETY: the first offset value is definitely not going to exceed the bounds.
+        unsafe { offsets_buffer.push_unchecked(0_i32) };
+        Self {
+            offsets_buffer,
+            value_buffer: MutableBuffer::with_capacity(data_capacity),
+        }
+    }
+
+    pub fn write<const CHECK_VALID: bool>(
+        &mut self,
+        column: &ColumnarValueRef,
+        i: usize,
+    ) {
+        match column {
+            ColumnarValueRef::Scalar(s) => {
+                self.value_buffer.extend_from_slice(s);
+            }
+            ColumnarValueRef::NullableArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NonNullableArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+        }
+    }
+
+    pub fn append_offset(&mut self) {
+        let next_offset: i32 = self
+            .value_buffer
+            .len()
+            .try_into()
+            .expect("byte array offset overflow");
+        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+    }
+
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
+        let array_builder = ArrayDataBuilder::new(DataType::Utf8)
+            .len(self.offsets_buffer.len() / std::mem::size_of::<i32>() - 1)
+            .add_buffer(self.offsets_buffer.into())
+            .add_buffer(self.value_buffer.into())
+            .nulls(null_buffer);
+        // SAFETY: all data that was appended was valid UTF8 and the values
+        // and offsets were created correctly
+        let array_data = unsafe { array_builder.build_unchecked() };
+        StringArray::from(array_data)
     }
 }
 

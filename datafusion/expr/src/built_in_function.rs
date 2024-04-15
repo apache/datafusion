@@ -23,7 +23,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use crate::type_coercion::functions::data_types;
-use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
+use crate::{FuncMonotonicity, Signature, Volatility};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -39,15 +39,6 @@ pub enum BuiltinScalarFunction {
     // math functions
     /// coalesce
     Coalesce,
-    // string functions
-    /// concat
-    Concat,
-    /// concat_ws
-    ConcatWithSeparator,
-    /// ends_with
-    EndsWith,
-    /// initcap
-    InitCap,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -101,10 +92,6 @@ impl BuiltinScalarFunction {
         match self {
             // Immutable scalar builtins
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
-            BuiltinScalarFunction::Concat => Volatility::Immutable,
-            BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
-            BuiltinScalarFunction::EndsWith => Volatility::Immutable,
-            BuiltinScalarFunction::InitCap => Volatility::Immutable,
         }
     }
 
@@ -117,8 +104,6 @@ impl BuiltinScalarFunction {
     /// 1. Perform additional checks on `input_expr_types` that are beyond the scope of `TypeSignature` validation.
     /// 2. Deduce the output `DataType` based on the provided `input_expr_types`.
     pub fn return_type(self, input_expr_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
@@ -130,43 +115,18 @@ impl BuiltinScalarFunction {
                 let coerced_types = data_types(input_expr_types, &self.signature());
                 coerced_types.map(|types| types[0].clone())
             }
-            BuiltinScalarFunction::Concat => Ok(Utf8),
-            BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
-            BuiltinScalarFunction::InitCap => {
-                utf8_to_str_type(&input_expr_types[0], "initcap")
-            }
-            BuiltinScalarFunction::EndsWith => Ok(Boolean),
         }
     }
 
     /// Return the argument [`Signature`] supported by this function
     pub fn signature(&self) -> Signature {
-        use DataType::*;
-        use TypeSignature::*;
         // note: the physical expression must accept the type returned by this function or the execution panics.
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::Concat
-            | BuiltinScalarFunction::ConcatWithSeparator => {
-                Signature::variadic(vec![Utf8], self.volatility())
-            }
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::InitCap => {
-                Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
-            }
-
-            BuiltinScalarFunction::EndsWith => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                self.volatility(),
-            ),
         }
     }
 
@@ -182,11 +142,6 @@ impl BuiltinScalarFunction {
         match self {
             // conditional functions
             BuiltinScalarFunction::Coalesce => &["coalesce"],
-
-            BuiltinScalarFunction::Concat => &["concat"],
-            BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
-            BuiltinScalarFunction::EndsWith => &["ends_with"],
-            BuiltinScalarFunction::InitCap => &["initcap"],
         }
     }
 }
@@ -207,49 +162,6 @@ impl FromStr for BuiltinScalarFunction {
         }
     }
 }
-
-/// Creates a function to identify the optimal return type of a string function given
-/// the type of its first argument.
-///
-/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
-/// `$largeUtf8Type`,
-///
-/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
-macro_rules! get_optimal_return_type {
-    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
-        fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
-            Ok(match arg_type {
-                // LargeBinary inputs are automatically coerced to Utf8
-                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                // Binary inputs are automatically coerced to Utf8
-                DataType::Utf8 | DataType::Binary => $utf8Type,
-                DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                    DataType::Utf8 | DataType::Binary => $utf8Type,
-                    DataType::Null => DataType::Null,
-                    _ => {
-                        return plan_err!(
-                            "The {} function can only accept strings, but got {:?}.",
-                            name.to_uppercase(),
-                            **value_type
-                        );
-                    }
-                },
-                data_type => {
-                    return plan_err!(
-                        "The {} function can only accept strings, but got {:?}.",
-                        name.to_uppercase(),
-                        data_type
-                    );
-                }
-            })
-        }
-    };
-}
-
-// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
-get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 #[cfg(test)]
 mod tests {

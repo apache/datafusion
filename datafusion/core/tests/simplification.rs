@@ -31,7 +31,7 @@ use datafusion_expr::{
     expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
     LogicalPlanBuilder, ScalarUDF, Volatility,
 };
-use datafusion_functions::math;
+use datafusion_functions::{math, string};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
@@ -217,7 +217,7 @@ fn fold_and_simplify() {
     let info: MyInfo = schema().into();
 
     // What will it do with the expression `concat('foo', 'bar') == 'foobar')`?
-    let expr = concat(&[lit("foo"), lit("bar")]).eq(lit("foobar"));
+    let expr = concat(vec![lit("foo"), lit("bar")]).eq(lit("foobar"));
 
     // Since datafusion applies both simplification *and* rewriting
     // some expressions can be entirely simplified
@@ -364,13 +364,13 @@ fn test_const_evaluator() {
 #[test]
 fn test_const_evaluator_scalar_functions() {
     // concat("foo", "bar") --> "foobar"
-    let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
+    let expr = string::expr_fn::concat(vec![lit("foo"), lit("bar")]);
     test_evaluate(expr, lit("foobar"));
 
     // ensure arguments are also constant folded
     // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-    let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
-    let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
+    let concat1 = string::expr_fn::concat(vec![lit("bar"), lit("baz")]);
+    let expr = string::expr_fn::concat(vec![lit("foo"), concat1]);
     test_evaluate(expr, lit("foobarbaz"));
 
     // Check non string arguments
@@ -568,4 +568,93 @@ fn test_simplify_power() {
         let expected = power(col("c3_non_null"), col("c4_non_null"));
         test_simplify(expr, expected)
     }
+}
+
+#[test]
+fn test_simplify_concat_ws() {
+    let null = lit(ScalarValue::Utf8(None));
+    // the delimiter is not a literal
+    {
+        let expr = concat_ws(col("c"), vec![lit("a"), null.clone(), lit("b")]);
+        let expected = concat_ws(col("c"), vec![lit("a"), lit("b")]);
+        test_simplify(expr, expected);
+    }
+
+    // the delimiter is an empty string
+    {
+        let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
+        let expected = concat(vec![col("a"), lit("cb")]);
+        test_simplify(expr, expected);
+    }
+
+    // the delimiter is a not-empty string
+    {
+        let expr = concat_ws(
+            lit("-"),
+            vec![
+                null.clone(),
+                col("c0"),
+                lit("hello"),
+                null.clone(),
+                lit("rust"),
+                col("c1"),
+                lit(""),
+                lit(""),
+                null,
+            ],
+        );
+        let expected = concat_ws(
+            lit("-"),
+            vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
+        );
+        test_simplify(expr, expected)
+    }
+}
+
+#[test]
+fn test_simplify_concat_ws_with_null() {
+    let null = lit(ScalarValue::Utf8(None));
+    // null delimiter -> null
+    {
+        let expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        test_simplify(expr, null.clone());
+    }
+
+    // filter out null args
+    {
+        let expr = concat_ws(lit("|"), vec![col("c1"), null.clone(), col("c2")]);
+        let expected = concat_ws(lit("|"), vec![col("c1"), col("c2")]);
+        test_simplify(expr, expected);
+    }
+
+    // nested test
+    {
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        let expr = concat_ws(lit("|"), vec![sub_expr, col("c3")]);
+        test_simplify(expr, concat_ws(lit("|"), vec![col("c3")]));
+    }
+
+    // null delimiter (nested)
+    {
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
+        test_simplify(expr, null);
+    }
+}
+
+#[test]
+fn test_simplify_concat() {
+    let null = lit(ScalarValue::Utf8(None));
+    let expr = concat(vec![
+        null.clone(),
+        col("c0"),
+        lit("hello "),
+        null.clone(),
+        lit("rust"),
+        col("c1"),
+        lit(""),
+        null,
+    ]);
+    let expected = concat(vec![col("c0"), lit("hello rust"), col("c1")]);
+    test_simplify(expr, expected)
 }

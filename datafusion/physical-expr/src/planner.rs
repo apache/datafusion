@@ -307,7 +307,7 @@ pub fn create_physical_expr(
 
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
-                    functions::create_physical_expr(
+                    functions::create_builtin_physical_expr(
                         fun,
                         &physical_args,
                         input_schema,
