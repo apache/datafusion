@@ -113,12 +113,8 @@ fn get_common_requirement_of_aggregate_input(
 ///
 /// - `aggr_exprs`: A slice of `Arc<dyn AggregateExpr>` containing all the
 ///   aggregate expressions.
-/// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the
-///   physical GROUP BY expression.
 /// - `eq_properties`: A reference to an `EquivalenceProperties` instance
 ///   representing equivalence properties for ordering.
-/// - `agg_mode`: A reference to an `AggregateMode` instance representing the
-///   mode of aggregation.
 ///
 /// # Returns
 ///
@@ -149,11 +145,12 @@ fn try_convert_reverse_if_better(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
-                // Converting to LAST_VALUE enables more efficient execution
+                // Converting to reverse enables more efficient execution
                 // given the existing ordering:
                 if let Some(aggr_expr_rev) = aggr_expr.reverse_expr() {
                     *aggr_expr = aggr_expr_rev;
                 } else {
+                    // If reverse execution is not possible, cannot update current aggregate expression.
                     continue;
                 }
                 *aggr_expr = aggr_expr.clone().with_requirement_satisfied(true)?;
