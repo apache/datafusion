@@ -1168,12 +1168,13 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
-                LogicalPlan::Unnest(Unnest { input, column, schema, options }) => {
+                LogicalPlan::Unnest(Unnest { input, columns, schema, options }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
-                    let column_exec = schema.index_of_column(column)
-                        .map(|idx| Column::new(&column.name, idx))?;
+                    let column_execs = columns.iter().map(|column| {
+                        schema.index_of_column(column).map(|idx| Column::new(&column.name, idx))
+                    }).collect::<Result<_>>()?;
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
-                    Ok(Arc::new(UnnestExec::new(input, column_exec, schema, options.clone())))
+                    Ok(Arc::new(UnnestExec::new(input, column_execs, schema, options.clone())))
                 }
                 LogicalPlan::Ddl(ddl) => {
                     // There is no default plan for DDl statements --

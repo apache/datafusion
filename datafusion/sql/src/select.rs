@@ -294,13 +294,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     transformed,
                     tnr: _,
                 } = expr.transform_up_mut(&mut |expr: Expr| {
-                    if let Expr::Unnest(Unnest { ref exprs }) = expr {
+                    if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                         let column_name = expr.display_name()?;
                         unnest_columns.push(column_name.clone());
                         // Add alias for the argument expression, to avoid naming conflicts with other expressions
                         // in the select list. For example: `select unnest(col1), col1 from t`.
                         inner_projection_exprs
-                            .push(exprs[0].clone().alias(column_name.clone()));
+                            .push(arg.clone().alias(column_name.clone()));
                         Ok(Transformed::yes(Expr::Column(Column::from_name(
                             column_name,
                         ))))
@@ -332,15 +332,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .project(inner_projection_exprs)?
                 .build()
         } else {
-            if unnest_columns.len() > 1 {
-                return not_impl_err!("Only support single unnest expression for now");
-            }
-            let unnest_column = unnest_columns.pop().unwrap();
+            let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
             // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
             LogicalPlanBuilder::from(input)
                 .project(inner_projection_exprs)?
-                .unnest_column_with_options(unnest_column, unnest_options)?
+                .unnest_columns_with_options(columns, unnest_options)?
                 .project(outer_projection_exprs)?
                 .build()
         }
