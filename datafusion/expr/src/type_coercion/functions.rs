@@ -28,9 +28,7 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
-use super::binary::{
-    comparison_binary_numeric_coercion, comparison_coercion,
-};
+use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
 /// Performs type coercion for function arguments.
 ///
@@ -455,14 +453,15 @@ fn coerced_from<'a>(
         // Note that not all rules in `comparison_coercion` can be reused here.
         // For example, all numeric types can be coerced into Utf8 for comparison,
         // but not for function arguments.
-        _ => comparison_binary_numeric_coercion(type_into, type_from)
-            .and_then(|coerced_type| {
+        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
+            |coerced_type| {
                 if *type_into == coerced_type {
                     Some(coerced_type)
                 } else {
                     None
                 }
-            }),
+            },
+        ),
     }
 }
 
