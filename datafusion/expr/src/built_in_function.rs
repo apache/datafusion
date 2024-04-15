@@ -277,4 +277,19 @@ mod tests {
             .unwrap();
         assert_eq!(return_type, DataType::Date32);
     }
+
+    #[test]
+    fn test_coalesce_return_types_dictionary() {
+        let coalesce = BuiltinScalarFunction::Coalesce;
+        let return_type = coalesce
+            .return_type(&[
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                DataType::Utf8,
+            ])
+            .unwrap();
+        assert_eq!(
+            return_type,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+    }
 }
