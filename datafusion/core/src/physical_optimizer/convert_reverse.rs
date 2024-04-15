@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use super::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
@@ -24,14 +27,10 @@ use datafusion_physical_expr::{
     reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::aggregates::concat_slices;
+use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
     aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
 };
-use std::sync::Arc;
-
-use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
-
-use super::PhysicalOptimizerRule;
 
 /// The optimizer rule check the ordering requirements of the aggregate expressions.
 /// And convert between FIRST_VALUE and LAST_VALUE if possible.
@@ -57,8 +56,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(&replace_with_reverse_aggregator_when_beneficial)
-            .data()
+        plan.transform_up(&update_aggregator_when_beneficial).data()
     }
 
     fn name(&self) -> &str {
@@ -70,7 +68,9 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
     }
 }
 
-fn replace_with_reverse_aggregator_when_beneficial(
+/// Updates the aggregators with mode `AggregateOrderSensitivity::Beneficial`
+/// if existing ordering enables to execute them more efficiently.
+fn update_aggregator_when_beneficial(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
@@ -95,7 +95,11 @@ fn replace_with_reverse_aggregator_when_beneficial(
             })
             .collect::<Vec<_>>();
 
-        try_convert_reverse_if_better(&requirement, &mut aggr_expr, input_eq_properties)?;
+        try_convert_aggregate_if_better(
+            &requirement,
+            &mut aggr_expr,
+            input_eq_properties,
+        )?;
 
         let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_expr);
 
@@ -107,23 +111,18 @@ fn replace_with_reverse_aggregator_when_beneficial(
     }
 }
 
-/// Get the common requirement that satisfies all the aggregate expressions.
+/// Tries to convert each aggregate expression to a potentially more efficient version.
 ///
 /// # Parameters
 ///
-/// - `aggr_exprs`: A slice of `Arc<dyn AggregateExpr>` containing all the
-///   aggregate expressions.
-/// - `eq_properties`: A reference to an `EquivalenceProperties` instance
-///   representing equivalence properties for ordering.
+/// * `prefix_requirement` - An array slice representing the ordering requirements preceding the aggregate expressions.
+/// * `aggr_exprs` - A mutable slice of `Arc<dyn AggregateExpr>` representing the aggregate expressions to be optimized.
+/// * `eq_properties` - A reference to the `EquivalenceProperties` object containing ordering information.
 ///
 /// # Returns
 ///
-/// A `LexRequirement` instance, which is the requirement that satisfies all the
-/// aggregate requirements. Returns an error in case of conflicting requirements.
-///
-/// Similar to the one in datafusion/physical-plan/src/aggregates/mod.rs, but this
-/// function care only the possible conversion between FIRST_VALUE and LAST_VALUE
-fn try_convert_reverse_if_better(
+/// Returns `Ok(())` if the conversion process completes successfully. If an error occurs during the conversion process, an error is returned.
+fn try_convert_aggregate_if_better(
     prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     eq_properties: &EquivalenceProperties,
