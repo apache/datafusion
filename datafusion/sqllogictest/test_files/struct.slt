@@ -85,11 +85,11 @@ query TT
 explain select struct(a, b, c) from values;
 ----
 logical_plan
-Projection: struct(values.a, values.b, values.c)
---TableScan: values projection=[a, b, c]
+01)Projection: struct(values.a, values.b, values.c)
+02)--TableScan: values projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
 query error DataFusion error: Error during planning: No function matches the given name and argument types 'named_struct\(\)'. You might need to add explicit type casts.
