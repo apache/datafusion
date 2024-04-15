@@ -76,7 +76,8 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
+    FileType, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -444,6 +445,22 @@ pub trait ExtensionPlanner {
 
 /// Default single node physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
+///
+/// This planner will first flatten the `LogicalPlan` tree via a
+/// depth first approach, which allows it to identify the leaves
+/// of the tree.
+///
+/// Tasks are spawned from these leaves and traverse back up the
+/// tree towards the root, converting each `LogicalPlan` node it
+/// reaches into their equivalent `ExecutionPlan` node. When these
+/// tasks reach a common node, they will terminate until the last
+/// task reaches the node which will then continue building up the
+/// tree.
+///
+/// Up to [`planning_concurrency`] tasks are buffered at once to
+/// execute concurrently.
+///
+/// [`planning_concurrency`]: crate::config::ExecutionOptions::planning_concurrency
 #[derive(Default)]
 pub struct DefaultPhysicalPlanner {
     extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
@@ -484,19 +501,23 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     }
 }
 
-/// (index, plan) since index is needed to order children to ensure consistent
-/// order in parent node plans.
-type ExecutionPlansWithIndex = Vec<(usize, Arc<dyn ExecutionPlan>)>;
+#[derive(Debug)]
+struct ExecutionPlanChild {
+    /// Index needed to order children of parent to ensure consistency with original
+    /// `LogicalPlan`
+    index: usize,
+    plan: Arc<dyn ExecutionPlan>,
+}
 
 #[derive(Debug)]
 enum NodeState {
     ZeroOrOneChild,
-    /// If a node has multiple children, we lock the ready children behind a Mutex
-    /// such that concurrent tasks are able to append safely, and ultimately
-    /// a single task will take all the ready children to build the plan.
+    /// Nodes with multiple children will have multiple tasks accessing it,
+    /// and each task will append their contribution until the last task takes
+    /// all the children to build the parent node.
     ///
     /// Wrapped in an Option to make it easier to take the Vec at the end.
-    TwoOrMoreChildren(Mutex<Option<ExecutionPlansWithIndex>>),
+    TwoOrMoreChildren(Mutex<Option<Vec<ExecutionPlanChild>>>),
 }
 
 /// To avoid needing to pass single child wrapped in a Vec for nodes
@@ -508,17 +529,17 @@ enum ChildrenContainer {
 }
 
 impl ChildrenContainer {
-    fn one(self) -> Arc<dyn ExecutionPlan> {
+    fn one(self) -> Result<Arc<dyn ExecutionPlan>> {
         match self {
-            Self::One(p) => p,
-            _ => unreachable!(),
+            Self::One(p) => Ok(p),
+            _ => internal_err!("More than one child in ChildrenContainer"),
         }
     }
 
-    fn two(self) -> [Arc<dyn ExecutionPlan>; 2] {
+    fn two(self) -> Result<[Arc<dyn ExecutionPlan>; 2]> {
         match self {
-            Self::Multiple(v) => v.try_into().unwrap(),
-            _ => unreachable!(),
+            Self::Multiple(v) if v.len() == 2 => Ok(v.try_into().unwrap()),
+            _ => internal_err!("ChildrenContainer doesn't contain exactly 2 children"),
         }
     }
 
@@ -570,7 +591,7 @@ impl DefaultPhysicalPlanner {
         while let Some((parent_index, node)) = dfs_visit_stack.pop() {
             let current_index = flat_tree.len();
             // Because of how we extend the visit stack here, we visit the children
-            // in reverse order of how they appeart, so later we need to reverse
+            // in reverse order of how they appear, so later we need to reverse
             // the order of children when building the nodes.
             dfs_visit_stack
                 .extend(node.inputs().iter().map(|&n| (Some(current_index), n)));
@@ -616,10 +637,11 @@ impl DefaultPhysicalPlanner {
             .flatten()
             .collect::<Vec<_>>();
         // Ideally this never happens if we have a valid LogicalPlan tree
-        assert!(
-            outputs.len() == 1,
-            "Invalid physical plan created from logical plan"
-        );
+        if outputs.len() != 1 {
+            return internal_err!(
+                "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
+            );
+        }
         let plan = outputs.pop().unwrap();
         Ok(plan)
     }
@@ -636,7 +658,11 @@ impl DefaultPhysicalPlanner {
         session_state: &'a SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
-        let mut node = &flat_tree[leaf_starter_index];
+        let mut node = flat_tree.get(leaf_starter_index).ok_or_else(|| {
+            internal_datafusion_err!(
+                "Invalid index whilst creating initial physical plan"
+            )
+        })?;
         let mut plan = self
             .map_logical_node_to_physical(
                 node.node,
@@ -647,7 +673,11 @@ impl DefaultPhysicalPlanner {
         let mut current_index = leaf_starter_index;
         // parent_index is None only for root
         while let Some(parent_index) = node.parent_index {
-            node = &flat_tree[parent_index];
+            node = flat_tree.get(parent_index).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Invalid index whilst creating initial physical plan"
+                )
+            })?;
             match &node.state {
                 NodeState::ZeroOrOneChild => {
                     plan = self
@@ -661,12 +691,22 @@ impl DefaultPhysicalPlanner {
                 // See if we have all children to build the node.
                 NodeState::TwoOrMoreChildren(children) => {
                     let mut children = {
-                        let mut guard = children.lock().unwrap();
+                        let mut guard = children.lock().map_err(|_| {
+                            internal_datafusion_err!(
+                                "Poisoned mutex protecitng children vec"
+                            )
+                        })?;
                         // Safe unwrap on option as only the last task reaching this
                         // node will take the contents (which happens after this line).
-                        let children = guard.as_mut().unwrap();
+                        let children = guard.as_mut().ok_or_else(|| {
+                            internal_datafusion_err!("Children vec is already taken")
+                        })?;
                         // Add our contribution to this parent node.
-                        children.push((current_index, plan));
+                        // Vec is pre-allocated so no allocation should occur here.
+                        children.push(ExecutionPlanChild {
+                            index: current_index,
+                            plan,
+                        });
                         if children.len() < node.node.inputs().len() {
                             // This node is not ready yet, still pending more children.
                             // This task is finished forever.
@@ -679,7 +719,9 @@ impl DefaultPhysicalPlanner {
                         // all children.
                         //
                         // This take is the only place the Option becomes None.
-                        guard.take().unwrap()
+                        guard.take().ok_or_else(|| {
+                            internal_datafusion_err!("Failed to take children vec")
+                        })?
                     };
 
                     // Indices refer to position in flat tree Vec, which means they are
@@ -687,9 +729,8 @@ impl DefaultPhysicalPlanner {
                     //
                     // We reverse sort because of how we visited the node in the initial
                     // DFS traversal (see above).
-                    children.sort_unstable_by_key(|(index, _)| std::cmp::Reverse(*index));
-                    let children =
-                        children.iter().map(|(_, plan)| plan.clone()).collect();
+                    children.sort_unstable_by_key(|epc| std::cmp::Reverse(epc.index));
+                    let children = children.into_iter().map(|epc| epc.plan).collect();
                     let children = ChildrenContainer::Multiple(children);
                     plan = self
                         .map_logical_node_to_physical(node.node, session_state, children)
@@ -770,7 +811,7 @@ impl DefaultPhysicalPlanner {
                 partition_by,
                 options: source_option_tuples,
             }) => {
-                let input_exec = children.one();
+                let input_exec = children.one()?;
                 let parsed_url = ListingTableUrl::parse(output_url)?;
                 let object_store_url = parsed_url.object_store();
 
@@ -832,7 +873,7 @@ impl DefaultPhysicalPlanner {
                 let name = table_name.table();
                 let schema = session_state.schema_for_ref(table_name.clone())?;
                 if let Some(provider) = schema.table(name).await? {
-                    let input_exec = children.one();
+                    let input_exec = children.one()?;
                     provider
                         .insert_into(session_state, input_exec, false)
                         .await?
@@ -848,7 +889,7 @@ impl DefaultPhysicalPlanner {
                 let name = table_name.table();
                 let schema = session_state.schema_for_ref(table_name.clone())?;
                 if let Some(provider) = schema.table(name).await? {
-                    let input_exec = children.one();
+                    let input_exec = children.one()?;
                     provider
                         .insert_into(session_state, input_exec, true)
                         .await?
@@ -863,7 +904,7 @@ impl DefaultPhysicalPlanner {
                     return internal_err!("Impossibly got empty window expression");
                 }
 
-                let input_exec = children.one();
+                let input_exec = children.one()?;
 
                 // at this moment we are guaranteed by the logical planner
                 // to have all the window_expr to have equal sort key
@@ -951,7 +992,7 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 // Initially need to perform the aggregate and then merge the partitions
-                let input_exec = children.one();
+                let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
 
@@ -1030,14 +1071,14 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(
                     session_state,
-                    children.one(),
+                    children.one()?,
                     input,
                     expr,
                 )?,
             LogicalPlan::Filter(Filter {
                 predicate, input, ..
             }) => {
-                let physical_input = children.one();
+                let physical_input = children.one()?;
                 let input_dfschema = input.schema();
 
                 let runtime_expr =
@@ -1054,7 +1095,7 @@ impl DefaultPhysicalPlanner {
                 input,
                 partitioning_scheme,
             }) => {
-                let physical_input = children.one();
+                let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let physical_partitioning = match partitioning_scheme {
                     LogicalPartitioning::RoundRobinBatch(n) => {
@@ -1087,7 +1128,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Sort(Sort {
                 expr, input, fetch, ..
             }) => {
-                let physical_input = children.one();
+                let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_expr = create_physical_sort_exprs(
                     expr,
@@ -1099,9 +1140,9 @@ impl DefaultPhysicalPlanner {
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
-            LogicalPlan::SubqueryAlias(_) => children.one(),
+            LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
-                let input = children.one();
+                let input = children.one()?;
 
                 // GlobalLimitExec requires a single partition for input
                 let input = if input.output_partitioning().partition_count() == 1 {
@@ -1124,7 +1165,7 @@ impl DefaultPhysicalPlanner {
                 options,
                 ..
             }) => {
-                let input = children.one();
+                let input = children.one()?;
                 let column_exec = schema
                     .index_of_column(column)
                     .map(|idx| Column::new(&column.name, idx))?;
@@ -1145,7 +1186,7 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let null_equals_null = *null_equals_null;
 
-                let [physical_left, physical_right] = children.two();
+                let [physical_left, physical_right] = children.two()?;
 
                 // If join has expression equijoin keys, add physical projection.
                 let has_expr_join_key = keys.iter().any(|(l, r)| {
@@ -1413,13 +1454,13 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::CrossJoin(_) => {
-                let [left, right] = children.two();
+                let [left, right] = children.two()?;
                 Arc::new(CrossJoinExec::new(left, right))
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
             }) => {
-                let [static_term, recursive_term] = children.two();
+                let [static_term, recursive_term] = children.two()?;
                 Arc::new(RecursiveQueryExec::try_new(
                     name.clone(),
                     static_term,
