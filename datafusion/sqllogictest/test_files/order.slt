@@ -159,13 +159,13 @@ query TT
 explain SELECT c1, c2 FROM aggregate_test_100 ORDER BY c2, c3, c2
 ----
 logical_plan
-Projection: aggregate_test_100.c1, aggregate_test_100.c2
---Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
-----TableScan: aggregate_test_100 projection=[c1, c2, c3]
+01)Projection: aggregate_test_100.c1, aggregate_test_100.c2
+02)--Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
+03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
-ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
---SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2
@@ -434,14 +434,14 @@ FROM multiple_ordered_table
 ORDER BY result;
 ----
 logical_plan
-Sort: result ASC NULLS LAST
---Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
-----TableScan: multiple_ordered_table projection=[a, b, c]
+01)Sort: result ASC NULLS LAST
+02)--Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
+03)----TableScan: multiple_ordered_table projection=[a, b, c]
 physical_plan
-SortPreservingMergeExec: [result@0 ASC NULLS LAST]
---ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
 
 statement ok
 drop table multiple_ordered_table;
@@ -464,14 +464,14 @@ FROM csv_with_timestamps
 ORDER BY db15;
 ----
 logical_plan
-Sort: db15 ASC NULLS LAST
---Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
-----TableScan: csv_with_timestamps projection=[ts]
+01)Sort: db15 ASC NULLS LAST
+02)--Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
+03)----TableScan: csv_with_timestamps projection=[ts]
 physical_plan
-SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
---ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+01)SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
 
 query TT
 EXPLAIN SELECT DATE_TRUNC('DAY', ts) as dt_day
@@ -479,14 +479,14 @@ FROM csv_with_timestamps
 ORDER BY dt_day;
 ----
 logical_plan
-Sort: dt_day ASC NULLS LAST
---Projection: date_trunc(Utf8("DAY"), csv_with_timestamps.ts) AS dt_day
-----TableScan: csv_with_timestamps projection=[ts]
+01)Sort: dt_day ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("DAY"), csv_with_timestamps.ts) AS dt_day
+03)----TableScan: csv_with_timestamps projection=[ts]
 physical_plan
-SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
---ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+01)SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
 
 statement ok
 drop table csv_with_timestamps;
@@ -522,14 +522,14 @@ FROM aggregate_test_100
 ORDER BY atan_c11;
 ----
 logical_plan
-Sort: atan_c11 ASC NULLS LAST
---Projection: atan(aggregate_test_100.c11) AS atan_c11
-----TableScan: aggregate_test_100 projection=[c11]
+01)Sort: atan_c11 ASC NULLS LAST
+02)--Projection: atan(aggregate_test_100.c11) AS atan_c11
+03)----TableScan: aggregate_test_100 projection=[c11]
 physical_plan
-SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
---ProjectionExec: expr=[atan(c11@0) as atan_c11]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[atan(c11@0) as atan_c11]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
 
 query TT
 EXPLAIN SELECT CEIL(c11) as ceil_c11
@@ -537,14 +537,14 @@ FROM aggregate_test_100
 ORDER BY ceil_c11;
 ----
 logical_plan
-Sort: ceil_c11 ASC NULLS LAST
---Projection: ceil(aggregate_test_100.c11) AS ceil_c11
-----TableScan: aggregate_test_100 projection=[c11]
+01)Sort: ceil_c11 ASC NULLS LAST
+02)--Projection: ceil(aggregate_test_100.c11) AS ceil_c11
+03)----TableScan: aggregate_test_100 projection=[c11]
 physical_plan
-SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
---ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
 
 query TT
   EXPLAIN SELECT LOG(c11, c12) as log_c11_base_c12
@@ -552,14 +552,14 @@ query TT
   ORDER BY log_c11_base_c12;
 ----
 logical_plan
-Sort: log_c11_base_c12 ASC NULLS LAST
---Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
-----TableScan: aggregate_test_100 projection=[c11, c12]
+01)Sort: log_c11_base_c12 ASC NULLS LAST
+02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
+03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
-SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
---ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
 
 query TT
 EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
@@ -567,14 +567,14 @@ FROM aggregate_test_100
 ORDER BY log_c12_base_c11 DESC;
 ----
 logical_plan
-Sort: log_c12_base_c11 DESC NULLS FIRST
---Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
-----TableScan: aggregate_test_100 projection=[c11, c12]
+01)Sort: log_c12_base_c11 DESC NULLS FIRST
+02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
+03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
-SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
---ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
+02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
 
 statement ok
 drop table aggregate_test_100;
@@ -633,8 +633,8 @@ query TT
 EXPLAIN SELECT o_orderkey, o_orderstatus FROM orders ORDER BY o_orderkey ASC
 ----
 logical_plan
-Sort: orders.o_orderkey ASC NULLS LAST
---TableScan: orders projection=[o_orderkey, o_orderstatus]
+01)Sort: orders.o_orderkey ASC NULLS LAST
+02)--TableScan: orders projection=[o_orderkey, o_orderstatus]
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], output_ordering=[o_orderkey@0 ASC NULLS LAST], has_header=true
 
 
@@ -677,11 +677,11 @@ query TT
 EXPLAIN SELECT * FROM t1 ORDER BY id DESC, id, name, id ASC;
 ----
 logical_plan
-Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
---TableScan: t1 projection=[id, name]
+01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
+02)--TableScan: t1 projection=[id, name]
 physical_plan
-SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
 SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
@@ -696,11 +696,11 @@ query TT
 EXPLAIN SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
 ----
 logical_plan
-Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
---TableScan: t1 projection=[id, name]
+01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
+02)--TableScan: t1 projection=[id, name]
 physical_plan
-SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Minimal reproduction of issue 5970
@@ -750,40 +750,40 @@ SELECT * FROM v
 ORDER BY 1, 2;
 ----
 logical_plan
-Sort: u.m ASC NULLS LAST, u.t ASC NULLS LAST
---Union
-----SubqueryAlias: u
-------Projection: Int64(0) AS m, m0.t
---------Aggregate: groupBy=[[Int64(0), m0.t]], aggr=[[]]
-----------SubqueryAlias: m0
-------------Projection: column1 AS t
---------------Values: (Int64(0)), (Int64(1)), (Int64(2))
-----SubqueryAlias: v
-------Projection: Int64(1) AS m, m1.t
---------Aggregate: groupBy=[[Int64(1), m1.t]], aggr=[[]]
-----------SubqueryAlias: m1
-------------Projection: column1 AS t
---------------Values: (Int64(0)), (Int64(1))
+01)Sort: u.m ASC NULLS LAST, u.t ASC NULLS LAST
+02)--Union
+03)----SubqueryAlias: u
+04)------Projection: Int64(0) AS m, m0.t
+05)--------Aggregate: groupBy=[[Int64(0), m0.t]], aggr=[[]]
+06)----------SubqueryAlias: m0
+07)------------Projection: column1 AS t
+08)--------------Values: (Int64(0)), (Int64(1)), (Int64(2))
+09)----SubqueryAlias: v
+10)------Projection: Int64(1) AS m, m1.t
+11)--------Aggregate: groupBy=[[Int64(1), m1.t]], aggr=[[]]
+12)----------SubqueryAlias: m1
+13)------------Projection: column1 AS t
+14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
-SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
---SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-----InterleaveExec
-------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
---------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
-----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2
---------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
-------------------ProjectionExec: expr=[column1@0 as t]
---------------------ValuesExec
-------ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]
---------AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
-----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2
---------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
-------------------ProjectionExec: expr=[column1@0 as t]
---------------------ValuesExec
+01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+03)----InterleaveExec
+04)------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+10)------------------ProjectionExec: expr=[column1@0 as t]
+11)--------------------ValuesExec
+12)------ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]
+13)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+14)----------CoalesceBatchesExec: target_batch_size=8192
+15)------------RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2
+16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+17)----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+18)------------------ProjectionExec: expr=[column1@0 as t]
+19)--------------------ValuesExec
 
 #####
 # Multi column sorting with lists
