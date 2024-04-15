@@ -37,16 +37,8 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// ceil
-    Ceil,
     /// coalesce
     Coalesce,
-    /// exp
-    Exp,
-    /// factorial
-    Factorial,
-    /// nanvl
-    Nanvl,
     // string functions
     /// concat
     Concat,
@@ -56,8 +48,6 @@ pub enum BuiltinScalarFunction {
     EndsWith,
     /// initcap
     InitCap,
-    /// random
-    Random,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -110,18 +100,11 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
-            BuiltinScalarFunction::Exp => Volatility::Immutable,
-            BuiltinScalarFunction::Factorial => Volatility::Immutable,
-            BuiltinScalarFunction::Nanvl => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
-
-            // Volatile builtin functions
-            BuiltinScalarFunction::Random => Volatility::Volatile,
         }
     }
 
@@ -152,22 +135,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
-            BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
-
-            BuiltinScalarFunction::Factorial => Ok(Int64),
-
-            BuiltinScalarFunction::Nanvl => match &input_expr_types[0] {
-                Float32 => Ok(Float32),
-                _ => Ok(Float64),
-            },
-
-            BuiltinScalarFunction::Ceil | BuiltinScalarFunction::Exp => {
-                match input_expr_types[0] {
-                    Float32 => Ok(Float32),
-                    _ => Ok(Float64),
-                }
-            }
         }
     }
 
@@ -199,22 +167,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
-            BuiltinScalarFunction::Nanvl => Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::Factorial => {
-                Signature::uniform(1, vec![Int64], self.volatility())
-            }
-            BuiltinScalarFunction::Ceil | BuiltinScalarFunction::Exp => {
-                // math expressions expect 1 argument of type f64 or f32
-                // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
-                // return the best approximation for it (in f64).
-                // We accept f32 because in this case it is clear that the best approximation
-                // will be as good as the number of digits in the number
-                Signature::uniform(1, vec![Float64, Float32], self.volatility())
-            }
         }
     }
 
@@ -222,27 +174,12 @@ impl BuiltinScalarFunction {
     /// The list can be extended, only mathematical and datetime functions are
     /// considered for the initial implementation of this feature.
     pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
-        if matches!(
-            &self,
-            BuiltinScalarFunction::Ceil
-                | BuiltinScalarFunction::Exp
-                | BuiltinScalarFunction::Factorial
-        ) {
-            Some(vec![Some(true)])
-        } else {
-            None
-        }
+        None
     }
 
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Ceil => &["ceil"],
-            BuiltinScalarFunction::Exp => &["exp"],
-            BuiltinScalarFunction::Factorial => &["factorial"],
-            BuiltinScalarFunction::Nanvl => &["nanvl"],
-            BuiltinScalarFunction::Random => &["random"],
-
             // conditional functions
             BuiltinScalarFunction::Coalesce => &["coalesce"],
 

@@ -87,6 +87,22 @@ f3 Utf8 YES
 f4 Float64 YES
 time Timestamp(Nanosecond, None) YES
 
+# in list with dictionary input
+query BBB
+SELECT
+    tag_id in ('1000'), '1000' in (tag_id, null), arrow_cast('999','Dictionary(Int32, Utf8)') in (tag_id, null)
+FROM m1
+----
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
 
 # Table m2 with a tag columns `tag_id` and `type`, a field column `f5`, and `time`
 statement ok
@@ -165,6 +181,29 @@ order by date_bin('30 minutes', time) DESC
 3 400 600 500 2023-12-04T00:30:00
 3 100 300 200 2023-12-04T00:00:00
 
+# query with in list
+query BBBBBBBB
+SELECT
+    type in ('active', 'passive')
+    , 'active' in (type)
+    , 'active' in (type, null)
+    , arrow_cast('passive','Dictionary(Int8, Utf8)') in (type, null)
+    , tag_id in ('1000', '2000')
+    , tag_id in ('999')
+    , '1000' in (tag_id, null)
+    , arrow_cast('999','Dictionary(Int16, Utf8)') in (tag_id, null)
+FROM m2
+----
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
 
 
 # Reproducer for https://github.com/apache/arrow-datafusion/issues/8738

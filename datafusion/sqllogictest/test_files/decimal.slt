@@ -720,5 +720,16 @@ select count(*),c1 from decimal256_simple group by c1 order by c1;
 4 0.00004
 5 0.00005
 
+query I
+select count(DISTINCT cast(c1 AS DECIMAL(42, 4))) from decimal256_simple;
+----
+2
+
+query BI
+select c4, count(DISTINCT cast(c1 AS DECIMAL(42, 4))) from decimal256_simple GROUP BY c4 ORDER BY c4;
+----
+false 2
+true 2
+
 statement ok
 drop table decimal256_simple;

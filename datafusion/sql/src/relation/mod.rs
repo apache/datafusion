@@ -105,15 +105,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Unnest table factor has empty input
                 let schema = DFSchema::empty();
                 let input = LogicalPlanBuilder::empty(true).build()?;
-                let exprs = array_exprs
+                // Unnest table factor can have multiple arugments.
+                // We treat each argument as a separate unnest expression.
+                let unnest_exprs = array_exprs
                     .into_iter()
-                    .map(|expr| {
-                        self.sql_expr_to_logical_expr(expr, &schema, planner_context)
+                    .map(|sql_expr| {
+                        let expr = self.sql_expr_to_logical_expr(
+                            sql_expr,
+                            &schema,
+                            planner_context,
+                        )?;
+                        Self::check_unnest_arg(&expr, &schema)?;
+                        Ok(Expr::Unnest(Unnest::new(expr)))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Self::check_unnest_args(&exprs, &schema)?;
-                let unnest_expr = Expr::Unnest(Unnest { exprs });
-                let logical_plan = self.try_process_unnest(input, vec![unnest_expr])?;
+                if unnest_exprs.is_empty() {
+                    return plan_err!("UNNEST must have at least one argument");
+                }
+                let logical_plan = self.try_process_unnest(input, unnest_exprs)?;
                 (logical_plan, alias)
             }
             TableFactor::UNNEST { .. } => {

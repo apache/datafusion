@@ -58,93 +58,93 @@ order by
     s_name;
 ----
 logical_plan
-Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
---Projection: supplier.s_name, COUNT(*) AS numwait
-----Aggregate: groupBy=[[supplier.s_name]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
-------Projection: supplier.s_name
---------LeftAnti Join: l1.l_orderkey = __correlated_sq_2.l_orderkey Filter: __correlated_sq_2.l_suppkey != l1.l_suppkey
-----------LeftSemi Join: l1.l_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_suppkey != l1.l_suppkey
-------------Projection: supplier.s_name, l1.l_orderkey, l1.l_suppkey
---------------Inner Join: supplier.s_nationkey = nation.n_nationkey
-----------------Projection: supplier.s_name, supplier.s_nationkey, l1.l_orderkey, l1.l_suppkey
-------------------Inner Join: l1.l_orderkey = orders.o_orderkey
---------------------Projection: supplier.s_name, supplier.s_nationkey, l1.l_orderkey, l1.l_suppkey
-----------------------Inner Join: supplier.s_suppkey = l1.l_suppkey
-------------------------TableScan: supplier projection=[s_suppkey, s_name, s_nationkey]
-------------------------SubqueryAlias: l1
---------------------------Projection: lineitem.l_orderkey, lineitem.l_suppkey
-----------------------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
-------------------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
---------------------Projection: orders.o_orderkey
-----------------------Filter: orders.o_orderstatus = Utf8("F")
-------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8("F")]
-----------------Projection: nation.n_nationkey
-------------------Filter: nation.n_name = Utf8("SAUDI ARABIA")
---------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("SAUDI ARABIA")]
-------------SubqueryAlias: __correlated_sq_1
---------------SubqueryAlias: l2
-----------------TableScan: lineitem projection=[l_orderkey, l_suppkey]
-----------SubqueryAlias: __correlated_sq_2
-------------SubqueryAlias: l3
---------------Projection: lineitem.l_orderkey, lineitem.l_suppkey
-----------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
-------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
+01)Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
+02)--Projection: supplier.s_name, COUNT(*) AS numwait
+03)----Aggregate: groupBy=[[supplier.s_name]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+04)------Projection: supplier.s_name
+05)--------LeftAnti Join: l1.l_orderkey = __correlated_sq_2.l_orderkey Filter: __correlated_sq_2.l_suppkey != l1.l_suppkey
+06)----------LeftSemi Join: l1.l_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_suppkey != l1.l_suppkey
+07)------------Projection: supplier.s_name, l1.l_orderkey, l1.l_suppkey
+08)--------------Inner Join: supplier.s_nationkey = nation.n_nationkey
+09)----------------Projection: supplier.s_name, supplier.s_nationkey, l1.l_orderkey, l1.l_suppkey
+10)------------------Inner Join: l1.l_orderkey = orders.o_orderkey
+11)--------------------Projection: supplier.s_name, supplier.s_nationkey, l1.l_orderkey, l1.l_suppkey
+12)----------------------Inner Join: supplier.s_suppkey = l1.l_suppkey
+13)------------------------TableScan: supplier projection=[s_suppkey, s_name, s_nationkey]
+14)------------------------SubqueryAlias: l1
+15)--------------------------Projection: lineitem.l_orderkey, lineitem.l_suppkey
+16)----------------------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
+17)------------------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
+18)--------------------Projection: orders.o_orderkey
+19)----------------------Filter: orders.o_orderstatus = Utf8("F")
+20)------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8("F")]
+21)----------------Projection: nation.n_nationkey
+22)------------------Filter: nation.n_name = Utf8("SAUDI ARABIA")
+23)--------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("SAUDI ARABIA")]
+24)------------SubqueryAlias: __correlated_sq_1
+25)--------------SubqueryAlias: l2
+26)----------------TableScan: lineitem projection=[l_orderkey, l_suppkey]
+27)----------SubqueryAlias: __correlated_sq_2
+28)------------SubqueryAlias: l3
+29)--------------Projection: lineitem.l_orderkey, lineitem.l_suppkey
+30)----------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
+31)------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
 physical_plan
-SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
---SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST]
-----ProjectionExec: expr=[s_name@0 as s_name, COUNT(*)@1 as numwait]
-------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([s_name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
---------------CoalesceBatchesExec: target_batch_size=8192
-----------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0, projection=[s_name@0]
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([l_orderkey@1], 4), input_partitions=4
---------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@1, n_nationkey@0)], projection=[s_name@0, l_orderkey@2, l_suppkey@3]
-------------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------------RepartitionExec: partitioning=Hash([s_nationkey@1], 4), input_partitions=4
-----------------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@2, o_orderkey@0)], projection=[s_name@0, s_nationkey@1, l_orderkey@2, l_suppkey@3]
---------------------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------------------RepartitionExec: partitioning=Hash([l_orderkey@2], 4), input_partitions=4
-------------------------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_suppkey@0, l_suppkey@1)], projection=[s_name@1, s_nationkey@2, l_orderkey@3, l_suppkey@4]
-----------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
---------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
-----------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
---------------------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
-----------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------------------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
---------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
---------------------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
-------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
---------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------------------------FilterExec: o_orderstatus@1 = F
-------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderstatus], has_header=false
-------------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
-----------------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
-------------------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------------------FilterExec: n_name@1 = SAUDI ARABIA
-----------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
---------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey], has_header=false
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
-----------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
-------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
-----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
+01)SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
+02)--SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST]
+03)----ProjectionExec: expr=[s_name@0 as s_name, COUNT(*)@1 as numwait]
+04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([s_name@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+08)--------------CoalesceBatchesExec: target_batch_size=8192
+09)----------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0, projection=[s_name@0]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0
+12)----------------------CoalesceBatchesExec: target_batch_size=8192
+13)------------------------RepartitionExec: partitioning=Hash([l_orderkey@1], 4), input_partitions=4
+14)--------------------------CoalesceBatchesExec: target_batch_size=8192
+15)----------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@1, n_nationkey@0)], projection=[s_name@0, l_orderkey@2, l_suppkey@3]
+16)------------------------------CoalesceBatchesExec: target_batch_size=8192
+17)--------------------------------RepartitionExec: partitioning=Hash([s_nationkey@1], 4), input_partitions=4
+18)----------------------------------CoalesceBatchesExec: target_batch_size=8192
+19)------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@2, o_orderkey@0)], projection=[s_name@0, s_nationkey@1, l_orderkey@2, l_suppkey@3]
+20)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+21)----------------------------------------RepartitionExec: partitioning=Hash([l_orderkey@2], 4), input_partitions=4
+22)------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+23)--------------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_suppkey@0, l_suppkey@1)], projection=[s_name@1, s_nationkey@2, l_orderkey@3, l_suppkey@4]
+24)----------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+25)------------------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
+26)--------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+27)----------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
+28)----------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+29)------------------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
+30)--------------------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
+31)----------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+32)------------------------------------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
+33)--------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
+34)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+35)----------------------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+36)------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
+37)--------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+38)----------------------------------------------FilterExec: o_orderstatus@1 = F
+39)------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderstatus], has_header=false
+40)------------------------------CoalesceBatchesExec: target_batch_size=8192
+41)--------------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
+42)----------------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
+43)------------------------------------CoalesceBatchesExec: target_batch_size=8192
+44)--------------------------------------FilterExec: n_name@1 = SAUDI ARABIA
+45)----------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+46)------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
+47)----------------------CoalesceBatchesExec: target_batch_size=8192
+48)------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+49)--------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey], has_header=false
+50)------------------CoalesceBatchesExec: target_batch_size=8192
+51)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+52)----------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
+53)------------------------CoalesceBatchesExec: target_batch_size=8192
+54)--------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
+55)----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
 
 
 

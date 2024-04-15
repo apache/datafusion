@@ -56,6 +56,9 @@ pub trait TreeNode: Sized {
     /// Visit the tree node using the given [`TreeNodeVisitor`], performing a
     /// depth-first walk of the node and its children.
     ///
+    /// See also:
+    /// *  [`Self::rewrite`] to rewrite owned `TreeNode`s
+    ///
     /// Consider the following tree structure:
     /// ```text
     /// ParentNode
@@ -92,6 +95,9 @@ pub trait TreeNode: Sized {
 
     /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
     /// recursively transforming [`TreeNode`]s.
+    ///
+    /// See also:
+    /// *  [`Self::visit`] for inspecting (without modification) `TreeNode`s
     ///
     /// Consider the following tree structure:
     /// ```text
@@ -310,13 +316,15 @@ pub trait TreeNode: Sized {
     }
 
     /// Apply the closure `F` to the node's children.
+    ///
+    /// See `mutate_children` for rewriting in place
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Apply transform `F` to the node's children. Note that the transform `F`
-    /// might have a direction (pre-order or post-order).
+    /// Apply transform `F` to potentially rewrite the node's children. Note
+    /// that the transform `F` might have a direction (pre-order or post-order).
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: F,

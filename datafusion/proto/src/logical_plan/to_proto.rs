@@ -963,9 +963,9 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { exprs }) => {
+        Expr::Unnest(Unnest { expr }) => {
             let expr = protobuf::Unnest {
-                exprs: serialize_exprs(exprs, codec)?,
+                exprs: vec![serialize_expr(expr.as_ref(), codec)?],
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -1407,16 +1407,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
 
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
-            BuiltinScalarFunction::Exp => Self::Exp,
-            BuiltinScalarFunction::Factorial => Self::Factorial,
-            BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
-            BuiltinScalarFunction::Random => Self::Random,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
-            BuiltinScalarFunction::Nanvl => Self::Nanvl,
         };
 
         Ok(scalar_function)

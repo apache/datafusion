@@ -22792,15 +22792,10 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Ceil => "Ceil",
-            Self::Exp => "Exp",
             Self::Concat => "Concat",
             Self::ConcatWithSeparator => "ConcatWithSeparator",
             Self::InitCap => "InitCap",
-            Self::Random => "Random",
             Self::Coalesce => "Coalesce",
-            Self::Factorial => "Factorial",
-            Self::Nanvl => "Nanvl",
             Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
@@ -22814,15 +22809,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Ceil",
-            "Exp",
             "Concat",
             "ConcatWithSeparator",
             "InitCap",
-            "Random",
             "Coalesce",
-            "Factorial",
-            "Nanvl",
             "EndsWith",
         ];
 
@@ -22865,15 +22855,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Ceil" => Ok(ScalarFunction::Ceil),
-                    "Exp" => Ok(ScalarFunction::Exp),
                     "Concat" => Ok(ScalarFunction::Concat),
                     "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
                     "InitCap" => Ok(ScalarFunction::InitCap),
-                    "Random" => Ok(ScalarFunction::Random),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
-                    "Factorial" => Ok(ScalarFunction::Factorial),
-                    "Nanvl" => Ok(ScalarFunction::Nanvl),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }

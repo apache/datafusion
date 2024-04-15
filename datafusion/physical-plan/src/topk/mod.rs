@@ -208,7 +208,7 @@ impl TopK {
         // break into record batches as needed
         let mut batches = vec![];
         loop {
-            if batch.num_rows() < batch_size {
+            if batch.num_rows() <= batch_size {
                 batches.push(Ok(batch));
                 break;
             } else {
