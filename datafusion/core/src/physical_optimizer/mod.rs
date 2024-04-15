@@ -24,6 +24,7 @@
 pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
+mod convert_first_last;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod join_selection;

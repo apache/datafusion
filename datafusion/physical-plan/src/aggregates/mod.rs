@@ -39,12 +39,15 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::aggregate::is_order_sensitive;
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
-    aggregate::is_order_sensitive,
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::{Column, FirstValue, LastValue, Max, Min, UnKnownColumn},
-    physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
-    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping,
+    expressions::{Column, Max, Min, UnKnownColumn},
+    AggregateExpr, LexRequirement, PhysicalExpr,
+};
+use datafusion_physical_expr::{
+    physical_exprs_contains, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -269,6 +272,36 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
+    /// Function used in `ConvertFirstLast` optimizer rule,
+    /// where we need parts of the new value, others cloned from the old one
+    pub fn new_with_aggr_expr_and_ordering_info(
+        &self,
+        required_input_ordering: Option<LexRequirement>,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        cache: PlanProperties,
+        input_order_mode: InputOrderMode,
+    ) -> Self {
+        Self {
+            aggr_expr,
+            required_input_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode,
+            cache,
+            // clone the rest of the fields
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            filter_expr: self.filter_expr.clone(),
+            limit: self.limit,
+            input: self.input.clone(),
+            schema: self.schema.clone(),
+            input_schema: self.input_schema.clone(),
+        }
+    }
+
+    pub fn cache(&self) -> &PlanProperties {
+        &self.cache
+    }
+
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
@@ -336,8 +369,7 @@ impl AggregateExec {
             })
             .collect::<Vec<_>>();
 
-        let req = get_aggregate_exprs_requirement(
-            &new_requirement,
+        let req = get_finer_aggregate_exprs_requirement(
             &mut aggr_expr,
             &group_by,
             input_eq_properties,
@@ -369,6 +401,7 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
         );
+
         Ok(AggregateExec {
             mode,
             group_by,
@@ -507,7 +540,7 @@ impl AggregateExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
+    pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         projection_mapping: &ProjectionMapping,
@@ -683,9 +716,9 @@ impl ExecutionPlan for AggregateExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.schema.clone(),
-            //self.original_schema.clone(),
         )?;
         me.limit = self.limit;
+
         Ok(Arc::new(me))
     }
 
@@ -870,7 +903,7 @@ fn finer_ordering(
 }
 
 /// Concatenates the given slices.
-fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
+pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
     [lhs, rhs].concat()
 }
 
@@ -891,8 +924,7 @@ fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
-fn get_aggregate_exprs_requirement(
-    prefix_requirement: &[PhysicalSortRequirement],
+fn get_finer_aggregate_exprs_requirement(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -900,60 +932,6 @@ fn get_aggregate_exprs_requirement(
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
-        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let reverse_aggr_req = reverse_order_bys(aggr_req);
-        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-        let reverse_aggr_req =
-            PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
-
-        if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
-            let mut first_value = first_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to LAST_VALUE enables more efficient execution
-                // given the existing ordering:
-                let mut last_value = first_value.convert_to_last();
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
-            } else {
-                // Requirement is not satisfied with existing ordering.
-                first_value = first_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(first_value) as _;
-            }
-            continue;
-        }
-        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
-            let mut last_value = last_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to FIRST_VALUE enables more efficient execution
-                // given the existing ordering:
-                let mut first_value = last_value.convert_to_first();
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
-            } else {
-                // Requirement is not satisfied with existing ordering.
-                last_value = last_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(last_value) as _;
-            }
-            continue;
-        }
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
@@ -1003,6 +981,7 @@ fn get_aggregate_exprs_requirement(
                 continue;
             }
         }
+
         // Neither the existing requirement and current aggregate requirement satisfy the other, this means
         // requirements are conflicting. Currently, we do not support
         // conflicting requirements.
@@ -1010,6 +989,7 @@ fn get_aggregate_exprs_requirement(
             "Conflicting ordering requirements in aggregate functions is not supported"
         );
     }
+
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
 
@@ -1235,7 +1215,7 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
@@ -2171,8 +2151,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
-        let res = get_aggregate_exprs_requirement(
-            &[],
+        let res = get_finer_aggregate_exprs_requirement(
             &mut aggr_exprs,
             &group_by,
             &eq_properties,
