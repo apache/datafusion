@@ -521,6 +521,7 @@ impl Sort {
         }
     }
 
+    /// Create a new Sort expression with the opposite sort direction
     pub fn reverse(&self) -> Self {
         Self {
             expr: self.expr.clone(),

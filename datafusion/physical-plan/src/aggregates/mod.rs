@@ -2000,7 +2000,6 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
         let sort_exprs = vec![Expr::Sort(Sort {
-            // Expr::Column(Column::from("b")),
             expr: Box::new(datafusion_expr::col("b")),
             asc: true,
             nulls_first: true,

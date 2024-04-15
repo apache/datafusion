@@ -198,7 +198,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                println!("fun: {:?}", fun);
                 let expr = match fun {
                     WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
                         let args =
