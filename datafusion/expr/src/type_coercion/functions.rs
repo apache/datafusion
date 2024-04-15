@@ -29,7 +29,7 @@ use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
 use super::binary::{
-    comparison_binary_numeric_coercion, comparison_coercion, dictionary_coercion,
+    comparison_binary_numeric_coercion, comparison_coercion,
 };
 
 /// Performs type coercion for function arguments.
@@ -316,8 +316,13 @@ fn coerced_from<'a>(
     // match Dictionary first
     match (type_into, type_from) {
         // coerced dictionary first
-        (cur_type, Dictionary(_, value_type)) | (Dictionary(_, value_type), cur_type)
-            if coerced_from(cur_type, value_type).is_some() =>
+        (_, Dictionary(_, value_type))
+            if coerced_from(type_into, value_type).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (Dictionary(_, value_type), _)
+            if coerced_from(value_type, type_from).is_some() =>
         {
             Some(type_into.clone())
         }
@@ -451,7 +456,6 @@ fn coerced_from<'a>(
         // For example, all numeric types can be coerced into Utf8 for comparison,
         // but not for function arguments.
         _ => comparison_binary_numeric_coercion(type_into, type_from)
-            .or_else(|| dictionary_coercion(type_into, type_from, true))
             .and_then(|coerced_type| {
                 if *type_into == coerced_type {
                     Some(coerced_type)
