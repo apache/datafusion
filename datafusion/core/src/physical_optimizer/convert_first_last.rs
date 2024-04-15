@@ -19,14 +19,13 @@ use datafusion_common::Result;
 use datafusion_common::{
     config::ConfigOptions,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column,
 };
-use datafusion_expr::{expr::Sort, Expr};
+use datafusion_expr::Expr;
 use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
-use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, reverse_order_bys, AggregateExpr,
-    EquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{equivalence::ProjectionMapping, EquivalenceProperties};
+use datafusion_physical_expr_common::aggregate::{AggregateExpr, AggregateFunctionExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
+use datafusion_physical_expr_common::utils::reverse_order_bys;
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
@@ -229,11 +228,6 @@ fn try_convert_first_last_if_better(
                     let expr = first_value.expressions().swap_remove(0);
                     format!("LAST_VALUE({})", expr)
                 };
-                // println!("convert to last, aggr_sort_expr: {:?}", aggr_sort_expr);
-                println!(
-                    "convert to last, reverse_sort_expr: {:?}",
-                    reversed_ordering
-                );
 
                 let sort_exprs = first_value.sort_exprs();
                 let reversed_sort_exprs = sort_exprs
@@ -247,15 +241,6 @@ fn try_convert_first_last_if_better(
                     })
                     .collect::<Vec<_>>();
 
-                // let sort_exprs = vec![Expr::Sort( Sort{
-                //     expr: Box::new(Expr::Column(Column::new(Some("sales_global"), "amount"))),
-                //     asc: false,
-                //     nulls_first: false,
-                // })];
-
-                // println!("expected sort_exprs: {:?}", sort_exprs);
-                // println!("reversed_sort_exprs: {:?}", reversed_sort_exprs);
-
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
                 let last_value = first_value
@@ -265,8 +250,6 @@ fn try_convert_first_last_if_better(
                     .with_ordering_req(reversed_ordering)
                     .with_requirement_satisfied(true);
 
-                // let mut last_value = first_value.convert_to_last();
-                // last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
             } else {
                 // Requirement is not satisfied with existing ordering.

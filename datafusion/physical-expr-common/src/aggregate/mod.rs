@@ -20,7 +20,6 @@ pub mod utils;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::expr::AggregateFunction;
-// use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
@@ -56,9 +55,6 @@ pub fn create_aggregate_expr(
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
 
     let requirement_satisfied = ordering_req.is_empty();
-
-    // println!("sort_exprs: {:?}", sort_exprs);
-    // println!("ordering_req: {:?}", ordering_req);
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
@@ -138,10 +134,6 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        None
-    }
-
-    fn reverse_expr_v2(&self) -> Option<AggregateFunction> {
         None
     }
 
