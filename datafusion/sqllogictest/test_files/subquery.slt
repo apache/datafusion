@@ -728,6 +728,32 @@ logical_plan
 07)------Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]
 08)--------TableScan: t2 projection=[]
 
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TT
+explain select (select count(*) from t1) as b, (select count(1) from t2)
+----
+logical_plan
+01)Projection: __scalar_sq_1.COUNT(*) AS b, __scalar_sq_2.COUNT(Int64(1)) AS COUNT(Int64(1))
+02)--Left Join: 
+03)----SubqueryAlias: __scalar_sq_1
+04)------Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)--------TableScan: t1 projection=[]
+06)----SubqueryAlias: __scalar_sq_2
+07)------Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]
+08)--------TableScan: t2 projection=[]
+physical_plan
+01)ProjectionExec: expr=[COUNT(*)@0 as b, COUNT(Int64(1))@1 as COUNT(Int64(1))]
+02)--NestedLoopJoinExec: join_type=Left
+03)----ProjectionExec: expr=[4 as COUNT(*)]
+04)------PlaceholderRowExec
+05)----ProjectionExec: expr=[4 as COUNT(Int64(1))]
+06)------PlaceholderRowExec
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
 query II
 select (select count(*) from t1) as b, (select count(1) from t2)
 ----

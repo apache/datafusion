@@ -35,9 +35,6 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 #[derive(Default)]
 pub struct AggregateStatistics {}
 
-/// The name of the column corresponding to [`COUNT_STAR_EXPANSION`]
-const COUNT_STAR_NAME: &str = "COUNT(*)";
-
 impl AggregateStatistics {
     #[allow(missing_docs)]
     pub fn new() -> Self {
@@ -144,7 +141,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
 fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
-) -> Option<(ScalarValue, &'static str)> {
+) -> Option<(ScalarValue, String)> {
     if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
         &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
@@ -158,7 +155,7 @@ fn take_optimizable_table_count(
                 if lit_expr.value() == &COUNT_STAR_EXPANSION {
                     return Some((
                         ScalarValue::Int64(Some(num_rows as i64)),
-                        COUNT_STAR_NAME,
+                        casted_expr.name().to_owned(),
                     ));
                 }
             }
