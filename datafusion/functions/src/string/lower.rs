@@ -23,7 +23,7 @@ use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-use crate::string::common::handle;
+use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
 
 #[derive(Debug)]
@@ -62,6 +62,99 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_lowercase(), "lower")
+        to_lower(args, "lower")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, StringArray};
+    use std::sync::Arc;
+
+    fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
+        let func = LowerFunc::new();
+        let args = vec![ColumnarValue::Array(input)];
+        let result = match func.invoke(&args)? {
+            ColumnarValue::Array(result) => result,
+            _ => unreachable!(),
+        };
+        assert_eq!(&expected, &result);
+        Ok(())
+    }
+
+    #[test]
+    fn lower_maybe_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("农历新年"),
+            None,
+            Some("DATAFUSION"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("农历新年"),
+            None,
+            Some("datafusion"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_full_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("DATAFUSION"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("datafusion"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_partial_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("DATAFUSION"),
+            Some("@_"),
+            Some("0123456789"),
+            Some(""),
+            Some("\t\n"),
+            Some("ὈΔΥΣΣΕΎΣ"),
+            Some("TSCHÜSS"),
+            Some("Ⱦ"), // ⱦ: length change
+            Some("农历新年"),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("datafusion"),
+            Some("@_"),
+            Some("0123456789"),
+            Some(""),
+            Some("\t\n"),
+            Some("ὀδυσσεύς"),
+            Some("tschüss"),
+            Some("ⱦ"),
+            Some("农历新年"),
+        ])) as ArrayRef;
+
+        to_lower(input, expected)
     }
 }

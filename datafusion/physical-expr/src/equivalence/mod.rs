@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
+use crate::sort_properties::SortProperties;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -35,6 +36,10 @@ pub use properties::{join_equivalence_properties, EquivalenceProperties};
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
+///
+/// It will also filter out entries that are ordered if the next entry is;
+/// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
+/// `vec![a Some(ASC)]`.
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
     let mut output = Vec::<PhysicalSortRequirement>::new();
     for item in input {
@@ -42,7 +47,48 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    output
+    collapse_monotonic_lex_req(output)
+}
+
+/// This function constructs a normalized [`LexRequirement`] by filtering out entries
+/// that are ordered if the next entry is.
+/// Used in `collapse_lex_req`
+fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
+    input
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            // If it's the last entry, there is no next entry
+            if i == input.len() - 1 {
+                return Some(item);
+            }
+            let next_expr = &input[i + 1];
+
+            // Only handle expressions with exactly one child
+            // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
+            // if f is monotonic in all arguments
+            if !(item.expr.children().len() == 1
+                && item.expr.children()[0].eq(&next_expr.expr))
+            {
+                return Some(item);
+            }
+
+            let opts = match next_expr.options {
+                None => return Some(item),
+                Some(opts) => opts,
+            };
+
+            if item.options.map(SortProperties::Ordered)
+                == Some(item.expr.get_ordering(&[SortProperties::Ordered(opts)]))
+            {
+                // Remove the redundant sort
+                return None;
+            }
+
+            Some(item)
+        })
+        .cloned()
+        .collect::<Vec<_>>()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is

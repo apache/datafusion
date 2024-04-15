@@ -49,14 +49,14 @@ query TT
 EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---TableScan: json_test projection=[]
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--TableScan: json_test projection=[]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
+01)AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
 
 query ?
 SELECT mycol FROM single_nan

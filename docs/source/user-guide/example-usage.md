@@ -261,7 +261,7 @@ Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#e
 ```bash
 RUST_BACKTRACE=1 ./target/debug/datafusion-cli
 DataFusion CLI v31.0.0
-❯ select row_numer() over (partition by a order by a) from (select 1 a);
+> select row_numer() over (partition by a order by a) from (select 1 a);
 Error during planning: Invalid function 'row_numer'.
 Did you mean 'ROW_NUMBER'?
 

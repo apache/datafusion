@@ -37,7 +37,7 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
@@ -279,7 +279,7 @@ impl FileFormat for ParquetFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,
