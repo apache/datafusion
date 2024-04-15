@@ -1599,7 +1599,7 @@ fn roundtrip_inlist() {
 #[test]
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
-        exprs: vec![lit(1), lit(2), lit(3)],
+        expr: Box::new(col("col")),
     });
 
     let ctx = SessionContext::new();

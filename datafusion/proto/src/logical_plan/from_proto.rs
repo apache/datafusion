@@ -1257,8 +1257,11 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
-            Ok(Expr::Unnest(Unnest { exprs }))
+            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            if exprs.len() != 1 {
+                return Err(proto_error("Unnest must have exactly one expression"));
+            }
+            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
