@@ -20,15 +20,12 @@ use datafusion_common::{
     config::ConfigOptions,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
-use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, reverse_order_bys, AggregateExpr,
-    EquivalenceProperties, PhysicalSortRequirement,
+    reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::{
-    aggregates::{AggregateExec, AggregateMode},
-    ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
 };
 use std::sync::Arc;
 
@@ -77,8 +74,11 @@ fn get_common_requirement_of_aggregate_input(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if !aggr_exec.mode().is_first_stage() {
+            return Ok(Transformed::no(plan));
+        }
         let input = aggr_exec.input();
-        let mut aggr_expr = try_get_updated_aggr_expr_from_child(aggr_exec);
+        let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
         let group_by = aggr_exec.group_by();
 
         let input_eq_properties = input.equivalence_properties();
@@ -95,11 +95,7 @@ fn get_common_requirement_of_aggregate_input(
             })
             .collect::<Vec<_>>();
 
-        try_convert_first_last_if_better(
-            &requirement,
-            &mut aggr_expr,
-            input_eq_properties,
-        )?;
+        try_convert_reverse_if_better(&requirement, &mut aggr_expr, input_eq_properties)?;
 
         let aggr_exec = aggr_exec.new_with_aggr_expr_and_ordering_info(aggr_expr);
 
@@ -109,41 +105,6 @@ fn get_common_requirement_of_aggregate_input(
     } else {
         Ok(Transformed::no(plan))
     }
-}
-
-/// In `create_initial_plan` for LogicalPlan::Aggregate, we have a nested AggregateExec where the first layer
-/// is in Partial mode and the second layer is in Final or Finalpartitioned mode.
-/// If the first layer of aggregate plan is transformed, we need to update the child of the layer with final mode.
-/// Therefore, we check it and get the updated aggregate expressions.
-///
-/// If AggregateExec is created from elsewhere, we skip the check and return the original aggregate expressions.
-fn try_get_updated_aggr_expr_from_child(
-    aggr_exec: &AggregateExec,
-) -> Vec<Arc<dyn AggregateExpr>> {
-    let input = aggr_exec.input();
-    if aggr_exec.mode() == &AggregateMode::Final
-        || aggr_exec.mode() == &AggregateMode::FinalPartitioned
-    {
-        // Some aggregators may be modified during initialization for
-        // optimization purposes. For example, a FIRST_VALUE may turn
-        // into a LAST_VALUE with the reverse ordering requirement.
-        // To reflect such changes to subsequent stages, use the updated
-        // `AggregateExpr`/`PhysicalSortExpr` objects.
-        //
-        // The bottom up transformation is the mirror of LogicalPlan::Aggregate creation in [create_initial_plan]
-        if let Some(c_aggr_exec) = input.as_any().downcast_ref::<AggregateExec>() {
-            if c_aggr_exec.mode() == &AggregateMode::Partial {
-                // If the input is an AggregateExec in Partial mode, then the
-                // input is a CoalescePartitionsExec. In this case, the
-                // AggregateExec is the second stage of aggregation. The
-                // requirements of the second stage are the requirements of
-                // the first stage.
-                return c_aggr_exec.aggr_expr().to_vec();
-            }
-        }
-    }
-
-    aggr_exec.aggr_expr().to_vec()
 }
 
 /// Get the common requirement that satisfies all the aggregate expressions.
@@ -166,7 +127,7 @@ fn try_get_updated_aggr_expr_from_child(
 ///
 /// Similar to the one in datafusion/physical-plan/src/aggregates/mod.rs, but this
 /// function care only the possible conversion between FIRST_VALUE and LAST_VALUE
-fn try_convert_first_last_if_better(
+fn try_convert_reverse_if_better(
     prefix_requirement: &[PhysicalSortRequirement],
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     eq_properties: &EquivalenceProperties,
@@ -178,54 +139,28 @@ fn try_convert_first_last_if_better(
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
-        if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
-            let mut first_value = first_value.clone();
-
+        if !aggr_expr.is_order_sensitive() && !aggr_req.is_empty() {
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
             )) {
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
+                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(true)?;
             } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
-                let mut last_value = first_value.convert_to_last();
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
-            } else {
+                if let Some(aggr_expr_rev) = aggr_expr.reverse_expr() {
+                    *aggr_expr = aggr_expr_rev;
+                } else {
+                    continue;
+                }
+                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(true)?;
                 // Requirement is not satisfied with existing ordering.
-                first_value = first_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(first_value) as _;
-            }
-            continue;
-        }
-        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
-            let mut last_value = last_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                last_value = last_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(last_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to FIRST_VALUE enables more efficient execution
-                // given the existing ordering:
-                let mut first_value = last_value.convert_to_first();
-                first_value = first_value.with_requirement_satisfied(true);
-                *aggr_expr = Arc::new(first_value) as _;
             } else {
-                // Requirement is not satisfied with existing ordering.
-                last_value = last_value.with_requirement_satisfied(false);
-                *aggr_expr = Arc::new(last_value) as _;
+                *aggr_expr = aggr_expr.clone().with_requirement_satisfied(false)?;
             }
-            continue;
         }
     }
 

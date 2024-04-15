@@ -18,7 +18,7 @@
 pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{exec_datafusion_err, not_impl_err, Result};
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
@@ -101,6 +101,23 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn is_order_sensitive(&self) -> bool {
+        true
+    }
+
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        _requirement_satisfied: bool,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        if self.order_bys().is_some() && !self.is_order_sensitive() {
+            return Err(exec_datafusion_err!(
+                "Should implement with satisfied for aggregator :{:?}",
+                self.name()
+            ));
+        }
+        unreachable!()
     }
 
     /// Human readable name such as `"MIN(c2)"`. The default

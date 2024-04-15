@@ -479,6 +479,19 @@ impl AggregateExpr for FirstValuePhysicalExpr {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
+    fn is_order_sensitive(&self) -> bool {
+        false
+    }
+
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        requirement_satisfied: bool,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        let mut res = self.as_ref().clone();
+        res.requirement_satisfied = requirement_satisfied;
+        Ok(Arc::new(res))
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -652,6 +665,19 @@ impl AggregateExpr for LastValuePhysicalExpr {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn is_order_sensitive(&self) -> bool {
+        false
+    }
+
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        requirement_satisfied: bool,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        let mut res = self.as_ref().clone();
+        res.requirement_satisfied = requirement_satisfied;
+        Ok(Arc::new(res))
     }
 
     fn name(&self) -> &str {
