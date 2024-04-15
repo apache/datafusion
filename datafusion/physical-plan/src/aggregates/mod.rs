@@ -1214,14 +1214,18 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_expr::expr::Sort;
+    use datafusion_expr::Expr;
+    use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{
         reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
         PhysicalSortExpr,
     };
 
+    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1995,27 +1999,45 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
+        let sort_exprs = vec![Expr::Sort(Sort {
+            // Expr::Column(Column::from("b")),
+            expr: Box::new(datafusion_expr::col("b")),
+            asc: true,
+            nulls_first: true,
+        })];
         let ordering_req = vec![PhysicalSortExpr {
             expr: col("b", &schema)?,
             options: SortOptions::default(),
         }];
+
+        let first_value_udf = first_value_udaf();
+
+        let first_value = create_aggregate_expr(
+            &first_value_udf,
+            &[col("b", &schema)?],
+            &sort_exprs,
+            &ordering_req,
+            &schema,
+            "FIRST_VALUE(b)",
+            false,
+        )?;
+
+        let last_value_udf = last_value_udaf();
+
+        let last_value = create_aggregate_expr(
+            &last_value_udf,
+            &[col("b", &schema)?],
+            &sort_exprs,
+            &ordering_req,
+            &schema,
+            "LAST_VALUE(b)",
+            false,
+        )?;
+
         let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
-            vec![Arc::new(FirstValue::new(
-                col("b", &schema)?,
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-                vec![],
-            ))]
+            vec![first_value]
         } else {
-            vec![Arc::new(LastValue::new(
-                col("b", &schema)?,
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-            ))]
+            vec![last_value]
         };
 
         let memory_exec = Arc::new(MemoryExec::try_new(
@@ -2182,23 +2204,30 @@ mod tests {
         let sort_expr_reverse = reverse_order_bys(&sort_expr);
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            Arc::new(FirstValue::new(
-                col_b.clone(),
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr_reverse.clone(),
-                vec![DataType::Float64],
-                vec![],
-            )),
-            Arc::new(LastValue::new(
-                col_b.clone(),
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr.clone(),
-                vec![DataType::Float64],
-            )),
-        ];
+        let first_value_udf = first_value_udaf();
+
+        let first_value = create_aggregate_expr(
+            &first_value_udf,
+            &[col_b.clone()],
+            &[],
+            &sort_expr_reverse,
+            &schema,
+            "FIRST_VALUE(b)",
+            false,
+        )?;
+
+        let last_value_udf = last_value_udaf();
+        let last_value = create_aggregate_expr(
+            &last_value_udf,
+            &[col_b.clone()],
+            &[],
+            &sort_expr,
+            &schema,
+            "LAST_VALUE(b)",
+            false,
+        )?;
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![first_value, last_value];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
