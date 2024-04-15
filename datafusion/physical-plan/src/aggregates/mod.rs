@@ -274,17 +274,15 @@ pub struct AggregateExec {
 impl AggregateExec {
     /// Function used in `ConvertFirstLast` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
-    pub fn new_with_aggr_expr_and_ordering_info(
-        &self,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-    ) -> Self {
+    /// Rewrites aggregate exec with new aggregate expressions.
+    pub fn with_new_aggr_exprs(&self, aggr_expr: Vec<Arc<dyn AggregateExpr>>) -> Self {
         Self {
             aggr_expr,
+            // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
-            // clone the rest of the fields
             mode: self.mode,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),

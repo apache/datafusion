@@ -103,10 +103,14 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         None
     }
 
+    /// Indicates whether aggregator can produce correct result with any arbitrary ordering or not.
     fn is_order_sensitive(&self) -> bool {
         true
     }
 
+    /// Indicates whether requirement of the aggregators is satisfied at the input.
+    /// If this is not the case some order in-sensitive aggregators can still produce
+    /// correct result with possibly more work internally.
     fn with_requirement_satisfied(
         self: Arc<Self>,
         _requirement_satisfied: bool,
