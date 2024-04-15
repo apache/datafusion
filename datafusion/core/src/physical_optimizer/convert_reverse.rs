@@ -33,14 +33,15 @@ use datafusion_physical_plan::{
 };
 
 /// The optimizer rule check the ordering requirements of the aggregate expressions.
-/// And convert between FIRST_VALUE and LAST_VALUE if possible.
-/// For example, If we have an ascending values and we want LastValue from the descending requirement,
-/// it is equivalent to FirstValue with the current ascending ordering.
+/// There are 3 kinds of aggregators in terms of ordering requirement
+/// - `AggregateOrderSensitivity::Insensitive`
+/// - `AggregateOrderSensitivity::HardRequirement`
+/// - `AggregateOrderSensitivity::Beneficial`
 ///
-/// The concrete example is that, says we have values c1 with [1, 2, 3], which is an ascending order.
-/// If we want LastValue(c1 order by desc), which is the first value of reversed c1 [3, 2, 1],
-/// so we can convert the aggregate expression to FirstValue(c1 order by asc),
-/// since the current ordering is already satisfied, it saves our time!
+/// `AggregateOrderSensitivity::Beneficial` mode have an ordering requirement. However, aggregator can still produce
+/// correct result even when ordering requirement is not satisfied (less efficiently). This rule analyzes
+/// `AggregateOrderSensitivity::Beneficial` aggregate expressions to see whether their requirement is satisfied or not.
+/// Using this information aggregators are updated to either work in efficient mode or less efficient mode.
 #[derive(Default)]
 pub struct OptimizeAggregateOrder {}
 
