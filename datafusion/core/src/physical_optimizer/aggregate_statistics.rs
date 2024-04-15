@@ -424,7 +424,7 @@ pub(crate) mod tests {
         /// What name would this aggregate produce in a plan?
         fn column_name(&self) -> &'static str {
             match self {
-                Self::CountStar => COUNT_STAR_NAME,
+                Self::CountStar => "COUNT(*)",
                 Self::ColumnA(_) => "COUNT(a)",
             }
         }
