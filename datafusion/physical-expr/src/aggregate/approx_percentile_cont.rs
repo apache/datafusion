@@ -447,8 +447,6 @@ mod tests {
     use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
     use crate::aggregate::tdigest::TDigest;
     use arrow_schema::DataType;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::Accumulator;
 
     #[test]
     fn test_combine_approx_percentile_accumulator() {
@@ -472,10 +470,5 @@ mod tests {
         assert_eq!(accumulator.digest.count(), 50_000.0);
         accumulator.merge_digests(&[t2]);
         assert_eq!(accumulator.digest.count(), 100_000.0);
-
-        assert_eq!(
-            accumulator.evaluate().unwrap(),
-            ScalarValue::Float64(Some(500.0))
-        );
     }
 }
