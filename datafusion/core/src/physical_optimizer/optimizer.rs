@@ -90,8 +90,6 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
-            // Run once before PartialFinalAggregation is rewritten to ensure the rule is applied correctly
-            Arc::new(OptimizeAggregateOrder::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
