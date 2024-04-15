@@ -115,12 +115,8 @@ impl ExprSchemable for Expr {
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::Unnest(Unnest { exprs }) => {
-                let arg_data_types = exprs
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                let arg_data_type = arg_data_types[0].clone();
+            Expr::Unnest(Unnest { expr }) => {
+                let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type{
                     DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) =>{

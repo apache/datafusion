@@ -1881,7 +1881,7 @@ impl SessionState {
 
             // optimize the child plan, capturing the output of each optimizer
             let optimized_plan = self.optimizer.optimize(
-                &analyzed_plan,
+                analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1911,7 +1911,7 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -1950,6 +1950,11 @@ impl SessionState {
     /// Return the [`SessionConfig`]
     pub fn config(&self) -> &SessionConfig {
         &self.config
+    }
+
+    /// Return the mutable [`SessionConfig`].
+    pub fn config_mut(&mut self) -> &mut SessionConfig {
+        &mut self.config
     }
 
     /// Return the physical optimizers

@@ -165,7 +165,7 @@ Query that single file (the CLI also supports parquet, compressed csv, avro, jso
 ```shell
 $ datafusion-cli
 DataFusion CLI v17.0.0
-❯ select * from 'data.csv';
+> select * from 'data.csv';
 +---+---+
 | a | b |
 +---+---+
@@ -184,7 +184,7 @@ data.csv   data2.csv
 ```shell
 $ datafusion-cli
 DataFusion CLI v16.0.0
-❯ select * from 'data_dir';
+> select * from 'data_dir';
 +---+---+
 | a | b |
 +---+---+
@@ -335,9 +335,9 @@ $ export AWS_ACCESS_KEY_ID=******
 
 $ datafusion-cli
 DataFusion CLI v21.0.0
-❯ create external table test stored as parquet location 's3://bucket/path/file.parquet';
+> create external table test stored as parquet location 's3://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
-❯ select * from test;
+> select * from test;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -429,9 +429,9 @@ $ export GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json
 
 $ datafusion-cli
 DataFusion CLI v21.0.0
-❯ create external table test stored as parquet location 'gs://bucket/path/file.parquet';
+> create external table test stored as parquet location 'gs://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
-❯ select * from test;
+> select * from test;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -619,7 +619,7 @@ appropriately:
 ```shell
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
-❯ show all;
+> show all;
 +-------------------------------------------------+---------+
 | name                                            | value   |
 +-------------------------------------------------+---------+
@@ -639,7 +639,7 @@ You can change the configuration options using `SET` statement as well
 ```shell
 $ datafusion-cli
 DataFusion CLI v13.0.0
-❯ show datafusion.execution.batch_size;
+> show datafusion.execution.batch_size;
 +---------------------------------+---------+
 | name                            | value   |
 +---------------------------------+---------+
@@ -647,10 +647,10 @@ DataFusion CLI v13.0.0
 +---------------------------------+---------+
 1 row in set. Query took 0.011 seconds.
 
-❯ set datafusion.execution.batch_size to 1024;
+> set datafusion.execution.batch_size to 1024;
 0 rows in set. Query took 0.000 seconds.
 
-❯ show datafusion.execution.batch_size;
+> show datafusion.execution.batch_size;
 +---------------------------------+---------+
 | name                            | value   |
 +---------------------------------+---------+

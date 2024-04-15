@@ -671,14 +671,14 @@ query TT
 explain select * from t1 inner join t2 on true;
 ----
 logical_plan
-CrossJoin:
---TableScan: t1 projection=[t1_id, t1_name, t1_int]
---TableScan: t2 projection=[t2_id, t2_name, t2_int]
+01)CrossJoin:
+02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
-CrossJoinExec
---MemoryExec: partitions=1, partition_sizes=[1]
---RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)CrossJoinExec
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table IF EXISTS t1;
@@ -749,15 +749,15 @@ t1 as t2
 WHERE t1.a=t2.a;
 ----
 logical_plan
-Inner Join: t1.a = t2.a
---TableScan: t1 projection=[a, b]
---SubqueryAlias: t2
-----TableScan: t1 projection=[a, b]
+01)Inner Join: t1.a = t2.a
+02)--TableScan: t1 projection=[a, b]
+03)--SubqueryAlias: t2
+04)----TableScan: t1 projection=[a, b]
 physical_plan
-CoalesceBatchesExec: target_batch_size=8192
---HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
-----MemoryExec: partitions=1, partition_sizes=[1]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok

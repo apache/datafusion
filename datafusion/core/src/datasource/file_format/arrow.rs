@@ -43,7 +43,7 @@ use arrow_schema::{ArrowError, Schema, SchemaRef};
 use datafusion_common::{not_impl_err, DataFusionError, FileType, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
+use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
@@ -129,7 +129,7 @@ impl FileFormat for ArrowFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ArrowFileSink::new(conf));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,

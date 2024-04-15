@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::handle;
+use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -59,6 +59,99 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_uppercase(), "upper")
+        to_upper(args, "upper")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, StringArray};
+    use std::sync::Arc;
+
+    fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
+        let func = UpperFunc::new();
+        let args = vec![ColumnarValue::Array(input)];
+        let result = match func.invoke(&args)? {
+            ColumnarValue::Array(result) => result,
+            _ => unreachable!(),
+        };
+        assert_eq!(&expected, &result);
+        Ok(())
+    }
+
+    #[test]
+    fn upper_maybe_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("农历新年"),
+            None,
+            Some("datafusion"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("农历新年"),
+            None,
+            Some("DATAFUSION"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        to_upper(input, expected)
+    }
+
+    #[test]
+    fn upper_full_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("datafusion"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("DATAFUSION"),
+            Some("0123456789"),
+            Some(""),
+        ])) as ArrayRef;
+
+        to_upper(input, expected)
+    }
+
+    #[test]
+    fn upper_partial_optimization() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![
+            Some("arrow"),
+            None,
+            Some("datafusion"),
+            Some("@_"),
+            Some("0123456789"),
+            Some(""),
+            Some("\t\n"),
+            Some("ὀδυσσεύς"),
+            Some("tschüß"),
+            Some("ⱦ"), // Ⱦ: length change
+            Some("农历新年"),
+        ])) as ArrayRef;
+
+        let expected = Arc::new(StringArray::from(vec![
+            Some("ARROW"),
+            None,
+            Some("DATAFUSION"),
+            Some("@_"),
+            Some("0123456789"),
+            Some(""),
+            Some("\t\n"),
+            Some("ὈΔΥΣΣΕΎΣ"),
+            Some("TSCHÜSS"),
+            Some("Ⱦ"),
+            Some("农历新年"),
+        ])) as ArrayRef;
+
+        to_upper(input, expected)
     }
 }
