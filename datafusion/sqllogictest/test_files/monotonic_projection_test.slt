@@ -40,14 +40,14 @@ FROM multiple_ordered_table
 ORDER BY a_big ASC, b ASC;
 ----
 logical_plan
-Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [a_big@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
---ProjectionExec: expr=[CAST(a@0 AS Int64) as a_big, b@1 as b]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a_big@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[CAST(a@0 AS Int64) as a_big, b@1 as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 query TT
 EXPLAIN
@@ -56,14 +56,14 @@ FROM multiple_ordered_table
 ORDER BY a ASC, b ASC;
 ----
 logical_plan
-Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@2 ASC NULLS LAST]
---ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # Cast to larger types as well as preserving ordering
 # doesn't invalidate lexicographical ordering.
@@ -77,14 +77,14 @@ FROM multiple_ordered_table
 ORDER BY a_big ASC, b ASC;
 ----
 logical_plan
-Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [a_big@1 ASC NULLS LAST,b@2 ASC NULLS LAST]
---ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a_big@1 ASC NULLS LAST,b@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # test for common rename
 query TT
@@ -94,12 +94,12 @@ FROM multiple_ordered_table
 ORDER BY a_big ASC, b ASC;
 ----
 logical_plan
-Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: a_big ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 query TT
 EXPLAIN
@@ -108,12 +108,12 @@ FROM multiple_ordered_table
 ORDER BY a ASC, b ASC;
 ----
 logical_plan
-Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: multiple_ordered_table.a, multiple_ordered_table.a AS a_big, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)ProjectionExec: expr=[a@0 as a, a@0 as a_big, b@1 as b]
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 
 # test for cast Utf8
@@ -128,15 +128,15 @@ FROM multiple_ordered_table
 ORDER BY a_str ASC, b ASC;
 ----
 logical_plan
-Sort: a_str ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
---Projection: CAST(multiple_ordered_table.a AS Utf8) AS a_str, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: a_str ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: CAST(multiple_ordered_table.a AS Utf8) AS a_str, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
---SortExec: expr=[a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
-----ProjectionExec: expr=[CAST(a@0 AS Utf8) as a_str, b@1 as b]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+02)--SortExec: expr=[a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+03)----ProjectionExec: expr=[CAST(a@0 AS Utf8) as a_str, b@1 as b]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # We cannot determine a+b is ordered from the
 # invariant [a ASC, b ASC] is satisfied. Hence
@@ -148,11 +148,11 @@ FROM multiple_ordered_table
 ORDER BY a + b ASC;
 ----
 logical_plan
-Sort: multiple_ordered_table.a + multiple_ordered_table.b ASC NULLS LAST
---TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: multiple_ordered_table.a + multiple_ordered_table.b ASC NULLS LAST
+02)--TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortExec: expr=[a@0 + b@1 ASC NULLS LAST]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortExec: expr=[a@0 + b@1 ASC NULLS LAST]
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # With similar reasoning above. It is not guaranteed sum_expr is ordered
 # Hence we should see a SortExec with sum_expr ASC in the plan.
@@ -163,12 +163,12 @@ FROM multiple_ordered_table
 ORDER BY sum_expr ASC;
 ----
 logical_plan
-Sort: sum_expr ASC NULLS LAST
---Projection: CAST(multiple_ordered_table.a + multiple_ordered_table.b AS Int64) AS sum_expr, multiple_ordered_table.a, multiple_ordered_table.b
-----TableScan: multiple_ordered_table projection=[a, b]
+01)Sort: sum_expr ASC NULLS LAST
+02)--Projection: CAST(multiple_ordered_table.a + multiple_ordered_table.b AS Int64) AS sum_expr, multiple_ordered_table.a, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [sum_expr@0 ASC NULLS LAST]
---SortExec: expr=[sum_expr@0 ASC NULLS LAST]
-----ProjectionExec: expr=[CAST(a@0 + b@1 AS Int64) as sum_expr, a@0 as a, b@1 as b]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [sum_expr@0 ASC NULLS LAST]
+02)--SortExec: expr=[sum_expr@0 ASC NULLS LAST]
+03)----ProjectionExec: expr=[CAST(a@0 + b@1 AS Int64) as sum_expr, a@0 as a, b@1 as b]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true

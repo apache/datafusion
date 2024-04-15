@@ -15,31 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-substrait"
-description = "DataFusion Substrait Producer and Consumer"
-readme = "README.md"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.73"
+name: "Close stale PRs"
+on:
+  schedule:
+    - cron: "30 1 * * *"
 
-[dependencies]
-async-recursion = "1.0"
-chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
-itertools = { workspace = true }
-object_store = { workspace = true }
-prost = "0.12"
-prost-types = "0.12"
-substrait = "0.30.0"
-
-[dev-dependencies]
-tokio = { workspace = true }
-
-[features]
-protoc = ["substrait/protoc"]
+jobs:
+  close-stale-prs:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          stale-pr-message: "Thank you for your contribution. Unfortunately, this pull request is stale because it has been open 60 days with no activity. Please remove the stale label or comment or this will be closed in 7 days."
+          days-before-pr-stale: 60
+          days-before-pr-close: 7
+          # do not close stale issues
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

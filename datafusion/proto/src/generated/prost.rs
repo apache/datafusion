@@ -2846,10 +2846,10 @@ pub enum ScalarFunction {
     ///   2 was Asin
     /// 3 was Atan
     /// 4 was Ascii
-    Ceil = 5,
+    /// 5 was Ceil
     /// 6 was Cos
     /// 7 was Digest
-    Exp = 8,
+    /// 8 was Exp
     /// 9 was Floor
     /// 10 was Ln
     /// 11 was Log
@@ -2924,7 +2924,7 @@ pub enum ScalarFunction {
     /// 80 was Pi
     /// 81 was Degrees
     /// 82 was Radians
-    Factorial = 83,
+    /// 83 was Factorial
     /// 84 was Lcm
     /// 85 was Gcd
     /// 86 was ArrayAppend
@@ -2988,13 +2988,10 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Ceil => "Ceil",
-            ScalarFunction::Exp => "Exp",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Coalesce => "Coalesce",
-            ScalarFunction::Factorial => "Factorial",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3002,13 +2999,10 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Ceil" => Some(Self::Ceil),
-            "Exp" => Some(Self::Exp),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
             "Coalesce" => Some(Self::Coalesce),
-            "Factorial" => Some(Self::Factorial),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }

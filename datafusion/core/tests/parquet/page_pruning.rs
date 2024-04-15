@@ -871,6 +871,57 @@ async fn without_pushdown_filter() {
     assert!(bytes_scanned_with_filter > bytes_scanned_without_filter);
 }
 
+#[tokio::test]
+// Data layout like this:
+// row_group1: page1(1~5), page2(All Null)
+// row_group2: page1(1~5), page2(6~10)
+// row_group3: page1(1~5), page2(6~9 + Null)
+// row_group4: page1(1~5), page2(All Null)
+// total 40 rows
+async fn test_pages_with_null_values() {
+    test_prune(
+        Scenario::WithNullValuesPageLevel,
+        "SELECT * FROM t where i8 <= 6",
+        Some(0),
+        // expect prune pages with all null or pages that have only values greater than 6
+        // (row_group1, page2), (row_group4, page2)
+        Some(10),
+        22,
+    )
+    .await;
+
+    test_prune(
+        Scenario::WithNullValuesPageLevel,
+        "SELECT * FROM t where \"i16\" is not null",
+        Some(0),
+        // expect prune (row_group1, page2) and (row_group4, page2) = 10 rows
+        Some(10),
+        29,
+    )
+    .await;
+
+    test_prune(
+        Scenario::WithNullValuesPageLevel,
+        "SELECT * FROM t where \"i32\" is null",
+        Some(0),
+        // expect prune (row_group1, page1), (row_group2, page1+2), (row_group3, page1), (row_group3, page1) =  25 rows
+        Some(25),
+        11,
+    )
+    .await;
+
+    test_prune(
+        Scenario::WithNullValuesPageLevel,
+        "SELECT * FROM t where \"i64\" > 6",
+        Some(0),
+        // expect to prune pages where i is all null, or where always <= 5
+        // (row_group1, page1+2), (row_group2, page1), (row_group3, page1) (row_group4, page1+2) = 30 rows
+        Some(30),
+        7,
+    )
+    .await;
+}
+
 fn cast_count_metric(metric: MetricValue) -> Option<usize> {
     match metric {
         MetricValue::Count { count, .. } => Some(count.value()),

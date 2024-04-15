@@ -37,9 +37,9 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    ceil, coalesce, concat_expr, concat_ws_expr, ends_with, exp,
+    coalesce, concat_expr, concat_ws_expr, ends_with,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, initcap,
+    initcap,
     logical_plan::{PlanType, StringifiedPlan},
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -418,9 +418,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Exp => Self::Exp,
-            ScalarFunction::Factorial => Self::Factorial,
-            ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Concat => Self::Concat,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
@@ -1260,8 +1257,11 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
-            Ok(Expr::Unnest(Unnest { exprs }))
+            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            if exprs.len() != 1 {
+                return Err(proto_error("Unnest must have exactly one expression"));
+            }
+            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
@@ -1287,11 +1287,6 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Factorial => {
-                    Ok(factorial(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }

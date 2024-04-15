@@ -186,7 +186,16 @@ pub enum Expr {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Unnest {
-    pub exprs: Vec<Expr>,
+    pub expr: Box<Expr>,
+}
+
+impl Unnest {
+    /// Create a new Unnest expression.
+    pub fn new(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+        }
+    }
 }
 
 /// Alias expression
@@ -1567,8 +1576,8 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { exprs }) => {
-                write!(f, "UNNEST({exprs:?})")
+            Expr::Unnest(Unnest { expr }) => {
+                write!(f, "UNNEST({expr:?})")
             }
         }
     }
@@ -1757,7 +1766,10 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::Unnest(Unnest { exprs }) => create_function_name("unnest", false, exprs),
+        Expr::Unnest(Unnest { expr }) => {
+            let expr_name = create_name(expr)?;
+            Ok(format!("unnest({expr_name})"))
+        }
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
