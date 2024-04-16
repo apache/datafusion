@@ -85,8 +85,9 @@ pub struct RunOpt {
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
 
-    /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[structopt(short = "j", long = "hash-join", default_value = "true")]
+    /// If true then hash join used, if false then sort merge join
+    /// True by default.
+    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 }
 
