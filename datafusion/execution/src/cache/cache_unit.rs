@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use core::panic;
 use std::sync::Arc;
 
 use crate::cache::CacheAccessor;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
@@ -156,10 +158,74 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
         "DefaultListFilesCache".to_string()
     }
 }
+use parking_lot::RwLock;
+use sequence_trie::SequenceTrie;
+#[derive(Default)]
+pub struct TrieFileCache {
+    stores: RwLock<SequenceTrie<char, Arc<Vec<ObjectMeta>>>>,
+}
+impl TrieFileCache {
+    fn path_to_char_seq(path: &Path) -> Vec<char> {
+        path.filename().unwrap_or_default().chars().collect()
+    }
+}
 
+impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for TrieFileCache {
+    type Extra = ObjectMeta;
+
+    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
+        panic!("Not supported DefaultListFilesCache put_with_extra")
+    }
+    fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        let key_seq = Self::path_to_char_seq(k);
+        self.stores.read().get(&key_seq).map(|x| x.clone())
+    }
+    fn put(
+        &self,
+        key: &Path,
+        value: Arc<Vec<ObjectMeta>>,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let key_seq = Self::path_to_char_seq(key);
+        self.stores.write().insert(&key_seq, value)
+    }
+
+    fn put_with_extra(
+        &self,
+        _key: &Path,
+        _value: Arc<Vec<ObjectMeta>>,
+        _e: &Self::Extra,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        panic!("Not supported TrieFileCache put_with_extra")
+    }
+
+    fn remove(&mut self, key: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        let key_seq = Self::path_to_char_seq(key);
+        self.stores.write().remove(&key_seq);
+        Some(Arc::new(Default::default()))
+    }
+
+    fn contains_key(&self, k: &Path) -> bool {
+        let key_seq = Self::path_to_char_seq(k);
+        self.stores.read().get(&key_seq).is_some()
+    }
+
+    fn len(&self) -> usize {
+        panic!("did not implement len")
+    }
+
+    fn clear(&self) {
+        self.stores.write().children().clear()
+    }
+
+    fn name(&self) -> String {
+        "TrieFileCache".to_string()
+    }
+}
 #[cfg(test)]
 mod tests {
-    use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
+    use crate::cache::cache_unit::{
+        DefaultFileStatisticsCache, DefaultListFilesCache, TrieFileCache,
+    };
     use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
@@ -224,6 +290,28 @@ mod tests {
         };
 
         let cache = DefaultListFilesCache::default();
+        assert!(cache.get(&meta.location).is_none());
+
+        cache.put(&meta.location, vec![meta.clone()].into());
+        assert_eq!(
+            cache.get(&meta.location).unwrap().first().unwrap().clone(),
+            meta.clone()
+        );
+    }
+
+    #[test]
+    fn test_trie_cache() {
+        let meta = ObjectMeta {
+            location: Path::from("test"),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        };
+
+        let cache = TrieFileCache::default();
         assert!(cache.get(&meta.location).is_none());
 
         cache.put(&meta.location, vec![meta.clone()].into());
