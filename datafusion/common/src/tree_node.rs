@@ -42,14 +42,47 @@ macro_rules! handle_transform_recursion_up {
     }};
 }
 
-/// API for visiting (read only) and rewriting tree data structures .
+/// API for inspecting and rewriting tree data structures.
 ///
-/// Note: this trait is implemented for plans ([`ExecutionPlan`] and
-/// [`LogicalPlan`]) as well as expression trees ([`PhysicalExpr`], [`Expr`]).
+/// The `TreeNode` API is used to express algorithms separately from traversing
+/// the structure of `TreeNode`s, avoiding substantial code duplication.
 ///
-/// # Common APIs:
-/// * [`Self::apply`] and [`Self::visit`] for inspecting (without modification) borrowed nodes
-/// * [`Self::transform`] and [`Self::rewrite`] for rewriting owned nodes
+/// This trait is implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`])
+/// and expression trees ([`PhysicalExpr`], [`Expr`]).
+///
+/// # Overview
+/// There are three categories of TreeNode APIs:
+///
+/// 1. "Inspecting" APIs to traverse a tree of `&TreeNodes`:
+/// [`apply`] and [`visit`].
+///
+/// 2. "Transforming" APIs that traverse and consume a tree of `TreeNode`s
+/// producing possibly changed `TreeNode`s: [`transform`], [`transform_up`],
+/// [`transform_down`], [`transform_down_up`], and [`rewrite`].
+///
+/// 3. Internal APIs used to implement the `TreeNode` API: [`apply_children`],
+/// and [`map_children`].
+///
+/// | Traversal Order | Inspecting | Transforming |
+/// | --- | --- | --- |
+/// | top-down | [`apply`] | [`transform_down`]|
+/// | bottom-up | | [`transform`] , [`transform_up`]|
+/// | combined with separate `f_down` and `f_up` closures | | [`transform_down_up`] |
+/// | combined with `f_down()` and `f_up()` in an object | [`visit`]  | [`rewrite`] |
+///
+/// **Note**:while there is currently no in-place mutation API that uses `&mut
+/// TreeNode`, the transforming APIs are efficient and optimized to avoid
+/// cloning.
+///
+/// [`apply`]: Self::apply
+/// [`visit`]: Self::visit
+/// [`transform`]: Self::transform
+/// [`transform_up`]: Self::transform_up
+/// [`transform_down`]: Self::transform_down
+/// [`transform_down_up`]: Self::transform_down_up
+/// [`rewrite`]: Self::rewrite
+/// [`apply_children`]: Self::apply_children
+/// [`map_children`]: Self::map_children
 ///
 /// # Terminology
 /// The following terms are used in this trait
@@ -70,9 +103,19 @@ pub trait TreeNode: Sized {
     /// Visit the tree node with a [`TreeNodeVisitor`], performing a
     /// depth-first walk of the node and its children.
     ///
-    /// See also:
-    /// *  [`Self::rewrite`] to rewrite owned `TreeNode`s
+    /// [`TreeNodeVisitor::f_down()`] is called in top-down order (before
+    /// children are visited), [`TreeNodeVisitor::f_up()`] is called in
+    /// bottom-up order (after children are visited).
     ///
+    /// # Return Value
+    /// The returns value specifies how the tree walk ended.
+    /// [`TreeNodeRecursion`] for details.
+    ///
+    /// # See Also:
+    /// * [`Self::apply`] for inspecting nodes with a closure
+    /// * [`Self::rewrite`] to rewrite owned `TreeNode`s
+    ///
+    /// # Example
     /// Consider the following tree structure:
     /// ```text
     /// ParentNode
@@ -89,14 +132,6 @@ pub trait TreeNode: Sized {
     /// TreeNodeVisitor::f_up(ChildNode2)
     /// TreeNodeVisitor::f_up(ParentNode)
     /// ```
-    ///
-    /// See [`TreeNodeRecursion`] for more details on controlling the traversal.
-    ///
-    /// If [`TreeNodeVisitor::f_down()`] or [`TreeNodeVisitor::f_up()`] returns [`Err`],
-    /// the recursion stops immediately.
-    ///
-    /// If using the default [`TreeNodeVisitor::f_up`] that does nothing, consider using
-    /// [`Self::apply`].
     fn visit<V: TreeNodeVisitor<Node = Self>>(
         &self,
         visitor: &mut V,
@@ -110,9 +145,25 @@ pub trait TreeNode: Sized {
     /// Rewrite the tree node with a [`TreeNodeRewriter`], performing a
     /// depth-first walk of the node and its children.
     ///
-    /// See also:
-    /// *  [`Self::visit`] for inspecting (without modification) `TreeNode`s
+    /// [`TreeNodeRewriter::f_down()`] is called in top-down order (before
+    /// children are visited), [`TreeNodeRewriter::f_up()`] is called in
+    /// bottom-up order (after children are visited).
     ///
+    /// Note: If using the default [`TreeNodeRewriter::f_up`] that does nothing,
+    /// consider using [`Self::transform_down`].
+    ///
+    /// # Return Value
+    /// The returns value specifies how the tree walk should proceed. See
+    /// [`TreeNodeRecursion`] for details. If an [`Err`] is returned, the
+    /// recursion stops immediately.
+    ///
+    /// # See Also
+    /// * [`Self::visit`] for inspecting (without modification) `TreeNode`s
+    /// * [Self::transform_down_up] for a top-down (pre-order) traversal.
+    /// * [Self::transform_down] for a top-down (pre-order) traversal.
+    /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
+    ///
+    /// # Example
     /// Consider the following tree structure:
     /// ```text
     /// ParentNode
@@ -129,11 +180,6 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ChildNode2)
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
-    ///
-    /// See [`TreeNodeRecursion`] for more details on controlling the traversal.
-    ///
-    /// If [`TreeNodeVisitor::f_down()`] or [`TreeNodeVisitor::f_up()`] returns [`Err`],
-    /// the recursion stops immediately.
     fn rewrite<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -148,6 +194,10 @@ pub trait TreeNode: Sized {
     ///
     /// The return [`TreeNodeRecursion`] controls the recursion and can cause
     /// an early return.
+    ///
+    /// # See Also
+    /// * [`Self::transform_down`] for the equivalent transformation API.
+    /// * [`Self::visit`] for both top-down and bottom up traversal.
     fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: &mut F,
@@ -155,15 +205,10 @@ pub trait TreeNode: Sized {
         f(self)?.visit_children(|| self.apply_children(|c| c.apply(f)))
     }
 
-    /// Recursively rewrite the node's children and then the node  using `f`
+    /// Recursively rewrite the node's children and then the node using `f`
     /// (a bottom-up post-order traversal).
     ///
-    /// A synonym of [`Self::transform_up`]. `f` is applied to the nodes
-    /// children first, and then to the node itself. See [`Self::transform_down`]
-    /// top-down (pre-order) traversal.
-    ///
-    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
-    /// down and up.
+    /// A synonym of [`Self::transform_up`].
     fn transform<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -174,10 +219,12 @@ pub trait TreeNode: Sized {
     /// Recursively rewrite the tree using `f` in a top-down (pre-order)
     /// fashion.
     ///
-    /// `f` is applied to the nodes first, and then its children.
+    /// `f` is applied to the node first, and then its children.
     ///
-    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
-    /// down and up the tree.
+    /// # See Also
+    /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
+    /// * [Self::transform_down_up] for a combined traversal with closures
+    /// * [`Self::rewrite`] for a combined traversal with a visitor
     fn transform_down<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -196,10 +243,12 @@ pub trait TreeNode: Sized {
     /// Recursively rewrite the node using `f` in a bottom-up (post-order)
     /// fashion.
     ///
-    /// `f` is applied to children first, and then to the node itself.
+    /// `f` is applied to the node's  children first, and then to the node itself.
     ///
-    /// Use [`TreeNodeRewriter`] for an API that supports transformations both
-    /// down and up the tree.
+    /// # See Also
+    /// * [`Self::transform_down`] top-down (pre-order) traversal.
+    /// * [Self::transform_down_up] for a combined traversal with closures
+    /// * [`Self::rewrite`] for a combined traversal with a visitor
     fn transform_up<F: Fn(Self) -> Result<Transformed<Self>>>(
         self,
         f: &F,
@@ -220,11 +269,17 @@ pub trait TreeNode: Sized {
     /// (pre-order), and using `f_up` while traversing the tree bottom-up
     /// (post-order).
     ///
-    /// Use this method if you want to start the `f_up` process right where `f_down` jumps.
-    /// This can make the whole process faster by reducing the number of `f_up` steps.
-    /// If you don't need this, it's just like using `transform_down_mut` followed by
-    /// `transform_up_mut` on the same node.
+    /// The method behaves the same as calling [`Self::transform_down`] followed
+    /// by [`Self::transform_up`] on the same node. Use this method if you want
+    /// to start the `f_up` process right where `f_down` jumps. This can make
+    /// the whole process faster by reducing the number of `f_up` steps.
     ///
+    /// # See Also
+    /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
+    /// * [Self::transform_down] for a top-down (pre-order) traversal.
+    /// * [`Self::rewrite`] for a combined traversal with a visitor
+    ///
+    /// # Example
     /// Consider the following tree structure:
     /// ```text
     /// ParentNode
@@ -337,55 +392,91 @@ pub trait TreeNode: Sized {
         found
     }
 
-    /// Apply `f` to inspect node's children (but not the node itself)
+    /// Low-level API used to implement other APIs.
     ///
-    /// See [`Self::apply`] and [`Self::visit`] for APIs that include self.
+    /// If you want to implement the [`TreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::map_children`].
     ///
-    /// See [`Self::map_children`] for rewriting in place
+    /// Users should use one of the higher level APIs described on [`Self`].
+    ///
+    /// Description: Apply `f` to inspect node's children (but not the node
+    /// itself).
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Apply `f` to rewrite the node's children (but not the node itself).
+    /// Low-level API used to implement other APIs.
     ///
-    /// See [`Self::transform`] and [`Self::rewrite`] for APIs that include self
+    /// If you want to implement the [`TreeNode`] trait for your own type, you
+    /// should implement this method and [`Self::apply_children`].
     ///
-    /// See [`Self::apply_children`] for inspecting in place
+    /// Users should use one of the higher level APIs described on [`Self`].
+    ///
+    /// Description: Apply `f` to rewrite the node's children (but not the node itself).
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: F,
     ) -> Result<Transformed<Self>>;
 }
 
-/// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern)
-/// for recursively walking [`TreeNode`]s.
+/// A [Visitor](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively
+/// inspecting [`TreeNode`]s via [`TreeNode::visit`].
 ///
-/// A [`TreeNodeVisitor`] allows one to express algorithms separately from the
-/// code traversing the structure of the `TreeNode` tree, making it easier to
-/// add new types of tree nodes and algorithms.
+/// See [`TreeNode`] for more details on available APIs
 ///
 /// When passed to [`TreeNode::visit`], [`TreeNodeVisitor::f_down`] and
 /// [`TreeNodeVisitor::f_up`] are invoked recursively on the tree.
 /// See [`TreeNodeRecursion`] for more details on controlling the traversal.
+///
+/// # Return Value
+/// The returns value of `f_up` and `f_down` specifies how the tree walk should
+/// proceed. See [`TreeNodeRecursion`] for details. If an [`Err`] is returned,
+/// the recursion stops immediately.
+///
+/// Note: If using the default implementations of [`TreeNodeVisitor::f_up`] or
+/// [`TreeNodeVisitor::f_down`] that do nothing, consider using
+/// [`TreeNode::apply`] instead.
+///
+/// # See Also:
+/// * [`TreeNode::rewrite`] to rewrite owned `TreeNode`s
 pub trait TreeNodeVisitor: Sized {
     /// The node type which is visitable.
     type Node: TreeNode;
 
-    /// Invoked before any children of `node` are visited.
-    /// Default implementation simply continues the recursion.
+    /// Invoked while traversing down the tree, before any children are visited.
+    /// Default implementation continues the recursion.
     fn f_down(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    /// Invoked after all children of `node` are visited.
-    /// Default implementation simply continues the recursion.
+    /// Invoked while traversing up the tree after children are visited. Default
+    /// implementation continues the recursion.
     fn f_up(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
 }
 
-/// Trait for potentially recursively transforming a tree of [`TreeNode`]s.
+/// A [Visitor](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively
+/// rewriting [`TreeNode`]s via [`TreeNode::rewrite`].
+///
+/// See [`TreeNode`] for more details on available APIs
+///
+/// When passed to [`TreeNode::rewrite`], [`TreeNodeRewriter::f_down`] and
+/// [`TreeNodeRewriter::f_up`] are invoked recursively on the tree.
+/// See [`TreeNodeRecursion`] for more details on controlling the traversal.
+///
+/// # Return Value
+/// The returns value of `f_up` and `f_down` specifies how the tree walk should
+/// proceed. See [`TreeNodeRecursion`] for details. If an [`Err`] is returned,
+/// the recursion stops immediately.
+///
+/// Note: If using the default implementations of [`TreeNodeRewriter::f_up`] or
+/// [`TreeNodeRewriter::f_down`] that do nothing, consider using
+/// [`TreeNode::transform_up`] or [`TreeNode::transform_down`] instead.
+///
+/// # See Also:
+/// * [`TreeNode::visit`] to inspect borrowed `TreeNode`s
 pub trait TreeNodeRewriter: Sized {
     /// The node type which is rewritable.
     type Node: TreeNode;
