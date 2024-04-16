@@ -58,7 +58,10 @@ use crate::{
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
-use crate::{functions, functions_aggregate, functions_array};
+
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
+use crate::{functions, functions_aggregate};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;

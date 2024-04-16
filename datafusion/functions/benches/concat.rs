@@ -19,7 +19,7 @@ use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::string_expressions::concat;
+use datafusion_functions::string::concat;
 use std::sync::Arc;
 
 fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
@@ -37,7 +37,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args(size, 32);
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
-            b.iter(|| criterion::black_box(concat(&args).unwrap()))
+            b.iter(|| criterion::black_box(concat().invoke(&args).unwrap()))
         });
         group.finish();
     }

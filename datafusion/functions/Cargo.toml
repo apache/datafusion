@@ -91,6 +91,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "concat"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "to_timestamp"
 required-features = ["datetime_expressions"]
 

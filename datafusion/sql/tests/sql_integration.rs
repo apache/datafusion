@@ -38,7 +38,7 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
-use datafusion_functions::unicode;
+use datafusion_functions::{string, unicode};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -2678,6 +2678,7 @@ fn logical_plan_with_dialect_and_options(
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider::default()
         .with_udf(unicode::character_length().as_ref().clone())
+        .with_udf(string::concat().as_ref().clone())
         .with_udf(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],

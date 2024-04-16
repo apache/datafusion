@@ -207,32 +207,6 @@ fn between_date64_plus_interval() -> Result<()> {
 }
 
 #[test]
-fn concat_literals() -> Result<()> {
-    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn concat_ws_literals() -> Result<()> {
-    let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
 fn propagate_empty_relation() {
     let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
     let plan = test_sql(sql).unwrap();
