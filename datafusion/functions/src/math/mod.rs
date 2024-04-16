@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 pub mod abs;
 pub mod cot;
+pub mod factorial;
 pub mod gcd;
 pub mod iszero;
 pub mod lcm;
@@ -44,10 +45,13 @@ make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
 make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
 make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, None);
+make_math_unary_udf!(CeilFunc, CEIL, ceil, ceil, Some(vec![Some(true)]));
 make_math_unary_udf!(CosFunc, COS, cos, cos, None);
 make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
 make_udf_function!(cot::CotFunc, COT, cot);
 make_math_unary_udf!(DegreesFunc, DEGREES, degrees, to_degrees, None);
+make_math_unary_udf!(ExpFunc, EXP, exp, exp, Some(vec![Some(true)]));
+make_udf_function!(factorial::FactorialFunc, FACTORIAL, factorial);
 make_math_unary_udf!(FloorFunc, FLOOR, floor, floor, Some(vec![Some(true)]));
 make_udf_function!(log::LogFunc, LOG, log);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
@@ -119,6 +123,11 @@ pub mod expr_fn {
         super::cbrt().call(vec![num])
     }
 
+    #[doc = "nearest integer greater than or equal to argument"]
+    pub fn ceil(num: Expr) -> Expr {
+        super::ceil().call(vec![num])
+    }
+
     #[doc = "cosine"]
     pub fn cos(num: Expr) -> Expr {
         super::cos().call(vec![num])
@@ -137,6 +146,16 @@ pub mod expr_fn {
     #[doc = "converts radians to degrees"]
     pub fn degrees(num: Expr) -> Expr {
         super::degrees().call(vec![num])
+    }
+
+    #[doc = "exponential"]
+    pub fn exp(num: Expr) -> Expr {
+        super::exp().call(vec![num])
+    }
+
+    #[doc = "factorial"]
+    pub fn factorial(num: Expr) -> Expr {
+        super::factorial().call(vec![num])
     }
 
     #[doc = "nearest integer less than or equal to argument"]
@@ -262,10 +281,13 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         atan2(),
         atanh(),
         cbrt(),
+        ceil(),
         cos(),
         cosh(),
         cot(),
         degrees(),
+        exp(),
+        factorial(),
         floor(),
         gcd(),
         isnan(),

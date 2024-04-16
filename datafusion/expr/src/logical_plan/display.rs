@@ -638,10 +638,10 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "DescribeTable"
                 })
             }
-            LogicalPlan::Unnest(Unnest { column, .. }) => {
+            LogicalPlan::Unnest(Unnest { columns, .. }) => {
                 json!({
                     "Node Type": "Unnest",
-                    "Column": format!("{}", column)
+                    "Column": expr_vec_fmt!(columns),
                 })
             }
         }

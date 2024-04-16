@@ -19,8 +19,10 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
+    OffsetSizeTrait,
 };
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -112,80 +114,105 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     }
 }
 
-/// applies a unary expression to `args[0]` that is expected to be downcastable to
-/// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
-/// # Errors
-/// This function errors when:
-/// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
-pub(crate) fn unary_string_function<'a, T, O, F, R>(
-    args: &[&'a dyn Array],
-    op: F,
-    name: &str,
-) -> Result<GenericStringArray<O>>
-where
-    R: AsRef<str>,
-    O: OffsetSizeTrait,
-    T: OffsetSizeTrait,
-    F: Fn(&'a str) -> R,
-{
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            name
-        );
-    }
-
-    let string_array = as_generic_string_array::<T>(args[0])?;
-
-    // first map is the iterator, second is for the `Option<_>`
-    Ok(string_array.iter().map(|string| string.map(&op)).collect())
+pub(crate) fn to_lower(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
+    case_conversion(args, |string| string.to_lowercase(), name)
 }
 
-pub(crate) fn handle<'a, F, R>(
+pub(crate) fn to_upper(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
+    case_conversion(args, |string| string.to_uppercase(), name)
+}
+
+fn case_conversion<'a, F>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
 ) -> Result<ColumnarValue>
 where
-    R: AsRef<str>,
-    F: Fn(&'a str) -> R,
+    F: Fn(&'a str) -> String,
 {
     match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i32,
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i64,
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32, _>(
+                array, op,
+            )?)),
+            DataType::LargeUtf8 => Ok(ColumnarValue::Array(case_conversion_array::<
+                i64,
+                _,
+            >(array, op)?)),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
+                let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
             ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
+                let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
+}
+
+fn case_conversion_array<'a, O, F>(array: &'a ArrayRef, op: F) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    const PRE_ALLOC_BYTES: usize = 8;
+
+    let string_array = as_generic_string_array::<O>(array)?;
+    let value_data = string_array.value_data();
+
+    // All values are ASCII.
+    if value_data.is_ascii() {
+        return case_conversion_ascii_array::<O, _>(string_array, op);
+    }
+
+    // Values contain non-ASCII.
+    let item_len = string_array.len();
+    let capacity = string_array.value_data().len() + PRE_ALLOC_BYTES;
+    let mut builder = GenericStringBuilder::<O>::with_capacity(item_len, capacity);
+
+    if string_array.null_count() == 0 {
+        let iter =
+            (0..item_len).map(|i| Some(op(unsafe { string_array.value_unchecked(i) })));
+        builder.extend(iter);
+    } else {
+        let iter = string_array.iter().map(|string| string.map(&op));
+        builder.extend(iter);
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+/// All values of string_array are ASCII, and when converting case, there is no changes in the byte
+/// array length. Therefore, the StringArray can be treated as a complete ASCII string for
+/// case conversion, and we can reuse the offsets buffer and the nulls buffer.
+fn case_conversion_ascii_array<'a, O, F>(
+    string_array: &'a GenericStringArray<O>,
+    op: F,
+) -> Result<ArrayRef>
+where
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    let value_data = string_array.value_data();
+    // SAFETY: all items stored in value_data satisfy UTF8.
+    // ref: impl ByteArrayNativeType for str {...}
+    let str_values = unsafe { std::str::from_utf8_unchecked(value_data) };
+
+    // conversion
+    let converted_values = op(str_values);
+    assert_eq!(converted_values.len(), str_values.len());
+    let bytes = converted_values.into_bytes();
+
+    // build result
+    let values = Buffer::from_vec(bytes);
+    let offsets = string_array.offsets().clone();
+    let nulls = string_array.nulls().cloned();
+    // SAFETY: offsets and nulls are consistent with the input array.
+    Ok(Arc::new(unsafe {
+        GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
+    }))
 }

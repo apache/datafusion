@@ -311,13 +311,13 @@ impl TreeNode for LogicalPlan {
             }
             LogicalPlan::Unnest(Unnest {
                 input,
-                column,
+                columns,
                 schema,
                 options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Unnest(Unnest {
                     input,
-                    column,
+                    columns,
                     schema,
                     options,
                 })
@@ -507,8 +507,12 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().apply_until_stop(f)
             }
-            LogicalPlan::Unnest(Unnest { column, .. }) => {
-                f(&Expr::Column(column.clone()))
+            LogicalPlan::Unnest(Unnest { columns, .. }) => {
+                let exprs = columns
+                    .iter()
+                    .map(|c| Expr::Column(c.clone()))
+                    .collect::<Vec<_>>();
+                exprs.iter().apply_until_stop(f)
             }
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
@@ -706,20 +710,6 @@ impl LogicalPlan {
                         fetch,
                     })
                 }),
-            LogicalPlan::Unnest(Unnest {
-                input,
-                column,
-                schema,
-                options,
-            }) => f(Expr::Column(column))?.map_data(|column| match column {
-                Expr::Column(column) => Ok(LogicalPlan::Unnest(Unnest {
-                    input,
-                    column,
-                    schema,
-                    options,
-                })),
-                _ => internal_err!("Transformation should return Column"),
-            })?,
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
                 select_expr,
@@ -744,6 +734,7 @@ impl LogicalPlan {
             }),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)

@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
-use crate::builder::change_redundant_column;
+use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Alias, Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -807,51 +807,11 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                column,
-                schema,
-                options,
-                ..
+                columns, options, ..
             }) => {
                 // Update schema with unnested column type.
-                let input = Arc::new(inputs.swap_remove(0));
-                let (nested_qualifier, nested_field) =
-                    input.schema().qualified_field_from_column(column)?;
-                let (unnested_qualifier, unnested_field) =
-                    schema.qualified_field_from_column(column)?;
-                let qualifiers_and_fields = input
-                    .schema()
-                    .iter()
-                    .map(|(qualifier, field)| {
-                        if qualifier.eq(&nested_qualifier)
-                            && field.as_ref() == nested_field
-                        {
-                            (
-                                unnested_qualifier.cloned(),
-                                Arc::new(unnested_field.clone()),
-                            )
-                        } else {
-                            (qualifier.cloned(), field.clone())
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                let schema = Arc::new(
-                    DFSchema::new_with_metadata(
-                        qualifiers_and_fields,
-                        input.schema().metadata().clone(),
-                    )?
-                    // We can use the existing functional dependencies as is:
-                    .with_functional_dependencies(
-                        input.schema().functional_dependencies().clone(),
-                    )?,
-                );
-
-                Ok(LogicalPlan::Unnest(Unnest {
-                    input,
-                    column: column.clone(),
-                    schema,
-                    options: options.clone(),
-                }))
+                let input = inputs.swap_remove(0);
+                unnest_with_options(input, columns.clone(), options.clone())
             }
         }
     }
@@ -1581,8 +1541,8 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { column, .. }) => {
-                        write!(f, "Unnest: {column}")
+                    LogicalPlan::Unnest(Unnest { columns, .. }) => {
+                        write!(f, "Unnest: {}", expr_vec_fmt!(columns))
                     }
                 }
             }
@@ -2556,8 +2516,8 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The column to unnest
-    pub column: Column,
+    /// The columns to unnest
+    pub columns: Vec<Column>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options

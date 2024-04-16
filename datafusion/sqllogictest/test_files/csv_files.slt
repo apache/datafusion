@@ -155,9 +155,9 @@ query TT
 EXPLAIN SELECT * FROM partitioned_table ORDER BY int_col;
 ----
 logical_plan
-Sort: partitioned_table.int_col ASC NULLS LAST
---TableScan: partitioned_table projection=[int_col, string_col, bigint_col, partition_col]
+01)Sort: partitioned_table.int_col ASC NULLS LAST
+02)--TableScan: partitioned_table projection=[int_col, string_col, bigint_col, partition_col]
 physical_plan
-SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
---SortExec: expr=[int_col@0 ASC NULLS LAST]
-----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=true
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[int_col@0 ASC NULLS LAST]
+03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=true
