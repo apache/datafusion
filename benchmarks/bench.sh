@@ -338,7 +338,7 @@ run_tpch_smj() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_smj_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch SMJ benchmark..."
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" -j false --format parquet -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join false --format parquet -o ${RESULTS_FILE}
 }
 
 # Runs the tpch in memory
