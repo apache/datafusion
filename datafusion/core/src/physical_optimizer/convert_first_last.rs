@@ -209,7 +209,6 @@ fn try_convert_first_last_if_better(
 
         if aggr_fun_expr.is_some_and(|e| e.fun().name() == "FIRST_VALUE") {
             let mut first_value = aggr_fun_expr.unwrap().clone();
-
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
                 &aggr_req,
@@ -229,17 +228,7 @@ fn try_convert_first_last_if_better(
                     format!("LAST_VALUE({})", expr)
                 };
 
-                let sort_exprs = first_value.sort_exprs();
-                let reversed_sort_exprs = sort_exprs
-                    .iter()
-                    .map(|e| {
-                        if let Expr::Sort(s) = e {
-                            Expr::Sort(s.reverse())
-                        } else {
-                            e.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let reversed_sort_exprs = reverse_sort_exprs(&first_value);
 
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
@@ -282,17 +271,7 @@ fn try_convert_first_last_if_better(
                     format!("FIRST_VALUE({})", expr)
                 };
 
-                let sort_exprs = last_value.sort_exprs();
-                let reversed_sort_exprs = sort_exprs
-                    .iter()
-                    .map(|e| {
-                        if let Expr::Sort(s) = e {
-                            Expr::Sort(s.reverse())
-                        } else {
-                            e.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let reversed_sort_exprs = reverse_sort_exprs(&last_value);
 
                 let first_value = last_value
                     .with_name(name)
@@ -312,4 +291,17 @@ fn try_convert_first_last_if_better(
     }
 
     Ok(())
+}
+
+fn reverse_sort_exprs(e: &AggregateFunctionExpr) -> Vec<Expr> {
+    e.sort_exprs()
+        .iter()
+        .map(|e| {
+            if let Expr::Sort(s) = e {
+                Expr::Sort(s.reverse())
+            } else {
+                e.clone()
+            }
+        })
+        .collect::<Vec<_>>()
 }
