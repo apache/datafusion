@@ -347,7 +347,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            prefer_hash_join: true
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -380,7 +380,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            prefer_hash_join: true
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
