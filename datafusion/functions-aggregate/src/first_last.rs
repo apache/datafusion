@@ -405,11 +405,7 @@ impl FirstValuePhysicalExpr {
     }
 
     pub fn convert_to_last(self) -> LastValuePhysicalExpr {
-        let mut name = if self.name.starts_with("FIRST") {
-            format!("LAST{}", &self.name[5..])
-        } else {
-            format!("LAST_VALUE({})", self.expr)
-        };
+        let mut name = format!("LAST{}", &self.name[5..]);
         replace_order_by_clause(&mut name);
 
         let FirstValuePhysicalExpr {
@@ -585,11 +581,7 @@ impl LastValuePhysicalExpr {
     }
 
     pub fn convert_to_first(self) -> FirstValuePhysicalExpr {
-        let mut name = if self.name.starts_with("LAST") {
-            format!("FIRST{}", &self.name[4..])
-        } else {
-            format!("FIRST_VALUE({})", self.expr)
-        };
+        let mut name = format!("FIRST{}", &self.name[4..]);
         replace_order_by_clause(&mut name);
 
         let LastValuePhysicalExpr {

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 
 use crate::expressions::Column;
 use crate::PhysicalExpr;
@@ -68,8 +68,9 @@ impl ProjectionMapping {
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
                             if col.name() != matching_input_field.name() {
-                                return Err(DataFusionError::Internal(format!("Input field name {} does not match with the projection expression {}",matching_input_field.name(),col.name())));
-                            }
+                                return internal_err!("Input field name {} does not match with the projection expression {}",
+                                    matching_input_field.name(),col.name())
+                                }
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
                             Ok(Transformed::yes(Arc::new(matching_input_column)))
