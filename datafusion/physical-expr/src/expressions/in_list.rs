@@ -415,6 +415,18 @@ impl PartialEq<dyn Any> for InListExpr {
     }
 }
 
+/// Checks if two types are logically equal, dictionary types are compared by their value types.
+fn is_logically_eq(lhs: &DataType, rhs: &DataType) -> bool {
+    match (lhs, rhs) {
+        (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
+            v1.as_ref().eq(v2.as_ref())
+        }
+        (DataType::Dictionary(_, l), _) => l.as_ref().eq(rhs),
+        (_, DataType::Dictionary(_, r)) => lhs.eq(r.as_ref()),
+        _ => lhs.eq(rhs),
+    }
+}
+
 /// Creates a unary expression InList
 pub fn in_list(
     expr: Arc<dyn PhysicalExpr>,
@@ -426,7 +438,7 @@ pub fn in_list(
     let expr_data_type = expr.data_type(schema)?;
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
-        if !expr_data_type.eq(&list_expr_data_type) {
+        if !is_logically_eq(&expr_data_type, &list_expr_data_type) {
             return internal_err!(
                 "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
             );
@@ -499,7 +511,21 @@ mod tests {
     macro_rules! in_list {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
-            let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
+            in_list_raw!(
+                $BATCH,
+                cast_list_exprs,
+                $NEGATED,
+                $EXPECTED,
+                cast_expr,
+                $SCHEMA
+            );
+        }};
+    }
+
+    // applies the in_list expr to an input batch and list without cast
+    macro_rules! in_list_raw {
+        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
+            let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
             let result = expr
                 .evaluate(&$BATCH)?
                 .into_array($BATCH.num_rows())
@@ -540,7 +566,7 @@ mod tests {
             &schema
         );
 
-        // expression: "a not in ("a", "b")"
+        // expression: "a in ("a", "b", null)"
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
@@ -551,7 +577,7 @@ mod tests {
             &schema
         );
 
-        // expression: "a not in ("a", "b")"
+        // expression: "a not in ("a", "b", null)"
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
         in_list!(
             batch,
@@ -1311,6 +1337,98 @@ mod tests {
             expr,
             &schema
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_utf8_with_dict_types() -> Result<()> {
+        fn dict_lit(key_type: DataType, value: &str) -> Arc<dyn PhysicalExpr> {
+            lit(ScalarValue::Dictionary(
+                Box::new(key_type),
+                Box::new(ScalarValue::new_utf8(value.to_string())),
+            ))
+        }
+
+        fn null_dict_lit(key_type: DataType) -> Arc<dyn PhysicalExpr> {
+            lit(ScalarValue::Dictionary(
+                Box::new(key_type),
+                Box::new(ScalarValue::Utf8(None)),
+            ))
+        }
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let a: UInt16DictionaryArray =
+            vec![Some("a"), Some("d"), None].into_iter().collect();
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ("a", "b")"
+        let lists = [
+            vec![lit("a"), lit("b")],
+            vec![
+                dict_lit(DataType::Int8, "a"),
+                dict_lit(DataType::UInt16, "b"),
+            ],
+        ];
+        for list in lists.iter() {
+            in_list_raw!(
+                batch,
+                list.clone(),
+                &false,
+                vec![Some(true), Some(false), None],
+                col_a.clone(),
+                &schema
+            );
+        }
+
+        // expression: "a not in ("a", "b")"
+        for list in lists.iter() {
+            in_list_raw!(
+                batch,
+                list.clone(),
+                &true,
+                vec![Some(false), Some(true), None],
+                col_a.clone(),
+                &schema
+            );
+        }
+
+        // expression: "a in ("a", "b", null)"
+        let lists = [
+            vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
+            vec![
+                dict_lit(DataType::Int8, "a"),
+                dict_lit(DataType::UInt16, "b"),
+                null_dict_lit(DataType::UInt16),
+            ],
+        ];
+        for list in lists.iter() {
+            in_list_raw!(
+                batch,
+                list.clone(),
+                &false,
+                vec![Some(true), None, None],
+                col_a.clone(),
+                &schema
+            );
+        }
+
+        // expression: "a not in ("a", "b", null)"
+        for list in lists.iter() {
+            in_list_raw!(
+                batch,
+                list.clone(),
+                &true,
+                vec![Some(false), None, None],
+                col_a.clone(),
+                &schema
+            );
+        }
 
         Ok(())
     }

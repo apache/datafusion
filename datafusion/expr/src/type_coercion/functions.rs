@@ -314,8 +314,13 @@ fn coerced_from<'a>(
     // match Dictionary first
     match (type_into, type_from) {
         // coerced dictionary first
-        (cur_type, Dictionary(_, value_type)) | (Dictionary(_, value_type), cur_type)
-            if coerced_from(cur_type, value_type).is_some() =>
+        (_, Dictionary(_, value_type))
+            if coerced_from(type_into, value_type).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (Dictionary(_, value_type), _)
+            if coerced_from(value_type, type_from).is_some() =>
         {
             Some(type_into.clone())
         }
@@ -623,5 +628,21 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_coerced_from_dictionary() {
+        let type_into =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
     }
 }

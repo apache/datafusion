@@ -228,8 +228,7 @@ mod tests {
     use itertools::Itertools;
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{BuiltinScalarFunction, Operator, ScalarUDF};
+    use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, create_random_schema,
@@ -241,7 +240,6 @@ mod tests {
     };
     use crate::expressions::Column;
     use crate::expressions::{col, BinaryExpr};
-    use crate::functions::create_physical_expr;
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExpr, PhysicalSortExpr};
 
@@ -301,11 +299,12 @@ mod tests {
             &[],
             &DFSchema::empty(),
         )?;
-        let exp_a = &create_physical_expr(
-            &BuiltinScalarFunction::Exp,
+        let exp_a = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),

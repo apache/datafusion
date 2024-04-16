@@ -26,7 +26,7 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
@@ -279,7 +279,7 @@ impl TableProvider for MemTable {
             return not_impl_err!("Overwrite not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             self.schema.clone(),
