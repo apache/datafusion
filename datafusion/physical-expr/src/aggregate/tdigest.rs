@@ -370,7 +370,10 @@ impl TDigest {
     }
 
     // Merge multiple T-Digests
-    pub(crate) fn merge_digests(digests: &[TDigest]) -> TDigest {
+    pub(crate) fn merge_digests<'a>(
+        digests: impl IntoIterator<Item = &'a TDigest>,
+    ) -> TDigest {
+        let digests = digests.into_iter().collect::<Vec<_>>();
         let n_centroids: usize = digests.iter().map(|d| d.centroids.len()).sum();
         if n_centroids == 0 {
             return TDigest::default();

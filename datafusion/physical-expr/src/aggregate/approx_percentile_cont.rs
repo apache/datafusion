@@ -284,9 +284,8 @@ impl ApproxPercentileAccumulator {
     }
 
     pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
-        let mut input_digests = digests.to_vec();
-        input_digests.push(self.digest.clone());
-        self.digest = TDigest::merge_digests(input_digests.as_slice());
+        let digests = digests.iter().chain(std::iter::once(&self.digest));
+        self.digest = TDigest::merge_digests(digests)
     }
 
     pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
