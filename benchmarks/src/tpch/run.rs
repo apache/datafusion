@@ -312,7 +312,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::exec_err;
-    use datafusion::error::{DataFusionError, Result};
+    use datafusion::error::Result;
     use datafusion_proto::bytes::{
         logical_plan_from_bytes, logical_plan_to_bytes, physical_plan_from_bytes,
         physical_plan_to_bytes,
@@ -347,6 +347,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -379,6 +380,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
