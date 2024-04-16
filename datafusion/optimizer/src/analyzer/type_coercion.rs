@@ -757,8 +757,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
 #[cfg(test)]
 mod test {
     use std::any::Any;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
+    use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -766,10 +767,10 @@ mod test {
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
     use datafusion_expr::{
-        cast, col, concat, concat_ws, create_udaf, is_true, lit,
-        AccumulatorFactoryFunction, AggregateFunction, AggregateUDF, BinaryExpr, Case,
-        ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Volatility,
+        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction,
+        AggregateFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -821,10 +822,11 @@ mod test {
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
-    static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+    #[derive(Debug, Clone)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
 
-    #[derive(Debug, Clone, Default)]
-    struct TestScalarUDF {}
     impl ScalarUDFImpl for TestScalarUDF {
         fn as_any(&self) -> &dyn Any {
             self
@@ -833,11 +835,11 @@ mod test {
         fn name(&self) -> &str {
             "TestScalarUDF"
         }
+
         fn signature(&self) -> &Signature {
-            TEST_SIGNATURE.get_or_init(|| {
-                Signature::uniform(1, vec![DataType::Float32], Volatility::Stable)
-            })
+            &self.signature
         }
+
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Utf8)
         }
@@ -851,7 +853,10 @@ mod test {
     fn scalar_udf() -> Result<()> {
         let empty = empty();
 
-        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit(123_i32)]);
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit(123_i32)]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -861,7 +866,10 @@ mod test {
     #[test]
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
-        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit("Apple")]);
         let plan_err = Projection::try_new(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
 
@@ -876,7 +884,9 @@ mod test {
         // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {});
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        });
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
@@ -1233,24 +1243,16 @@ mod test {
         let empty = empty_with_type(DataType::Utf8);
         let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
 
-        // concat
+        // concat-type signature
         {
-            let expr = concat(&args);
-
+            let expr = ScalarUDF::new_from_impl(TestScalarUDF {
+                signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+            })
+            .call(args.to_vec());
             let plan =
                 LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
             let expected =
-                "Projection: concat(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
-            assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
-        }
-
-        // concat_ws
-        {
-            let expr = concat_ws(lit("-"), args.to_vec());
-
-            let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-            let expected =
-                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 

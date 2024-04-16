@@ -22792,11 +22792,7 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Concat => "Concat",
-            Self::ConcatWithSeparator => "ConcatWithSeparator",
-            Self::InitCap => "InitCap",
             Self::Coalesce => "Coalesce",
-            Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
     }
@@ -22809,11 +22805,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Concat",
-            "ConcatWithSeparator",
-            "InitCap",
             "Coalesce",
-            "EndsWith",
         ];
 
         struct GeneratedVisitor;
@@ -22855,11 +22847,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Concat" => Ok(ScalarFunction::Concat),
-                    "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
-                    "InitCap" => Ok(ScalarFunction::InitCap),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
-                    "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

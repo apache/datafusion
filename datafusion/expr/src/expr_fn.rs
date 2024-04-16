@@ -26,8 +26,8 @@ use crate::function::{
 };
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
-    Operator, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    logical_plan::Subquery, AggregateUDF, Expr, LogicalPlan, Operator,
+    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
@@ -277,26 +277,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
 }
 
-/// Concatenates the text representations of all the arguments. NULL arguments are ignored.
-pub fn concat(args: &[Expr]) -> Expr {
-    Expr::ScalarFunction(ScalarFunction::new(
-        BuiltinScalarFunction::Concat,
-        args.to_vec(),
-    ))
-}
-
-/// Concatenates all but the first argument, with separators.
-/// The first argument is used as the separator.
-/// NULL arguments in `values` are ignored.
-pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
-    let mut args = values;
-    args.insert(0, sep);
-    Expr::ScalarFunction(ScalarFunction::new(
-        BuiltinScalarFunction::ConcatWithSeparator,
-        args,
-    ))
-}
-
 /// Returns the approximate number of distinct input values.
 /// This function provides an approximation of count(DISTINCT x).
 /// Zero is returned if all input values are null.
@@ -498,18 +478,6 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
     Expr::IsNotUnknown(Box::new(expr))
 }
 
-macro_rules! scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
-        #[doc = $DOC]
-        pub fn $FUNC($($arg: Expr),*) -> Expr {
-            Expr::ScalarFunction(ScalarFunction::new(
-                built_in_function::BuiltinScalarFunction::$ENUM,
-                vec![$($arg),*],
-            ))
-        }
-    };
-}
-
 macro_rules! nary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
         #[doc = $DOC ]
@@ -525,16 +493,7 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
-//there is a func concat_ws before, so use concat_ws_expr as name.c
-nary_scalar_expr!(
-    ConcatWithSeparator,
-    concat_ws_expr,
-    "concatenates several strings, placing a seperator between each one"
-);
-nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -843,18 +802,9 @@ impl WindowUDFImpl for SimpleWindowUDF {
     }
 }
 
-/// Calls a named built in function
-pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
-    match name.as_ref().parse::<BuiltinScalarFunction>() {
-        Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
-        Err(e) => Err(e),
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::ScalarFunctionDefinition;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -865,29 +815,5 @@ mod test {
             format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
-    }
-
-    macro_rules! test_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-        let expected = [$(stringify!($arg)),*];
-        let result = $FUNC(
-            $(
-                col(stringify!($arg.to_string()))
-            ),*
-        );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
-            let name = built_in_function::BuiltinScalarFunction::$ENUM;
-            assert_eq!(name, fun);
-            assert_eq!(expected.len(), args.len());
-        } else {
-            assert!(false, "unexpected: {:?}", result);
-        }
-    };
-}
-
-    #[test]
-    fn scalar_function_definitions() {
-        test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(EndsWith, ends_with, string, characters);
     }
 }
