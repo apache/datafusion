@@ -525,9 +525,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    Self::volatility_ok(fun.volatility())
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     Self::volatility_ok(fun.signature().volatility)
                 }

@@ -90,16 +90,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        match fun.volatility() {
-                            Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
-                            // TODO: Stable functions could be `applicable`, but that would require access to the context
-                            Volatility::Stable | Volatility::Volatile => {
-                                is_applicable = false;
-                                Ok(TreeNodeRecursion::Stop)
-                            }
-                        }
-                    }
                     ScalarFunctionDefinition::UDF(fun) => {
                         match fun.signature().volatility {
                             Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
