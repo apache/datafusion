@@ -96,9 +96,9 @@ fn update_aggregator_when_beneficial(
             })
             .collect::<Vec<_>>();
 
-        try_convert_aggregate_if_better(
+        aggr_expr = try_convert_aggregate_if_better(
+            aggr_expr,
             &requirement,
-            &mut aggr_expr,
             input_eq_properties,
         )?;
 
@@ -116,70 +116,76 @@ fn update_aggregator_when_beneficial(
 ///
 /// # Parameters
 ///
+/// * `aggr_exprs` - A evector of `Arc<dyn AggregateExpr>` representing the aggregate expressions to be optimized.
 /// * `prefix_requirement` - An array slice representing the ordering requirements preceding the aggregate expressions.
-/// * `aggr_exprs` - A mutable slice of `Arc<dyn AggregateExpr>` representing the aggregate expressions to be optimized.
 /// * `eq_properties` - A reference to the `EquivalenceProperties` object containing ordering information.
 ///
 /// # Returns
 ///
-/// Returns `Ok(())` if the conversion process completes successfully. If an error occurs during the conversion process, an error is returned.
+/// Returns `Ok(converted_aggr_exprs)` if the conversion process completes successfully.
+/// If an error occurs during the conversion process, an error is returned.
 fn try_convert_aggregate_if_better(
+    aggr_exprs: Vec<Arc<dyn AggregateExpr>>,
     prefix_requirement: &[PhysicalSortRequirement],
-    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     eq_properties: &EquivalenceProperties,
-) -> Result<()> {
-    for aggr_expr in aggr_exprs.iter_mut() {
-        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
-        let reverse_aggr_req = reverse_order_bys(aggr_req);
-        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
-        let reverse_aggr_req =
-            PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
-        let err_fn = || {
-            plan_datafusion_err!(
-                "Expects beneficial mode aggregator to implement with_requirement API."
+) -> Result<Vec<Arc<dyn AggregateExpr>>> {
+    aggr_exprs
+        .into_iter()
+        .map(|aggr_expr| {
+            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(&[]);
+            let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
+            let aggr_sort_reqs =
+                PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs);
+            let reverse_aggr_req =
+                PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_sort_exprs);
+            let err_fn = || {
+                plan_datafusion_err!(
+                "Expects an aggregate expression which can benefit from ordered input"
             )
-        };
+            };
 
-        // If ordering for the aggregator is beneficial and there is a requirement for the aggregator,
-        // try update the aggregator in case there is a more beneficial version with existing ordering
-        // Otherwise do not update.
-        if aggr_expr.order_sensitivity().is_order_beneficial() && !aggr_req.is_empty() {
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
-                // Existing ordering satisfy the requirement of the aggregator
-                *aggr_expr = aggr_expr
-                    .clone()
-                    .with_requirement_satisfied(true)?
-                    .ok_or_else(err_fn)?;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
-                // Converting to reverse enables more efficient execution
-                // given the existing ordering:
-                if let Some(aggr_expr_rev) = aggr_expr.reverse_expr() {
-                    *aggr_expr = aggr_expr_rev;
+            // If ordering for the aggregator is beneficial and there is a requirement for the aggregator,
+            // try update the aggregator in case there is a more beneficial version with existing ordering
+            // Otherwise do not update.
+            if aggr_expr.order_sensitivity().is_order_beneficial()
+                && !aggr_sort_reqs.is_empty()
+            {
+                if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                    prefix_requirement,
+                    &aggr_sort_reqs,
+                )) {
+                    // Existing ordering satisfy the requirement of the aggregator
+                    aggr_expr
+                        .with_requirement_satisfied(true)?
+                        .ok_or_else(err_fn)
+                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                    prefix_requirement,
+                    &reverse_aggr_req,
+                )) {
+                    // Converting to reverse enables more efficient execution
+                    // given the existing ordering:
+                    let updated_aggr_expr =
+                        if let Some(aggr_expr_rev) = aggr_expr.reverse_expr() {
+                            aggr_expr_rev
+                        } else {
+                            // If reverse execution is not possible, cannot update current aggregate expression.
+                            aggr_expr
+                        };
+                    updated_aggr_expr
+                        .with_requirement_satisfied(true)?
+                        .ok_or_else(err_fn)
+                    // Requirement is not satisfied with existing ordering.
                 } else {
-                    // If reverse execution is not possible, cannot update current aggregate expression.
-                    continue;
+                    // Requirement is not satisfied for the aggregator (Please note that: Aggregator can
+                    // still work in this case, guaranteed by order sensitive flag being false. However,
+                    // it will be inefficient compared to version where requirement is satisfied).
+                    aggr_expr
+                        .with_requirement_satisfied(false)?
+                        .ok_or_else(err_fn)
                 }
-                *aggr_expr = aggr_expr
-                    .clone()
-                    .with_requirement_satisfied(true)?
-                    .ok_or_else(err_fn)?;
-                // Requirement is not satisfied with existing ordering.
             } else {
-                // Requirement is not satisfied for the aggregator (Please note that: Aggregator can still work in this case, guaranteed by order sensitive flag being false.
-                // However, It will be inefficient compared to version where requirement is satisfied).
-                *aggr_expr = aggr_expr
-                    .clone()
-                    .with_requirement_satisfied(false)?
-                    .ok_or_else(err_fn)?;
+                Ok(aggr_expr)
             }
-        }
-    }
-
-    Ok(())
+        })
+        .collect::<Result<Vec<_>>>()
 }

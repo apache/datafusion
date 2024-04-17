@@ -137,9 +137,16 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         AggregateOrderSensitivity::Insensitive
     }
 
-    /// Indicates whether requirement of the aggregators is satisfied at the input.
+    /// Sets the indicator whether requirement of the aggregators is satisfied at the input.
     /// If this is not the case: Aggregators with order sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
     /// correct result with possibly more work internally.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(updated_expr))` if the process completes successfully.
+    /// If the expression which can benefit does not implement the method, it returns an error.
+    /// [`AggregateOrderSensitivity::Insensitive`] and [`AggregateOrderSensitivity::HardRequirement`]
+    /// expressions return Ok(None).
     fn with_requirement_satisfied(
         self: Arc<Self>,
         _requirement_satisfied: bool,
