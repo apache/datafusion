@@ -87,7 +87,7 @@ struct JoinLeftData {
     visited_indices_bitmap: Mutex<BooleanBufferBuilder>,
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
-    running_threads_counter: AtomicUsize,
+    probe_threads_counter: AtomicUsize,
     /// Memory reservation that tracks memory used by `hash_map` hash table
     /// `batch`. Cleared on drop.
     #[allow(dead_code)]
@@ -100,14 +100,14 @@ impl JoinLeftData {
         hash_map: JoinHashMap,
         batch: RecordBatch,
         visited_indices_bitmap: SharedBitmapBuilder,
-        running_threads_counter: AtomicUsize,
+        probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
             hash_map,
             batch,
             visited_indices_bitmap,
-            running_threads_counter,
+            probe_threads_counter,
             reservation,
         }
     }
@@ -130,7 +130,7 @@ impl JoinLeftData {
     /// Decrements the counter of running threads, and returns `true`
     /// if caller is the last running thread
     fn report_probe_completed(&self) -> bool {
-        self.running_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
     }
 }
 
@@ -837,7 +837,7 @@ async fn collect_left_input(
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
-    right_input_partitions: usize,
+    probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
@@ -934,7 +934,7 @@ async fn collect_left_input(
         hashmap,
         single_batch,
         Mutex::new(visited_indices_bitmap),
-        AtomicUsize::new(right_input_partitions),
+        AtomicUsize::new(probe_threads_count),
         reservation,
     );
 
