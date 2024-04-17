@@ -1514,7 +1514,7 @@ async fn unnest_non_nullable_list() -> Result<()> {
         .collect()
         .await?;
 
-    // Unnesting may produce NULLs even if the lists are non-nullable.
+    // Unnesting may produce NULLs even if the list is non-nullable.
     let expected = [
         "+----+", "| c1 |", "+----+", "|    |", "| 1  |", "| 2  |", "+----+",
     ];
