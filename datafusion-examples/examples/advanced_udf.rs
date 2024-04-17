@@ -187,7 +187,7 @@ impl ScalarUDFImpl for PowUdf {
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true)]))
+        Ok(Some(FuncMonotonicity::Increasing))
     }
 }
 

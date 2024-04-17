@@ -223,7 +223,14 @@ pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
 ) -> SortProperties {
-    func.iter().zip(arg_orderings).fold(
+    let monotonicity_vec = match func {
+        FuncMonotonicity::None => vec![None],
+        FuncMonotonicity::Increasing => vec![Some(true)],
+        FuncMonotonicity::Decreasing => vec![Some(false)],
+        FuncMonotonicity::Mixed(v) => v.to_vec(),
+    };
+
+    monotonicity_vec.iter().zip(arg_orderings).fold(
         SortProperties::Singleton,
         |prev_sort, (item, arg)| {
             let current_sort = func_order_in_one_dimension(item, arg);

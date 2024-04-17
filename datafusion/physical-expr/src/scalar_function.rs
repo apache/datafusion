@@ -54,7 +54,7 @@ pub struct ScalarFunctionExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
     // Keeps monotonicity information of the function.
-    // FuncMonotonicity vector is one to one mapped to `args`,
+    // FuncMonotonicity is one to one mapped to `args`,
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
