@@ -33,29 +33,24 @@
 use std::ops::Neg;
 use std::sync::Arc;
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Schema},
-};
+use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::Array;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
-use datafusion_expr::ScalarFunctionDefinition;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
     ScalarFunctionImplementation,
 };
+use datafusion_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
 
 use crate::sort_properties::SortProperties;
-use crate::{
-    conditional_expressions, string_expressions, PhysicalExpr, ScalarFunctionExpr,
-};
+use crate::{conditional_expressions, PhysicalExpr, ScalarFunctionExpr};
 
 /// Create a physical (function) expression.
 /// This function errors when `args`' can't be coerced to a valid argument type of the function.
-pub fn create_physical_expr(
+pub fn create_builtin_physical_expr(
     fun: &BuiltinScalarFunction,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
@@ -80,6 +75,38 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
+        fun.signature().type_signature.supports_zero_argument(),
+    )))
+}
+
+/// Create a physical (function) expression.
+/// This function errors when `args`' can't be coerced to a valid argument type of the function.
+pub fn create_physical_expr(
+    fun: &ScalarUDF,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    args: &[Expr],
+    input_dfschema: &DFSchema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let input_expr_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, fun.signature())?;
+
+    // Since we have arg_types, we don't need args and schema.
+    let return_type =
+        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
+
+    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        fun.name(),
+        fun_def,
+        input_phy_exprs.to_vec(),
+        return_type,
+        fun.monotonicity()?,
         fun.signature().type_signature.supports_zero_argument(),
     )))
 }
@@ -179,32 +206,6 @@ pub fn create_physical_fun(
     Ok(match fun {
         // string functions
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
-        BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
-        BuiltinScalarFunction::ConcatWithSeparator => {
-            Arc::new(string_expressions::concat_ws)
-        }
-        BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::initcap::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::initcap::<i64>)(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function initcap")
-            }
-        }),
-        BuiltinScalarFunction::EndsWith => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::ends_with::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::ends_with::<i64>)(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function ends_with")
-            }
-        }),
     })
 }
 
@@ -272,219 +273,51 @@ fn func_order_in_one_dimension(
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{Array, ArrayRef, BooleanArray, Int32Array, StringArray, UInt64Array},
-        datatypes::Field,
-        record_batch::RecordBatch,
+        array::{Array, ArrayRef, UInt64Array},
+        datatypes::{DataType, Field},
     };
+    use arrow_schema::DataType::Utf8;
 
     use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{internal_err, plan_err};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
-    use datafusion_expr::Signature;
+    use datafusion_expr::{Signature, Volatility};
 
-    use crate::expressions::lit;
     use crate::expressions::try_cast;
+    use crate::utils::tests::TestScalarUDF;
 
     use super::*;
 
-    /// $FUNC function to test
-    /// $ARGS arguments (vec) to pass to function
-    /// $EXPECTED a Result<Option<$EXPECTED_TYPE>> where Result allows testing errors and Option allows testing Null
-    /// $EXPECTED_TYPE is the expected value type
-    /// $DATA_TYPE is the function to test result type
-    /// $ARRAY_TYPE is the column type after function applied
-    macro_rules! test_function {
-        ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
-            // used to provide type annotation
-            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let execution_props = ExecutionProps::new();
-
-            // any type works here: we evaluate against a literal of `value`
-            let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
-
-            let expr =
-                create_physical_expr_with_type_coercion(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
-
-            // type is correct
-            assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
-
-            let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-
-            match expected {
-                Ok(expected) => {
-                    let result = expr.evaluate(&batch)?;
-                    let result = result.into_array(batch.num_rows()).expect("Failed to convert to array");
-                    let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-
-                    // value is correct
-                    match expected {
-                        Some(v) => assert_eq!(result.value(0), v),
-                        None => assert!(result.is_null(0)),
-                    };
-                }
-                Err(expected_error) => {
-                    // evaluate is expected error - cannot use .expect_err() due to Debug not being implemented
-                    match expr.evaluate(&batch) {
-                        Ok(_) => assert!(false, "expected error"),
-                        Err(error) => {
-                            assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
-                        }
-                    }
-                }
-            };
-        };
-    }
-
-    #[test]
-    fn test_functions() -> Result<()> {
-        test_function!(
-            Concat,
-            &[lit("aa"), lit("bb"), lit("cc"),],
-            Ok(Some("aabbcc")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Concat,
-            &[lit("aa"), lit(ScalarValue::Utf8(None)), lit("cc"),],
-            Ok(Some("aacc")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Concat,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(Some("")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWithSeparator,
-            &[lit("|"), lit("aa"), lit("bb"), lit("cc"),],
-            Ok(Some("aa|bb|cc")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWithSeparator,
-            &[lit("|"), lit(ScalarValue::Utf8(None)),],
-            Ok(Some("")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWithSeparator,
-            &[
-                lit(ScalarValue::Utf8(None)),
-                lit("aa"),
-                lit("bb"),
-                lit("cc"),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWithSeparator,
-            &[lit("|"), lit("aa"), lit(ScalarValue::Utf8(None)), lit("cc"),],
-            Ok(Some("aa|cc")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            InitCap,
-            &[lit("hi THOMAS")],
-            Ok(Some("Hi Thomas")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(InitCap, &[lit("")], Ok(Some("")), &str, Utf8, StringArray);
-        test_function!(InitCap, &[lit("")], Ok(Some("")), &str, Utf8, StringArray);
-        test_function!(
-            InitCap,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            EndsWith,
-            &[lit("alphabet"), lit("alph"),],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            EndsWith,
-            &[lit("alphabet"), lit("bet"),],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            EndsWith,
-            &[lit(ScalarValue::Utf8(None)), lit("alph"),],
-            Ok(None),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            EndsWith,
-            &[lit("alphabet"), lit(ScalarValue::Utf8(None)),],
-            Ok(None),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-
-        Ok(())
-    }
-
     #[test]
     fn test_empty_arguments_error() -> Result<()> {
-        let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let udf = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+        });
+        let expr = create_physical_expr_with_type_coercion(
+            &udf,
+            &[],
+            &schema,
+            &[],
+            &DFSchema::empty(),
+        );
 
-        // pick some arbitrary functions to test
-        let funs = [BuiltinScalarFunction::Concat];
-
-        for fun in funs.iter() {
-            let expr = create_physical_expr_with_type_coercion(
-                fun,
-                &[],
-                &schema,
-                &execution_props,
-            );
-
-            match expr {
-                Ok(..) => {
-                    return plan_err!(
-                        "Builtin scalar function {fun} does not support empty arguments"
-                    );
-                }
-                Err(DataFusionError::Plan(_)) => {
-                    // Continue the loop
-                }
-                Err(..) => {
-                    return internal_err!(
-                        "Builtin scalar function {fun} didn't got the right error with empty arguments");
-                }
+        match expr {
+            Ok(..) => {
+                return plan_err!(
+                    "ScalarUDF function {udf:?} does not support empty arguments"
+                );
+            }
+            Err(DataFusionError::Plan(_)) => {
+                // Continue the loop
+            }
+            Err(..) => {
+                return internal_err!(
+                    "ScalarUDF function {udf:?} didn't got the right error with empty arguments");
             }
         }
+
         Ok(())
     }
 
@@ -517,14 +350,21 @@ mod tests {
     // Helper function just for testing.
     // The type coercion will be done in the logical phase, should do the type coercion for the test
     fn create_physical_expr_with_type_coercion(
-        fun: &BuiltinScalarFunction,
+        fun: &ScalarUDF,
         input_phy_exprs: &[Arc<dyn PhysicalExpr>],
         input_schema: &Schema,
-        execution_props: &ExecutionProps,
+        args: &[Expr],
+        input_dfschema: &DFSchema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let type_coerced_phy_exprs =
-            coerce(input_phy_exprs, input_schema, &fun.signature()).unwrap();
-        create_physical_expr(fun, &type_coerced_phy_exprs, input_schema, execution_props)
+            coerce(input_phy_exprs, input_schema, fun.signature()).unwrap();
+        create_physical_expr(
+            fun,
+            &type_coerced_phy_exprs,
+            input_schema,
+            args,
+            input_dfschema,
+        )
     }
 
     fn dummy_function(args: &[ArrayRef]) -> Result<ArrayRef> {

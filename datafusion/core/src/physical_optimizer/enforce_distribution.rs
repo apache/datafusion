@@ -875,7 +875,8 @@ fn add_hash_on_top(
     n_target: usize,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
-    if n_target == 1 {
+    // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
+    if n_target == 1 && input.plan.output_partitioning().partition_count() == 1 {
         return Ok(input);
     }
 

@@ -567,11 +567,11 @@ enum ScalarFunction {
   // 23 was Btrim
   // 24 was CharacterLength
   // 25 was Chr
-  Concat = 26;
-  ConcatWithSeparator = 27;
+  // 26 was Concat
+  // 27 was ConcatWithSeparator
   // 28 was DatePart
   // 29 was DateTrunc
-  InitCap = 30;
+  // 30 was InitCap
   // 31 was Left
   // 32 was Lpad
   // 33 was Lower
@@ -670,7 +670,7 @@ enum ScalarFunction {
   // 128 was ArraySort
   // 129 was ArrayDistinct
   // 130 was ArrayResize
-  EndsWith = 131;
+  // 131 was EndsWith
   // 132 was InStr
   // 133 was MakeDate
   // 134 was ArrayReverse

@@ -2867,11 +2867,11 @@ pub enum ScalarFunction {
     /// 23 was Btrim
     /// 24 was CharacterLength
     /// 25 was Chr
-    Concat = 26,
-    ConcatWithSeparator = 27,
+    /// 26 was Concat
+    /// 27 was ConcatWithSeparator
     /// 28 was DatePart
     /// 29 was DateTrunc
-    InitCap = 30,
+    /// 30 was InitCap
     /// 31 was Left
     /// 32 was Lpad
     /// 33 was Lower
@@ -2904,7 +2904,7 @@ pub enum ScalarFunction {
     /// 60 was Translate
     /// Trim = 61;
     /// Upper = 62;
-    Coalesce = 63,
+    ///
     /// 64 was Power
     /// 65 was StructFun
     /// 66 was FromUnixtime
@@ -2970,7 +2970,7 @@ pub enum ScalarFunction {
     /// 128 was ArraySort
     /// 129 was ArrayDistinct
     /// 130 was ArrayResize
-    ///
+    /// 131 was EndsWith
     /// 132 was InStr
     /// 133 was MakeDate
     /// 134 was ArrayReverse
@@ -2978,7 +2978,7 @@ pub enum ScalarFunction {
     /// 136 was ToChar
     /// 137 was ToDate
     /// 138 was ToUnixtime
-    EndsWith = 131,
+    Coalesce = 63,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2988,22 +2988,14 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Concat => "Concat",
-            ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
-            ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Coalesce => "Coalesce",
-            ScalarFunction::EndsWith => "EndsWith",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Concat" => Some(Self::Concat),
-            "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
-            "InitCap" => Some(Self::InitCap),
             "Coalesce" => Some(Self::Coalesce),
-            "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }
     }
