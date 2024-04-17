@@ -238,6 +238,26 @@ impl DataFrame {
     }
 
     /// Expand each list element of a column to multiple rows.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        self.unnest_columns(&[column])
+    }
+
+    /// Expand each list element of a column to multiple rows, with
+    /// behavior controlled by [`UnnestOptions`].
+    ///
+    /// Please see the documentation on [`UnnestOptions`] for more
+    /// details about the meaning of unnest.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
+    pub fn unnest_column_with_options(
+        self,
+        column: &str,
+        options: UnnestOptions,
+    ) -> Result<DataFrame> {
+        self.unnest_columns_with_options(&[column], options)
+    }
+
+    /// Expands multiple list columns into a set of rows.
     ///
     /// See also:
     ///
@@ -252,26 +272,27 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_column("a")?;
+    /// let df = df.unnest_columns(&["a", "b"])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_column_with_options(column, UnnestOptions::new())
+    pub fn unnest_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        self.unnest_columns_with_options(columns, UnnestOptions::new())
     }
 
-    /// Expand each list element of a column to multiple rows, with
+    /// Expand multiple list columns into a set of rows, with
     /// behavior controlled by [`UnnestOptions`].
     ///
     /// Please see the documentation on [`UnnestOptions`] for more
     /// details about the meaning of unnest.
-    pub fn unnest_column_with_options(
+    pub fn unnest_columns_with_options(
         self,
-        column: &str,
+        columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
+        let columns = columns.iter().map(|c| Column::from(*c)).collect();
         let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_column_with_options(column, options)?
+            .unnest_columns_with_options(columns, options)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
