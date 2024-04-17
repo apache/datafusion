@@ -337,7 +337,7 @@ struct ArrayAggGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
-    values: Vec<Vec<Option<<T as ArrowPrimitiveType>::Native>>>,
+    values: Vec<PrimitiveBuilder<T>>,
     data_type: DataType,
     null_state: NullState,
 }
@@ -357,20 +357,20 @@ where
 
 impl<T: ArrowPrimitiveType + Send> ArrayAggGroupsAccumulator<T> {
     fn build_list(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let array = emit_to.take_needed(&mut self.values);
+        let arrays = emit_to.take_needed(&mut self.values);
         let nulls = self.null_state.build(emit_to);
 
         let len = nulls.len();
-        assert_eq!(array.len(), len);
+        assert_eq!(arrays.len(), len);
 
         let mut builder = ListBuilder::with_capacity(
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone()),
             len,
         );
 
-        for (is_valid, arr) in nulls.iter().zip(array.into_iter()) {
+        for (is_valid, mut arr) in nulls.iter().zip(arrays.into_iter()) {
             if is_valid {
-                builder.append_value(arr);
+                builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
             }
@@ -394,7 +394,11 @@ where
         assert_eq!(new_values.len(), 1, "single argument to update_batch");
         let new_values = new_values[0].as_primitive::<T>();
 
-        self.values.resize(total_num_groups, vec![]);
+        for _ in self.values.len()..total_num_groups {
+            self.values.push(
+                PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone()),
+            );
+        }
 
         self.null_state.accumulate(
             group_indices,
@@ -402,7 +406,7 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                self.values[group_index].push(Some(new_value));
+                self.values[group_index].append_value(new_value);
             },
         );
 
@@ -419,7 +423,11 @@ where
         assert_eq!(values.len(), 1, "single argument to merge_batch");
         let values = values[0].as_list();
 
-        self.values.resize(total_num_groups, vec![]);
+        for _ in self.values.len()..total_num_groups {
+            self.values.push(
+                PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone()),
+            );
+        }
 
         self.null_state.accumulate_array(
             group_indices,
@@ -444,7 +452,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity()
+        std::mem::size_of_val(self)
+            + std::mem::size_of::<PrimitiveBuilder<T>>() * self.values.capacity()
             + self.values.iter().map(|arr| arr.capacity()).sum::<usize>()
                 * std::mem::size_of::<<T as ArrowPrimitiveType>::Native>()
             + self.null_state.size()
@@ -452,7 +461,7 @@ where
 }
 
 struct StringArrayAggGroupsAccumulator {
-    values: Vec<Vec<Option<String>>>,
+    values: Vec<StringBuilder>,
     null_state: NullState,
 }
 
@@ -473,9 +482,9 @@ impl StringArrayAggGroupsAccumulator {
         assert_eq!(array.len(), nulls.len());
 
         let mut builder = ListBuilder::with_capacity(StringBuilder::new(), nulls.len());
-        for (is_valid, arr) in nulls.iter().zip(array.into_iter()) {
+        for (is_valid, mut arr) in nulls.iter().zip(array.into_iter()) {
             if is_valid {
-                builder.append_value(arr);
+                builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
             }
@@ -496,7 +505,9 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
         assert_eq!(new_values.len(), 1, "single argument to update_batch");
         let new_values = new_values[0].as_string();
 
-        self.values.resize(total_num_groups, vec![]);
+        for _ in self.values.len()..total_num_groups {
+            self.values.push(StringBuilder::new());
+        }
 
         self.null_state.accumulate_string(
             group_indices,
@@ -504,7 +515,7 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                self.values[group_index].push(Some(new_value.to_string()));
+                self.values[group_index].append_value(new_value);
             },
         );
 
@@ -521,8 +532,9 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
         assert_eq!(values.len(), 1, "single argument to merge_batch");
         let values = values[0].as_list();
 
-        self.values
-            .resize(total_num_groups, Vec::<Option<String>>::new());
+        for _ in self.values.len()..total_num_groups {
+            self.values.push(StringBuilder::new());
+        }
 
         self.null_state.accumulate_array(
             group_indices,
@@ -548,14 +560,15 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.values.capacity()
+        std::mem::size_of_val(self)
+            + std::mem::size_of::<StringBuilder>() * self.values.capacity()
             + self
                 .values
                 .iter()
                 .map(|arr| {
-                    arr.iter()
-                        .map(|e| e.as_ref().map(|s| s.len()).unwrap_or(0))
-                        .sum::<usize>()
+                    std::mem::size_of_val(arr.values_slice())
+                        + std::mem::size_of_val(arr.offsets_slice())
+                        + arr.validity_slice().map(std::mem::size_of_val).unwrap_or(0)
                 })
                 .sum::<usize>()
             + self.null_state.size()
