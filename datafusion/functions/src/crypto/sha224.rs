@@ -23,9 +23,15 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct SHA224Func {
+pub struct SHA224Func {
     signature: Signature,
 }
+impl Default for SHA224Func {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SHA224Func {
     pub fn new() -> Self {
         use DataType::*;

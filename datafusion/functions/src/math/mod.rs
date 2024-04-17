@@ -17,8 +17,8 @@
 
 //! "math" DataFusion functions
 
-mod abs;
-mod nans;
+pub mod abs;
+pub mod nans;
 
 // Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);

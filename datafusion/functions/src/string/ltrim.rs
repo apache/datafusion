@@ -35,7 +35,7 @@ fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct LtrimFunc {
+pub struct LtrimFunc {
     signature: Signature,
 }
 

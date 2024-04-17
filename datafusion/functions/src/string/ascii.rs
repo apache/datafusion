@@ -44,7 +44,7 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct AsciiFunc {
+pub struct AsciiFunc {
     signature: Signature,
 }
 impl AsciiFunc {

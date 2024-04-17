@@ -17,13 +17,13 @@
 
 //! "core" DataFusion functions
 
-mod arrow_cast;
-mod arrowtypeof;
-mod getfield;
-mod nullif;
-mod nvl;
-mod nvl2;
-mod r#struct;
+pub mod arrow_cast;
+pub mod arrowtypeof;
+pub mod getfield;
+pub mod nullif;
+pub mod nvl;
+pub mod nvl2;
+pub mod r#struct;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);

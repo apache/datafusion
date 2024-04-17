@@ -28,7 +28,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct CharacterLengthFunc {
+pub struct CharacterLengthFunc {
     signature: Signature,
     aliases: Vec<String>,
 }

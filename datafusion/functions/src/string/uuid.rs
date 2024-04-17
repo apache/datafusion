@@ -29,7 +29,7 @@ use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
-pub(super) struct UuidFunc {
+pub struct UuidFunc {
     signature: Signature,
 }
 

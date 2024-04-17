@@ -48,6 +48,12 @@ pub struct MakeArray {
     aliases: Vec<String>,
 }
 
+impl Default for MakeArray {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MakeArray {
     pub fn new() -> Self {
         Self {
