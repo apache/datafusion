@@ -75,6 +75,9 @@ fn update_aggregator_when_beneficial(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        // Final stage implementations doesn't rely on ordering (Those ordering fields may be pruned out by
+        // first stage aggregates. Hence, necessary information for proper merge is added during the first stage to the state field.
+        // Final stage only uses the state field information).
         if !aggr_exec.mode().is_first_stage() {
             return Ok(Transformed::no(plan));
         }
