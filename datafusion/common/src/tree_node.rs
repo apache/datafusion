@@ -47,8 +47,9 @@ macro_rules! handle_transform_recursion_up {
 /// The `TreeNode` API is used to express algorithms separately from traversing
 /// the structure of `TreeNode`s, avoiding substantial code duplication.
 ///
-/// This trait is implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`])
-/// and expression trees ([`PhysicalExpr`], [`Expr`]).
+/// This trait is implemented for plans ([`ExecutionPlan`], [`LogicalPlan`]) and
+/// expression trees ([`PhysicalExpr`], [`Expr`]) as well as Plan+Payload
+/// combinations [`PlanContext`] and [`ExprContext`].
 ///
 /// # Overview
 /// There are three categories of TreeNode APIs:
@@ -99,6 +100,8 @@ macro_rules! handle_transform_recursion_up {
 /// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
+/// [`PlanContext`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/tree_node/struct.PlanContext.html
+/// [`ExprContext`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/tree_node/struct.ExprContext.html
 pub trait TreeNode: Sized {
     /// Visit the tree node with a [`TreeNodeVisitor`], performing a
     /// depth-first walk of the node and its children.
