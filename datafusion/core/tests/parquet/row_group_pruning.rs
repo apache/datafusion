@@ -100,7 +100,7 @@ impl RowGroupPruningTest {
 
     // Execute the test with the current configuration
     async fn test_row_group_prune(self) {
-        let output = ContextWithParquet::new(self.scenario, RowGroup)
+        let output = ContextWithParquet::new(self.scenario, RowGroup(5))
             .await
             .query(&self.query)
             .await;
@@ -231,7 +231,7 @@ async fn prune_date64() {
         .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
     let date = ScalarValue::Date64(Some(date.and_utc().timestamp_millis()));
 
-    let output = ContextWithParquet::new(Scenario::Dates, RowGroup)
+    let output = ContextWithParquet::new(Scenario::Dates, RowGroup(5))
         .await
         .query_with_expr(col("date64").lt(lit(date)))
         // .query(
@@ -267,10 +267,11 @@ async fn prune_disabled() {
     let expected_rows = 10;
     let config = SessionConfig::new().with_parquet_pruning(false);
 
-    let output = ContextWithParquet::with_config(Scenario::Timestamps, RowGroup, config)
-        .await
-        .query(query)
-        .await;
+    let output =
+        ContextWithParquet::with_config(Scenario::Timestamps, RowGroup(5), config)
+            .await
+            .query(query)
+            .await;
     println!("{}", output.description());
 
     // This should not prune any
