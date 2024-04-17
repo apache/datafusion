@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::cache::CacheAccessor;
-
-use datafusion_common::Statistics;
-
+use core::panic;
 use dashmap::DashMap;
+use datafusion_common::Statistics;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
@@ -156,10 +156,115 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
         "DefaultListFilesCache".to_string()
     }
 }
+pub struct LruMetaCache {
+    // the actual hashmap
+    stores: DashMap<Path, Arc<Vec<ObjectMeta>>>,
+    // number of object meta we should store
+    capacity: usize,
+    // order in linked list
+    order: Mutex<VecDeque<Path>>,
+    // position of the actual path
+    key_position: DashMap<Path, usize>,
+}
+impl LruMetaCache {
+    fn update_order(&self, k: &Path) {
+        let mut order = self.order.lock();
+        if let Some(pos) = self.key_position.get(k).map(|x| *x.value()) {
+            order.remove(pos);
+            order.push_back(k.clone());
+            self.key_position.insert(k.clone(), order.len() - 1);
+        }
+    }
+}
+impl Default for LruMetaCache {
+    fn default() -> Self {
+        Self {
+            capacity: 50,
+            stores: DashMap::new(),
+            order: Mutex::new(VecDeque::new()),
+            key_position: DashMap::new(),
+        }
+    }
+}
+impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for LruMetaCache {
+    type Extra = ObjectMeta;
 
+    fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        let value = self.stores.get(k).map(|x| x.clone());
+        if value.is_some() {
+            self.update_order(k);
+        }
+        value
+    }
+
+    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
+        panic!("Put cache in LruMetaCache without Extra not supported.")
+    }
+
+    fn put(
+        &self,
+        key: &Path,
+        value: Arc<Vec<ObjectMeta>>,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let mut order = self.order.lock();
+        if order.len() == self.capacity {
+            let oldest = order.pop_front().unwrap();
+            self.stores.remove(&oldest);
+            self.key_position.remove(&oldest);
+        }
+        let res = self.stores.insert(key.clone(), value);
+        order.push_back(key.clone());
+        self.key_position.insert(key.clone(), order.len() - 1);
+        res
+    }
+
+    fn put_with_extra(
+        &self,
+        _key: &Path,
+        _value: Arc<Vec<ObjectMeta>>,
+        _e: &Self::Extra,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        panic!("Put cache in LruMetaCache without Extra not supported.")
+    }
+
+    fn remove(&mut self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+        let removed_value = self.stores.remove(k);
+        if let Some(value) = removed_value {
+            let mut order = self.order.lock();
+            if let Some(pos) = self.key_position.get(k).map(|x| *x.value()) {
+                order.remove(pos);
+                self.key_position.remove(k);
+            }
+            Some(value.1)
+        } else {
+            None
+        }
+    }
+
+    fn contains_key(&self, k: &Path) -> bool {
+        self.stores.contains_key(k)
+    }
+
+    fn len(&self) -> usize {
+        self.stores.len()
+    }
+
+    fn clear(&self) {
+        self.stores.clear();
+        let mut order = self.order.lock();
+        order.clear();
+        self.key_position.clear();
+    }
+
+    fn name(&self) -> String {
+        "LruMetaCache".to_string()
+    }
+}
 #[cfg(test)]
 mod tests {
-    use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
+    use crate::cache::cache_unit::{
+        DefaultFileStatisticsCache, DefaultListFilesCache, LruMetaCache,
+    };
     use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
@@ -231,5 +336,65 @@ mod tests {
             cache.get(&meta.location).unwrap().first().unwrap().clone(),
             meta.clone()
         );
+    }
+    #[test]
+    fn test_lru_cache_single() {
+        let meta = ObjectMeta {
+            location: Path::from("test"),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        };
+
+        let cache = LruMetaCache::default();
+        assert!(cache.get(&meta.location).is_none());
+
+        cache.put(&meta.location, vec![meta.clone()].into());
+        assert_eq!(
+            cache.get(&meta.location).unwrap().first().unwrap().clone(),
+            meta.clone()
+        );
+    }
+    use std::sync::Arc;
+    use std::thread;
+    #[test]
+    fn test_lru_cache_concurreny() {
+        let meta = ObjectMeta {
+            location: Path::from("test"),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        };
+
+        let cache = Arc::new(LruMetaCache::default());
+        assert!(cache.get(&meta.location).is_none());
+
+        let cache_clone = cache.clone();
+        let meta_clone = meta.clone();
+        let handle_put = thread::spawn(move || {
+            cache_clone.put(&meta_clone.location, Arc::new(vec![meta_clone.clone()]));
+        });
+
+        handle_put.join().unwrap();
+
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let cache_clone = cache.clone();
+            let meta_clone = meta.clone();
+            handles.push(thread::spawn(move || {
+                let retrieved_meta = cache_clone.get(&meta_clone.location).unwrap();
+                assert_eq!(retrieved_meta.first().unwrap().clone(), meta_clone);
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
     }
 }

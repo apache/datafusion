@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::cache_unit::{self};
 use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-
 /// The cache of listing files statistics.
 /// if set [`CacheManagerConfig::with_files_statistics_cache`]
 /// Will avoid infer same file statistics repeatedly during the session lifetime,
@@ -73,7 +73,7 @@ impl CacheManager {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CacheManagerConfig {
     /// Enable cache of files statistics when listing files.
     /// Avoid get same file statistics repeatedly in same datafusion session.
@@ -87,7 +87,14 @@ pub struct CacheManagerConfig {
     /// Default is disable.
     pub list_files_cache: Option<ListFilesCache>,
 }
-
+impl Default for CacheManagerConfig {
+    fn default() -> Self {
+        Self {
+            table_files_statistics_cache: None,
+            list_files_cache: Some(Arc::new(cache_unit::LruMetaCache::default())),
+        }
+    }
+}
 impl CacheManagerConfig {
     pub fn with_files_statistics_cache(
         mut self,
