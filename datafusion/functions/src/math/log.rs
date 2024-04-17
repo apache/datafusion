@@ -158,7 +158,7 @@ impl ScalarUDFImpl for LogFunc {
         // log(number)
         // log(base, number)
         let num_args = args.len();
-        if args.len() > 2 {
+        if num_args > 2 {
             return plan_err!("Expected log to have 1 or 2 arguments, got {num_args}");
         }
         let number = args.pop().ok_or_else(|| {
