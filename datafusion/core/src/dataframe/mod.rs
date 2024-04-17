@@ -257,7 +257,7 @@ impl DataFrame {
         self.unnest_columns_with_options(&[column], options)
     }
 
-    /// Expands multiple list columns into a set of rows.
+    /// Expand multiple list columns into a set of rows.
     ///
     /// See also:
     ///
