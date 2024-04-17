@@ -1060,3 +1060,58 @@ logical_plan
 Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
 --Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
 ----TableScan: t projection=[a]
+
+###
+## Ensure that operators are rewritten in subqueries
+###
+
+statement ok
+create table foo(x int) as values (1);
+
+# Show input data
+query ?
+select struct(1, 'b')
+----
+{c0: 1, c1: b}
+
+
+query T
+select (select struct(1, 'b')['c1']);
+----
+b
+
+query T
+select 'foo' || (select struct(1, 'b')['c1']);
+----
+foob
+
+query I
+SELECT  * FROM (VALUES (1), (2))
+WHERE column1  IN (SELECT struct(1, 'b')['c0']);
+----
+1
+
+# also add an expression so the subquery is the output expr
+query I
+SELECT  * FROM (VALUES (1), (2))
+WHERE 1+2 = 3 AND column1  IN (SELECT struct(1, 'b')['c0']);
+----
+1
+
+
+query I
+SELECT  * FROM foo
+WHERE EXISTS (SELECT * FROM (values (1)) WHERE column1 = foo.x AND struct(1, 'b')['c0'] = 1);
+----
+1
+
+# also add an expression so the subquery is the output expr
+query I
+SELECT  * FROM foo
+WHERE 1+2 = 3 AND EXISTS (SELECT * FROM (values (1)) WHERE column1 = foo.x AND struct(1, 'b')['c0'] = 1);
+----
+1
+
+
+statement ok
+drop table foo;
