@@ -1115,7 +1115,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Field;
     use async_trait::async_trait;
-    use bytes::Bytes;
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_nanosecond_array,
@@ -1132,14 +1131,14 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOpts, PutOptions,
+        PutPayload, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
-    use tokio::io::AsyncWrite;
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {
@@ -1256,25 +1255,17 @@ mod tests {
         async fn put_opts(
             &self,
             _location: &Path,
-            _bytes: Bytes,
+            _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn put_multipart(
+        async fn put_multipart_opts(
             &self,
             _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
 

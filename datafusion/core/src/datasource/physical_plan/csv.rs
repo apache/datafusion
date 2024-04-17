@@ -962,9 +962,8 @@ mod tests {
         let session_ctx = SessionContext::new();
         let store = object_store::memory::InMemory::new();
 
-        let data = bytes::Bytes::from("a,b\n1,2\n3,4");
         let path = object_store::path::Path::from("a.csv");
-        store.put(&path, data).await.unwrap();
+        store.put(&path, "a,b\n1,2\n3,4".into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
         session_ctx
