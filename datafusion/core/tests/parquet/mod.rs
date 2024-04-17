@@ -81,7 +81,7 @@ enum Scenario {
 }
 
 enum Unit {
-    // pass max row per row group in parquet writer
+    // pass max row per row_group in parquet writer
     RowGroup(usize),
     // pass max row per page in parquet writer
     Page(usize),
