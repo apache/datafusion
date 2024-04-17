@@ -1493,6 +1493,36 @@ async fn unnest_multiple_columns() -> Result<()> {
     Ok(())
 }
 
+/// Test unnesting a non-nullable list.
+#[tokio::test]
+async fn unnest_non_nullable_list() -> Result<()> {
+    let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2)]),
+        Some(vec![None]),
+    ]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c1",
+        DataType::new_list(DataType::Int32, true),
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(list_array)])?;
+    let ctx = SessionContext::new();
+    let results = ctx
+        .read_batches(vec![batch])?
+        .unnest_columns(&["c1"])?
+        .collect()
+        .await?;
+
+    // Unnesting may produce NULLs even if the lists are non-nullable.
+    let expected = [
+        "+----+", "| c1 |", "+----+", "|    |", "| 1  |", "| 2  |", "+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_read_batches() -> Result<()> {
     let config = SessionConfig::new();

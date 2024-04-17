@@ -383,23 +383,5 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 5 3
 11 NULL
 
-# Unnest with non-nullable lists
-statement ok
-create table non_nullable_list(
-    c1 int[] not null,
-    c2 int[] not null
-) as values ([1,2,3], [4]);
-
-# Unnesting may produce NULLs even if the lists are non-nullable
-query II
-select unnest(c1), unnest(c2) from non_nullable_list;
-----
-1 4
-2 NULL
-3 NULL
-
 statement ok
 drop table unnest_table;
-
-statement ok
-drop table non_nullable_list;
