@@ -152,8 +152,9 @@ pub trait TreeNode: Sized {
     /// children are visited), [`TreeNodeRewriter::f_up()`] is called in
     /// bottom-up order (after children are visited).
     ///
-    /// Note: If using the default [`TreeNodeRewriter::f_up`] that does nothing,
-    /// consider using [`Self::transform_down`].
+    /// Note: If using the default [`TreeNodeRewriter::f_up`] or
+    /// [`TreeNodeRewriter::f_down`] that do nothing, consider using
+    /// [`Self::transform_down`] instead.
     ///
     /// # Return Value
     /// The returns value specifies how the tree walk should proceed. See
