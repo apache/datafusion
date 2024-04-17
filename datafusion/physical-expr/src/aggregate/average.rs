@@ -519,7 +519,8 @@ where
         // don't evaluate averages with null inputs to avoid errors on null values
 
         let array: PrimitiveArray<T> = if nulls.null_count() > 0 {
-            let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len());
+            let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len())
+                .with_data_type(self.return_data_type.clone());
             let iter = sums.into_iter().zip(counts).zip(nulls.iter());
 
             for ((sum, count), is_valid) in iter {
