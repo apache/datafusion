@@ -42,6 +42,9 @@ use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 use log::info;
 use structopt::StructOpt;
 
+// hack to avoid `default_value is meaningless for bool` errors
+type BoolDefaultTrue = bool;
+
 /// Run the tpch benchmark.
 ///
 /// This benchmarks is derived from the [TPC-H][1] version
@@ -81,6 +84,11 @@ pub struct RunOpt {
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
+
+    /// If true then hash join used, if false then sort merge join
+    /// True by default.
+    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
+    prefer_hash_join: BoolDefaultTrue,
 }
 
 const TPCH_QUERY_START_ID: usize = 1;
@@ -107,10 +115,11 @@ impl RunOpt {
     }
 
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self
+        let mut config = self
             .common
             .config()
             .with_collect_statistics(!self.disable_statistics);
+        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
@@ -304,7 +313,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::exec_err;
-    use datafusion::error::{DataFusionError, Result};
+    use datafusion::error::Result;
     use datafusion_proto::bytes::{
         logical_plan_from_bytes, logical_plan_to_bytes, physical_plan_from_bytes,
         physical_plan_to_bytes,
@@ -339,6 +348,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -371,6 +381,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
