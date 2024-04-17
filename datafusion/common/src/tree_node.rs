@@ -55,7 +55,7 @@ macro_rules! handle_transform_recursion_up {
 /// There are three categories of TreeNode APIs:
 ///
 /// 1. "Inspecting" APIs to traverse a tree of `&TreeNodes`:
-/// [`apply`] and [`visit`].
+/// [`apply`], [`visit`], [`exists`].
 ///
 /// 2. "Transforming" APIs that traverse and consume a tree of `TreeNode`s
 /// producing possibly changed `TreeNode`s: [`transform`], [`transform_up`],
@@ -66,7 +66,7 @@ macro_rules! handle_transform_recursion_up {
 ///
 /// | Traversal Order | Inspecting | Transforming |
 /// | --- | --- | --- |
-/// | top-down | [`apply`] | [`transform_down`]|
+/// | top-down | [`apply`], [`exists`] | [`transform_down`]|
 /// | bottom-up | | [`transform`] , [`transform_up`]|
 /// | combined with separate `f_down` and `f_up` closures | | [`transform_down_up`] |
 /// | combined with `f_down()` and `f_up()` in an object | [`visit`]  | [`rewrite`] |
@@ -77,6 +77,7 @@ macro_rules! handle_transform_recursion_up {
 ///
 /// [`apply`]: Self::apply
 /// [`visit`]: Self::visit
+/// [`exists`]: Self::exists
 /// [`transform`]: Self::transform
 /// [`transform_up`]: Self::transform_up
 /// [`transform_down`]: Self::transform_down
