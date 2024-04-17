@@ -1779,6 +1779,46 @@ SELECT COALESCE(NULL, 'test')
 ----
 test
 
+
+statement ok
+create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
+
+# test coercion string
+query ?
+select  coalesce(column1, 'none_set') from test1;
+----
+foo
+none_set
+
+# test coercion Int
+query I
+select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+# test with Int
+query I
+select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34);
+----
+123
+
+# test with null
+query I
+select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+# test with null
+query T
+select  coalesce(null, column1, 'none_set') from test1;
+----
+foo
+none_set
+
+statement ok
+drop table test1
+
+
 statement ok
 CREATE TABLE test(
   c1 INT,
@@ -2162,5 +2202,3 @@ query I
 select strpos('joséésoj', arrow_cast(null, 'Utf8'));
 ----
 NULL
-
-
