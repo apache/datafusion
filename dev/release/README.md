@@ -194,12 +194,11 @@ Send the email output from the script to dev@arrow.apache.org. The email should 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][DataFusion] Release Apache Arrow DataFusion 5.1.0 RC0
+Subject: [VOTE][DataFusion] Release Apache DataFusion 5.1.0 RC0
 
 Hi,
 
-I would like to propose a release of Apache Arrow DataFusion Implementation,
-version 5.1.0.
+I would like to propose a release of Apache DataFusion version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
 The proposed release artifacts and signatures are hosted at [2].
@@ -210,9 +209,9 @@ and vote on the release.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Arrow DataFusion 5.1.0
+[ ] +1 Release this as Apache DataFusion 5.1.0
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
+[ ] -1 Do not release this as Apache DataFusion 5.1.0 because...
 
 Here is my vote:
 

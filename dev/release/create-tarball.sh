@@ -80,11 +80,10 @@ echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
 To: dev@arrow.apache.org
-Subject: [VOTE][RUST][DataFusion] Release Apache Arrow DataFusion ${version} RC${rc}
+Subject: [VOTE][RUST][DataFusion] Release Apache DataFusion ${version} RC${rc}
 Hi,
 
-I would like to propose a release of Apache Arrow DataFusion Implementation,
-version ${version}.
+I would like to propose a release of Apache DataFusion version ${version}.
 
 This release candidate is based on commit: ${release_hash} [1]
 The proposed release tarball and signatures are hosted at [2].
@@ -98,9 +97,9 @@ encouraged to test the release and vote with "(non-binding)".
 
 The standard verification procedure is documented at https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#verifying-release-candidates.
 
-[ ] +1 Release this as Apache Arrow DataFusion ${version}
+[ ] +1 Release this as Apache DataFusion ${version}
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow DataFusion ${version} because...
+[ ] -1 Do not release this as Apache DataFusion ${version} because...
 
 Here is my vote:
 
@@ -133,4 +132,4 @@ gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 echo "Uploading to apache dist/dev to ${url}"
 svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
 svn add ${distdir}
-svn ci -m "Apache Arrow DataFusion ${version} ${rc}" ${distdir}
+svn ci -m "Apache DataFusion ${version} ${rc}" ${distdir}
