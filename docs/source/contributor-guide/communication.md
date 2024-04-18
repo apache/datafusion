@@ -22,7 +22,7 @@
 We welcome participation from everyone and encourage you to join us, ask
 questions, and get involved.
 
-All participation in the Apache Arrow DataFusion project is governed by the
+All participation in the Apache DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 

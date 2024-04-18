@@ -18,9 +18,9 @@
 .. image:: _static/images/2x_bgwhite_original.png
   :alt: DataFusion Logo
 
-=======================
-Apache Arrow DataFusion
-=======================
+=================
+Apache DataFusion
+=================
 
 .. Code from https://buttons.github.io/
 .. raw:: html
