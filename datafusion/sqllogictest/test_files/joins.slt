@@ -3627,7 +3627,7 @@ physical_plan
 13)------------ProjectionExec: expr=[1 as c, 3 as d]
 14)--------------PlaceholderRowExec
 
-query IIII
+query IIII rowsort
 SELECT * FROM (
     SELECT 1 as c, 2 as d
     UNION ALL
@@ -3673,7 +3673,7 @@ physical_plan
 11)------------ProjectionExec: expr=[1 as c, 3 as d]
 12)--------------PlaceholderRowExec
 
-query IIII
+query IIII rowsort
 SELECT * FROM (
     SELECT 1 as c, 2 as d
     UNION ALL
