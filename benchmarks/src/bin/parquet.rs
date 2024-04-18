@@ -25,7 +25,7 @@ use structopt::StructOpt;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(name = "Benchmarks", about = "Apache Arrow Rust Benchmarks.")]
+#[structopt(name = "Benchmarks", about = "Apache DataFusion Rust Benchmarks.")]
 enum ParquetBenchCmd {
     /// Benchmark sorting parquet files
     Sort(sort::RunOpt),
