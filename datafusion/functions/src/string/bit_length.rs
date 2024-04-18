@@ -27,7 +27,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature};
 use crate::utils::utf8_to_int_type;
 
 #[derive(Debug)]
-pub(super) struct BitLengthFunc {
+pub struct BitLengthFunc {
     signature: Signature,
 }
 

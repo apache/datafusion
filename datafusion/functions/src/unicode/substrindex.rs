@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
@@ -29,7 +29,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
-pub(super) struct SubstrIndexFunc {
+pub struct SubstrIndexFunc {
     signature: Signature,
     aliases: Vec<String>,
 }
@@ -101,38 +101,151 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let delimiter_array = as_generic_string_array::<T>(&args[1])?;
     let count_array = as_int64_array(&args[2])?;
 
-    let result = string_array
+    let mut builder = StringBuilder::new();
+    string_array
         .iter()
         .zip(delimiter_array.iter())
         .zip(count_array.iter())
-        .map(|((string, delimiter), n)| match (string, delimiter, n) {
+        .for_each(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 // In MySQL, these cases will return an empty string.
                 if n == 0 || string.is_empty() || delimiter.is_empty() {
-                    return Some(String::new());
+                    builder.append_value("");
+                    return;
                 }
 
-                let splitted: Box<dyn Iterator<Item = _>> = if n > 0 {
-                    Box::new(string.split(delimiter))
-                } else {
-                    Box::new(string.rsplit(delimiter))
-                };
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-                // The length of the substring covered by substr_index.
-                let length = splitted
-                    .take(occurrences) // at least 1 element, since n != 0
-                    .map(|s| s.len() + delimiter.len())
-                    .sum::<usize>()
-                    - delimiter.len();
-                if n > 0 {
-                    Some(string[..length].to_owned())
+                let length = if n > 0 {
+                    let splitted = string.split(delimiter);
+                    splitted
+                        .take(occurrences)
+                        .map(|s| s.len() + delimiter.len())
+                        .sum::<usize>()
+                        - delimiter.len()
                 } else {
-                    Some(string[string.len() - length..].to_owned())
+                    let splitted = string.rsplit(delimiter);
+                    splitted
+                        .take(occurrences)
+                        .map(|s| s.len() + delimiter.len())
+                        .sum::<usize>()
+                        - delimiter.len()
+                };
+                if n > 0 {
+                    match string.get(..length) {
+                        Some(substring) => builder.append_value(substring),
+                        None => builder.append_null(),
+                    }
+                } else {
+                    match string.get(string.len().saturating_sub(length)..) {
+                        Some(substring) => builder.append_value(substring),
+                        None => builder.append_null(),
+                    }
                 }
             }
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
+            _ => builder.append_null(),
+        });
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray};
+    use arrow::datatypes::DataType::Utf8;
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::unicode::substrindex::SubstrIndexFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() -> Result<()> {
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("www")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("www.apache")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(-2i64)),
+            ],
+            Ok(Some("apache.org")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(-1i64)),
+            ],
+            Ok(Some("org")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("")),
+                ColumnarValue::Scalar(ScalarValue::from(".")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrIndexFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
+                ColumnarValue::Scalar(ScalarValue::from("")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        Ok(())
+    }
 }

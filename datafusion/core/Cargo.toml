@@ -30,7 +30,10 @@ authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
 # "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
 # https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.72"
+rust-version = "1.73"
+
+[lints]
+workspace = true
 
 [lib]
 name = "datafusion"
@@ -42,7 +45,7 @@ array_expressions = ["datafusion-functions-array"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
-crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
+crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
     "array_expressions",
@@ -98,6 +101,7 @@ datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-array = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }

@@ -29,13 +29,13 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Fields};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
-    SchemaReference, TableReference, ToDFSchema,
+    unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, FileType, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -850,7 +850,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
             };
-            if !(key.contains('.') || key == "format") {
+            if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
@@ -866,16 +866,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FileType::from_str(&file_type).map_err(|_| {
                 DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
             })?
-        } else if let Some(format) = options.remove("format") {
-            // try to infer file format from the "format" key in options
-            FileType::from_str(&format)
-                .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
         } else {
             let e = || {
                 DataFusionError::Configuration(
-                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                        .to_string(),
-                )
+                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                    .to_string(),
+            )
             };
             // try to infer file format from file extension
             let extension: &str = &Path::new(&statement.target)
@@ -988,12 +984,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
+        df_schema.check_names()?;
 
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::bare(name);
+        let name = TableReference::bare(name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -1263,9 +1260,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build updated values for each column, using the previous value if not modified
         let exprs = table_schema
-            .fields()
             .iter()
-            .map(|field| {
+            .map(|(qualifier, field)| {
                 let expr = match assign_map.remove(field.name()) {
                     Some(new_value) => {
                         let mut expr = self.sql_to_expr(
@@ -1292,7 +1288,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 field.name(),
                             ))
                         } else {
-                            datafusion_expr::Expr::Column(field.qualified_column())
+                            datafusion_expr::Expr::Column(Column::from((
+                                qualifier,
+                                field.as_ref(),
+                            )))
                         }
                     }
                 };
@@ -1347,7 +1346,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .enumerate()
                 .map(|(i, c)| {
                     let column_index = table_schema
-                        .index_of_column_by_name(None, &c)?
+                        .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
@@ -1358,8 +1357,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     Ok(table_schema.field(column_index).clone())
                 })
-                .collect::<Result<Vec<DFField>>>()?;
-            (fields, value_indices)
+                .collect::<Result<Vec<_>>>()?;
+            (Fields::from(fields), value_indices)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way
@@ -1378,7 +1377,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 idx + 1
                             )
                         })?;
-                        let dt = field.field().data_type().clone();
+                        let dt = field.data_type().clone();
                         let _ = prepare_param_data_types.insert(name, dt);
                     }
                 }
@@ -1400,11 +1399,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => {
-                        let source_field = source.schema().field(v);
-                        datafusion_expr::Expr::Column(source_field.qualified_column())
-                            .cast_to(target_field.data_type(), source.schema())?
-                    }
+                    Some(v) => datafusion_expr::Expr::Column(Column::from(
+                        source.schema().qualified_field(v),
+                    ))
+                    .cast_to(target_field.data_type(), source.schema())?,
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
                         .get_column_default(target_field.name())

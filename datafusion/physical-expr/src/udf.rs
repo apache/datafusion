@@ -16,14 +16,17 @@
 // under the License.
 
 //! UDF support
-use crate::{PhysicalExpr, ScalarFunctionExpr};
+use std::sync::Arc;
+
 use arrow_schema::Schema;
+
 use datafusion_common::{DFSchema, Result};
 pub use datafusion_expr::ScalarUDF;
 use datafusion_expr::{
     type_coercion::functions::data_types, Expr, ScalarFunctionDefinition,
 };
-use std::sync::Arc;
+
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 
 /// Create a physical expression of the UDF.
 ///
@@ -60,58 +63,18 @@ pub fn create_physical_expr(
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::{DataType, Schema};
-    use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{
-        ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-    };
+    use arrow_schema::Schema;
 
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::ScalarUDF;
+
+    use crate::utils::tests::TestScalarUDF;
     use crate::ScalarFunctionExpr;
 
     use super::create_physical_expr;
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[derive(Debug, Clone)]
-        struct TestScalarUDF {
-            signature: Signature,
-        }
-
-        impl TestScalarUDF {
-            fn new() -> Self {
-                let signature =
-                    Signature::exact(vec![DataType::Float64], Volatility::Immutable);
-
-                Self { signature }
-            }
-        }
-
-        impl ScalarUDFImpl for TestScalarUDF {
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-
-            fn name(&self) -> &str {
-                "my_fn"
-            }
-
-            fn signature(&self) -> &Signature {
-                &self.signature
-            }
-
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(DataType::Float64)
-            }
-
-            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-                unimplemented!("my_fn is not implemented")
-            }
-
-            fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-                Ok(Some(vec![Some(true)]))
-            }
-        }
-
         // create and register the udf
         let udf = ScalarUDF::from(TestScalarUDF::new());
 

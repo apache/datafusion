@@ -25,9 +25,15 @@ use datafusion_expr::{
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct DigestFunc {
+pub struct DigestFunc {
     signature: Signature,
 }
+impl Default for DigestFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DigestFunc {
     pub fn new() -> Self {
         use DataType::*;

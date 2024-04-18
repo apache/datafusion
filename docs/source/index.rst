@@ -67,7 +67,7 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 
    user-guide/introduction
    user-guide/example-usage
-   user-guide/cli
+   user-guide/cli/index
    user-guide/dataframe
    user-guide/expressions
    user-guide/sql/index

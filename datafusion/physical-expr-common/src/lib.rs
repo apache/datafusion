@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tree node implementation for logical expr and logical plan
-
-pub mod expr;
-pub mod plan;
+pub mod aggregate;
+pub mod expressions;
+pub mod physical_expr;
+pub mod sort_expr;
+pub mod sort_properties;
+pub mod tree_node;
+pub mod utils;

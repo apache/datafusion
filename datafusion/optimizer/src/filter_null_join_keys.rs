@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
-//! where the join key is nullable on one side and non-nullable on the other side
-//! and then insert an `IsNotNull` filter on the nullable side since null values
-//! can never match.
+//! [`FilterNullJoinKeys`] adds filters to join inputs when input isn't nullable
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -119,7 +116,7 @@ mod tests {
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)
     }
 
@@ -131,7 +128,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -142,7 +139,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -179,7 +176,7 @@ mod tests {
         \n    Filter: t1.optional_id IS NOT NULL\
         \n      TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -200,7 +197,7 @@ mod tests {
         \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -221,7 +218,7 @@ mod tests {
         \n  TableScan: t1\
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -244,7 +241,7 @@ mod tests {
         \n    TableScan: t1\
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     fn build_plan(

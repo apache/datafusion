@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
     aggregate_function, built_in_function, built_in_window_function, udaf,
@@ -35,7 +35,7 @@ use crate::{
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFSchema, OwnedTableReference, Result, ScalarValue,
+    internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::NullTreatment;
 
@@ -184,16 +184,31 @@ pub enum Expr {
     Unnest(Unnest),
 }
 
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Literal(ScalarValue::Null)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Unnest {
-    pub exprs: Vec<Expr>,
+    pub expr: Box<Expr>,
+}
+
+impl Unnest {
+    /// Create a new Unnest expression.
+    pub fn new(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+        }
+    }
 }
 
 /// Alias expression
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
-    pub relation: Option<OwnedTableReference>,
+    pub relation: Option<TableReference>,
     pub name: String,
 }
 
@@ -201,7 +216,7 @@ impl Alias {
     /// Create an alias with an optional schema/field qualifier.
     pub fn new(
         expr: Expr,
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Self {
         Self {
@@ -577,6 +592,7 @@ impl AggregateFunction {
         distinct: bool,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             func_def: AggregateFunctionDefinition::UDF(udf),
@@ -584,7 +600,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
-            null_treatment: None,
+            null_treatment,
         }
     }
 }
@@ -1028,7 +1044,7 @@ impl Expr {
     /// Return `self AS name` alias expression with a specific qualifier
     pub fn alias_qualified(
         self,
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
         match self {
@@ -1231,7 +1247,7 @@ impl Expr {
 
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
-        !find_out_reference_exprs(self).is_empty()
+        self.exists(|expr| matches!(expr, Expr::OuterReferenceColumn { .. }))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -1566,8 +1582,8 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { exprs }) => {
-                write!(f, "UNNEST({exprs:?})")
+            Expr::Unnest(Unnest { expr }) => {
+                write!(f, "UNNEST({expr:?})")
             }
         }
     }
@@ -1756,7 +1772,10 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::Unnest(Unnest { exprs }) => create_function_name("unnest", false, exprs),
+        Expr::Unnest(Unnest { expr }) => {
+            let expr_name = create_name(expr)?;
+            Ok(format!("unnest({expr_name})"))
+        }
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1902,8 +1921,8 @@ mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{
-        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        case, lit, ColumnarValue, Expr, ScalarFunctionDefinition, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
@@ -2017,13 +2036,6 @@ mod test {
 
     #[test]
     fn test_is_volatile_scalar_func_definition() {
-        // BuiltIn
-        assert!(
-            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
-                .is_volatile()
-                .unwrap()
-        );
-
         // UDF
         #[derive(Debug)]
         struct TestScalarUDF {

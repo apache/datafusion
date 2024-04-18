@@ -61,6 +61,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Configuration for creating a [`ListingTable`]
@@ -438,6 +439,112 @@ impl ListingOptions {
 
         self.format.infer_schema(state, &store, &files).await
     }
+
+    /// Infers the partition columns stored in `LOCATION` and compares
+    /// them with the columns provided in `PARTITIONED BY` to help prevent
+    /// accidental corrupts of partitioned tables.
+    ///
+    /// Allows specifying partial partitions.
+    pub async fn validate_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<()> {
+        if self.table_partition_cols.is_empty() {
+            return Ok(());
+        }
+
+        if !table_path.is_collection() {
+            return plan_err!(
+                "Can't create a partitioned table backed by a single file, \
+                perhaps the URL is missing a trailing slash?"
+            );
+        }
+
+        let inferred = self.infer_partitions(state, table_path).await?;
+
+        // no partitioned files found on disk
+        if inferred.is_empty() {
+            return Ok(());
+        }
+
+        let table_partition_names = self
+            .table_partition_cols
+            .iter()
+            .map(|(col_name, _)| col_name.clone())
+            .collect_vec();
+
+        if inferred.len() < table_partition_names.len() {
+            return plan_err!(
+                "Inferred partitions to be {:?}, but got {:?}",
+                inferred,
+                table_partition_names
+            );
+        }
+
+        // match prefix to allow creating tables with partial partitions
+        for (idx, col) in table_partition_names.iter().enumerate() {
+            if &inferred[idx] != col {
+                return plan_err!(
+                    "Inferred partitions to be {:?}, but got {:?}",
+                    inferred,
+                    table_partition_names
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Infer the partitioning at the given path on the provided object store.
+    /// For performance reasons, it doesn't read all the files on disk
+    /// and therefore may fail to detect invalid partitioning.
+    async fn infer_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<Vec<String>> {
+        let store = state.runtime_env().object_store(table_path)?;
+
+        // only use 10 files for inference
+        // This can fail to detect inconsistent partition keys
+        // A DFS traversal approach of the store can help here
+        let files: Vec<_> = table_path
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
+            .take(10)
+            .try_collect()
+            .await?;
+
+        let stripped_path_parts = files.iter().map(|file| {
+            table_path
+                .strip_prefix(&file.location)
+                .unwrap()
+                .collect_vec()
+        });
+
+        let partition_keys = stripped_path_parts
+            .map(|path_parts| {
+                path_parts
+                    .into_iter()
+                    .rev()
+                    .skip(1) // get parents only; skip the file itself
+                    .rev()
+                    .map(|s| s.split('=').take(1).collect())
+                    .collect_vec()
+            })
+            .collect_vec();
+
+        match partition_keys.into_iter().all_equal_value() {
+            Ok(v) => Ok(v),
+            Err(None) => Ok(vec![]),
+            Err(Some(diff)) => {
+                let mut sorted_diff = [diff.0, diff.1];
+                sorted_diff.sort();
+                plan_err!("Found mixed partition values on disk {:?}", sorted_diff)
+            }
+        }
+    }
 }
 
 /// Reads data from one or more files via an
@@ -685,26 +792,32 @@ impl TableProvider for ListingTable {
             .await
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(
-            &self
-                .options
-                .table_partition_cols
-                .iter()
-                .map(|x| x.0.clone())
-                .collect::<Vec<_>>(),
-            filter,
-        ) {
-            // if filter can be handled by partiton pruning, it is exact
-            Ok(TableProviderFilterPushDown::Exact)
-        } else {
-            // otherwise, we still might be able to handle the filter with file
-            // level mechanisms such as Parquet row group pruning.
-            Ok(TableProviderFilterPushDown::Inexact)
-        }
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        let support: Vec<_> = filters
+            .iter()
+            .map(|filter| {
+                if expr_applicable_for_cols(
+                    &self
+                        .options
+                        .table_partition_cols
+                        .iter()
+                        .map(|x| x.0.clone())
+                        .collect::<Vec<_>>(),
+                    filter,
+                ) {
+                    // if filter can be handled by partition pruning, it is exact
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    // otherwise, we still might be able to handle the filter with file
+                    // level mechanisms such as Parquet row group pruning.
+                    TableProviderFilterPushDown::Inexact
+                }
+            })
+            .collect();
+        Ok(support)
     }
 
     fn get_table_definition(&self) -> Option<&str> {

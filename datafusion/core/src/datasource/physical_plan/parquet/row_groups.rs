@@ -232,8 +232,8 @@ impl PruningStatistics for BloomFilterStatistics {
                     ScalarValue::Float32(Some(v)) => sbbf.check(v),
                     ScalarValue::Int64(Some(v)) => sbbf.check(v),
                     ScalarValue::Int32(Some(v)) => sbbf.check(v),
-                    ScalarValue::Int16(Some(v)) => sbbf.check(v),
-                    ScalarValue::Int8(Some(v)) => sbbf.check(v),
+                    ScalarValue::UInt64(Some(v)) => sbbf.check(v),
+                    ScalarValue::UInt32(Some(v)) => sbbf.check(v),
                     ScalarValue::Decimal128(Some(v), p, s) => match parquet_type {
                         Type::INT32 => {
                             //https://github.com/apache/parquet-format/blob/eb4b31c1d64a01088d02a2f9aefc6c17c54cc6fc/Encodings.md?plain=1#L35-L42
@@ -338,8 +338,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         scalar.to_array().ok()
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        None
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let (c, _) = self.column(&column.name)?;
+        let scalar = ScalarValue::UInt64(Some(c.num_values() as u64));
+        scalar.to_array().ok()
     }
 
     fn contained(
@@ -1022,15 +1024,17 @@ mod tests {
         column_statistics: Vec<ParquetStatistics>,
     ) -> RowGroupMetaData {
         let mut columns = vec![];
+        let number_row = 1000;
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
                 .set_statistics(s.clone())
+                .set_num_values(number_row)
                 .build()
                 .unwrap();
             columns.push(column);
         }
         RowGroupMetaData::builder(schema_descr.clone())
-            .set_num_rows(1000)
+            .set_num_rows(number_row)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
             .build()
@@ -1208,7 +1212,7 @@ mod tests {
         /// Return a test for data_index_bloom_encoding_stats.parquet
         /// Note the values in the `String` column are:
         /// ```sql
-        /// ❯ select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+        /// > select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
         /// +-----------+
         /// | String    |
         /// +-----------+

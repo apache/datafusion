@@ -22,18 +22,8 @@ use std::{
     sync::Arc,
 };
 
-use crate::protobuf::{
-    self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
-    scalar_value::Value, ArrowOptions, AvroOptions, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection, ScalarValue,
-};
-
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-
-use datafusion_expr::ScalarFunctionDefinition;
-
-use crate::logical_plan::csv_writer_options_to_proto;
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
@@ -71,195 +61,187 @@ use datafusion_common::{
     stats::Precision,
     DataFusionError, JoinSide, Result,
 };
+use datafusion_expr::ScalarFunctionDefinition;
 
-use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
+use crate::logical_plan::csv_writer_options_to_proto;
+use crate::protobuf::{
+    self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
+    scalar_value::Value, ArrowOptions, AvroOptions, PhysicalSortExprNode,
+    PhysicalSortExprNodeCollection, ScalarValue,
+};
 
-impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
-    type Error = DataFusionError;
+use super::PhysicalExtensionCodec;
 
-    fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
-        let codec = DefaultPhysicalExtensionCodec {};
-        let expressions = serialize_physical_exprs(a.expressions(), &codec)?;
+pub fn serialize_physical_aggr_expr(
+    aggr_expr: Arc<dyn AggregateExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNode> {
+    let expressions = serialize_physical_exprs(aggr_expr.expressions(), codec)?;
+    let ordering_req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
+    let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
-        let ordering_req = a.order_bys().unwrap_or(&[]).to_vec();
-        let ordering_req = serialize_physical_sort_exprs(ordering_req, &codec)?;
-
-        if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            let name = a.fun().name().to_string();
-            return Ok(protobuf::PhysicalExprNode {
-                    expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-                        protobuf::PhysicalAggregateExprNode {
-                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
-                            expr: expressions,
-                            ordering_req,
-                            distinct: false,
-                        },
-                    )),
-                });
-        }
-
-        let AggrFn {
-            inner: aggr_function,
-            distinct,
-        } = aggr_expr_to_aggr_fn(a.as_ref())?;
-
-        Ok(protobuf::PhysicalExprNode {
+    if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        let name = a.fun().name().to_string();
+        return Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
-                    aggregate_function: Some(
-                        physical_aggregate_expr_node::AggregateFunction::AggrFunction(
-                            aggr_function as i32,
-                        ),
-                    ),
+                    aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                     expr: expressions,
                     ordering_req,
-                    distinct,
+                    distinct: false,
                 },
             )),
-        })
+        });
     }
+
+    let AggrFn {
+        inner: aggr_function,
+        distinct,
+    } = aggr_expr_to_aggr_fn(aggr_expr.as_ref())?;
+
+    Ok(protobuf::PhysicalExprNode {
+        expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+            protobuf::PhysicalAggregateExprNode {
+                aggregate_function: Some(
+                    physical_aggregate_expr_node::AggregateFunction::AggrFunction(
+                        aggr_function as i32,
+                    ),
+                ),
+                expr: expressions,
+                ordering_req,
+                distinct,
+            },
+        )),
+    })
 }
 
-impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
-    type Error = DataFusionError;
+pub fn serialize_physical_window_expr(
+    window_expr: Arc<dyn WindowExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalWindowExprNode> {
+    let expr = window_expr.as_any();
+    let mut args = window_expr.expressions().to_vec();
+    let window_frame = window_expr.get_window_frame();
 
-    fn try_from(
-        window_expr: Arc<dyn WindowExpr>,
-    ) -> std::result::Result<Self, Self::Error> {
-        let expr = window_expr.as_any();
+    let window_function = if let Some(built_in_window_expr) =
+        expr.downcast_ref::<BuiltInWindowExpr>()
+    {
+        let expr = built_in_window_expr.get_built_in_func_expr();
+        let built_in_fn_expr = expr.as_any();
 
-        let mut args = window_expr.expressions().to_vec();
-        let window_frame = window_expr.get_window_frame();
-
-        let window_function = if let Some(built_in_window_expr) =
-            expr.downcast_ref::<BuiltInWindowExpr>()
+        let builtin_fn = if built_in_fn_expr.downcast_ref::<RowNumber>().is_some() {
+            protobuf::BuiltInWindowFunction::RowNumber
+        } else if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>() {
+            match rank_expr.get_type() {
+                RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
+                RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,
+                RankType::Percent => protobuf::BuiltInWindowFunction::PercentRank,
+            }
+        } else if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
+            protobuf::BuiltInWindowFunction::CumeDist
+        } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
+            args.insert(
+                0,
+                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                    ntile_expr.get_n() as i64,
+                )))),
+            );
+            protobuf::BuiltInWindowFunction::Ntile
+        } else if let Some(window_shift_expr) =
+            built_in_fn_expr.downcast_ref::<WindowShift>()
         {
-            let expr = built_in_window_expr.get_built_in_func_expr();
-            let built_in_fn_expr = expr.as_any();
+            args.insert(
+                1,
+                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                    window_shift_expr.get_shift_offset(),
+                )))),
+            );
+            args.insert(
+                2,
+                Arc::new(Literal::new(window_shift_expr.get_default_value())),
+            );
 
-            let builtin_fn = if built_in_fn_expr.downcast_ref::<RowNumber>().is_some() {
-                protobuf::BuiltInWindowFunction::RowNumber
-            } else if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>() {
-                match rank_expr.get_type() {
-                    RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
-                    RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,
-                    RankType::Percent => protobuf::BuiltInWindowFunction::PercentRank,
-                }
-            } else if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
-                protobuf::BuiltInWindowFunction::CumeDist
-            } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
-                args.insert(
-                    0,
-                    Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
-                        ntile_expr.get_n() as i64,
-                    )))),
-                );
-                protobuf::BuiltInWindowFunction::Ntile
-            } else if let Some(window_shift_expr) =
-                built_in_fn_expr.downcast_ref::<WindowShift>()
-            {
-                args.insert(
-                    1,
-                    Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
-                        window_shift_expr.get_shift_offset(),
-                    )))),
-                );
-                args.insert(
-                    2,
-                    Arc::new(Literal::new(window_shift_expr.get_default_value())),
-                );
-
-                if window_shift_expr.get_shift_offset() >= 0 {
-                    protobuf::BuiltInWindowFunction::Lag
-                } else {
-                    protobuf::BuiltInWindowFunction::Lead
-                }
-            } else if let Some(nth_value_expr) =
-                built_in_fn_expr.downcast_ref::<NthValue>()
-            {
-                match nth_value_expr.get_kind() {
-                    NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
-                    NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
-                    NthValueKind::Nth(n) => {
-                        args.insert(
-                            1,
-                            Arc::new(Literal::new(
-                                datafusion_common::ScalarValue::Int64(Some(n)),
-                            )),
-                        );
-                        protobuf::BuiltInWindowFunction::NthValue
-                    }
-                }
+            if window_shift_expr.get_shift_offset() >= 0 {
+                protobuf::BuiltInWindowFunction::Lag
             } else {
-                return not_impl_err!("BuiltIn function not supported: {expr:?}");
-            };
-
-            physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32)
-        } else if let Some(plain_aggr_window_expr) =
-            expr.downcast_ref::<PlainAggregateWindowExpr>()
-        {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                // TODO
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
+                protobuf::BuiltInWindowFunction::Lead
             }
-
-            if !window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+        } else if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
+            match nth_value_expr.get_kind() {
+                NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
+                NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
+                NthValueKind::Nth(n) => {
+                    args.insert(
+                        1,
+                        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(
+                            Some(n),
+                        ))),
+                    );
+                    protobuf::BuiltInWindowFunction::NthValue
+                }
             }
-
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
-        } else if let Some(sliding_aggr_window_expr) =
-            expr.downcast_ref::<SlidingAggregateWindowExpr>()
-        {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                // TODO
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
-            }
-
-            if window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-            }
-
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         } else {
-            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+            return not_impl_err!("BuiltIn function not supported: {expr:?}");
         };
-        let codec = DefaultPhysicalExtensionCodec {};
-        let args = serialize_physical_exprs(args, &codec)?;
-        let partition_by =
-            serialize_physical_exprs(window_expr.partition_by().to_vec(), &codec)?;
 
-        let order_by =
-            serialize_physical_sort_exprs(window_expr.order_by().to_vec(), &codec)?;
+        physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32)
+    } else if let Some(plain_aggr_window_expr) =
+        expr.downcast_ref::<PlainAggregateWindowExpr>()
+    {
+        let AggrFn { inner, distinct } =
+            aggr_expr_to_aggr_fn(plain_aggr_window_expr.get_aggregate_expr().as_ref())?;
 
-        let window_frame: protobuf::WindowFrame = window_frame
-            .as_ref()
-            .try_into()
-            .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+        if distinct {
+            // TODO
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
 
-        let name = window_expr.name().to_string();
+        if !window_frame.start_bound.is_unbounded() {
+            return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+        }
 
-        Ok(protobuf::PhysicalWindowExprNode {
-            args,
-            partition_by,
-            order_by,
-            window_frame: Some(window_frame),
-            window_function: Some(window_function),
-            name,
-        })
-    }
+        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+    } else if let Some(sliding_aggr_window_expr) =
+        expr.downcast_ref::<SlidingAggregateWindowExpr>()
+    {
+        let AggrFn { inner, distinct } =
+            aggr_expr_to_aggr_fn(sliding_aggr_window_expr.get_aggregate_expr().as_ref())?;
+
+        if distinct {
+            // TODO
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
+
+        if window_frame.start_bound.is_unbounded() {
+            return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+        }
+
+        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+    } else {
+        return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+    };
+
+    let args = serialize_physical_exprs(args, codec)?;
+    let partition_by =
+        serialize_physical_exprs(window_expr.partition_by().to_vec(), codec)?;
+    let order_by = serialize_physical_sort_exprs(window_expr.order_by().to_vec(), codec)?;
+    let window_frame: protobuf::WindowFrame = window_frame
+        .as_ref()
+        .try_into()
+        .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+
+    Ok(protobuf::PhysicalWindowExprNode {
+        args,
+        partition_by,
+        order_by,
+        window_frame: Some(window_frame),
+        window_function: Some(window_function),
+        name: window_expr.name().to_string(),
+    })
 }
 
 struct AggrFn {
@@ -366,7 +348,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
 pub fn serialize_physical_sort_exprs<I>(
     sort_exprs: I,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<protobuf::PhysicalSortExprNode>, DataFusionError>
+) -> Result<Vec<PhysicalSortExprNode>>
 where
     I: IntoIterator<Item = PhysicalSortExpr>,
 {
@@ -379,7 +361,7 @@ where
 pub fn serialize_physical_sort_expr(
     sort_expr: PhysicalSortExpr,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<protobuf::PhysicalSortExprNode, DataFusionError> {
+) -> Result<PhysicalSortExprNode> {
     let PhysicalSortExpr { expr, options } = sort_expr;
     let expr = serialize_physical_expr(expr, codec)?;
     Ok(PhysicalSortExprNode {
@@ -392,7 +374,7 @@ pub fn serialize_physical_sort_expr(
 pub fn serialize_physical_exprs<I>(
     values: I,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<protobuf::PhysicalExprNode>, DataFusionError>
+) -> Result<Vec<protobuf::PhysicalExprNode>>
 where
     I: IntoIterator<Item = Arc<dyn PhysicalExpr>>,
 {
@@ -409,7 +391,7 @@ where
 pub fn serialize_physical_expr(
     value: Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<protobuf::PhysicalExprNode, DataFusionError> {
+) -> Result<protobuf::PhysicalExprNode> {
     let expr = value.as_any();
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
@@ -456,7 +438,7 @@ pub fn serialize_physical_expr(
                                 .when_then_expr()
                                 .iter()
                                 .map(|(when_expr, then_expr)| {
-                                    try_parse_when_then_expr(when_expr, then_expr, codec)
+                                    serialize_when_then_expr(when_expr, then_expr, codec)
                                 })
                                 .collect::<Result<
                                     Vec<protobuf::PhysicalWhenThen>,
@@ -623,7 +605,7 @@ pub fn serialize_physical_expr(
     }
 }
 
-fn try_parse_when_then_expr(
+fn serialize_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
@@ -637,7 +619,7 @@ fn try_parse_when_then_expr(
 impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
-    fn try_from(pf: &PartitionedFile) -> Result<Self, Self::Error> {
+    fn try_from(pf: &PartitionedFile) -> Result<Self> {
         let last_modified = pf.object_meta.last_modified;
         let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
             DataFusionError::Plan(format!(
@@ -661,7 +643,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
 impl TryFrom<&FileRange> for protobuf::FileRange {
     type Error = DataFusionError;
 
-    fn try_from(value: &FileRange) -> Result<Self, Self::Error> {
+    fn try_from(value: &FileRange) -> Result<Self> {
         Ok(protobuf::FileRange {
             start: value.start,
             end: value.end,
@@ -746,61 +728,58 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
     }
 }
 
-impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
-    type Error = DataFusionError;
-    fn try_from(
-        conf: &FileScanConfig,
-    ) -> Result<protobuf::FileScanExecConf, Self::Error> {
-        let codec = DefaultPhysicalExtensionCodec {};
-        let file_groups = conf
-            .file_groups
-            .iter()
-            .map(|p| p.as_slice().try_into())
-            .collect::<Result<Vec<_>, _>>()?;
+pub fn serialize_file_scan_config(
+    conf: &FileScanConfig,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::FileScanExecConf> {
+    let file_groups = conf
+        .file_groups
+        .iter()
+        .map(|p| p.as_slice().try_into())
+        .collect::<Result<Vec<_>, _>>()?;
 
-        let mut output_orderings = vec![];
-        for order in &conf.output_ordering {
-            let ordering = serialize_physical_sort_exprs(order.to_vec(), &codec)?;
-            output_orderings.push(ordering)
-        }
-
-        // Fields must be added to the schema so that they can persist in the protobuf
-        // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
-        let mut fields = conf
-            .file_schema
-            .fields()
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        fields.extend(conf.table_partition_cols.iter().cloned().map(Arc::new));
-        let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields.clone()));
-
-        Ok(protobuf::FileScanExecConf {
-            file_groups,
-            statistics: Some((&conf.statistics).into()),
-            limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
-            projection: conf
-                .projection
-                .as_ref()
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|n| *n as u32)
-                .collect(),
-            schema: Some(schema.as_ref().try_into()?),
-            table_partition_cols: conf
-                .table_partition_cols
-                .iter()
-                .map(|x| x.name().clone())
-                .collect::<Vec<_>>(),
-            object_store_url: conf.object_store_url.to_string(),
-            output_ordering: output_orderings
-                .into_iter()
-                .map(|e| PhysicalSortExprNodeCollection {
-                    physical_sort_expr_nodes: e,
-                })
-                .collect::<Vec<_>>(),
-        })
+    let mut output_orderings = vec![];
+    for order in &conf.output_ordering {
+        let ordering = serialize_physical_sort_exprs(order.to_vec(), codec)?;
+        output_orderings.push(ordering)
     }
+
+    // Fields must be added to the schema so that they can persist in the protobuf,
+    // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
+    let mut fields = conf
+        .file_schema
+        .fields()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    fields.extend(conf.table_partition_cols.iter().cloned().map(Arc::new));
+    let schema = Arc::new(arrow::datatypes::Schema::new(fields.clone()));
+
+    Ok(protobuf::FileScanExecConf {
+        file_groups,
+        statistics: Some((&conf.statistics).into()),
+        limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
+        projection: conf
+            .projection
+            .as_ref()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|n| *n as u32)
+            .collect(),
+        schema: Some(schema.as_ref().try_into()?),
+        table_partition_cols: conf
+            .table_partition_cols
+            .iter()
+            .map(|x| x.name().clone())
+            .collect::<Vec<_>>(),
+        object_store_url: conf.object_store_url.to_string(),
+        output_ordering: output_orderings
+            .into_iter()
+            .map(|e| PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes: e,
+            })
+            .collect::<Vec<_>>(),
+    })
 }
 
 impl From<JoinSide> for protobuf::JoinSide {
@@ -812,46 +791,15 @@ impl From<JoinSide> for protobuf::JoinSide {
     }
 }
 
-impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
-    type Error = DataFusionError;
-
-    fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self, Self::Error> {
-        let codec = DefaultPhysicalExtensionCodec {};
-        match expr {
-            None => Ok(protobuf::MaybeFilter { expr: None }),
-            Some(expr) => Ok(protobuf::MaybeFilter {
-                expr: Some(serialize_physical_expr(expr, &codec)?),
-            }),
-        }
-    }
-}
-
-impl TryFrom<Option<Vec<PhysicalSortExpr>>> for protobuf::MaybePhysicalSortExprs {
-    type Error = DataFusionError;
-
-    fn try_from(sort_exprs: Option<Vec<PhysicalSortExpr>>) -> Result<Self, Self::Error> {
-        match sort_exprs {
-            None => Ok(protobuf::MaybePhysicalSortExprs { sort_expr: vec![] }),
-            Some(sort_exprs) => Ok(protobuf::MaybePhysicalSortExprs {
-                sort_expr: sort_exprs
-                    .into_iter()
-                    .map(|sort_expr| sort_expr.try_into())
-                    .collect::<Result<Vec<_>>>()?,
-            }),
-        }
-    }
-}
-
-impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
-    type Error = DataFusionError;
-
-    fn try_from(sort_expr: PhysicalSortExpr) -> std::result::Result<Self, Self::Error> {
-        let codec = DefaultPhysicalExtensionCodec {};
-        Ok(PhysicalSortExprNode {
-            expr: Some(Box::new(serialize_physical_expr(sort_expr.expr, &codec)?)),
-            asc: !sort_expr.options.descending,
-            nulls_first: sort_expr.options.nulls_first,
-        })
+pub fn serialize_maybe_filter(
+    expr: Option<Arc<dyn PhysicalExpr>>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::MaybeFilter> {
+    match expr {
+        None => Ok(protobuf::MaybeFilter { expr: None }),
+        Some(expr) => Ok(protobuf::MaybeFilter {
+            expr: Some(serialize_physical_expr(expr, codec)?),
+        }),
     }
 }
 

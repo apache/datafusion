@@ -22,12 +22,12 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3], [7], 1),
-    ([4,5], [8,9,10], 2),
-    ([6], [11,12], 3),
-    ([12], [null, 42, null], null),
+    ([1,2,3], [7], 1, [13, 14]),
+    ([4,5], [8,9,10], 2, [15, 16]),
+    ([6], [11,12], 3, null),
+    ([12], [null, 42, null], null, null),
     -- null array to verify the `preserve_nulls` option
-    (null, null, 4)
+    (null, null, 4, [17, 18])
 ;
 
 ## Basic unnest expression in select list
@@ -93,6 +93,20 @@ NULL
 42
 NULL
 
+## Unnest single column and filter out null lists
+query I
+select unnest(column2) from unnest_table where column2 is not null;
+----
+7
+8
+9
+10
+11
+12
+NULL
+42
+NULL
+
 ## Unnest with additional column
 ## Issue: https://github.com/apache/arrow-datafusion/issues/9349
 query II
@@ -135,9 +149,48 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(column3) from unnest_table;
 
+## Unnest doesn't work with untyped nulls
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+select unnest(null) from unnest_table;
+
 ## Multiple unnest functions in selection
-query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
-select unnest(column1), unnest(column2) from unnest_table;
+query ?I
+select unnest([]), unnest(NULL::int[]);
+----
+
+query III
+select
+    unnest(column1),
+    unnest(arrow_cast(column2, 'LargeList(Int64)')),
+    unnest(arrow_cast(column4, 'FixedSizeList(2, Int64)'))
+from unnest_table where column4 is not null;
+----
+1 7 13
+2 NULL 14
+3 NULL NULL
+4 8 15
+5 9 16
+NULL 10 NULL
+NULL NULL 17
+NULL NULL 18
+
+query IIII
+select 
+    unnest(column1), unnest(column2) + 2, 
+    column3 * 10, unnest(array_remove(column1, '4')) 
+from unnest_table;
+----
+1 9 10 1
+2 NULL 10 2
+3 NULL 10 3
+4 10 20 5
+5 11 20 NULL
+NULL 12 20 NULL
+6 13 30 6
+NULL 14 30 NULL
+12 NULL NULL 12
+NULL 44 NULL NULL
+NULL NULL NULL NULL
 
 ## Unnest scalar in select list
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
@@ -149,7 +202,7 @@ select * from unnest(1);
 
 
 ## Unnest empty expression in select list
-query error DataFusion error: Error during planning: unnest\(\) requires at least one argument
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest();
 
 ## Unnest empty expression in from clause
@@ -157,13 +210,26 @@ query error DataFusion error: SQL error: ParserError\("Expected an expression:, 
 select * from unnest();
 
 
-## Unnest multiple expressions in select list
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+## Unnest multiple expressions in select list. This form is only allowed in a query's FROM clause.
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest([1,2], [2,3]);
 
 ## Unnest multiple expressions in from clause
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
-select * from unnest([1,2], [2,3]);
+query ITII
+select * from unnest(
+    [1,2],
+    arrow_cast(['a','b', 'c'], 'LargeList(Utf8)'),
+    arrow_cast([4, NULL], 'FixedSizeList(2, Int64)'),
+    NULL::int[]
+) as t(a, b, c, d);
+----
+1 a 4 NULL
+2 b NULL NULL
+NULL c NULL NULL
+
+query ?I
+select * from unnest([], NULL::int[]);
+----
 
 
 ## Unnest struct expression in select list

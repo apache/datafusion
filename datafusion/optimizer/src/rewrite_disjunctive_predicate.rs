@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`RewriteDisjunctivePredicate`] rewrites predicates to reduce redundancy
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;

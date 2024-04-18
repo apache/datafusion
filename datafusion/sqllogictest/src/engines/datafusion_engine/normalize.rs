@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -96,14 +96,18 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         // form new rows with each additional line
         let new_lines: Vec<_> = lines
             .into_iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(idx, l)| {
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
                 // See https://github.com/apache/arrow-datafusion/issues/6328
                 let content = l.trim_start();
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("{new_prefix}{content}")]
+                // maintain for each line a number, so
+                // reviewing explain result changes is easier
+                let line_num = idx + 1;
+                vec![format!("{line_num:02}){new_prefix}{content}")]
             })
             .collect();
 
@@ -239,7 +243,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
+pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

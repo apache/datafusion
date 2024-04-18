@@ -66,7 +66,6 @@ pub mod sorts;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
-pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
@@ -91,6 +90,11 @@ pub use datafusion_physical_expr::{
 // Backwards compatibility
 pub use crate::stream::EmptyRecordBatchStream;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub mod udaf {
+    pub use datafusion_physical_expr_common::aggregate::{
+        create_aggregate_expr, AggregateFunctionExpr,
+    };
+}
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -574,7 +578,7 @@ impl PlanProperties {
         execution_mode: ExecutionMode,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
-        let output_ordering = eq_properties.oeq_class().output_ordering();
+        let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
@@ -599,7 +603,7 @@ impl PlanProperties {
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
-        self.output_ordering = eq_properties.oeq_class().output_ordering();
+        self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
         self
     }

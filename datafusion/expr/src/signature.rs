@@ -39,8 +39,7 @@ pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// An immutable function will always return the same output when given the same
-    /// input. An example of this is [super::BuiltinScalarFunction::Cos]. DataFusion
-    /// will attempt to inline immutable functions during planning.
+    /// input. DataFusion will attempt to inline immutable functions during planning.
     Immutable,
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
@@ -52,7 +51,7 @@ pub enum Volatility {
     Stable,
     /// A volatile function may change the return value from evaluation to evaluation.
     /// Multiple invocations of a volatile function may return different results when used in the
-    /// same query. An example of this is [super::BuiltinScalarFunction::Random]. DataFusion
+    /// same query. An example of this is the random() function. DataFusion
     /// can not evaluate such functions during planning.
     /// In the query `select col1, random() from t1`, `random()` function will be evaluated
     /// for each output row, resulting in a unique random value for each row.

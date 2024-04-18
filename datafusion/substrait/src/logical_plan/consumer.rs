@@ -18,7 +18,7 @@
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFField, DFSchema, DFSchemaRef,
+    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 
 use datafusion::execution::FunctionRegistry;
@@ -460,16 +460,16 @@ pub async fn from_substrait_rel(
                         return plan_err!("No table name found in NamedTable");
                     }
                     1 => TableReference::Bare {
-                        table: (&nt.names[0]).into(),
+                        table: nt.names[0].clone().into(),
                     },
                     2 => TableReference::Partial {
-                        schema: (&nt.names[0]).into(),
-                        table: (&nt.names[1]).into(),
+                        schema: nt.names[0].clone().into(),
+                        table: nt.names[1].clone().into(),
                     },
                     _ => TableReference::Full {
-                        catalog: (&nt.names[0]).into(),
-                        schema: (&nt.names[1]).into(),
-                        table: (&nt.names[2]).into(),
+                        catalog: nt.names[0].clone().into(),
+                        schema: nt.names[1].clone().into(),
+                        table: nt.names[2].clone().into(),
                     },
                 };
                 let t = ctx.table(table_reference).await?;
@@ -484,9 +484,14 @@ pub async fn from_substrait_rel(
                                 .collect();
                             match &t {
                                 LogicalPlan::TableScan(scan) => {
-                                    let fields: Vec<DFField> = column_indices
+                                    let fields = column_indices
                                         .iter()
-                                        .map(|i| scan.projected_schema.field(*i).clone())
+                                        .map(|i| {
+                                            scan.projected_schema.qualified_field(*i)
+                                        })
+                                        .map(|(qualifier, field)| {
+                                            (qualifier.cloned(), Arc::new(field.clone()))
+                                        })
                                         .collect();
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
@@ -749,7 +754,7 @@ pub async fn from_substrait_agg_func(
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by),
+            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
@@ -1389,13 +1394,9 @@ fn from_substrait_field_reference(
                 Some(_) => not_impl_err!(
                     "Direct reference StructField with child is not supported"
                 ),
-                None => {
-                    let column = input_schema.field(x.field as usize).qualified_column();
-                    Ok(Expr::Column(Column {
-                        relation: column.relation,
-                        name: column.name,
-                    }))
-                }
+                None => Ok(Expr::Column(Column::from(
+                    input_schema.qualified_field(x.field as usize),
+                ))),
             },
             _ => not_impl_err!(
                 "Direct reference with types other than StructField is not supported"

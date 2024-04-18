@@ -105,19 +105,23 @@ pub trait PruningStatistics {
     fn num_containers(&self) -> usize;
 
     /// Return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
+    /// [`UInt64Array`]
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
     /// Return the number of rows for the named column in each container
-    /// as an `Option<UInt64Array>`.
+    /// as an [`UInt64Array`].
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
     fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
 
     /// Returns [`BooleanArray`] where each row represents information known
@@ -330,7 +334,8 @@ pub trait PruningStatistics {
 /// `x = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END`
 /// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
 /// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
-/// `x IS NULL`  | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_null_count > 0 END`
+/// `x IS NULL`  | `x_null_count > 0`
+/// `x IS NOT NULL`  | `x_null_count != row_count`
 /// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
 ///
 /// ## Predicate Evaluation
@@ -1235,26 +1240,51 @@ fn build_single_column_expr(
 /// returns a pruning expression in terms of IsNull that will evaluate to true
 /// if the column may contain null, and false if definitely does not
 /// contain null.
+/// If `with_not` is true, build a pruning expression for `col IS NOT NULL`: `col_count != col_null_count`
+/// The pruning expression evaluates to true ONLY if the column definitely CONTAINS
+/// at least one NULL value.  In this case we can know that `IS NOT NULL` can not be true and
+/// thus can prune the row group / value
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
+    with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
     if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
         let field = schema.field_with_name(col.name()).ok()?;
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
-        required_columns
-            .null_count_column_expr(col, expr, null_count_field)
-            .map(|null_count_column_expr| {
-                // IsNull(column) => null_count > 0
-                Arc::new(phys_expr::BinaryExpr::new(
-                    null_count_column_expr,
-                    Operator::Gt,
-                    Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
-                )) as _
-            })
-            .ok()
+        if with_not {
+            if let Ok(row_count_expr) =
+                required_columns.row_count_column_expr(col, expr, null_count_field)
+            {
+                required_columns
+                    .null_count_column_expr(col, expr, null_count_field)
+                    .map(|null_count_column_expr| {
+                        // IsNotNull(column) => null_count != row_count
+                        Arc::new(phys_expr::BinaryExpr::new(
+                            null_count_column_expr,
+                            Operator::NotEq,
+                            row_count_expr,
+                        )) as _
+                    })
+                    .ok()
+            } else {
+                None
+            }
+        } else {
+            required_columns
+                .null_count_column_expr(col, expr, null_count_field)
+                .map(|null_count_column_expr| {
+                    // IsNull(column) => null_count > 0
+                    Arc::new(phys_expr::BinaryExpr::new(
+                        null_count_column_expr,
+                        Operator::Gt,
+                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                    )) as _
+                })
+                .ok()
+        }
     } else {
         None
     }
@@ -1283,8 +1313,17 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
-        return build_is_null_column_expr(is_null.arg(), schema, required_columns)
+        return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
             .unwrap_or(unhandled);
+    }
+    if let Some(is_not_null) = expr_any.downcast_ref::<phys_expr::IsNotNullExpr>() {
+        return build_is_null_column_expr(
+            is_not_null.arg(),
+            schema,
+            required_columns,
+            true,
+        )
+        .unwrap_or(unhandled);
     }
     if let Some(col) = expr_any.downcast_ref::<phys_expr::Column>() {
         return build_single_column_expr(col, schema, required_columns, false)
@@ -1519,6 +1558,7 @@ mod tests {
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
     };
+    use arrow_array::UInt64Array;
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::InList;
@@ -1684,10 +1724,10 @@ mod tests {
         /// there are containers
         fn with_null_counts(
             mut self,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let null_counts: ArrayRef =
-                Arc::new(counts.into_iter().collect::<Int64Array>());
+                Arc::new(counts.into_iter().collect::<UInt64Array>());
 
             self.assert_invariants();
             self.null_counts = Some(null_counts);
@@ -1698,10 +1738,10 @@ mod tests {
         /// there are containers
         fn with_row_counts(
             mut self,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let row_counts: ArrayRef =
-                Arc::new(counts.into_iter().collect::<Int64Array>());
+                Arc::new(counts.into_iter().collect::<UInt64Array>());
 
             self.assert_invariants();
             self.row_counts = Some(row_counts);
@@ -1753,13 +1793,13 @@ mod tests {
             self
         }
 
-        /// Add null counts for the specified columm.
+        /// Add null counts for the specified column.
         /// There must be the same number of null counts as
         /// there are containers
         fn with_null_counts(
             mut self,
             name: impl Into<String>,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let col = Column::from_name(name.into());
 
@@ -1775,13 +1815,13 @@ mod tests {
             self
         }
 
-        /// Add row counts for the specified columm.
+        /// Add row counts for the specified column.
         /// There must be the same number of row counts as
         /// there are containers
         fn with_row_counts(
             mut self,
             name: impl Into<String>,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let col = Column::from_name(name.into());
 
@@ -1797,7 +1837,7 @@ mod tests {
             self
         }
 
-        /// Add contained information for the specified columm.
+        /// Add contained information for the specified column.
         fn with_contained(
             mut self,
             name: impl Into<String>,

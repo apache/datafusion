@@ -100,7 +100,7 @@ impl RowGroupPruningTest {
 
     // Execute the test with the current configuration
     async fn test_row_group_prune(self) {
-        let output = ContextWithParquet::new(self.scenario, RowGroup)
+        let output = ContextWithParquet::new(self.scenario, RowGroup(5))
             .await
             .query(&self.query)
             .await;
@@ -231,7 +231,7 @@ async fn prune_date64() {
         .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
     let date = ScalarValue::Date64(Some(date.and_utc().timestamp_millis()));
 
-    let output = ContextWithParquet::new(Scenario::Dates, RowGroup)
+    let output = ContextWithParquet::new(Scenario::Dates, RowGroup(5))
         .await
         .query_with_expr(col("date64").lt(lit(date)))
         // .query(
@@ -267,10 +267,11 @@ async fn prune_disabled() {
     let expected_rows = 10;
     let config = SessionConfig::new().with_parquet_pruning(false);
 
-    let output = ContextWithParquet::with_config(Scenario::Timestamps, RowGroup, config)
-        .await
-        .query(query)
-        .await;
+    let output =
+        ContextWithParquet::with_config(Scenario::Timestamps, RowGroup(5), config)
+            .await
+            .query(query)
+            .await;
     println!("{}", output.description());
 
     // This should not prune any
@@ -290,7 +291,7 @@ async fn prune_disabled() {
 // https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
-    ($bits:expr, correct_bloom_filters: $correct_bloom_filters:expr) => {
+    ($bits:expr) => {
         paste::item! {
             #[tokio::test]
             async fn [<prune_int $bits _lt >]() {
@@ -329,9 +330,9 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
-                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
-                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
                     .test_row_group_prune()
                     .await;
             }
@@ -339,13 +340,13 @@ macro_rules! int_tests {
             async fn [<prune_int $bits _scalar_fun_and_eq >]() {
                 RowGroupPruningTest::new()
                     .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} = 1", $bits))
+                    .with_query(&format!("SELECT * FROM t where abs(i{}) = 1 and i{} = 1", $bits, $bits))
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
-                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
-                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
                     .test_row_group_prune()
                     .await;
             }
@@ -404,9 +405,9 @@ macro_rules! int_tests {
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
-                    .with_matched_by_bloom_filter(Some(if $correct_bloom_filters { 1 } else { 0 }))
-                    .with_pruned_by_bloom_filter(Some(if $correct_bloom_filters { 0 } else { 1 }))
-                    .with_expected_rows(if $correct_bloom_filters { 1 } else { 0 })
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
                     .test_row_group_prune()
                     .await;
             }
@@ -447,10 +448,146 @@ macro_rules! int_tests {
     };
 }
 
-int_tests!(8, correct_bloom_filters: false);
-int_tests!(16, correct_bloom_filters: false);
-int_tests!(32, correct_bloom_filters: true);
-int_tests!(64, correct_bloom_filters: true);
+// int8/int16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
+int_tests!(32);
+int_tests!(64);
+
+// $bits: number of bits of the integer to test (8, 16, 32, 64)
+// $correct_bloom_filters: if false, replicates the
+// https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
+// if and only if Bloom filters on UInt8 and UInt16 columns are still buggy.
+macro_rules! uint_tests {
+    ($bits:expr) => {
+        paste::item! {
+            #[tokio::test]
+            async fn [<prune_uint $bits _lt >]() {
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{} < 6", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(3))
+                    .with_pruned_by_stats(Some(1))
+                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(11)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _eq >]() {
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{} = 6", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(1))
+                    .with_pruned_by_stats(Some(3))
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
+                    .test_row_group_prune()
+                    .await;
+            }
+            #[tokio::test]
+            async fn [<prune_uint $bits _scalar_fun_and_eq >]() {
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6", $bits, $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(1))
+                    .with_pruned_by_stats(Some(3))
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _scalar_fun >]() {
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 25", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(0))
+                    .with_pruned_by_stats(Some(0))
+                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(2)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _complex_expr >]() {
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{}+1 = 6", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(0))
+                    .with_pruned_by_stats(Some(0))
+                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(2)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _eq_in_list >]() {
+                // result of sql "SELECT * FROM t where in (1)"
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{} in (6)", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(1))
+                    .with_pruned_by_stats(Some(3))
+                    .with_matched_by_bloom_filter(Some(1))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(1)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _eq_in_list_2 >]() {
+                // result of sql "SELECT * FROM t where in (1000)", prune all
+                // test whether statistics works
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{} in (100)", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(0))
+                    .with_pruned_by_stats(Some(4))
+                    .with_matched_by_bloom_filter(Some(0))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(0)
+                    .test_row_group_prune()
+                    .await;
+            }
+
+            #[tokio::test]
+            async fn [<prune_uint $bits _eq_in_list_negated >]() {
+                // result of sql "SELECT * FROM t where not in (1)" prune nothing
+                RowGroupPruningTest::new()
+                    .with_scenario(Scenario::UInt)
+                    .with_query(&format!("SELECT * FROM t where u{} not in (6)", $bits))
+                    .with_expected_errors(Some(0))
+                    .with_matched_by_stats(Some(4))
+                    .with_pruned_by_stats(Some(0))
+                    .with_matched_by_bloom_filter(Some(4))
+                    .with_pruned_by_bloom_filter(Some(0))
+                    .with_expected_rows(19)
+                    .test_row_group_prune()
+                    .await;
+            }
+        }
+    };
+}
+
+// uint8/uint16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
+uint_tests!(32);
+uint_tests!(64);
 
 #[tokio::test]
 async fn prune_int32_eq_large_in_list() {
@@ -460,6 +597,28 @@ async fn prune_int32_eq_large_in_list() {
         .with_query(
             format!(
                 "SELECT * FROM t where i in ({})",
+                (200050..200082).join(",")
+            )
+            .as_str(),
+        )
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_expected_rows(0)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn prune_uint32_eq_large_in_list() {
+    // result of sql "SELECT * FROM t where i in (2050...2582)", prune all
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::UInt32Range)
+        .with_query(
+            format!(
+                "SELECT * FROM t where u in ({})",
                 (200050..200082).join(",")
             )
             .as_str(),
@@ -1101,6 +1260,66 @@ async fn prune_periods_in_column_names() {
         .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn test_row_group_with_null_values() {
+    // Three row groups:
+    // 1. all Null values
+    // 2. values from 1 to 5
+    // 3. all Null values
+
+    // After pruning, only row group 2 should be selected
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i8\" <= 5")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(2))
+        .with_expected_rows(5)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    // After pruning, only row group 1,3 should be selected
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i8\" is Null")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(10)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    // After pruning, only row group 2 should be selected
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i16\" is Not Null")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(2))
+        .with_expected_rows(5)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    // All row groups will be pruned
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::WithNullValues)
+        .with_query("SELECT * FROM t WHERE \"i32\" > 7")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
+        .with_pruned_by_stats(Some(3))
+        .with_expected_rows(0)
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
         .test_row_group_prune()
         .await;
 }

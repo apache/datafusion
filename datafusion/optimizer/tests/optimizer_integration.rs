@@ -25,7 +25,7 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -207,32 +207,6 @@ fn between_date64_plus_interval() -> Result<()> {
 }
 
 #[test]
-fn concat_literals() -> Result<()> {
-    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn concat_ws_literals() -> Result<()> {
-    let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
 fn propagate_empty_relation() {
     let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
     let plan = test_sql(sql).unwrap();
@@ -281,7 +255,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, COUNT(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
@@ -315,8 +289,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
     let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
-    optimizer.optimize(&plan, &config, |_, _| {})
+    optimizer.optimize(plan, &config, observe)
 }
+
+fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 #[derive(Default)]
 struct MyContextProvider {

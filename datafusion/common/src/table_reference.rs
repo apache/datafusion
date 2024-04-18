@@ -16,36 +16,39 @@
 // under the License.
 
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use std::borrow::Cow;
+use std::sync::Arc;
 
-/// A resolved path to a table of the form "catalog.schema.table"
+/// A fully resolved path to a table of the form "catalog.schema.table"
 #[derive(Debug, Clone)]
-pub struct ResolvedTableReference<'a> {
+pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
-    pub catalog: Cow<'a, str>,
+    pub catalog: Arc<str>,
     /// The schema containing the table
-    pub schema: Cow<'a, str>,
+    pub schema: Arc<str>,
     /// The table name
-    pub table: Cow<'a, str>,
+    pub table: Arc<str>,
 }
 
-impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
+impl std::fmt::Display for ResolvedTableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
     }
 }
 
-/// [`TableReference`]s represent a multi part identifier (path) to a
-/// table that may require further resolution.
+/// A multi part identifier (path) to a table that may require further
+/// resolution (e.g. `foo.bar`).
+///
+/// [`TableReference`]s are cheap to `clone()` as they are implemented with
+/// `Arc`.
+///
+/// See [`ResolvedTableReference`] for a fully resolved table reference.
 ///
 /// # Creating [`TableReference`]
 ///
-/// When converting strings to [`TableReference`]s, the string is
-/// parsed as though it were a SQL identifier, normalizing (convert to
-/// lowercase) any unquoted identifiers.
-///
-/// See [`TableReference::bare`] to create references without applying
-/// normalization semantics
+/// When converting strings to [`TableReference`]s, the string is parsed as
+/// though it were a SQL identifier, normalizing (convert to lowercase) any
+/// unquoted identifiers.  [`TableReference::bare`] creates references without
+/// applying normalization semantics.
 ///
 /// # Examples
 /// ```
@@ -68,43 +71,31 @@ impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
 /// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
 ///```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum TableReference<'a> {
+pub enum TableReference {
     /// An unqualified table reference, e.g. "table"
     Bare {
         /// The table name
-        table: Cow<'a, str>,
+        table: Arc<str>,
     },
     /// A partially resolved table reference, e.g. "schema.table"
     Partial {
         /// The schema containing the table
-        schema: Cow<'a, str>,
+        schema: Arc<str>,
         /// The table name
-        table: Cow<'a, str>,
+        table: Arc<str>,
     },
     /// A fully resolved table reference, e.g. "catalog.schema.table"
     Full {
         /// The catalog (aka database) containing the table
-        catalog: Cow<'a, str>,
+        catalog: Arc<str>,
         /// The schema containing the table
-        schema: Cow<'a, str>,
+        schema: Arc<str>,
         /// The table name
-        table: Cow<'a, str>,
+        table: Arc<str>,
     },
 }
 
-/// This is a [`TableReference`] that has 'static lifetime (aka it
-/// owns the underlying string)
-///
-/// To  convert a [`TableReference`] to an [`OwnedTableReference`], use
-///
-/// ```
-/// # use datafusion_common::{OwnedTableReference, TableReference};
-/// let table_reference = TableReference::from("mytable");
-/// let owned_reference = table_reference.to_owned_reference();
-/// ```
-pub type OwnedTableReference = TableReference<'static>;
-
-impl std::fmt::Display for TableReference<'_> {
+impl std::fmt::Display for TableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TableReference::Bare { table } => write!(f, "{table}"),
@@ -120,18 +111,18 @@ impl std::fmt::Display for TableReference<'_> {
     }
 }
 
-impl<'a> TableReference<'a> {
+impl TableReference {
     /// Convenience method for creating a typed none `None`
-    pub fn none() -> Option<TableReference<'a>> {
+    pub fn none() -> Option<TableReference> {
         None
     }
 
     /// Convenience method for creating a [`TableReference::Bare`]
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at
+    /// As described on [`TableReference`] this does *NO* normalization at
     /// all, so "Foo.Bar" stays as a reference to the table named
     /// "Foo.Bar" (rather than "foo"."bar")
-    pub fn bare(table: impl Into<Cow<'a, str>>) -> TableReference<'a> {
+    pub fn bare(table: impl Into<Arc<str>>) -> TableReference {
         TableReference::Bare {
             table: table.into(),
         }
@@ -139,11 +130,11 @@ impl<'a> TableReference<'a> {
 
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at all.
+    /// Note: *NO* normalization is applied to the schema or table name.
     pub fn partial(
-        schema: impl Into<Cow<'a, str>>,
-        table: impl Into<Cow<'a, str>>,
-    ) -> TableReference<'a> {
+        schema: impl Into<Arc<str>>,
+        table: impl Into<Arc<str>>,
+    ) -> TableReference {
         TableReference::Partial {
             schema: schema.into(),
             table: table.into(),
@@ -152,12 +143,13 @@ impl<'a> TableReference<'a> {
 
     /// Convenience method for creating a [`TableReference::Full`]
     ///
-    /// As described on [`TableReference`] this does *NO* parsing at all.
+    /// Note: *NO* normalization is applied to the catalog, schema or table
+    /// name.
     pub fn full(
-        catalog: impl Into<Cow<'a, str>>,
-        schema: impl Into<Cow<'a, str>>,
-        table: impl Into<Cow<'a, str>>,
-    ) -> TableReference<'a> {
+        catalog: impl Into<Arc<str>>,
+        schema: impl Into<Arc<str>>,
+        table: impl Into<Arc<str>>,
+    ) -> TableReference {
         TableReference::Full {
             catalog: catalog.into(),
             schema: schema.into(),
@@ -165,7 +157,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Retrieve the actual table name, regardless of qualification
+    /// Retrieve the table name, regardless of qualification.
     pub fn table(&self) -> &str {
         match self {
             Self::Full { table, .. }
@@ -174,7 +166,8 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Retrieve the schema name if in the `Partial` or `Full` qualification
+    /// Retrieve the schema name if [`Self::Partial]` or [`Self::`Full`],
+    /// `None` otherwise.
     pub fn schema(&self) -> Option<&str> {
         match self {
             Self::Full { schema, .. } | Self::Partial { schema, .. } => Some(schema),
@@ -182,7 +175,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Retrieve the catalog name if in the `Full` qualification
+    /// Retrieve the catalog name if  [`Self::Full`], `None` otherwise.
     pub fn catalog(&self) -> Option<&str> {
         match self {
             Self::Full { catalog, .. } => Some(catalog),
@@ -191,35 +184,37 @@ impl<'a> TableReference<'a> {
     }
 
     /// Compare with another [`TableReference`] as if both are resolved.
-    /// This allows comparing across variants, where if a field is not present
+    /// This allows comparing across variants. If a field is not present
     /// in both variants being compared then it is ignored in the comparison.
     ///
     /// e.g. this allows a [`TableReference::Bare`] to be considered equal to a
     /// fully qualified [`TableReference::Full`] if the table names match.
     pub fn resolved_eq(&self, other: &Self) -> bool {
         match self {
-            TableReference::Bare { table } => table == other.table(),
+            TableReference::Bare { table } => **table == *other.table(),
             TableReference::Partial { schema, table } => {
-                table == other.table() && other.schema().map_or(true, |s| s == schema)
+                **table == *other.table()
+                    && other.schema().map_or(true, |s| *s == **schema)
             }
             TableReference::Full {
                 catalog,
                 schema,
                 table,
             } => {
-                table == other.table()
-                    && other.schema().map_or(true, |s| s == schema)
-                    && other.catalog().map_or(true, |c| c == catalog)
+                **table == *other.table()
+                    && other.schema().map_or(true, |s| *s == **schema)
+                    && other.catalog().map_or(true, |c| *c == **catalog)
             }
         }
     }
 
-    /// Given a default catalog and schema, ensure this table reference is fully resolved
+    /// Given a default catalog and schema, ensure this table reference is fully
+    /// resolved
     pub fn resolve(
         self,
-        default_catalog: &'a str,
-        default_schema: &'a str,
-    ) -> ResolvedTableReference<'a> {
+        default_catalog: &str,
+        default_schema: &str,
+    ) -> ResolvedTableReference {
         match self {
             Self::Full {
                 catalog,
@@ -239,29 +234,6 @@ impl<'a> TableReference<'a> {
                 catalog: default_catalog.into(),
                 schema: default_schema.into(),
                 table,
-            },
-        }
-    }
-
-    /// Converts directly into an [`OwnedTableReference`] by cloning
-    /// the underlying data.
-    pub fn to_owned_reference(&self) -> OwnedTableReference {
-        match self {
-            Self::Full {
-                catalog,
-                schema,
-                table,
-            } => OwnedTableReference::Full {
-                catalog: catalog.to_string().into(),
-                schema: schema.to_string().into(),
-                table: table.to_string().into(),
-            },
-            Self::Partial { schema, table } => OwnedTableReference::Partial {
-                schema: schema.to_string().into(),
-                table: table.to_string().into(),
-            },
-            Self::Bare { table } => OwnedTableReference::Bare {
-                table: table.to_string().into(),
             },
         }
     }
@@ -298,7 +270,7 @@ impl<'a> TableReference<'a> {
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
     /// identifier. See docs on [`TableReference`] for more details.
-    pub fn parse_str(s: &'a str) -> Self {
+    pub fn parse_str(s: &str) -> Self {
         let mut parts = parse_identifiers_normalized(s, false);
 
         match parts.len() {
@@ -338,53 +310,29 @@ impl<'a> TableReference<'a> {
     }
 }
 
-/// Parse a `String` into a OwnedTableReference as a multipart SQL identifier.
-impl From<String> for OwnedTableReference {
-    fn from(s: String) -> Self {
-        TableReference::parse_str(&s).to_owned_reference()
-    }
-}
-
-impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
-    fn from(value: &'a OwnedTableReference) -> Self {
-        match value {
-            OwnedTableReference::Bare { table } => TableReference::Bare {
-                table: Cow::Borrowed(table),
-            },
-            OwnedTableReference::Partial { schema, table } => TableReference::Partial {
-                schema: Cow::Borrowed(schema),
-                table: Cow::Borrowed(table),
-            },
-            OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => TableReference::Full {
-                catalog: Cow::Borrowed(catalog),
-                schema: Cow::Borrowed(schema),
-                table: Cow::Borrowed(table),
-            },
-        }
-    }
-}
-
 /// Parse a string into a TableReference, normalizing where appropriate
 ///
 /// See full details on [`TableReference::parse_str`]
-impl<'a> From<&'a str> for TableReference<'a> {
+impl<'a> From<&'a str> for TableReference {
     fn from(s: &'a str) -> Self {
         Self::parse_str(s)
     }
 }
 
-impl<'a> From<&'a String> for TableReference<'a> {
+impl<'a> From<&'a String> for TableReference {
     fn from(s: &'a String) -> Self {
         Self::parse_str(s)
     }
 }
 
-impl<'a> From<ResolvedTableReference<'a>> for TableReference<'a> {
-    fn from(resolved: ResolvedTableReference<'a>) -> Self {
+impl From<String> for TableReference {
+    fn from(s: String) -> Self {
+        Self::parse_str(&s)
+    }
+}
+
+impl From<ResolvedTableReference> for TableReference {
+    fn from(resolved: ResolvedTableReference) -> Self {
         Self::Full {
             catalog: resolved.catalog,
             schema: resolved.schema,
@@ -400,29 +348,29 @@ mod tests {
     #[test]
     fn test_table_reference_from_str_normalizes() {
         let expected = TableReference::Full {
-            catalog: Cow::Owned("catalog".to_string()),
-            schema: Cow::Owned("FOO\".bar".to_string()),
-            table: Cow::Owned("table".to_string()),
+            catalog: "catalog".into(),
+            schema: "FOO\".bar".into(),
+            table: "table".into(),
         };
         let actual = TableReference::from("catalog.\"FOO\"\".bar\".TABLE");
         assert_eq!(expected, actual);
 
         let expected = TableReference::Partial {
-            schema: Cow::Owned("FOO\".bar".to_string()),
-            table: Cow::Owned("table".to_string()),
+            schema: "FOO\".bar".into(),
+            table: "table".into(),
         };
         let actual = TableReference::from("\"FOO\"\".bar\".TABLE");
         assert_eq!(expected, actual);
 
         let expected = TableReference::Bare {
-            table: Cow::Owned("table".to_string()),
+            table: "table".into(),
         };
         let actual = TableReference::from("TABLE");
         assert_eq!(expected, actual);
 
         // if fail to parse, take entire input string as identifier
         let expected = TableReference::Bare {
-            table: Cow::Owned("TABLE()".to_string()),
+            table: "TABLE()".into(),
         };
         let actual = TableReference::from("TABLE()");
         assert_eq!(expected, actual);

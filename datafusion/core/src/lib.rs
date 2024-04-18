@@ -296,11 +296,15 @@
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! [`Expr`]s can be rewritten using the  [`TreeNode`] API and simplified using
-//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be found in the
-//! [`expr_api`.rs] example
+//! `LogicalPlan`s can be rewritten with [`TreeNode`] API, see the
+//! [`tree_node module`] for more details.
+//!
+//! [`Expr`]s can also be rewritten with [`TreeNode`] API and simplified using
+//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be
+//! found in the [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
+//! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
 //! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
@@ -435,10 +439,13 @@
 //! and improve compilation times. The crates are:
 //!
 //! * [datafusion_common]: Common traits and types
-//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
 //! * [datafusion_execution]: State and structures needed for execution
+//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_functions]: Scalar function packages
+//! * [datafusion_functions_array]: Scalar function packages for `ARRAY`s
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
+//! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
@@ -536,6 +543,11 @@ pub mod functions {
 pub mod functions_array {
     #[cfg(feature = "array_expressions")]
     pub use datafusion_functions_array::*;
+}
+
+/// re-export of [`datafusion_functions_aggregate`] crate
+pub mod functions_aggregate {
+    pub use datafusion_functions_aggregate::*;
 }
 
 #[cfg(test)]

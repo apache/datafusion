@@ -25,19 +25,24 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 
 ## Branching Policy
 
-- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- When we prepare a new release, we create a release branch, such as `branch-37` in the Apache repository (not in a fork)
 - We update the crate version and generate the changelog in this branch and create a PR against the main branch
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
 #### How to add changes to `branch-*` branch?
 
-If you would like to propose your change for inclusion in a release branch
+If you would like to propose your change for inclusion in a release branch for a
+patch release:
 
-1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
-2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
+1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
+1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-## Prerequisite
+[example release issue]: https://github.com/apache/arrow-datafusion/issues/9904
+[example backport pr]: https://github.com/apache/arrow-datafusion/pull/10123
+
+## Release Prerequisite
 
 - Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
 - Created a personal access token in GitHub for changelog automation script.
@@ -121,7 +126,7 @@ This process is not fully automated, so there are some additional manual steps:
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
-See [#801](https://github.com/apache/arrow-datafusion/pull/801) for an example.
+See [#9697](https://github.com/apache/arrow-datafusion/pull/9697) for an example.
 
 Here are the commands that could be used to prepare the `5.1.0` release:
 
@@ -278,17 +283,20 @@ instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
 of the following crates:
 
-- [datafusion](https://crates.io/crates/datafusion)
-- [datafusion-cli](https://crates.io/crates/datafusion-cli)
 - [datafusion-common](https://crates.io/crates/datafusion-common)
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
-- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
-- [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-execution](https://crates.io/crates/datafusion-execution)
-- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
+- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
+- [datafusion-functions](https://crates.io/crates/datafusion-functions)
+- [datafusion-functions-array](https://crates.io/crates/datafusion-functions-array)
 - [datafusion-sql](https://crates.io/crates/datafusion-sql)
 - [datafusion-optimizer](https://crates.io/crates/datafusion-optimizer)
+- [datafusion-common-runtime](https://crates.io/crates/datafusion-common-runtime)
+- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
+- [datafusion](https://crates.io/crates/datafusion)
+- [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-substrait](https://crates.io/crates/datafusion-substrait)
+- [datafusion-cli](https://crates.io/crates/datafusion-cli)
 
 Download and unpack the official release tarball
 
@@ -311,10 +319,13 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```shell
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
-(cd datafusion/sql && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
-(cd datafusion/optimizer && cargo publish)
 (cd datafusion/execution && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
+(cd datafusion/functions && cargo publish)
+(cd datafusion/functions-array && cargo publish)
+(cd datafusion/sql && cargo publish)
+(cd datafusion/optimizer && cargo publish)
+(cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)

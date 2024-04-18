@@ -146,11 +146,11 @@ query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
@@ -160,11 +160,11 @@ query TT
 EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' STORED AS PARQUET
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Copy more files to directory via query
 query IT
@@ -512,44 +512,6 @@ COPY source_table to 'test_files/scratch/copy/format_table2.csv'
 OPTIONS (
     unknown_option  false,
 );
-
-
-# Format Options Support with format in OPTIONS i.e. COPY { table_name | query } TO 'file_name' OPTIONS (format <format-name>, ...)
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format parquet);
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format parquet, compression 'zstd(10)');
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format json, compression gzip);
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (
-    format csv,
-    has_header false,
-    compression xz,
-    datetime_format '%FT%H:%M:%S.%9f',
-    delimiter ';',
-    null_value 'NULLVAL'
-);
-----
-1
-
-query error DataFusion error: Invalid or Unsupported Configuration: This feature is not implemented: Unknown FileType: NOTVALIDFORMAT
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format notvalidformat, compression 'zstd(5)');
 
 
 # Error cases:

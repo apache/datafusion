@@ -26,7 +26,7 @@ use std::result;
 use std::sync::Arc;
 
 use crate::utils::quote_identifier;
-use crate::{Column, DFSchema, OwnedTableReference};
+use crate::{Column, DFSchema, TableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -141,7 +141,7 @@ pub enum SchemaError {
     AmbiguousReference { field: Column },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
-        qualifier: Box<OwnedTableReference>,
+        qualifier: Box<TableReference>,
         name: String,
     },
     /// Schema contains duplicate unqualified field name
@@ -606,18 +606,14 @@ pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
 /// Create a "field not found" DataFusion::SchemaError
-pub fn field_not_found<R: Into<OwnedTableReference>>(
+pub fn field_not_found<R: Into<TableReference>>(
     qualifier: Option<R>,
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
@@ -625,11 +621,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
