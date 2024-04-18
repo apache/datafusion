@@ -1523,10 +1523,17 @@ async fn unnest_non_nullable_list() -> Result<()> {
         .await?;
 
     // Unnesting may produce NULLs even if the list is non-nullable.
+    #[rustfmt::skip]
     let expected = [
-        "+----+", "| c1 |", "+----+", "|    |", "| 1  |", "| 2  |", "+----+",
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 1  |",
+        "| 2  |",
+        "|    |",
+        "+----+",
     ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
