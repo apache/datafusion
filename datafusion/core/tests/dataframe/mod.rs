@@ -1471,7 +1471,6 @@ async fn unnest_multiple_columns() -> Result<()> {
 
     // Test with `preserve_nulls = false``
     let results = df
-        .clone()
         .unnest_columns_with_options(
             &["list", "large_list", "fixed_list"],
             UnnestOptions::new().with_preserve_nulls(false),
