@@ -184,6 +184,12 @@ pub enum Expr {
     Unnest(Unnest),
 }
 
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Literal(ScalarValue::Null)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
