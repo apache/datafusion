@@ -68,11 +68,26 @@ impl Constraints {
         let constraints = constraints
             .iter()
             .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique {
-                    columns,
-                    is_primary,
-                    ..
-                } => {
+                TableConstraint::Unique { columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get primary key and/or unique indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|pk| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == pk.value)
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(
+                                        "Unique key doesn't exist".to_string(),
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::Unique(indices))
+                }
+                TableConstraint::PrimaryKey { columns, .. } => {
                     let field_names = df_schema.field_names();
                     // Get primary key and/or unique indices in the schema:
                     let indices = columns
@@ -89,11 +104,7 @@ impl Constraints {
                             Ok(idx)
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(if *is_primary {
-                        Constraint::PrimaryKey(indices)
-                    } else {
-                        Constraint::Unique(indices)
-                    })
+                    Ok(Constraint::PrimaryKey(indices))
                 }
                 TableConstraint::ForeignKey { .. } => {
                     _plan_err!("Foreign key constraints are not currently supported")
