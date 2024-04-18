@@ -19,12 +19,13 @@
 mod dataframe_functions;
 mod describe;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Float32Type, Int32Type, Schema, UInt64Type};
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{
     array::{
-        ArrayRef, FixedSizeListBuilder, Int32Array, Int32Builder, ListBuilder,
-        StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder,
+        ArrayRef, FixedSizeListArray, FixedSizeListBuilder, Int32Array, Int32Builder,
+        LargeListArray, ListArray, ListBuilder, StringArray, StringBuilder,
+        StructBuilder, UInt32Array, UInt32Builder,
     },
     record_batch::RecordBatch,
 };
@@ -896,7 +897,7 @@ async fn unnest_columns() -> Result<()> {
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let results = df.unnest_column("tags")?.collect().await?;
+    let results = df.unnest_columns(&["tags"])?.collect().await?;
     let expected = [
         "+----------+------------------------------------------------+------+",
         "| shape_id | points                                         | tags |",
@@ -914,12 +915,12 @@ async fn unnest_columns() -> Result<()> {
 
     // Test aggregate results for tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let count = df.unnest_column("tags")?.count().await?;
+    let count = df.unnest_columns(&["tags"])?.count().await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     // Unnest points
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let results = df.unnest_column("points")?.collect().await?;
+    let results = df.unnest_columns(&["points"])?.collect().await?;
     let expected = [
         "+----------+-----------------+--------------------+",
         "| shape_id | points          | tags               |",
@@ -938,14 +939,14 @@ async fn unnest_columns() -> Result<()> {
 
     // Test aggregate results for points.
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let count = df.unnest_column("points")?.count().await?;
+    let count = df.unnest_columns(&["points"])?.count().await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     // Unnest both points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df
-        .unnest_column("points")?
-        .unnest_column("tags")?
+        .unnest_columns(&["points"])?
+        .unnest_columns(&["tags"])?
         .collect()
         .await?;
     let expected = vec![
@@ -972,8 +973,8 @@ async fn unnest_columns() -> Result<()> {
     // Test aggregate results for points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
     let count = df
-        .unnest_column("points")?
-        .unnest_column("tags")?
+        .unnest_columns(&["points"])?
+        .unnest_columns(&["tags"])?
         .count()
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
@@ -1002,7 +1003,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
     let results = df
         .clone()
-        .unnest_column_with_options("list", options)?
+        .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
     let expected = [
@@ -1019,7 +1020,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
-        .unnest_column_with_options("list", options)?
+        .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
     let expected = [
@@ -1062,7 +1063,7 @@ async fn unnest_fixed_list() -> Result<()> {
     let options = UnnestOptions::new().with_preserve_nulls(true);
 
     let results = df
-        .unnest_column_with_options("tags", options)?
+        .unnest_columns_with_options(&["tags"], options)?
         .collect()
         .await?;
     let expected = vec![
@@ -1112,7 +1113,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     let options = UnnestOptions::new().with_preserve_nulls(false);
 
     let results = df
-        .unnest_column_with_options("tags", options)?
+        .unnest_columns_with_options(&["tags"], options)?
         .collect()
         .await?;
     let expected = [
@@ -1178,7 +1179,7 @@ async fn unnest_fixed_list_nonull() -> Result<()> {
 
     let options = UnnestOptions::new().with_preserve_nulls(true);
     let results = df
-        .unnest_column_with_options("tags", options)?
+        .unnest_columns_with_options(&["tags"], options)?
         .collect()
         .await?;
     let expected = vec![
@@ -1225,7 +1226,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
 
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df
-        .unnest_column("tags")?
+        .unnest_columns(&["tags"])?
         .aggregate(vec![], vec![count(col("tags"))])?
         .collect()
         .await?;
@@ -1308,7 +1309,7 @@ async fn unnest_array_agg() -> Result<()> {
             vec![col("shape_id")],
             vec![array_agg(col("tag_id")).alias("tag_id")],
         )?
-        .unnest_column("tag_id")?
+        .unnest_columns(&["tag_id"])?
         .collect()
         .await?;
     let expected = vec![
@@ -1377,7 +1378,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
             vec![col("shape_id")],
             vec![array_agg(col("shape_id")).alias("shape_id2")],
         )?
-        .unnest_column("shape_id2")?
+        .unnest_columns(&["shape_id2"])?
         .select(vec![col("shape_id")])?;
 
     let optimized_plan = df.clone().into_optimized_plan()?;
@@ -1422,7 +1423,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
 
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df
-        .unnest_column("tags")?
+        .unnest_columns(&["tags"])?
         .explain(false, true)?
         .collect()
         .await?;
@@ -1437,6 +1438,105 @@ async fn unnest_analyze_metrics() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn unnest_multiple_columns() -> Result<()> {
+    let df = table_with_mixed_lists().await?;
+    // Default behavior is to preserve nulls.
+    let results = df
+        .clone()
+        .unnest_columns(&["list", "large_list", "fixed_list"])?
+        .collect()
+        .await?;
+    // list:        [1,2,3], null, [null], null,
+    // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
+    // fixed_list:  null, [1,2], [3,4], null
+    // string:      a, b, c, d
+    let expected = [
+        "+------+------------+------------+--------+",
+        "| list | large_list | fixed_list | string |",
+        "+------+------------+------------+--------+",
+        "| 1    |            |            | a      |",
+        "| 2    | 1.1        |            | a      |",
+        "| 3    |            |            | a      |",
+        "|      | 2.2        | 1          | b      |",
+        "|      | 3.3        | 2          | b      |",
+        "|      | 4.4        |            | b      |",
+        "|      |            | 3          | c      |",
+        "|      |            | 4          | c      |",
+        "|      |            |            | d      |",
+        "+------+------------+------------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Test with `preserve_nulls = false``
+    let results = df
+        .unnest_columns_with_options(
+            &["list", "large_list", "fixed_list"],
+            UnnestOptions::new().with_preserve_nulls(false),
+        )?
+        .collect()
+        .await?;
+    // list:        [1,2,3], null, [null], null,
+    // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
+    // fixed_list:  null, [1,2], [3,4], null
+    // string:      a, b, c, d
+    let expected = [
+        "+------+------------+------------+--------+",
+        "| list | large_list | fixed_list | string |",
+        "+------+------------+------------+--------+",
+        "| 1    |            |            | a      |",
+        "| 2    | 1.1        |            | a      |",
+        "| 3    |            |            | a      |",
+        "|      | 2.2        | 1          | b      |",
+        "|      | 3.3        | 2          | b      |",
+        "|      | 4.4        |            | b      |",
+        "|      |            | 3          | c      |",
+        "|      |            | 4          | c      |",
+        "+------+------------+------------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+/// Test unnesting a non-nullable list.
+#[tokio::test]
+async fn unnest_non_nullable_list() -> Result<()> {
+    let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2)]),
+        Some(vec![None]),
+    ]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c1",
+        DataType::new_list(DataType::Int32, true),
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(list_array)])?;
+    let ctx = SessionContext::new();
+    let results = ctx
+        .read_batches(vec![batch])?
+        .unnest_columns(&["c1"])?
+        .collect()
+        .await?;
+
+    // Unnesting may produce NULLs even if the list is non-nullable.
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 1  |",
+        "| 2  |",
+        "|    |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_read_batches() -> Result<()> {
     let config = SessionConfig::new();
@@ -1729,6 +1829,47 @@ fn get_fixed_list_batch() -> Result<RecordBatch, ArrowError> {
     ])?;
 
     Ok(batch)
+}
+
+/// Create a table with different types of list columns and a string column.
+async fn table_with_mixed_lists() -> Result<DataFrame> {
+    let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2), Some(3)]),
+        None,
+        Some(vec![None]),
+        None,
+    ]);
+
+    let large_list_array =
+        LargeListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![None, Some(1.1)]),
+            Some(vec![Some(2.2), Some(3.3), Some(4.4)]),
+            None,
+            Some(vec![]),
+        ]);
+
+    let fixed_list_array = FixedSizeListArray::from_iter_primitive::<UInt64Type, _, _>(
+        vec![
+            None,
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            None,
+        ],
+        2,
+    );
+
+    let string_array = StringArray::from(vec!["a", "b", "c", "d"]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("list", Arc::new(list_array) as ArrayRef),
+        ("large_list", Arc::new(large_list_array) as ArrayRef),
+        ("fixed_list", Arc::new(fixed_list_array) as ArrayRef),
+        ("string", Arc::new(string_array) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("mixed_lists", batch)?;
+    ctx.table("mixed_lists").await
 }
 
 /// A a data frame that a list of integers and string IDs
