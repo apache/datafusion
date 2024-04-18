@@ -32,6 +32,9 @@ rust-version = "1.73"
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_proto"
 path = "src/lib.rs"
