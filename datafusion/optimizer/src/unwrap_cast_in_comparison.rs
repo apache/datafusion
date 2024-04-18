@@ -179,8 +179,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         };
                         **left = lit(value);
                         // unwrap the cast/try_cast for the right expr
-                        **right =
-                            mem::replace(right_expr, Expr::Literal(ScalarValue::Null));
+                        **right = mem::take(right_expr);
                         Ok(Transformed::yes(expr))
                     }
                     (
@@ -203,8 +202,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                             return Ok(Transformed::no(expr));
                         };
                         // unwrap the cast/try_cast for the left expr
-                        **left =
-                            mem::replace(left_expr, Expr::Literal(ScalarValue::Null));
+                        **left = mem::take(left_expr);
                         **right = lit(value);
                         Ok(Transformed::yes(expr))
                     }
@@ -262,7 +260,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     .collect::<Result<Vec<_>>>() else {
                     return Ok(Transformed::no(expr))
                 };
-                **left = mem::replace(left_expr, Expr::Literal(ScalarValue::Null));
+                **left = mem::take(left_expr);
                 *list = right_exprs;
                 Ok(Transformed::yes(expr))
             }
