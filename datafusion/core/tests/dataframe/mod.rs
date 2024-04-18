@@ -1448,22 +1448,26 @@ async fn unnest_multiple_columns() -> Result<()> {
         .unnest_columns(&["list", "large_list", "fixed_list"])?
         .collect()
         .await?;
+    // list:        [1,2,3], null, [null], null,
+    // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
+    // fixed_list:  null, [1,2], [3,4], null
+    // string:      a, b, c, d
     let expected = [
         "+------+------------+------------+--------+",
         "| list | large_list | fixed_list | string |",
         "+------+------------+------------+--------+",
-        "|      |            |            | d      |",
-        "|      |            | 3          | c      |",
-        "|      |            | 4          | c      |",
-        "|      | 2.2        | 1          | b      |",
-        "|      | 3.3        | 2          | b      |",
-        "|      | 4.4        |            | b      |",
         "| 1    |            |            | a      |",
         "| 2    | 1.1        |            | a      |",
         "| 3    |            |            | a      |",
+        "|      | 2.2        | 1          | b      |",
+        "|      | 3.3        | 2          | b      |",
+        "|      | 4.4        |            | b      |",
+        "|      |            | 3          | c      |",
+        "|      |            | 4          | c      |",
+        "|      |            |            | d      |",
         "+------+------------+------------+--------+",
     ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_batches_eq!(expected, &results);
 
     // Test with `preserve_nulls = false``
     let results = df
@@ -1474,18 +1478,22 @@ async fn unnest_multiple_columns() -> Result<()> {
         )?
         .collect()
         .await?;
+    // list:        [1,2,3], null, [null], null,
+    // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
+    // fixed_list:  null, [1,2], [3,4], null
+    // string:      a, b, c, d
     let expected = [
         "+------+------------+------------+--------+",
         "| list | large_list | fixed_list | string |",
         "+------+------------+------------+--------+",
-        "|      |            | 3          | c      |",
-        "|      |            | 4          | c      |",
-        "|      | 2.2        | 1          | b      |",
-        "|      | 3.3        | 2          | b      |",
-        "|      | 4.4        |            | b      |",
         "| 1    |            |            | a      |",
         "| 2    | 1.1        |            | a      |",
         "| 3    |            |            | a      |",
+        "|      | 2.2        | 1          | b      |",
+        "|      | 3.3        | 2          | b      |",
+        "|      | 4.4        |            | b      |",
+        "|      |            | 3          | c      |",
+        "|      |            | 4          | c      |",
         "+------+------------+------------+--------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
