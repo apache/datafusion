@@ -993,7 +993,7 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    e.transform_up(&|expr| {
+    e.transform_up(&mut |expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
                 Some(new_c) => Transformed::yes(new_c.clone()),

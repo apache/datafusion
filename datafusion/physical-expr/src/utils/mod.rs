@@ -194,9 +194,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init
-        .transform_up_mut(&mut |node| builder.mutate(node))
-        .data()?;
+    let root = init.transform_up(&mut |node| builder.mutate(node)).data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -224,7 +222,7 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(&|expr| {
+    pred.transform_down(&mut |expr| {
         let expr_any = expr.as_any();
 
         if let Some(column) = expr_any.downcast_ref::<Column>() {

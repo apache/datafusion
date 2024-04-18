@@ -797,9 +797,9 @@ impl LogicalPlan {
     /// Similarly to [`Self::transform`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
-    pub fn transform_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
+    pub fn transform_with_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        f: &mut F,
     ) -> Result<Transformed<Self>> {
         self.transform_up_with_subqueries(f)
     }
@@ -807,43 +807,21 @@ impl LogicalPlan {
     /// Similarly to [`Self::transform_down`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
-    pub fn transform_down_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c.transform_down_with_subqueries(f))
-    }
-
-    /// Similarly to [`Self::transform_down_mut`], rewrites this node and its inputs using `f`,
-    /// including subqueries that may appear in expressions such as `IN (SELECT
-    /// ...)`.
-    pub fn transform_down_mut_with_subqueries<
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    >(
+    pub fn transform_down_with_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c
-            .transform_down_mut_with_subqueries(f))
+        handle_transform_recursion_down!(f(self), |c| c.transform_down_with_subqueries(f))
     }
 
     /// Similarly to [`Self::transform_up`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
-    pub fn transform_up_with_subqueries<F: Fn(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &F,
-    ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_with_subqueries(f), f)
-    }
-
-    pub fn transform_up_mut_with_subqueries<
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    >(
+    pub fn transform_up_with_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_mut_with_subqueries(f), f)
+        handle_transform_recursion_up!(self, |c| c.transform_up_with_subqueries(f), f)
     }
 
     /// Similarly to [`Self::transform_down`], rewrites this node and its inputs using `f`,
@@ -895,7 +873,7 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         self.map_expressions(|expr| {
-            expr.transform_down_mut(&mut |expr| match expr {
+            expr.transform_down(&mut |expr| match expr {
                 Expr::Exists(Exists { subquery, negated }) => {
                     f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
                         LogicalPlan::Subquery(subquery) => {

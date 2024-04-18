@@ -41,7 +41,7 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down_with_subqueries(&analyze_internal)
+        plan.transform_down_with_subqueries(&mut analyze_internal)
             .data()
     }
 
@@ -78,7 +78,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr)?;
-        let transformed_expr = expr.transform_up(&|expr| match expr {
+        let transformed_expr = expr.transform_up(&mut |expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
             {

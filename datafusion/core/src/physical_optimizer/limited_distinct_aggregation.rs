@@ -138,7 +138,7 @@ impl LimitedDistinctAggregation {
             rewrite_applicable = false;
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
+        let child = child.clone().transform_down(&mut closure).data().ok()?;
         if is_global_limit {
             return Some(Arc::new(GlobalLimitExec::new(
                 child,
@@ -163,7 +163,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_distinct_aggregation_soft_limit {
-            plan.transform_down(&|plan| {
+            plan.transform_down(&mut |plan| {
                 Ok(
                     if let Some(plan) =
                         LimitedDistinctAggregation::transform_limit(plan.clone())

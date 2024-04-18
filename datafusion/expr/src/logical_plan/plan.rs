@@ -554,7 +554,7 @@ impl LogicalPlan {
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
                 let predicate = predicate
-                    .transform_down(&|expr| {
+                    .transform_down(&mut |expr| {
                         match expr {
                             Expr::Exists { .. }
                             | Expr::ScalarSubquery(_)
@@ -1017,10 +1017,10 @@ impl LogicalPlan {
         self,
         param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
-        self.transform_up_with_subqueries(&|plan| {
+        self.transform_up_with_subqueries(&mut |plan| {
             let schema = plan.schema().clone();
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(&|e| {
+                e.infer_placeholder_types(&schema)?.transform_up(&mut |e| {
                     if let Expr::Placeholder(Placeholder { id, .. }) = e {
                         let value = param_values.get_placeholders_with_values(&id)?;
                         Ok(Transformed::yes(Expr::Literal(value)))
@@ -3170,7 +3170,7 @@ digraph {
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
         let plan = plan
-            .transform(&|plan| match plan {
+            .transform(&mut |plan| match plan {
                 LogicalPlan::TableScan(table) => {
                     let filter = Filter::try_new(
                         external_filter.clone(),

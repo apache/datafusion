@@ -145,9 +145,9 @@ pub trait TreeNode: Sized {
     /// Convenience utility for writing optimizer rules: Recursively apply the
     /// given function `f` to the tree in a bottom-up (post-order) fashion. When
     /// `f` does not apply to a given node, it is left unchanged.
-    fn transform<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        f: &mut F,
     ) -> Result<Transformed<Self>> {
         self.transform_up(f)
     }
@@ -155,9 +155,9 @@ pub trait TreeNode: Sized {
     /// Convenience utility for writing optimizer rules: Recursively apply the
     /// given function `f` to a node and then to its children (pre-order traversal).
     /// When `f` does not apply to a given node, it is left unchanged.
-    fn transform_down<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform_down<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        f: &mut F,
     ) -> Result<Transformed<Self>> {
         handle_transform_recursion_down!(f(self), |c| c.transform_down(f))
     }
@@ -165,20 +165,21 @@ pub trait TreeNode: Sized {
     /// Convenience utility for writing optimizer rules: Recursively apply the
     /// given mutable function `f` to a node and then to its children (pre-order
     /// traversal). When `f` does not apply to a given node, it is left unchanged.
+    #[deprecated(since = "38.0.0", note = "Use `transform_down` instead")]
     fn transform_down_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c.transform_down_mut(f))
+        self.transform_down(f)
     }
 
     /// Convenience utility for writing optimizer rules: Recursively apply the
     /// given function `f` to all children of a node, and then to the node itself
     /// (post-order traversal). When `f` does not apply to a given node, it is
     /// left unchanged.
-    fn transform_up<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform_up<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        f: &mut F,
     ) -> Result<Transformed<Self>> {
         handle_transform_recursion_up!(self, |c| c.transform_up(f), f)
     }
@@ -187,11 +188,12 @@ pub trait TreeNode: Sized {
     /// given mutable function `f` to all children of a node, and then to the
     /// node itself (post-order traversal). When `f` does not apply to a given
     /// node, it is left unchanged.
+    #[deprecated(since = "38.0.0", note = "Use `transform_up` instead")]
     fn transform_up_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_mut(f), f)
+        self.transform_up(f)
     }
 
     /// Transforms the tree using `f_down` while traversing the tree top-down
@@ -200,8 +202,8 @@ pub trait TreeNode: Sized {
     ///
     /// Use this method if you want to start the `f_up` process right where `f_down` jumps.
     /// This can make the whole process faster by reducing the number of `f_up` steps.
-    /// If you don't need this, it's just like using `transform_down_mut` followed by
-    /// `transform_up_mut` on the same tree.
+    /// If you don't need this, it's just like using `transform_down` followed by
+    /// `transform_up` on the same tree.
     ///
     /// Consider the following tree structure:
     /// ```text
@@ -439,9 +441,7 @@ impl TreeNodeRecursion {
 /// This struct is used by tree transformation APIs such as
 /// - [`TreeNode::rewrite`],
 /// - [`TreeNode::transform_down`],
-/// - [`TreeNode::transform_down_mut`],
 /// - [`TreeNode::transform_up`],
-/// - [`TreeNode::transform_up_mut`],
 /// - [`TreeNode::transform_down_up`]
 ///
 /// to control the transformation and return the transformed result.
@@ -1466,7 +1466,7 @@ mod tests {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
-                assert_eq!(tree.transform_down_mut(&mut $F)?, $EXPECTED_TREE);
+                assert_eq!(tree.transform_down(&mut $F)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1478,7 +1478,7 @@ mod tests {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
-                assert_eq!(tree.transform_up_mut(&mut $F)?, $EXPECTED_TREE);
+                assert_eq!(tree.transform_up(&mut $F)?, $EXPECTED_TREE);
 
                 Ok(())
             }
