@@ -2429,12 +2429,12 @@ statement ok
 INSERT INTO test_decimal_table VALUES (1, 10.10, 100.1, NULL), (1, 20.20, 200.2, NULL), (2, 10.10, 700.1, NULL), (2, 20.20, 700.1, NULL), (3, 10.1, 100.1, NULL), (3, 10.1, NULL, NULL)
 
 # aggregate_decimal_with_group_by
-query IIRRRRIIR rowsort
-select c1, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c3), count(c4), sum(c4) from test_decimal_table group by c1
+query IIRRRRIIRR rowsort
+select c1, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c3), count(c4), sum(c4), avg(c4) from test_decimal_table group by c1
 ----
-1 2 15.15 30.3 10.1 20.2 2 0 NULL
-2 2 15.15 30.3 10.1 20.2 2 0 NULL
-3 2 10.1 20.2 10.1 10.1 1 0 NULL
+1 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
+2 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
+3 2 10.1 20.2 10.1 10.1 1 0 NULL NULL
 
 # aggregate_decimal_with_group_by_decimal
 query RIRRRRIR rowsort
