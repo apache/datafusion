@@ -471,24 +471,37 @@ impl SessionContext {
     /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Ddl(ddl) => match ddl {
-                DdlStatement::CreateExternalTable(cmd) => {
-                    self.create_external_table(&cmd).await
+            LogicalPlan::Ddl(ddl) => {
+                // Box::pin avoids allocating the stack space within this function's frame
+                // for every one of these individual async functions, decreasing the risk of
+                // stack overflows.
+                match ddl {
+                    DdlStatement::CreateExternalTable(cmd) => {
+                        Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    }
+                    DdlStatement::CreateMemoryTable(cmd) => {
+                        Box::pin(self.create_memory_table(cmd))
+                    }
+                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateCatalogSchema(cmd) => {
+                        Box::pin(self.create_catalog_schema(cmd))
+                    }
+                    DdlStatement::CreateCatalog(cmd) => {
+                        Box::pin(self.create_catalog(cmd))
+                    }
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropCatalogSchema(cmd) => {
+                        Box::pin(self.drop_schema(cmd))
+                    }
+                    DdlStatement::CreateFunction(cmd) => {
+                        Box::pin(self.create_function(cmd))
+                    }
+                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
                 }
-                DdlStatement::CreateMemoryTable(cmd) => {
-                    self.create_memory_table(cmd).await
-                }
-                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
-                DdlStatement::CreateCatalogSchema(cmd) => {
-                    self.create_catalog_schema(cmd).await
-                }
-                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
-                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
-                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
-                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
-                DdlStatement::CreateFunction(cmd) => self.create_function(cmd).await,
-                DdlStatement::DropFunction(cmd) => self.drop_function(cmd).await,
-            },
+                .await
+            }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
