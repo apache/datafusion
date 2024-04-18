@@ -1496,7 +1496,7 @@ async fn unnest_multiple_columns() -> Result<()> {
         "|      |            | 4          | c      |",
         "+------+------------+------------+--------+",
     ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
