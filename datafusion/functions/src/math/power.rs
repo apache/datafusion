@@ -18,7 +18,9 @@
 //! Math function: `power()`.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionDefinition};
@@ -118,40 +120,47 @@ impl ScalarUDFImpl for PowerFunc {
     /// 3. Power(a, Log(a, b)) ===> b
     fn simplify(
         &self,
-        args: Vec<Expr>,
+        mut args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let base = &args[0];
-        let exponent = &args[1];
+        let exponent = args.pop().ok_or_else(|| {
+            plan_datafusion_err!("Expected power to have 2 arguments, got 0")
+        })?;
+        let base = args.pop().ok_or_else(|| {
+            plan_datafusion_err!("Expected power to have 2 arguments, got 1")
+        })?;
 
+        let exponent_type = info.get_data_type(&exponent)?;
         match exponent {
-            Expr::Literal(value)
-                if value == &ScalarValue::new_zero(&info.get_data_type(exponent)?)? =>
-            {
+            Expr::Literal(value) if value == ScalarValue::new_zero(&exponent_type)? => {
                 Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-                    ScalarValue::new_one(&info.get_data_type(base)?)?,
+                    ScalarValue::new_one(&info.get_data_type(&base)?)?,
                 )))
             }
-            Expr::Literal(value)
-                if value == &ScalarValue::new_one(&info.get_data_type(exponent)?)? =>
-            {
-                Ok(ExprSimplifyResult::Simplified(base.clone()))
+            Expr::Literal(value) if value == ScalarValue::new_one(&exponent_type)? => {
+                Ok(ExprSimplifyResult::Simplified(base))
             }
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(fun),
-                args,
-            }) if base == &args[0]
-                && fun
-                    .as_ref()
-                    .inner()
-                    .as_any()
-                    .downcast_ref::<LogFunc>()
-                    .is_some() =>
+            Expr::ScalarFunction(ScalarFunction { func_def, mut args })
+                if is_log(&func_def) && args.len() == 2 && base == args[0] =>
             {
-                Ok(ExprSimplifyResult::Simplified(args[1].clone()))
+                let b = args.pop().unwrap(); // length checked above
+                Ok(ExprSimplifyResult::Simplified(b))
             }
-            _ => Ok(ExprSimplifyResult::Original(args)),
+            _ => Ok(ExprSimplifyResult::Original(vec![base, exponent])),
         }
+    }
+}
+
+/// Return true if this function call is a call to `Log`
+fn is_log(func_def: &ScalarFunctionDefinition) -> bool {
+    if let ScalarFunctionDefinition::UDF(fun) = func_def {
+        fun.as_ref()
+            .inner()
+            .as_any()
+            .downcast_ref::<LogFunc>()
+            .is_some()
+    } else {
+        false
     }
 }
 
