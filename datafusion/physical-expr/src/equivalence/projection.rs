@@ -59,7 +59,7 @@ impl ProjectionMapping {
                 let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
                 expression
                     .clone()
-                    .transform_down(&mut |e| match e.as_any().downcast_ref::<Column>() {
+                    .transform_down(|e| match e.as_any().downcast_ref::<Column>() {
                         Some(col) => {
                             // Sometimes, an expression and its name in the input_schema
                             // doesn't match. This can cause problems, so we make sure

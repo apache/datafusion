@@ -613,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());

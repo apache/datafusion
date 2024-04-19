@@ -263,7 +263,7 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
-            .transform_up(&mut |p| apply_subrules(p, &subrules, config))
+            .transform_up(|p| apply_subrules(p, &subrules, config))
             .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
@@ -280,7 +280,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
         new_plan
-            .transform_up(&mut |plan| {
+            .transform_up(|plan| {
                 statistical_join_selection_subrule(
                     plan,
                     collect_threshold_byte_size,
@@ -842,13 +842,13 @@ mod tests_statistical {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
-            .transform_up(&mut |p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .transform_up(|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
             .data()?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        let _ = new_plan.transform_up(&mut |plan| {
+        let _ = new_plan.transform_up(|plan| {
             statistical_join_selection_subrule(
                 plan,
                 collect_left_threshold,
