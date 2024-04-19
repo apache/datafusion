@@ -279,4 +279,28 @@ backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
    ............
 ```
 
+The backtraces are useful when debugging code. If there is a test in `datafusion/core/src/physical_planner.rs`
+
+```
+#[tokio::test]
+async fn test_get_backtrace_for_failed_code() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "
+    select row_numer() over (partition by a order by a) from (select 1 a);
+    ";
+
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    Ok(())
+}
+```
+
+To obtain a backtrace:
+
+```bash
+cargo build --features=backtrace
+RUST_BACKTRACE=1 cargo test --features=backtrace --package datafusion --lib -- physical_planner::tests::test_get_backtrace_for_failed_code --exact --nocapture
+```
+
 Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored
