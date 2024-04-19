@@ -572,6 +572,51 @@ mod test {
     }
 
     #[test]
+    fn multiple_rows_with_struct() {
+        let struct_col = struct_array(vec![
+            // row group 1
+            (Some(true), Some(1)),
+            (None, None),
+            (Some(false), Some(3)),
+        ]);
+
+        let expected_max = struct_array(vec![(Some(true), Some(3))]);
+
+        let expected_min = struct_array(vec![(Some(false), Some(1))]);
+
+        let input_batch =
+            RecordBatch::try_from_iter([("struct_col", struct_col.clone())]).unwrap();
+
+        let schema = input_batch.schema();
+
+        let metadata = parquet_metadata(schema.clone(), input_batch);
+        let parquet_schema = metadata.file_metadata().schema_descr();
+
+        // read the int_col statistics
+        let (idx, _) = parquet_column(parquet_schema, &schema, "struct_col").unwrap();
+        assert_eq!(idx, 1);
+
+        let row_groups = metadata.row_groups();
+        let iter = row_groups.iter().map(|x| x.column(idx).statistics());
+
+        let min = min_statistics(&DataType::Int32, iter.clone()).unwrap();
+        assert_eq!(
+            &min,
+            &expected_min,
+            "Min. Statistics\n\n{}\n\n",
+            DisplayStats(row_groups)
+        );
+
+        let max = max_statistics(&DataType::Int32, iter).unwrap();
+        assert_eq!(
+            &max,
+            &expected_max,
+            "Max. Statistics\n\n{}\n\n",
+            DisplayStats(row_groups)
+        );
+    }
+
+    #[test]
     fn nan_in_stats() {
         // /parquet-testing/data/nan_in_stats.parquet
         // row_groups: 1
