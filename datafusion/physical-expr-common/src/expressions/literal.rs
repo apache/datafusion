@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::{
     datatypes::{DataType, Schema},
