@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines physical expressions that can evaluated at runtime during query execution
+
+#[macro_use]
+pub mod binary;
 pub mod column;
-pub mod intervals;
+pub mod datum;
 pub mod literal;
+pub mod try_cast;

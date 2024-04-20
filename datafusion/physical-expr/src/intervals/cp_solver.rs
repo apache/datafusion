@@ -34,7 +34,7 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-pub use datafusion_physical_expr_common::expressions::intervals::cp_solver::{
+pub use datafusion_physical_expr_common::intervals::cp_solver::{
     propagate_arithmetic, propagate_comparison,
 };
 
