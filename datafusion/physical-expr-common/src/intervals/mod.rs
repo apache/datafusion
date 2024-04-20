@@ -19,4 +19,3 @@
 
 pub mod cp_solver;
 pub mod utils;
-
