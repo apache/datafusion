@@ -66,6 +66,7 @@ use std::sync::Arc;
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::first_last::first_value;
+    pub use super::first_last::last_value;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]

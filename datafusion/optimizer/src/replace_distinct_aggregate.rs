@@ -23,7 +23,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{col, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
-use datafusion_functions_aggregate::first_last::create_first_value_expr;
+use datafusion_functions_aggregate::expr_fn::first_value;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -90,13 +90,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let aggr_expr = select_expr
                     .iter()
                     .map(|e| {
-                        create_first_value_expr(
-                            vec![e.clone()],
-                            false,
-                            None,
-                            sort_expr.clone(),
-                            None,
-                        )
+                        first_value(vec![e.clone()], false, None, sort_expr.clone(), None)
                     })
                     .collect::<Vec<Expr>>();
 

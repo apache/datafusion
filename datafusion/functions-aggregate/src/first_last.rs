@@ -24,7 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{AggregateFunction, Sort};
+use datafusion_expr::expr::Sort;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
@@ -42,7 +42,6 @@ use std::fmt::Debug;
 make_udaf_function!(
     FirstValue,
     first_value,
-    value,
     "Returns the first value in a group of values.",
     first_value_udaf
 );
@@ -50,27 +49,9 @@ make_udaf_function!(
 make_udaf_function!(
     LastValue,
     last_value,
-    value,
     "Returns the last value in a group of values.",
     last_value_udaf
 );
-
-pub fn create_first_value_expr(
-    args: Vec<Expr>,
-    distinct: bool,
-    filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
-    null_treatment: Option<NullTreatment>,
-) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
-        first_value_udaf(),
-        args,
-        distinct,
-        filter,
-        order_by,
-        null_treatment,
-    ))
-}
 
 pub struct FirstValue {
     signature: Signature,
