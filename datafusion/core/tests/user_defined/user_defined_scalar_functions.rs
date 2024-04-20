@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
     Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
@@ -176,7 +175,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from(vec![1,2]))],
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -197,7 +196,13 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
         buggy_udf,
     ));
     assert_contains!(
-        ctx.sql("select buggy_func(a) from t").await?.show().await.err().unwrap().to_string(),
+        ctx.sql("select buggy_func(a) from t")
+            .await?
+            .show()
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
         "UDF returned a different number of rows than expected"
     );
     Ok(())
