@@ -25,19 +25,24 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 
 ## Branching Policy
 
-- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- When we prepare a new release, we create a release branch, such as `branch-37` in the Apache repository (not in a fork)
 - We update the crate version and generate the changelog in this branch and create a PR against the main branch
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
 #### How to add changes to `branch-*` branch?
 
-If you would like to propose your change for inclusion in a release branch
+If you would like to propose your change for inclusion in a release branch for a
+patch release:
 
-1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
-2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
+1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
+1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-## Prerequisite
+[example release issue]: https://github.com/apache/arrow-datafusion/issues/9904
+[example backport pr]: https://github.com/apache/arrow-datafusion/pull/10123
+
+## Release Prerequisite
 
 - Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
 - Created a personal access token in GitHub for changelog automation script.
@@ -121,7 +126,7 @@ This process is not fully automated, so there are some additional manual steps:
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
-See [#801](https://github.com/apache/arrow-datafusion/pull/801) for an example.
+See [#9697](https://github.com/apache/arrow-datafusion/pull/9697) for an example.
 
 Here are the commands that could be used to prepare the `5.1.0` release:
 
@@ -194,12 +199,11 @@ Send the email output from the script to dev@arrow.apache.org. The email should 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][DataFusion] Release Apache Arrow DataFusion 5.1.0 RC0
+Subject: [VOTE][DataFusion] Release Apache DataFusion 5.1.0 RC0
 
 Hi,
 
-I would like to propose a release of Apache Arrow DataFusion Implementation,
-version 5.1.0.
+I would like to propose a release of Apache DataFusion version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
 The proposed release artifacts and signatures are hosted at [2].
@@ -210,9 +214,9 @@ and vote on the release.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Arrow DataFusion 5.1.0
+[ ] +1 Release this as Apache DataFusion 5.1.0
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
+[ ] -1 Do not release this as Apache DataFusion 5.1.0 because...
 
 Here is my vote:
 

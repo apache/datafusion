@@ -81,8 +81,10 @@ enum Scenario {
 }
 
 enum Unit {
-    RowGroup,
-    Page,
+    // pass max row per row_group in parquet writer
+    RowGroup(usize),
+    // pass max row per page in parquet writer
+    Page(usize),
 }
 
 /// Test fixture that has an execution context that has an external
@@ -185,13 +187,13 @@ impl ContextWithParquet {
         mut config: SessionConfig,
     ) -> Self {
         let file = match unit {
-            Unit::RowGroup => {
+            Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
-                make_test_file_rg(scenario).await
+                make_test_file_rg(scenario, row_per_group).await
             }
-            Unit::Page => {
+            Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
-                make_test_file_page(scenario).await
+                make_test_file_page(scenario, row_per_page).await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -880,7 +882,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 }
 
 /// Create a test parquet file with various data types
-async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
+async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_pruning")
         .suffix(".parquet")
@@ -888,7 +890,7 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(5)
+        .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
         .build();
 
@@ -906,17 +908,17 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
     output_file
 }
 
-async fn make_test_file_page(scenario: Scenario) -> NamedTempFile {
+async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_page_pruning")
         .suffix(".parquet")
         .tempfile()
         .expect("tempfile creation");
 
-    // set row count to 5, should get same result as rowGroup
+    // set row count to row_per_page, should get same result as rowGroup
     let props = WriterProperties::builder()
-        .set_data_page_row_count_limit(5)
-        .set_write_batch_size(5)
+        .set_data_page_row_count_limit(row_per_page)
+        .set_write_batch_size(row_per_page)
         .build();
 
     let batches = create_data_batch(scenario);

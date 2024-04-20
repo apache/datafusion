@@ -156,7 +156,8 @@ impl Default for DataFrameWriteOptions {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DataFrame {
-    session_state: SessionState,
+    // Box the (large) SessionState to reduce the size of DataFrame on the stack
+    session_state: Box<SessionState>,
     plan: LogicalPlan,
 }
 
@@ -168,7 +169,7 @@ impl DataFrame {
     /// `DataFrame` from an existing datasource.
     pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
-            session_state,
+            session_state: Box::new(session_state),
             plan,
         }
     }
@@ -234,10 +235,33 @@ impl DataFrame {
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Expand each list element of a column to multiple rows.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        self.unnest_columns(&[column])
+    }
+
+    /// Expand each list element of a column to multiple rows, with
+    /// behavior controlled by [`UnnestOptions`].
+    ///
+    /// Please see the documentation on [`UnnestOptions`] for more
+    /// details about the meaning of unnest.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
+    pub fn unnest_column_with_options(
+        self,
+        column: &str,
+        options: UnnestOptions,
+    ) -> Result<DataFrame> {
+        self.unnest_columns_with_options(&[column], options)
+    }
+
+    /// Expand multiple list columns into a set of rows.
     ///
     /// See also:
     ///
@@ -252,28 +276,32 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_column("a")?;
+    /// let df = df.unnest_columns(&["a", "b"])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_column_with_options(column, UnnestOptions::new())
+    pub fn unnest_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        self.unnest_columns_with_options(columns, UnnestOptions::new())
     }
 
-    /// Expand each list element of a column to multiple rows, with
+    /// Expand multiple list columns into a set of rows, with
     /// behavior controlled by [`UnnestOptions`].
     ///
     /// Please see the documentation on [`UnnestOptions`] for more
     /// details about the meaning of unnest.
-    pub fn unnest_column_with_options(
+    pub fn unnest_columns_with_options(
         self,
-        column: &str,
+        columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
+        let columns = columns.iter().map(|c| Column::from(*c)).collect();
         let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_column_with_options(column, options)?
+            .unnest_columns_with_options(columns, options)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a DataFrame with only rows for which `predicate` evaluates to
@@ -298,7 +326,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` that aggregates the rows of the current
@@ -329,7 +360,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new DataFrame that adds the result of evaluating one or more
@@ -338,7 +372,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .window(window_exprs)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Returns a new `DataFrame` with a limited number of rows.
@@ -363,7 +400,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .limit(skip, fetch)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.
@@ -387,7 +427,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .union(dataframe.plan)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the distinct union of two [`DataFrame`]s.
@@ -409,12 +452,13 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::from(self.plan)
-                .union_distinct(dataframe.plan)?
-                .build()?,
-        ))
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_distinct(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` with all duplicated rows removed.
@@ -432,10 +476,11 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn distinct(self) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
-        ))
+        let plan = LogicalPlanBuilder::from(self.plan).distinct()?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` that has statistics for a DataFrame.
@@ -603,15 +648,18 @@ impl DataFrame {
             describe_record_batch.schema(),
             vec![vec![describe_record_batch]],
         )?;
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::scan(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        ))
+
+        let plan = LogicalPlanBuilder::scan(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Sort the DataFrame by the specified sorting expressions.
@@ -637,7 +685,10 @@ impl DataFrame {
     /// ```
     pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Join this `DataFrame` with another `DataFrame` using explicitly specified
@@ -691,7 +742,10 @@ impl DataFrame {
                 filter,
             )?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Join this `DataFrame` with another `DataFrame` using the specified
@@ -741,7 +795,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .join_on(right.plan, join_type, expr)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Repartition a DataFrame based on a logical partitioning scheme.
@@ -762,7 +819,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .repartition(partitioning_scheme)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return the total number of rows in this `DataFrame`.
@@ -867,7 +927,7 @@ impl DataFrame {
 
     /// Return a new [`TaskContext`] which would be used to execute this DataFrame
     pub fn task_ctx(&self) -> TaskContext {
-        TaskContext::from(&self.session_state)
+        TaskContext::from(self.session_state.as_ref())
     }
 
     /// Executes this DataFrame and returns a stream over a single partition
@@ -973,7 +1033,7 @@ impl DataFrame {
 
     /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
     pub fn into_parts(self) -> (SessionState, LogicalPlan) {
-        (self.session_state, self.plan)
+        (*self.session_state, self.plan)
     }
 
     /// Return the [`LogicalPlan`] represented by this DataFrame without running
@@ -1027,7 +1087,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a `FunctionRegistry` used to plan udf's calls
@@ -1046,7 +1109,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn registry(&self) -> &dyn FunctionRegistry {
-        &self.session_state
+        self.session_state.as_ref()
     }
 
     /// Calculate the intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -1066,10 +1129,11 @@ impl DataFrame {
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
-        ))
+        let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -1089,11 +1153,11 @@ impl DataFrame {
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::except(left_plan, right_plan, true)?,
-        ))
+        let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Execute this `DataFrame` and write the results to `table_name`.
@@ -1118,7 +1182,13 @@ impl DataFrame {
             write_options.overwrite,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Execute the `DataFrame` and write the results to CSV file(s).
@@ -1166,7 +1236,13 @@ impl DataFrame {
             options.partition_by,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Execute the `DataFrame` and write the results to JSON file(s).
@@ -1215,7 +1291,13 @@ impl DataFrame {
             options.partition_by,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Add an additional column to the DataFrame.
@@ -1261,7 +1343,10 @@ impl DataFrame {
 
         let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
 
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Rename one column by applying a new projection. This is a no-op if the column to be
@@ -1326,7 +1411,10 @@ impl DataFrame {
         let project_plan = LogicalPlanBuilder::from(self.plan)
             .project(projection)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Replace all parameters in logical plan with the specified
@@ -1388,7 +1476,10 @@ impl DataFrame {
     /// ```
     pub fn with_param_values(self, query_values: impl Into<ParamValues>) -> Result<Self> {
         let plan = self.plan.with_param_values(query_values)?;
-        Ok(Self::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Cache DataFrame as a memory table.
@@ -1405,7 +1496,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state(self.session_state.clone());
+        let context = SessionContext::new_with_state((*self.session_state).clone());
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();

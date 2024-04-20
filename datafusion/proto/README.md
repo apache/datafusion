@@ -17,9 +17,9 @@
   under the License.
 -->
 
-# `datafusion-proto`: Apache Arrow DataFusion Protobuf Serialization / Deserialization
+# `datafusion-proto`: Apache DataFusion Protobuf Serialization / Deserialization
 
-This crate contains code to convert Apache Arrow [DataFusion] plans to and from
+This crate contains code to convert Apache [DataFusion] plans to and from
 bytes, which can be useful for sending plans over the network, for example
 when building a distributed query engine.
 

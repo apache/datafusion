@@ -213,6 +213,12 @@ main() {
                 tpch_mem10)
                     run_tpch_mem "10"
                     ;;
+                tpch_smj)
+                    run_tpch_smj "1"
+                    ;;    
+                tpch_smj10)
+                    run_tpch_smj "10"
+                    ;;                      
                 parquet)
                     run_parquet
                     ;;
@@ -318,6 +324,21 @@ run_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --format parquet -o ${RESULTS_FILE}
+}
+
+# Runs the tpch benchmark with sort merge join
+run_tpch_smj() {
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+
+    RESULTS_FILE="${RESULTS_DIR}/tpch_smj_sf${SCALE_FACTOR}.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpch SMJ benchmark..."
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join false --format parquet -o ${RESULTS_FILE}
 }
 
 # Runs the tpch in memory
