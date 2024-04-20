@@ -184,7 +184,6 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
 
     // udf that always return 1 row
     let buggy_udf = Arc::new(|_: &[ColumnarValue]| {
-        println!("here");
         Ok(ColumnarValue::Array(Arc::new(Int32Array::from(vec![0]))))
     });
 
