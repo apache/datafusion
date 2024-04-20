@@ -16,19 +16,24 @@
 // under the License.
 
 macro_rules! make_udaf_function {
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+    ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
-            pub fn $EXPR_FN($($arg: Expr),*) -> Expr {
+            pub fn $EXPR_FN(
+                args: Vec<Expr>,
+                distinct: bool,
+                filter: Option<Box<Expr>>,
+                order_by: Option<Vec<Expr>>,
+                null_treatment: Option<NullTreatment>
+            ) -> Expr {
                 Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                     $AGGREGATE_UDF_FN(),
-                    vec![$($arg),*],
-                    // TODO: Support arguments for `expr` API
-                    false,
-                    None,
-                    None,
-                    None,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
                 ))
             }
 

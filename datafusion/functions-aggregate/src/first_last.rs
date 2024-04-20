@@ -39,11 +39,11 @@ use datafusion_physical_expr_common::utils::reverse_order_bys;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use sqlparser::ast::NullTreatment;
 
 make_udaf_function!(
     FirstValue,
     first_value,
-    value,
     "Returns the first value in a group of values.",
     first_value_udaf
 );
