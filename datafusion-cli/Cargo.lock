@@ -1363,6 +1363,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "paste",
 ]
 
 [[package]]
