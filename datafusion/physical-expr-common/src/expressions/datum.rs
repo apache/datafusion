@@ -17,7 +17,7 @@
 
 use arrow::array::{ArrayRef, Datum};
 use arrow::error::ArrowError;
-use arrow_array::BooleanArray;
+use arrow::array::BooleanArray;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// Applies a binary [`Datum`] kernel `f` to `lhs` and `rhs`
 ///
 /// This maps arrow-rs' [`Datum`] kernels to DataFusion's [`ColumnarValue`] abstraction
-pub(crate) fn apply(
+pub fn apply(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
     f: impl Fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>,
@@ -49,7 +49,7 @@ pub(crate) fn apply(
 }
 
 /// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs`
-pub(crate) fn apply_cmp(
+pub fn apply_cmp(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
     f: impl Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,

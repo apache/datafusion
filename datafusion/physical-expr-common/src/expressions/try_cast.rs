@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Schema};
@@ -148,7 +148,7 @@ pub fn try_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::column::col;
     use arrow::array::{
         Decimal128Array, Decimal128Builder, StringArray, Time64NanosecondArray,
     };
