@@ -591,7 +591,7 @@ mod tests {
         let input_types = vec![DataType::Int64, DataType::Int32];
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
+        assert_eq!("Error during planning: The function MIN expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
 
         // test input args is invalid data type for sum or avg
         let fun = AggregateFunction::Sum;
