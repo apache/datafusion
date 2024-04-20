@@ -24,7 +24,7 @@ use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -622,8 +622,13 @@ pub fn binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast, Literal};
-    use datafusion_common::plan_datafusion_err;
+    use crate::expressions::column::col;
+    use crate::expressions::literal::{lit, Literal};
+    use crate::expressions::try_cast::try_cast;
+    use arrow::datatypes::{
+        ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
+    };
+    use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary

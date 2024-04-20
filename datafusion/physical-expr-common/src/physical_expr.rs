@@ -232,7 +232,7 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
-/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_physical_expr_common::create_physical_expr;
 /// # use datafusion_expr::execution_props::ExecutionProps;
 /// // For a logical expression `a = 1`, we can create a physical expression
 /// let expr = col("a").eq(lit(1));
@@ -252,7 +252,7 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::{assert_batches_eq, DFSchema};
 /// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
-/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_physical_expr_common::create_physical_expr;
 /// # use datafusion_expr::execution_props::ExecutionProps;
 /// # let expr = col("a").eq(lit(1));
 /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
