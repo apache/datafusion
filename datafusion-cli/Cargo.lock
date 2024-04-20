@@ -1310,7 +1310,6 @@ dependencies = [
  "datafusion-functions",
  "itertools",
  "log",
- "once_cell",
  "paste",
 ]
 
