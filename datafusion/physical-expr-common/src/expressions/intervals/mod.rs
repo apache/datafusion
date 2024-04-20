@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod column;
-pub mod intervals;
-pub mod literal;
+//! Interval arithmetic and constraint propagation library
+
+pub mod cp_solver;
+pub mod utils;
