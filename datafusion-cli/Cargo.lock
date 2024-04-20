@@ -1291,6 +1291,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "log",
  "paste",
+ "sqlparser",
 ]
 
 [[package]]
