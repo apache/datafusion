@@ -282,6 +282,7 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///                      to qualified or unqualified fields by name.
+#[allow(clippy::only_used_in_recursion)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
