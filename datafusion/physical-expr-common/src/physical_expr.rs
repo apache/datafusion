@@ -29,8 +29,9 @@ use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_expr::{BinaryExpr, ColumnarValue, Expr};
 
+use crate::expressions::binary::binary;
 use crate::expressions::column::Column;
 use crate::expressions::literal::Literal;
 use crate::sort_properties::SortProperties;
@@ -288,7 +289,7 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let _input_schema: &Schema = &input_dfschema.into();
+    let input_schema: &Schema = &input_dfschema.into();
 
     match e {
         Expr::Alias(Alias { expr, .. }) => {
@@ -366,19 +367,19 @@ pub fn create_physical_expr(
         //     );
         //     create_physical_expr(&binary_op, input_dfschema, execution_props)
         // }
-        // Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-        //     // Create physical expressions for left and right operands
-        //     let lhs = create_physical_expr(left, input_dfschema, execution_props)?;
-        //     let rhs = create_physical_expr(right, input_dfschema, execution_props)?;
-        //     // Note that the logical planner is responsible
-        //     // for type coercion on the arguments (e.g. if one
-        //     // argument was originally Int32 and one was
-        //     // Int64 they will both be coerced to Int64).
-        //     //
-        //     // There should be no coercion during physical
-        //     // planning.
-        //     binary(lhs, *op, rhs, input_schema)
-        // }
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            // Create physical expressions for left and right operands
+            let lhs = create_physical_expr(left, input_dfschema, execution_props)?;
+            let rhs = create_physical_expr(right, input_dfschema, execution_props)?;
+            // Note that the logical planner is responsible
+            // for type coercion on the arguments (e.g. if one
+            // argument was originally Int32 and one was
+            // Int64 they will both be coerced to Int64).
+            //
+            // There should be no coercion during physical
+            // planning.
+            binary(lhs, *op, rhs, input_schema)
+        }
         // Expr::Like(Like {
         //     negated,
         //     expr,

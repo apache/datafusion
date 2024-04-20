@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::BooleanArray;
 use arrow::array::{ArrayRef, Datum};
 use arrow::error::ArrowError;
-use arrow::array::BooleanArray;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;

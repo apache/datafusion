@@ -74,13 +74,14 @@ pub use datafusion_functions_aggregate::first_last::{
     FirstValuePhysicalExpr as FirstValue, LastValuePhysicalExpr as LastValue,
 };
 
-pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
+pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExpr};
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
+pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
@@ -88,7 +89,6 @@ pub use like::{like, LikeExpr};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
-pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
 
 #[cfg(test)]
 pub(crate) mod tests {

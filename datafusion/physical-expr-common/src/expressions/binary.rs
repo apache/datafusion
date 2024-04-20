@@ -23,8 +23,8 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::physical_expr::PhysicalExpr;
+use crate::sort_properties::SortProperties;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
