@@ -177,7 +177,7 @@ pub fn propagate_comparison(
     }
 }
 
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`],
+/// During the propagation of [`Interval`] values on an ExprIntervalGraph,
 /// if there exists a `timestamp - timestamp` operation, the result would be
 /// of type `Duration`. However, we may encounter a situation where a time interval
 /// is involved in an arithmetic operation with a `Duration` type. This function
@@ -229,7 +229,7 @@ fn propagate_right(
     .intersect(right)
 }
 
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`],
+/// During the propagation of [`Interval`] values on an ExprIntervalGraph,
 /// if there exists a `timestamp - timestamp` operation, the result would be
 /// of type `Duration`. However, we may encounter a situation where a time interval
 /// is involved in an arithmetic operation with a `Duration` type. This function
