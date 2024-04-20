@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Date32Builder;
+
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
-    Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, RecordBatch,
-    StringArray, UInt8Array,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
 };
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
-use chrono::DateTime;
+
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -32,7 +31,7 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
     cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{assert_contains, downcast_value, exec_err, internal_err, DataFusionError};
+use datafusion_common::{assert_contains, exec_err, internal_err, DataFusionError};
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
