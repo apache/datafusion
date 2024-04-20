@@ -177,7 +177,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 let fun = create_physical_fun(fun)?;
                 (fun)(&inputs)
             }
-            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
+            ScalarFunctionDefinition::UDF(ref fun) => {
+                let output = fun.invoke(&inputs)?;
+                let output_count = match &output {
+                    ColumnarValue::Array(array) => array.len(),
+                    ColumnarValue::Scalar(_) => 1,
+                };
+                if output_count != batch.num_rows() {
+                    return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}", 
+                    batch.num_rows(), output_count);
+                }
+                Ok(output)
+            }
             ScalarFunctionDefinition::Name(_) => {
                 internal_err!(
                     "Name function must be resolved to one of the other variants prior to physical planning"
