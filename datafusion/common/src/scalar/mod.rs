@@ -1575,6 +1575,18 @@ impl ScalarValue {
                     tz
                 )
             }
+            DataType::Duration(TimeUnit::Second) => {
+                build_array_primitive!(DurationSecondArray, DurationSecond)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                build_array_primitive!(DurationMillisecondArray, DurationMillisecond)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                build_array_primitive!(DurationMicrosecondArray, DurationMicrosecond)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                build_array_primitive!(DurationNanosecondArray, DurationNanosecond)
+            }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
             }
@@ -1605,7 +1617,10 @@ impl ScalarValue {
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())?
             }
-            DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Struct(_)
+            | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())?
@@ -1673,8 +1688,6 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Duration(_)
-            | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::Utf8View
