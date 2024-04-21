@@ -22,7 +22,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::expr::Alias;
-use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair, split_conjunction};
+use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -143,7 +143,7 @@ fn split_conjunction_own(expr: Expr) -> Vec<Expr> {
     split_conjunction_own_impl(expr, vec![])
 }
 
-fn split_conjunction_own_impl(mut expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
+fn split_conjunction_own_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr {
             right,
@@ -167,7 +167,7 @@ fn split_eq_and_noneq_join_predicate(
     filter: Expr,
     left_schema: &Arc<DFSchema>,
     right_schema: &Arc<DFSchema>,
-) -> Result<(Vec<(Expr, Expr)>, Option<Expr>)> {
+) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
     let exprs = split_conjunction_own(filter);
 
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
@@ -180,8 +180,8 @@ fn split_eq_and_noneq_join_predicate(
                 ref right,
             }) => {
                 let join_key_pair = find_valid_equijoin_key_pair(
-                    &left,
-                    &right,
+                    left,
+                    right,
                     left_schema.clone(),
                     right_schema.clone(),
                 )?;
