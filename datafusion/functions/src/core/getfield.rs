@@ -114,6 +114,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                     let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
                     let entries = arrow::compute::filter(map_array.entries(), &keys)?;
                     let entries_struct_array = as_struct_array(entries.as_ref())?;
+ let st =                   entries_struct_array.column(1).clone();
+ println!("{:?}", st.len());
                     Ok(ColumnarValue::Array(entries_struct_array.column(1).clone()))
                 }
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
