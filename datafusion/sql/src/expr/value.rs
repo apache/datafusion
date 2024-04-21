@@ -215,13 +215,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         return not_impl_err!("Unsupported interval operator: {op:?}");
                     }
                 };
-                match (interval.leading_field, left.as_ref(), right.as_ref()) {
+                match (
+                    interval.leading_field.as_ref(),
+                    left.as_ref(),
+                    right.as_ref(),
+                ) {
                     (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
                             negative,
                             Interval {
                                 value: left,
-                                leading_field: interval.leading_field,
+                                leading_field: interval.leading_field.clone(),
                                 leading_precision: None,
                                 last_field: None,
                                 fractional_seconds_precision: None,
