@@ -27,7 +27,10 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    TypeSignature, Volatility,
+};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -36,6 +39,7 @@ use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -43,7 +47,6 @@ use std::sync::Arc;
 make_udaf_function!(
     FirstValue,
     first_value,
-    value,
     "Returns the first value in a group of values.",
     first_value_udaf
 );
@@ -73,7 +76,14 @@ impl FirstValue {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("FIRST_VALUE")],
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }

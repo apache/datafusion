@@ -19,7 +19,7 @@
 
 # Profiling Cookbook
 
-The section contains examples how to perform CPU profiling for Apache Arrow DataFusion on different operating systems.
+The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.
 
 ## MacOS
 

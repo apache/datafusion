@@ -4613,6 +4613,7 @@ fn roundtrip_statement() -> Result<()> {
             "select * from (select id, first_name from (select * from person))",
             "select id, count(*) as cnt from (select id from person) group by id",
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
+            "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
             r#"select "First Name" from person_quoted_cols"#,
             r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
