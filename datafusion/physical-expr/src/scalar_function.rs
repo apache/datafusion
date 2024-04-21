@@ -179,13 +179,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
             }
             ScalarFunctionDefinition::UDF(ref fun) => {
                 let output = fun.invoke(&inputs)?;
-                let output_count = match &output {
-                    ColumnarValue::Array(array) => array.len(),
-                    ColumnarValue::Scalar(_) => 1,
-                };
-                if output_count != batch.num_rows() {
-                    return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}", 
-                    batch.num_rows(), output_count);
+                if let ColumnarValue::Array(array) = &output {
+                    if array.len() != batch.num_rows() {
+                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}", 
+                        batch.num_rows(), array.len());
+                    }
                 }
                 Ok(output)
             }
