@@ -1983,6 +1983,12 @@ SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
+# aggregate_duration_array_agg
+query T?
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+----
+X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
+Y [, 0 days 0 hours 0 mins 0.432 secs]
 
 statement ok
 drop table t_source;
