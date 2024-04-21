@@ -373,6 +373,15 @@ SELECT var(c2) FROM aggregate_test_100
 ----
 1.886363636364
 
+# csv_query_distinct_variance
+query R
+SELECT var(distinct c2) FROM aggregate_test_100
+----
+2.5
+
+statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
+SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+
 # csv_query_variance_5
 query R
 SELECT var_samp(c2) FROM aggregate_test_100
@@ -456,6 +465,24 @@ query I
 SELECT median(col_i8) FROM median_table
 ----
 -14
+
+# distinct_median_i8
+query I
+SELECT median(distinct col_i8) FROM median_table
+----
+100
+
+statement error DataFusion error: This feature is not implemented: MEDIAN\(DISTINCT\) aggregations are not available
+SELECT median(col_i8), median(distinct col_i8) FROM median_table
+
+# approx_distinct_median_i8
+query I
+SELECT approx_median(distinct col_i8) FROM median_table
+----
+100
+
+statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
+SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
 
 # median_i16
 query I
@@ -2497,6 +2524,15 @@ query R
 select avg(x_dict) from value_dict;
 ----
 2.625
+
+# distinct_average
+query R
+select avg(distinct x_dict) from value_dict;
+----
+3
+
+statement error DataFusion error: This feature is not implemented: AVG\(DISTINCT\) aggregations are not available
+select avg(x_dict), avg(distinct x_dict) from value_dict;
 
 query I
 select min(x_dict) from value_dict;
