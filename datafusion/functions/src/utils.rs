@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef};
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use bitflags::bitflags;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use datafusion_physical_expr::functions::Hint;
-use itertools::Either;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -117,30 +117,6 @@ where
     })
 }
 
-/// Create an adaptive iterator. When the `hints` args of `make_scalar_function`
-/// includes `Hint::AcceptsSingular`, this function can be used to wrap an `ArrayIter`
-/// that contains only one value into an `Iterator` that contains multiple values,
-/// facilitating `zip` operations.
-/// NOTE:
-/// 1. When using this function, be sure to ensure that the corresponding `Hint` for
-/// `array_iter` must be `Hint::AcceptsSingular`.
-/// 2. You cannot call this function on all `args` of `inner` of `make_scalar_function`
-/// at the same time; there is a risk of never being able to exit the iteration!
-pub(super) fn adaptive_array_iter<'a, T>(
-    mut array_iter: ArrayIter<T>,
-) -> impl Iterator<Item = Option<T::Item>> + 'a
-where
-    T: ArrayAccessor + 'a,
-    T::Item: Copy,
-{
-    if array_iter.len() == 1 {
-        let value = array_iter.next().expect("Contains a value");
-        Either::Left(std::iter::repeat(value))
-    } else {
-        Either::Right(array_iter)
-    }
-}
-
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -203,4 +179,50 @@ pub mod test {
     }
 
     pub(crate) use test_function;
+}
+
+bitflags! {
+    /// Represents the position of the Scalar in args.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub(crate) struct ScalarFlags: u8 {
+        // There are no Scalars in the args
+        const None = 0b00000000;
+
+        // Represents the 1th arg is Scalar
+        const A = 0b00000001;
+        // Represents the 2th arg is Scalar
+        const B = 0b00000010;
+        // Represents the 3th arg is Scalar
+        const C = 0b00000100;
+        // Represents the 4th arg is Scalar
+        const D = 0b00001000;
+
+        const AB = Self::A.bits() | Self::B.bits();
+        const AC = Self::A.bits() | Self::C.bits();
+        const AD = Self::A.bits() | Self::D.bits();
+        const BC = Self::B.bits() | Self::C.bits();
+        const BD = Self::B.bits() | Self::D.bits();
+        const CD = Self::C.bits() | Self::D.bits();
+
+        const ABC = Self::A.bits() | Self::B.bits() | Self::C.bits();
+        const ABD = Self::A.bits() | Self::B.bits() | Self::D.bits();
+        const ACD = Self::A.bits() | Self::C.bits() | Self::D.bits();
+        const BCD = Self::B.bits() | Self::C.bits() | Self::D.bits();
+
+        const ABCD = Self::A.bits() | Self::B.bits() | Self::C.bits() | Self::D.bits();
+    }
+}
+
+impl ScalarFlags {
+    pub fn try_create(args: &[ArrayRef]) -> Result<Self> {
+        let mut flag: u8 = 0;
+        args.iter().enumerate().for_each(|(i, arg)| {
+            if arg.len() == 1 {
+                flag |= 1 << i;
+            }
+        });
+        Self::from_bits(flag).ok_or_else(|| {
+            DataFusionError::Execution(format!("Unsupported ScalarFlags: {}", flag))
+        })
+    }
 }
