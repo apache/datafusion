@@ -22,7 +22,7 @@ use arrow_array::{
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 
-use datafusion::datasource::MemTable;
+
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -38,7 +38,7 @@ use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_sql::TableReference;
+
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
