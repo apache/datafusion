@@ -46,29 +46,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let set_expr = query.body;
+        let mut set_expr = query.body;
         if let Some(with) = query.with {
             self.plan_with_clause(with, planner_context)?;
         }
-        let plan = self.set_expr_to_plan(*(set_expr.clone()), planner_context)?;
-        let plan = self.order_by(plan, query.order_by, planner_context)?;
-        let plan = self.limit(plan, query.offset, query.limit)?;
-
-        let plan = match *set_expr {
-            SetExpr::Select(select) if select.into.is_some() => {
-                let select_into = select.into.unwrap();
-                LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
-                    name: self.object_name_to_table_reference(select_into.name)?,
-                    constraints: Constraints::empty(),
-                    input: Arc::new(plan),
-                    if_not_exists: false,
-                    or_replace: false,
-                    column_defaults: vec![],
-                }))
-            }
-            _ => plan,
+        // Take the `SelectInto` for later processing.
+        let select_into = match set_expr.as_mut() {
+            SetExpr::Select(select) => select.into.take(),
+            _ => None,
         };
-
+        let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
+        let plan = self.order_by(plan, query.order_by, planner_context)?;
+        let mut plan = self.limit(plan, query.offset, query.limit)?;
+        if let Some(into) = select_into {
+            plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                name: self.object_name_to_table_reference(into.name)?,
+                constraints: Constraints::empty(),
+                input: Arc::new(plan),
+                if_not_exists: false,
+                or_replace: false,
+                column_defaults: vec![],
+            }))
+        }
         Ok(plan)
     }
 
