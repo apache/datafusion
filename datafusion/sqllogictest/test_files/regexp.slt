@@ -309,5 +309,16 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 ----
 fooxx
 
+# multiline string
+query B
+SELECT 'foo\nbar\nbaz' ~ 'bar';
+----
+true
+
+query B
+SELECT 'foo\nbar\nbaz' LIKE '%bar%';
+----
+true
+
 statement ok
 drop table t;
