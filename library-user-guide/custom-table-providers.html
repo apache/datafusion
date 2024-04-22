@@ -73,7 +73,7 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+  <a class="reference external" href="https://github.com/apache/datafusion">
    Github and Issue Tracker
   </a>
  </li>
@@ -88,7 +88,7 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
    Code of conduct
   </a>
  </li>
@@ -507,7 +507,7 @@
 <h4>Execution Plan<a class="headerlink" href="#execution-plan" title="Link to this heading">¶</a></h4>
 <p>The <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait at its core is a way to get a stream of batches. The aptly-named <code class="docutils literal notranslate"><span class="pre">execute</span></code> method returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;SendableRecordBatchStream&gt;</span></code>, which should be a stream of <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es that can be sent across threads, and has a schema that matches the data to be contained in those batches.</p>
 <p>There are many different types of <code class="docutils literal notranslate"><span class="pre">SendableRecordBatchStream</span></code> implemented in DataFusion – you can use a pre existing one, such as <code class="docutils literal notranslate"><span class="pre">MemoryStream</span></code> (if your <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es are all in memory) or implement your own custom logic, depending on your usecase.</p>
-<p>Looking at the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a>, the execute method:</p>
+<p>Looking at the <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a>, the execute method:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span> <span class="nc">CustomExec</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">db</span>: <span class="nc">CustomDataSource</span><span class="p">,</span>
 <span class="w">    </span><span class="n">projected_schema</span>: <span class="nc">SchemaRef</span><span class="p">,</span>
@@ -557,7 +557,7 @@
 <li><p>Constructs the individual output arrays (columns)</p></li>
 <li><p>Returns a <code class="docutils literal notranslate"><span class="pre">MemoryStream</span></code> of a single <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code> with the arrays</p></li>
 </ol>
-<p>I.e. returns the “physical” data. For other examples, refer to the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70"><code class="docutils literal notranslate"><span class="pre">CsvExec</span></code></a> and <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104"><code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code></a> for more complex implementations.</p>
+<p>I.e. returns the “physical” data. For other examples, refer to the <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70"><code class="docutils literal notranslate"><span class="pre">CsvExec</span></code></a> and <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104"><code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code></a> for more complex implementations.</p>
 <p>With the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> implemented, we can now implement the <code class="docutils literal notranslate"><span class="pre">scan</span></code> method of the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
 </section>
 <section id="scan-revisited">
@@ -632,7 +632,7 @@
 </section>
 <section id="next-steps">
 <h2>Next Steps<a class="headerlink" href="#next-steps" title="Link to this heading">¶</a></h2>
-<p>As mentioned the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70">csv</a> and <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104">parquet</a> implementations are good examples of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. The <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a> is a good example of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> that uses a custom data source.</p>
+<p>As mentioned the <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70">csv</a> and <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104">parquet</a> implementations are good examples of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. The <a class="reference external" href="https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a> is a good example of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> that uses a custom data source.</p>
 <p>More abstractly, see the following traits for more information on how to implement a custom <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> for a file format:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> - a trait for opening a file and inferring the schema</p></li>

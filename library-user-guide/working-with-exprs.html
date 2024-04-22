@@ -73,7 +73,7 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+  <a class="reference external" href="https://github.com/apache/datafusion">
    Github and Issue Tracker
   </a>
  </li>
@@ -88,7 +88,7 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
    Code of conduct
   </a>
  </li>
@@ -496,7 +496,7 @@
 -->
 <section id="working-with-exprs">
 <h1>Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#working-with-exprs" title="Link to this heading">¶</a></h1>
-<!-- https://github.com/apache/arrow-datafusion/issues/7304 -->
+<!-- https://github.com/apache/datafusion/issues/7304 -->
 <p><code class="docutils literal notranslate"><span class="pre">Expr</span></code> is short for “expression”. It is a core abstraction in DataFusion for representing a computation, and follows the standard “expression tree” abstraction found in most compilers and databases.</p>
 <p>For example, the SQL expression <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span></code> would be represented as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> with a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> variant. A <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> has a left and right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and an operator.</p>
 <p>As another example, the SQL expression <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span> <span class="pre">*</span> <span class="pre">c</span></code> would be represented as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> with a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> variant. The left <code class="docutils literal notranslate"><span class="pre">Expr</span></code> would be <code class="docutils literal notranslate"><span class="pre">a</span></code> and the right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> would be another <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> with a left <code class="docutils literal notranslate"><span class="pre">Expr</span></code> of <code class="docutils literal notranslate"><span class="pre">b</span></code> and a right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> of <code class="docutils literal notranslate"><span class="pre">c</span></code>. As a classic expression tree, this would look like:</p>
@@ -523,7 +523,7 @@
 <p>As the writer of a library, you can use <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and how to rewrite <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to inline the simple UDF.</p>
 <section id="creating-and-evaluating-exprs">
 <h2>Creating and Evaluating <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#creating-and-evaluating-exprs" title="Link to this heading">¶</a></h2>
-<p>Please see <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a> for well commented code for creating, evaluating, simplifying, and analyzing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
+<p>Please see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a> for well commented code for creating, evaluating, simplifying, and analyzing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
 </section>
 <section id="a-scalar-udf-example">
 <h2>A Scalar UDF Example<a class="headerlink" href="#a-scalar-udf-example" title="Link to this heading">¶</a></h2>
@@ -548,7 +548,7 @@
 </section>
 <section id="rewriting-exprs">
 <h2>Rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#rewriting-exprs" title="Link to this heading">¶</a></h2>
-<p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs">rewrite_expr.rs</a> contains example code for rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
+<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs">rewrite_expr.rs</a> contains example code for rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
 <p>Rewriting Expressions is the process of taking an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and transforming it into another <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. This is useful for a number of reasons, including:</p>
 <ul class="simple">
 <li><p>Simplifying <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to make them easier to evaluate</p></li>

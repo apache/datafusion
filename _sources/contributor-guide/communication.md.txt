@@ -29,7 +29,7 @@ conduct](https://www.apache.org/foundation/policies/conduct.html).
 ## GitHub
 
 The vast majority of communication occurs in the open on our
-[github repository](https://github.com/apache/arrow-datafusion) in the form of tickets, issues, discussions, and Pull Requests.
+[github repository](https://github.com/apache/datafusion) in the form of tickets, issues, discussions, and Pull Requests.
 
 ## Slack and Discord
 
