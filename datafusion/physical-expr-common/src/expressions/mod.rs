@@ -19,6 +19,7 @@
 
 #[macro_use]
 pub mod binary;
+pub mod cast;
 pub mod column;
 pub mod datum;
 pub mod literal;
