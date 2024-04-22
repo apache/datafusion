@@ -312,6 +312,8 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
     // Support Expr::struct by rewriting expressions
     let expr = expr
         .transform_up(&|expr| {
+            // see https://github.com/apache/datafusion/issues/10181
+            // This is part of the function rewriter code in DataFusion inlined here temporarily
             Ok(match expr {
                 Expr::GetIndexedField(GetIndexedField {
                     expr,
@@ -320,6 +322,23 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
                     let name = Expr::Literal(name);
                     Transformed::yes(get_field(*expr, name))
                 }
+                // expr[idx] ==> array_element(expr, idx)
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field: GetFieldAccess::ListIndex { key },
+                }) => Transformed::yes(array_element(*expr, *key)),
+
+                // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field:
+                        GetFieldAccess::ListRange {
+                            start,
+                            stop,
+                            stride,
+                        },
+                }) => Transformed::yes(array_slice(*expr, *start, *stop, *stride)),
+
                 _ => Transformed::no(expr),
             })
         })?
