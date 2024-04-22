@@ -111,7 +111,7 @@ pub fn create_physical_expr(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     use datafusion_physical_expr_common::physical_expr::create_physical_expr as create_physical_expr_common;
 
-    // Temporary solution, after all the logic is moved to common, we can remove this function
+    // PR #10074: Temporary solution, after all the logic is moved to common, we can remove this function
     let res = create_physical_expr_common(e, input_dfschema, execution_props);
     if res.is_ok() {
         return res;
