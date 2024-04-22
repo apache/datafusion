@@ -25,15 +25,16 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{BinaryExpr, ColumnarValue, Expr};
+use datafusion_expr::{BinaryExpr, ColumnarValue, Expr, Like};
 
 use crate::expressions::binary::binary;
 use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
+use crate::expressions::like::like;
 use crate::expressions::literal::{lit, Literal};
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
@@ -404,28 +405,28 @@ pub fn create_physical_expr(
             // planning.
             binary(lhs, *op, rhs, input_schema)
         }
-        // Expr::Like(Like {
-        //     negated,
-        //     expr,
-        //     pattern,
-        //     escape_char,
-        //     case_insensitive,
-        // }) => {
-        //     if escape_char.is_some() {
-        //         return exec_err!("LIKE does not support escape_char");
-        //     }
-        //     let physical_expr =
-        //         create_physical_expr(expr, input_dfschema, execution_props)?;
-        //     let physical_pattern =
-        //         create_physical_expr(pattern, input_dfschema, execution_props)?;
-        //     like(
-        //         *negated,
-        //         *case_insensitive,
-        //         physical_expr,
-        //         physical_pattern,
-        //         input_schema,
-        //     )
-        // }
+        Expr::Like(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            case_insensitive,
+        }) => {
+            if escape_char.is_some() {
+                return exec_err!("LIKE does not support escape_char");
+            }
+            let physical_expr =
+                create_physical_expr(expr, input_dfschema, execution_props)?;
+            let physical_pattern =
+                create_physical_expr(pattern, input_dfschema, execution_props)?;
+            like(
+                *negated,
+                *case_insensitive,
+                physical_expr,
+                physical_pattern,
+                input_schema,
+            )
+        }
         // Expr::Case(case) => {
         //     let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
         //         Some(create_physical_expr(

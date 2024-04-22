@@ -18,13 +18,13 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::expressions::datum::apply_cmp;
+use crate::expressions::datum::apply_cmp;
 
 // Like expression
 #[derive(Debug, Hash)]
@@ -174,7 +174,7 @@ pub fn like(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::column::col;
     use arrow::array::*;
     use arrow_schema::Field;
     use datafusion_common::cast::as_boolean_array;

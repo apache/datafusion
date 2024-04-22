@@ -21,7 +21,6 @@ mod case;
 mod column;
 mod is_not_null;
 mod is_null;
-mod like;
 mod negative;
 mod no_op;
 mod not;
@@ -83,7 +82,7 @@ pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCa
 pub use datafusion_physical_expr_common::expressions::in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
-pub use like::{like, LikeExpr};
+pub use datafusion_physical_expr_common::expressions::like::{like, LikeExpr};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
