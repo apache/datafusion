@@ -25,5 +25,6 @@ pub mod datum;
 pub mod in_list;
 pub mod like;
 pub mod literal;
+pub mod negative;
 pub mod not;
 pub mod try_cast;

@@ -21,7 +21,6 @@ mod case;
 mod column;
 mod is_not_null;
 mod is_null;
-mod negative;
 mod no_op;
 
 /// Module with some convenient methods used in expression building
@@ -82,7 +81,7 @@ pub use datafusion_physical_expr_common::expressions::in_list::{in_list, InListE
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use datafusion_physical_expr_common::expressions::like::{like, LikeExpr};
-pub use negative::{negative, NegativeExpr};
+pub use datafusion_physical_expr_common::expressions::negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use datafusion_physical_expr_common::expressions::not::{not, NotExpr};
 

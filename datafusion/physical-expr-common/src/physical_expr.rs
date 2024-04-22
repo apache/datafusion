@@ -38,6 +38,7 @@ use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
 use crate::expressions::like::like;
 use crate::expressions::literal::{lit, Literal};
+use crate::expressions::negative::negative;
 use crate::expressions::not::not;
 use crate::expressions::try_cast::try_cast;
 use crate::sort_properties::SortProperties;
@@ -481,10 +482,10 @@ pub fn create_physical_expr(
         Expr::Not(expr) => {
             not(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
-        // Expr::Negative(expr) => expressions::negative(
-        //     create_physical_expr(expr, input_dfschema, execution_props)?,
-        //     input_schema,
-        // ),
+        Expr::Negative(expr) => negative(
+            create_physical_expr(expr, input_dfschema, execution_props)?,
+            input_schema,
+        ),
         // Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
         //     expr,
         //     input_dfschema,
