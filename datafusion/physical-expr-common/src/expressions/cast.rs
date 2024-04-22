@@ -17,7 +17,7 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -217,7 +217,7 @@ pub fn cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::column::col;
 
     use arrow::{
         array::{

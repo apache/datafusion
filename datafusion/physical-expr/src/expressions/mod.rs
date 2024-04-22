@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 mod case;
-mod cast;
 mod column;
 mod in_list;
 mod is_not_null;
@@ -75,7 +74,7 @@ pub use datafusion_functions_aggregate::first_last::{
 };
 
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_with_options, CastExpr};
+pub use datafusion_physical_expr_common::expressions::cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
 pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExpr};
