@@ -112,8 +112,7 @@ pub trait TreeNode: Sized {
     /// bottom-up order (after children are visited).
     ///
     /// # Return Value
-    /// The returns value specifies how the tree walk ended.
-    /// [`TreeNodeRecursion`] for details.
+    /// Specifies how the tree walk ended. See [`TreeNodeRecursion`] for details.
     ///
     /// # See Also:
     /// * [`Self::apply`] for inspecting nodes with a closure
