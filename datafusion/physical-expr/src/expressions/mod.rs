@@ -23,7 +23,6 @@ mod is_not_null;
 mod is_null;
 mod negative;
 mod no_op;
-mod not;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -85,7 +84,7 @@ pub use is_null::{is_null, IsNullExpr};
 pub use datafusion_physical_expr_common::expressions::like::{like, LikeExpr};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
-pub use not::{not, NotExpr};
+pub use datafusion_physical_expr_common::expressions::not::{not, NotExpr};
 
 #[cfg(test)]
 pub(crate) mod tests {

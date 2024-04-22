@@ -24,12 +24,13 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{binary_expr, BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
+use datafusion_expr::{BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
 
 use crate::expressions::binary::binary;
 use crate::expressions::cast::cast;
@@ -37,6 +38,7 @@ use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
 use crate::expressions::like::like;
 use crate::expressions::literal::{lit, Literal};
+use crate::expressions::not::not;
 use crate::expressions::try_cast::try_cast;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
@@ -347,7 +349,7 @@ pub fn create_physical_expr(
         //     }
         // }
         Expr::IsTrue(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(Some(true))),
@@ -355,7 +357,7 @@ pub fn create_physical_expr(
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsNotTrue(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(Some(true))),
@@ -363,7 +365,7 @@ pub fn create_physical_expr(
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsFalse(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(Some(false))),
@@ -371,7 +373,7 @@ pub fn create_physical_expr(
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsNotFalse(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(Some(false))),
@@ -379,7 +381,7 @@ pub fn create_physical_expr(
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsUnknown(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(None)),
@@ -387,7 +389,7 @@ pub fn create_physical_expr(
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsNotUnknown(expr) => {
-            let binary_op = binary_expr(
+            let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
                 Expr::Literal(ScalarValue::Boolean(None)),
@@ -476,9 +478,9 @@ pub fn create_physical_expr(
             input_schema,
             data_type.clone(),
         ),
-        // Expr::Not(expr) => {
-        //     expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
-        // }
+        Expr::Not(expr) => {
+            not(create_physical_expr(expr, input_dfschema, execution_props)?)
+        }
         // Expr::Negative(expr) => expressions::negative(
         //     create_physical_expr(expr, input_dfschema, execution_props)?,
         //     input_schema,
