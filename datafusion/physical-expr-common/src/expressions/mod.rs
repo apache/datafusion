@@ -23,6 +23,8 @@ pub mod cast;
 pub mod column;
 pub mod datum;
 pub mod in_list;
+pub mod is_not_null;
+pub mod is_null;
 pub mod like;
 pub mod literal;
 pub mod negative;

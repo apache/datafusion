@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 use arrow::compute;
 use arrow::{
     datatypes::{DataType, Schema},
@@ -115,7 +115,7 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::column::col;
     use arrow::{
         array::{BooleanArray, StringArray},
         datatypes::*,

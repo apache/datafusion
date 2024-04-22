@@ -19,8 +19,6 @@
 
 mod case;
 mod column;
-mod is_not_null;
-mod is_null;
 mod no_op;
 
 /// Module with some convenient methods used in expression building
@@ -70,20 +68,26 @@ pub use datafusion_functions_aggregate::first_last::{
 };
 
 pub use case::{case, CaseExpr};
-pub use datafusion_physical_expr_common::expressions::cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
 pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExpr};
+pub use datafusion_physical_expr_common::expressions::cast::{
+    cast, cast_with_options, CastExpr,
+};
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
-pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
-pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
 pub use datafusion_physical_expr_common::expressions::in_list::{in_list, InListExpr};
-pub use is_not_null::{is_not_null, IsNotNullExpr};
-pub use is_null::{is_null, IsNullExpr};
+pub use datafusion_physical_expr_common::expressions::is_not_null::{
+    is_not_null, IsNotNullExpr,
+};
+pub use datafusion_physical_expr_common::expressions::is_null::{is_null, IsNullExpr};
 pub use datafusion_physical_expr_common::expressions::like::{like, LikeExpr};
-pub use datafusion_physical_expr_common::expressions::negative::{negative, NegativeExpr};
-pub use no_op::NoOp;
+pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
+pub use datafusion_physical_expr_common::expressions::negative::{
+    negative, NegativeExpr,
+};
 pub use datafusion_physical_expr_common::expressions::not::{not, NotExpr};
+pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
+pub use no_op::NoOp;
 
 #[cfg(test)]
 pub(crate) mod tests {

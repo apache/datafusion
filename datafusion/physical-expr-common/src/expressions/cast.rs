@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::physical_expr::PhysicalExpr;
+use crate::sort_properties::SortProperties;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
