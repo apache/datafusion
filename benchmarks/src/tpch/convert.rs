@@ -88,9 +88,8 @@ impl ConvertOpt {
                 .schema()
                 .iter()
                 .take(schema.fields.len() - 1)
-                .map(|(qualifier, field)| {
-                    Expr::Column(Column::from((qualifier, field.as_ref())))
-                })
+                .map(Column::from)
+                .map(Expr::Column)
                 .collect();
 
             csv = csv.select(selection)?;

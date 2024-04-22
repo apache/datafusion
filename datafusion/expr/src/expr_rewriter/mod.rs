@@ -221,9 +221,8 @@ pub fn coerce_plan_expr_for_schema(
             let exprs: Vec<Expr> = plan
                 .schema()
                 .iter()
-                .map(|(qualifier, field)| {
-                    Expr::Column(Column::from((qualifier, field.as_ref())))
-                })
+                .map(Column::from)
+                .map(Expr::Column)
                 .collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;

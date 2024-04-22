@@ -1307,8 +1307,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ))
                         } else {
                             datafusion_expr::Expr::Column(Column::from((
-                                qualifier,
-                                field.as_ref(),
+                                qualifier, field,
                             )))
                         }
                     }

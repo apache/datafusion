@@ -143,7 +143,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         _ => false,
                     }) {
                         Some((qualifier, df_field)) => {
-                            Expr::Column(Column::from((qualifier, df_field.as_ref())))
+                            Expr::Column(Column::from((qualifier, df_field)))
                         }
                         None => Expr::Column(col),
                     }

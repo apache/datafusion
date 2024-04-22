@@ -358,9 +358,8 @@ fn get_exprs_except_skipped(
     if columns_to_skip.is_empty() {
         schema
             .iter()
-            .map(|(qualifier, field)| {
-                Expr::Column(Column::from((qualifier, field.as_ref())))
-            })
+            .map(Column::from)
+            .map(Expr::Column)
             .collect::<Vec<Expr>>()
     } else {
         schema

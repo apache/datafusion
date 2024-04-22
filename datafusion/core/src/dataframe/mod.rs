@@ -1332,7 +1332,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(Column::from((qualifier, field.as_ref())))
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect();
@@ -1402,9 +1402,9 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field.as_ref()))).alias(new_name)
+                    col(Column::from((qualifier, field))).alias(new_name)
                 } else {
-                    col(Column::from((qualifier, field.as_ref())))
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect::<Vec<_>>();

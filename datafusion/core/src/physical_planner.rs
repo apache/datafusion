@@ -1248,12 +1248,8 @@ impl DefaultPhysicalPlanner {
                     if left_projected || right_projected {
                         let final_join_result = join_schema
                             .iter()
-                            .map(|(qualifier, field)| {
-                                Expr::Column(datafusion_common::Column::from((
-                                    qualifier,
-                                    field.as_ref(),
-                                )))
-                            })
+                            .map(datafusion_common::Column::from)
+                            .map(Expr::Column)
                             .collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,

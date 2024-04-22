@@ -1577,7 +1577,7 @@ pub fn unnest_with_options(
                 return Ok(input);
             }
         };
-        qualified_columns.push(Column::from((unnest_qualifier, unnested_field.as_ref())));
+        qualified_columns.push(Column::from((unnest_qualifier, &unnested_field)));
         unnested_fields.insert(index, unnested_field);
     }
 
