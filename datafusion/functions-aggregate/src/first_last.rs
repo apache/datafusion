@@ -415,11 +415,9 @@ impl FirstValuePhysicalExpr {
     }
 
     pub fn convert_to_last(self) -> LastValuePhysicalExpr {
-        let name = if self.name.starts_with("FIRST") {
-            format!("LAST{}", &self.name[5..])
-        } else {
-            format!("LAST_VALUE({})", self.expr)
-        };
+        let mut name = format!("LAST{}", &self.name[5..]);
+        replace_order_by_clause(&mut name);
+
         let FirstValuePhysicalExpr {
             expr,
             input_data_type,
@@ -593,11 +591,9 @@ impl LastValuePhysicalExpr {
     }
 
     pub fn convert_to_first(self) -> FirstValuePhysicalExpr {
-        let name = if self.name.starts_with("LAST") {
-            format!("FIRST{}", &self.name[4..])
-        } else {
-            format!("FIRST_VALUE({})", self.expr)
-        };
+        let mut name = format!("FIRST{}", &self.name[4..]);
+        replace_order_by_clause(&mut name);
+
         let LastValuePhysicalExpr {
             expr,
             input_data_type,
@@ -903,6 +899,31 @@ fn convert_to_sort_cols(
             options: Some(sort_expr.options),
         })
         .collect::<Vec<_>>()
+}
+
+fn replace_order_by_clause(order_by: &mut String) {
+    let suffixes = [
+        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+    ];
+
+    if let Some(start) = order_by.find("ORDER BY [") {
+        if let Some(end) = order_by[start..].find(']') {
+            let order_by_start = start + 9;
+            let order_by_end = start + end;
+
+            let column_order = &order_by[order_by_start..=order_by_end];
+            for &(suffix, replacement) in &suffixes {
+                if column_order.ends_with(suffix) {
+                    let new_order = column_order.replace(suffix, replacement);
+                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
