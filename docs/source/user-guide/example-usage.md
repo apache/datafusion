@@ -19,9 +19,9 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
 
-Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
+Even [`more code examples`](https://github.com/apache/datafusion/tree/main/datafusion-examples) attached to the project.
 
 ## Add published DataFusion dependency
 
@@ -35,23 +35,23 @@ tokio = "1.0"
 
 ## Add latest non published DataFusion dependency
 
-DataFusion changes are published to `crates.io` according to [release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
+DataFusion changes are published to `crates.io` according to [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
 In case if it is required to test out DataFusion changes which are merged but yet to be published, Cargo supports adding dependency directly to Github branch
 
 ```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main"}
+datafusion = { git = "https://github.com/apache/datafusion", branch = "main"}
 ```
 
 Also it works on the package level
 
 ```toml
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", package = "datafusion-common"}
+datafusion-common = { git = "https://github.com/apache/datafusion", branch = "main", package = "datafusion-common"}
 ```
 
 And with features
 
 ```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
+datafusion = { git = "https://github.com/apache/datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
 ```
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)

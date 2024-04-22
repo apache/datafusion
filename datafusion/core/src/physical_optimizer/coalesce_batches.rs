@@ -59,7 +59,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             // The goal here is to detect operators that could produce small batches and only
             // wrap those ones with a CoalesceBatchesExec operator. An alternate approach here
             // would be to build the coalescing logic directly into the operators
-            // See https://github.com/apache/arrow-datafusion/issues/139
+            // See https://github.com/apache/datafusion/issues/139
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
                 // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec

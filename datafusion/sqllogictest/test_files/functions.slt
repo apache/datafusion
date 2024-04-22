@@ -1050,7 +1050,7 @@ SELECT
 ----
 arrow.apache.org arrow.apache.org
 
-# Test substring_index issue https://github.com/apache/arrow-datafusion/issues/9472
+# Test substring_index issue https://github.com/apache/datafusion/issues/9472
 query TTT
 SELECT
   url,

@@ -288,7 +288,7 @@ async fn prune_disabled() {
 
 // $bits: number of bits of the integer to test (8, 16, 32, 64)
 // $correct_bloom_filters: if false, replicates the
-// https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
+// https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
     ($bits:expr) => {
@@ -448,13 +448,13 @@ macro_rules! int_tests {
     };
 }
 
-// int8/int16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
+// int8/int16 are incorrect: https://github.com/apache/datafusion/issues/9779
 int_tests!(32);
 int_tests!(64);
 
 // $bits: number of bits of the integer to test (8, 16, 32, 64)
 // $correct_bloom_filters: if false, replicates the
-// https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
+// https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on UInt8 and UInt16 columns are still buggy.
 macro_rules! uint_tests {
     ($bits:expr) => {
@@ -585,7 +585,7 @@ macro_rules! uint_tests {
     };
 }
 
-// uint8/uint16 are incorrect: https://github.com/apache/arrow-datafusion/issues/9779
+// uint8/uint16 are incorrect: https://github.com/apache/datafusion/issues/9779
 uint_tests!(32);
 uint_tests!(64);
 

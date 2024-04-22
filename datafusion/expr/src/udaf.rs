@@ -54,12 +54,12 @@ use std::vec;
 /// This is a separate struct from `AggregateUDFImpl` to maintain backwards
 /// compatibility with the older API.
 ///
-/// [the examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples#single-process
+/// [the examples]: https://github.com/apache/datafusion/tree/main/datafusion-examples#single-process
 /// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
 /// [`Accumulator`]: crate::Accumulator
 /// [`create_udaf`]: crate::expr_fn::create_udaf
-/// [`simple_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-/// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 #[derive(Debug, Clone)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -214,7 +214,7 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-/// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 ///
 /// # Basic Example
 /// ```

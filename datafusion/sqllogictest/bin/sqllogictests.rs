@@ -297,7 +297,7 @@ fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
 /// This structure attempts to mimic the command line options
 /// accepted by IDEs such as CLion that pass arguments
 ///
-/// See <https://github.com/apache/arrow-datafusion/issues/8287> for more details
+/// See <https://github.com/apache/datafusion/issues/8287> for more details
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about= None)]
 struct Options {

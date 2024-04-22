@@ -2940,7 +2940,7 @@ mod tests {
 
     #[test]
     fn relatively_deeply_nested() {
-        // Reproducer for https://github.com/apache/arrow-datafusion/issues/419
+        // Reproducer for https://github.com/apache/datafusion/issues/419
 
         // where even relatively shallow binary expressions overflowed
         // the stack in debug builds
@@ -3408,7 +3408,7 @@ mod tests {
         .unwrap();
         // is distinct: float64array is distinct decimal array
         // TODO: now we do not refactor the `is distinct or is not distinct` rule of coercion.
-        // traced by https://github.com/apache/arrow-datafusion/issues/1590
+        // traced by https://github.com/apache/datafusion/issues/1590
         // the decimal array will be casted to float64array
         apply_logic_op(
             &schema,

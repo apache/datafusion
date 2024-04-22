@@ -27,14 +27,14 @@
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
 [license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
-[license-url]: https://github.com/apache/arrow-datafusion/blob/main/LICENSE.txt
-[actions-badge]: https://github.com/apache/arrow-datafusion/actions/workflows/rust.yml/badge.svg
-[actions-url]: https://github.com/apache/arrow-datafusion/actions?query=branch%3Amain
+[license-url]: https://github.com/apache/datafusion/blob/main/LICENSE.txt
+[actions-badge]: https://github.com/apache/datafusion/actions/workflows/rust.yml/badge.svg
+[actions-url]: https://github.com/apache/datafusion/actions?query=branch%3Amain
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
 
-[Website](https://github.com/apache/arrow-datafusion) |
-[Guides](https://github.com/apache/arrow-datafusion/tree/main/docs) |
+[Website](https://github.com/apache/datafusion) |
+[Guides](https://github.com/apache/datafusion/tree/main/docs) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
@@ -42,7 +42,7 @@
 
 Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available. DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+in-memory format. [Python Bindings](https://github.com/apache/datafusion-python) are also available. DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
 Here are links to some important information
 
@@ -51,7 +51,7 @@ Here are links to some important information
 - [Rust Getting Started](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
 - [Rust DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
-- [Rust Examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
+- [Rust Examples](https://github.com/apache/datafusion/tree/master/datafusion-examples)
 - [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
 - [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
 
@@ -102,4 +102,4 @@ each stable Rust version for 6 months after it is
 [released](https://github.com/rust-lang/rust/blob/master/RELEASES.md). This
 generally translates to support for the most recent 3 to 4 stable Rust versions.
 
-We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

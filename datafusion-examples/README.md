@@ -30,7 +30,7 @@ Run `git submodule update --init` to init test files.
 To run the examples, use the `cargo run` command, such as:
 
 ```bash
-git clone https://github.com/apache/arrow-datafusion
+git clone https://github.com/apache/datafusion
 cd arrow-datafusion
 # Download test data
 git submodule update --init

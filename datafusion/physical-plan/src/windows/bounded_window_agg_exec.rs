@@ -393,7 +393,7 @@ trait PartitionSearcher: Send {
                 // Use input_schema for the buffer schema, not `record_batch.schema()`
                 // as it may not have the "correct" schema in terms of output
                 // nullability constraints. For details, see the following issue:
-                // https://github.com/apache/arrow-datafusion/issues/9320
+                // https://github.com/apache/datafusion/issues/9320
                 .or_insert_with(|| PartitionBatchState::new(self.input_schema().clone()));
             partition_batch_state.extend(&partition_batch)?;
         }

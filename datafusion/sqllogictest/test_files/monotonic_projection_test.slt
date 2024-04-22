@@ -69,7 +69,7 @@ physical_plan
 # doesn't invalidate lexicographical ordering.
 # Hence '[CAST(a AS BIGINT) AS a_big ASC, b ASC]'
 # is valid for the given ordering: '[a ASC, b ASC]'.
-# See discussion for rationale: https://github.com/apache/arrow-datafusion/issues/8838#issue-2077714891
+# See discussion for rationale: https://github.com/apache/datafusion/issues/8838#issue-2077714891
 query TT
 EXPLAIN
 SELECT a, CAST(a AS BIGINT) AS a_big, b
@@ -118,7 +118,7 @@ physical_plan
 
 # test for cast Utf8
 # (must actually sort as the sort order for a number cast to utf8 is different than for int)
-# See discussion: https://github.com/apache/arrow-datafusion/pull/9127#discussion_r1492336709
+# See discussion: https://github.com/apache/datafusion/pull/9127#discussion_r1492336709
 query TT
 EXPLAIN
 SELECT 

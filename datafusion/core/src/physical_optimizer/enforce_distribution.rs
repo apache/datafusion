@@ -3029,7 +3029,7 @@ pub(crate) mod tests {
 
     #[test]
     fn merge_does_not_need_sort() -> Result<()> {
-        // see https://github.com/apache/arrow-datafusion/issues/4331
+        // see https://github.com/apache/datafusion/issues/4331
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
             expr: col("a", &schema).unwrap(),
@@ -3647,7 +3647,7 @@ pub(crate) mod tests {
 
         // The groups must have only contiguous ranges of rows from the same file
         // if any group has rows from multiple files, the data is no longer sorted destroyed
-        // https://github.com/apache/arrow-datafusion/issues/8451
+        // https://github.com/apache/datafusion/issues/8451
         let expected = [
             "SortRequiredExec: [a@0 ASC]",
             "FilterExec: c@2 = 0",
