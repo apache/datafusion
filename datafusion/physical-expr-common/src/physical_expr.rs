@@ -29,13 +29,15 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result, 
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{BinaryExpr, ColumnarValue, Expr, Like};
+use datafusion_expr::{binary_expr, BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
 
 use crate::expressions::binary::binary;
+use crate::expressions::cast::cast;
 use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
 use crate::expressions::like::like;
 use crate::expressions::literal::{lit, Literal};
+use crate::expressions::try_cast::try_cast;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 
@@ -344,54 +346,54 @@ pub fn create_physical_expr(
         //         }
         //     }
         // }
-        // Expr::IsTrue(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsNotDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(Some(true))),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
-        // Expr::IsNotTrue(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(Some(true))),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
-        // Expr::IsFalse(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsNotDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(Some(false))),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
-        // Expr::IsNotFalse(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(Some(false))),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
-        // Expr::IsUnknown(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsNotDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(None)),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
-        // Expr::IsNotUnknown(expr) => {
-        //     let binary_op = binary_expr(
-        //         expr.as_ref().clone(),
-        //         Operator::IsDistinctFrom,
-        //         Expr::Literal(ScalarValue::Boolean(None)),
-        //     );
-        //     create_physical_expr(&binary_op, input_dfschema, execution_props)
-        // }
+        Expr::IsTrue(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
+        Expr::IsNotTrue(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
+        Expr::IsFalse(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(false))),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
+        Expr::IsNotFalse(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(Some(false))),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
+        Expr::IsUnknown(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsNotDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(None)),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
+        Expr::IsNotUnknown(expr) => {
+            let binary_op = binary_expr(
+                expr.as_ref().clone(),
+                Operator::IsDistinctFrom,
+                Expr::Literal(ScalarValue::Boolean(None)),
+            );
+            create_physical_expr(&binary_op, input_dfschema, execution_props)
+        }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             // Create physical expressions for left and right operands
             let lhs = create_physical_expr(left, input_dfschema, execution_props)?;
@@ -464,16 +466,16 @@ pub fn create_physical_expr(
         //         };
         //     Ok(expressions::case(expr, when_then_expr, else_expr)?)
         // }
-        // Expr::Cast(Cast { expr, data_type }) => expressions::cast(
-        //     create_physical_expr(expr, input_dfschema, execution_props)?,
-        //     input_schema,
-        //     data_type.clone(),
-        // ),
-        // Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
-        //     create_physical_expr(expr, input_dfschema, execution_props)?,
-        //     input_schema,
-        //     data_type.clone(),
-        // ),
+        Expr::Cast(Cast { expr, data_type }) => cast(
+            create_physical_expr(expr, input_dfschema, execution_props)?,
+            input_schema,
+            data_type.clone(),
+        ),
+        Expr::TryCast(TryCast { expr, data_type }) => try_cast(
+            create_physical_expr(expr, input_dfschema, execution_props)?,
+            input_schema,
+            data_type.clone(),
+        ),
         // Expr::Not(expr) => {
         //     expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
         // }
