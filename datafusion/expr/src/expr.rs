@@ -85,9 +85,7 @@ use sqlparser::ast::NullTreatment;
 /// }
 /// ```
 ///
-/// Return a list of [`Expr::Column`] from a schema's columns
-///
-/// Example:
+/// ## Return a list of [`Expr::Column`] from a schema's columns
 /// ```
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::{DFSchema, Column};
