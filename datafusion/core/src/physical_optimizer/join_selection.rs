@@ -848,7 +848,7 @@ mod tests_statistical {
         let expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new_with_schema("big_col", &intermediate_schema).unwrap()),
             Operator::Gt,
-            Arc::new(Column::new_with_schema("big_col", &intermediate_schema).unwrap()),
+            Arc::new(Column::new_with_schema("small_col", &intermediate_schema).unwrap()),
         )) as _;
         Some(JoinFilter::new(
             expression,
