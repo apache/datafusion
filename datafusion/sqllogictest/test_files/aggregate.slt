@@ -71,7 +71,7 @@ CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 # Error tests
 #######
 
-# https://github.com/apache/arrow-datafusion/issues/3353
+# https://github.com/apache/datafusion/issues/3353
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "APPROX_DISTINCT\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
@@ -551,7 +551,7 @@ SELECT approx_median(col_f64_nan) FROM median_table
 NaN
 
 # median_multi
-# test case for https://github.com/apache/arrow-datafusion/issues/3105
+# test case for https://github.com/apache/datafusion/issues/3105
 # has an intermediate grouping
 statement ok
 create table cpu (host string, usage float) as select * from (values
@@ -674,7 +674,7 @@ SELECT COUNT(2) FROM aggregate_test_100
 100
 
 # csv_query_approx_count
-# FIX: https://github.com/apache/arrow-datafusion/issues/3353
+# FIX: https://github.com/apache/datafusion/issues/3353
 # query II
 # SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 # ----
@@ -3383,7 +3383,7 @@ query I
 SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
 ----
 
-# Test issue: https://github.com/apache/arrow-datafusion/issues/9161
+# Test issue: https://github.com/apache/datafusion/issues/9161
 query I rowsort
 SELECT CAST(a AS INT) FROM t GROUP BY t.a;
 ----

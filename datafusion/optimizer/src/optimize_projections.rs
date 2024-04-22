@@ -463,7 +463,7 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
 
     // If an expression is non-trivial and appears more than once, consecutive
     // projections will benefit from a compute-once approach. For details, see:
-    // https://github.com/apache/arrow-datafusion/issues/8296
+    // https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
         usage > 1
             && !is_expr_trivial(
@@ -613,7 +613,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///   columns are collected.
 fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
                 columns.insert(col.clone());
@@ -1351,7 +1351,7 @@ mod tests {
     }
 
     // Test outer projection isn't discarded despite the same schema as inner
-    // https://github.com/apache/arrow-datafusion/issues/8942
+    // https://github.com/apache/datafusion/issues/8942
     #[test]
     fn test_derived_column() -> Result<()> {
         let table_scan = test_table_scan()?;

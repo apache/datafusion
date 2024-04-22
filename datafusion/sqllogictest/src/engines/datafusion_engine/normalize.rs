@@ -101,7 +101,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
-                // See https://github.com/apache/arrow-datafusion/issues/6328
+                // See https://github.com/apache/datafusion/issues/6328
                 let content = l.trim_start();
                 let new_prefix = "-".repeat(l.len() - content.len());
                 // maintain for each line a number, so

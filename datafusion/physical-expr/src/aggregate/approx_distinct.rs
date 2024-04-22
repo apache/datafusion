@@ -89,7 +89,7 @@ impl AggregateExpr for ApproxDistinct {
         let accumulator: Box<dyn Accumulator> = match &self.input_data_type {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
             // TODO support for boolean (trivial case)
-            // https://github.com/apache/arrow-datafusion/issues/1109
+            // https://github.com/apache/datafusion/issues/1109
             DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
             DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),

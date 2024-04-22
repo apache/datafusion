@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    expressions::{self, binary, like, Column, Literal},
-    functions, udf, PhysicalExpr,
-};
+use std::sync::Arc;
+
 use arrow::datatypes::Schema;
+
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
@@ -31,7 +30,11 @@ use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
     Operator, ScalarFunctionDefinition, TryCast,
 };
-use std::sync::Arc;
+
+use crate::{
+    expressions::{self, binary, like, Column, Literal},
+    udf, PhysicalExpr,
+};
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.
@@ -306,14 +309,6 @@ pub fn create_physical_expr(
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
             match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    functions::create_builtin_physical_expr(
-                        fun,
-                        &physical_args,
-                        input_schema,
-                        execution_props,
-                    )
-                }
                 ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
                     fun.clone().as_ref(),
                     &physical_args,
@@ -390,11 +385,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{col, lit};
+
+    use super::*;
 
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {

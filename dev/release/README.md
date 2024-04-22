@@ -39,12 +39,12 @@ patch release:
 1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
 1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-[example release issue]: https://github.com/apache/arrow-datafusion/issues/9904
-[example backport pr]: https://github.com/apache/arrow-datafusion/pull/10123
+[example release issue]: https://github.com/apache/datafusion/issues/9904
+[example backport pr]: https://github.com/apache/datafusion/pull/10123
 
 ## Release Prerequisite
 
-- Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
+- Have upstream git repo `git@github.com:apache/datafusion.git` add as git remote `apache`.
 - Created a personal access token in GitHub for changelog automation script.
   - Github PAT should be created with `repo` access
 - Make sure your signing key is added to the following files in SVN:
@@ -96,7 +96,7 @@ pip3 install PyGitHub
 Run the following command to generate the changelog content.
 
 ```bash
-$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
@@ -116,9 +116,9 @@ This process is not fully automated, so there are some additional manual steps:
 - Add the following content (copy from the previous version's changelog and update as appropriate:
 
 ```
-## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
+## [24.0.0](https://github.com/apache/datafusion/tree/24.0.0) (2023-05-06)
 
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+[Full Changelog](https://github.com/apache/datafusion/compare/23.0.0...24.0.0)
 ```
 
 ## Prepare release commits and PR
@@ -126,7 +126,7 @@ This process is not fully automated, so there are some additional manual steps:
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
-See [#9697](https://github.com/apache/arrow-datafusion/pull/9697) for an example.
+See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
 
 Here are the commands that could be used to prepare the `5.1.0` release:
 
@@ -222,9 +222,9 @@ Here is my vote:
 
 +1
 
-[1]: https://github.com/apache/arrow-datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
+[1]: https://github.com/apache/datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
 [2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0
-[3]: https://github.com/apache/arrow-datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
+[3]: https://github.com/apache/datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
 ```
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.

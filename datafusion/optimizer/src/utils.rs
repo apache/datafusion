@@ -100,7 +100,7 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 /// check whether the expression is volatile predicates
 pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
     let mut is_volatile_expr = false;
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         Ok(if is_volatile(expr)? {
             is_volatile_expr = true;
             TreeNodeRecursion::Stop
@@ -294,7 +294,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 /// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
 /// expression should be preserved: `3 as "1 + 2"`
 ///
-/// See <https://github.com/apache/arrow-datafusion/issues/3555> for details
+/// See <https://github.com/apache/datafusion/issues/3555> for details
 pub struct NamePreserver {
     use_alias: bool,
 }

@@ -185,7 +185,7 @@ pub trait PruningStatistics {
 /// example of how to use `PruningPredicate` to prune files based on min/max
 /// values.
 ///
-/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/pruning.rs
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:
@@ -1175,7 +1175,7 @@ fn rewrite_column_expr(
     column_old: &phys_expr::Column,
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    e.transform(&|expr| {
+    e.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
                 return Ok(Transformed::yes(Arc::new(column_new.clone())));

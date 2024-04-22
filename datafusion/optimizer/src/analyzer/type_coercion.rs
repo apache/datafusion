@@ -108,7 +108,7 @@ fn analyze_internal(
         .into_iter()
         .map(|expr| {
             // ensure aggregate names don't change:
-            // https://github.com/apache/arrow-datafusion/issues/3555
+            // https://github.com/apache/datafusion/issues/3555
             rewrite_preserving_name(expr, &mut expr_rewrite)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -306,16 +306,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let new_args = coerce_arguments_for_signature(
-                        args.as_slice(),
-                        &self.schema,
-                        &fun.signature(),
-                    )?;
-                    Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                        fun, new_args,
-                    ))))
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
                         args.as_slice(),

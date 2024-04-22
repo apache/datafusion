@@ -95,7 +95,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
         .await?;
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
-    // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
+    // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
     // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
     let df_results = ctx
@@ -110,7 +110,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
                     .select(vec![count(wildcard())])?
                     .into_unoptimized_plan(),
                 // Usually, into_optimized_plan() should be used here, but due to
-                // https://github.com/apache/arrow-datafusion/issues/5771,
+                // https://github.com/apache/datafusion/issues/5771,
                 // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
             ),
         ))?
@@ -147,7 +147,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
                 .select(vec![count(wildcard())])?
                 .into_unoptimized_plan(),
             // Usually, into_optimized_plan() should be used here, but due to
-            // https://github.com/apache/arrow-datafusion/issues/5771,
+            // https://github.com/apache/datafusion/issues/5771,
             // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
         )))?
         .select(vec![col("a"), col("b")])?
@@ -245,7 +245,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
         .await?;
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
-    // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
+    // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
     // for compare difference between sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
     let df_results = ctx

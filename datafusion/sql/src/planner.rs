@@ -440,7 +440,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
             // Explicitly list all other types so that if sqlparser
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
-            // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
+            // and avoid bugs like https://github.com/apache/datafusion/issues/3059
             SQLDataType::Nvarchar(_)
             | SQLDataType::JSON
             | SQLDataType::Uuid

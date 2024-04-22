@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections).data()
+        plan.transform_down(remove_unnecessary_projections).data()
     }
 
     fn name(&self) -> &str {
@@ -273,7 +273,7 @@ fn try_unifying_projections(
 
     // Collect the column references usage in the outer projection.
     projection.expr().iter().for_each(|(expr, _)| {
-        expr.apply(&mut |expr| {
+        expr.apply(|expr| {
             Ok({
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     *column_ref_map.entry(column.clone()).or_default() += 1;
@@ -287,7 +287,7 @@ fn try_unifying_projections(
     // Merging these projections is not beneficial, e.g
     // If an expression is not trivial and it is referred more than 1, unifies projections will be
     // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
         *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
     }) {
@@ -977,7 +977,7 @@ fn update_expr(
 
     let new_expr = expr
         .clone()
-        .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
+        .transform_up(|expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -1120,7 +1120,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             (*on)
                 .clone()
-                .transform(&|expr| {
+                .transform(|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs

@@ -30,18 +30,6 @@ macro_rules! handle_transform_recursion {
     }};
 }
 
-macro_rules! handle_transform_recursion_down {
-    ($F_DOWN:expr, $F_CHILD:expr) => {{
-        $F_DOWN?.transform_children(|n| n.map_children($F_CHILD))
-    }};
-}
-
-macro_rules! handle_transform_recursion_up {
-    ($SELF:expr, $F_CHILD:expr, $F_UP:expr) => {{
-        $SELF.map_children($F_CHILD)?.transform_parent(|n| $F_UP(n))
-    }};
-}
-
 /// API for inspecting and rewriting tree data structures.
 ///
 /// The `TreeNode` API is used to express algorithms separately from traversing
@@ -204,18 +192,25 @@ pub trait TreeNode: Sized {
     /// * [`Self::visit`] for both top-down and bottom up traversal.
     fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
-        f: &mut F,
+        mut f: F,
     ) -> Result<TreeNodeRecursion> {
-        f(self)?.visit_children(|| self.apply_children(|c| c.apply(f)))
+        fn apply_impl<N: TreeNode, F: FnMut(&N) -> Result<TreeNodeRecursion>>(
+            node: &N,
+            f: &mut F,
+        ) -> Result<TreeNodeRecursion> {
+            f(node)?.visit_children(|| node.apply_children(|c| apply_impl(c, f)))
+        }
+
+        apply_impl(self, &mut f)
     }
 
     /// Recursively rewrite the node's children and then the node using `f`
     /// (a bottom-up post-order traversal).
     ///
     /// A synonym of [`Self::transform_up`].
-    fn transform<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        f: F,
     ) -> Result<Transformed<Self>> {
         self.transform_up(f)
     }
@@ -229,19 +224,27 @@ pub trait TreeNode: Sized {
     /// * [`Self::transform_up`] for a bottom-up (post-order) traversal.
     /// * [Self::transform_down_up] for a combined traversal with closures
     /// * [`Self::rewrite`] for a combined traversal with a visitor
-    fn transform_down<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform_down<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        mut f: F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c.transform_down(f))
+        fn transform_down_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
+            node: N,
+            f: &mut F,
+        ) -> Result<Transformed<N>> {
+            f(node)?.transform_children(|n| n.map_children(|c| transform_down_impl(c, f)))
+        }
+
+        transform_down_impl(self, &mut f)
     }
 
     /// Same as [`Self::transform_down`] but with a mutable closure.
+    #[deprecated(since = "38.0.0", note = "Use `transform_down` instead")]
     fn transform_down_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_down!(f(self), |c| c.transform_down_mut(f))
+        self.transform_down(f)
     }
 
     /// Recursively rewrite the node using `f` in a bottom-up (post-order)
@@ -253,20 +256,28 @@ pub trait TreeNode: Sized {
     /// * [`Self::transform_down`] top-down (pre-order) traversal.
     /// * [Self::transform_down_up] for a combined traversal with closures
     /// * [`Self::rewrite`] for a combined traversal with a visitor
-    fn transform_up<F: Fn(Self) -> Result<Transformed<Self>>>(
+    fn transform_up<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        f: &F,
+        mut f: F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up(f), f)
+        fn transform_up_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
+            node: N,
+            f: &mut F,
+        ) -> Result<Transformed<N>> {
+            node.map_children(|c| transform_up_impl(c, f))?
+                .transform_parent(f)
+        }
+
+        transform_up_impl(self, &mut f)
     }
 
     /// Same as [`Self::transform_up`] but with a mutable closure.
-
+    #[deprecated(since = "38.0.0", note = "Use `transform_up` instead")]
     fn transform_up_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         f: &mut F,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion_up!(self, |c| c.transform_up_mut(f), f)
+        self.transform_up(f)
     }
 
     /// Transforms the node using `f_down` while traversing the tree top-down
@@ -369,14 +380,26 @@ pub trait TreeNode: Sized {
         FU: FnMut(Self) -> Result<Transformed<Self>>,
     >(
         self,
-        f_down: &mut FD,
-        f_up: &mut FU,
+        mut f_down: FD,
+        mut f_up: FU,
     ) -> Result<Transformed<Self>> {
-        handle_transform_recursion!(
-            f_down(self),
-            |c| c.transform_down_up(f_down, f_up),
-            f_up
-        )
+        fn transform_down_up_impl<
+            N: TreeNode,
+            FD: FnMut(N) -> Result<Transformed<N>>,
+            FU: FnMut(N) -> Result<Transformed<N>>,
+        >(
+            node: N,
+            f_down: &mut FD,
+            f_up: &mut FU,
+        ) -> Result<Transformed<N>> {
+            handle_transform_recursion!(
+                f_down(node),
+                |c| transform_down_up_impl(c, f_down, f_up),
+                f_up
+            )
+        }
+
+        transform_down_up_impl(self, &mut f_down, &mut f_up)
     }
 
     /// Returns true if `f` returns true for any node in the tree.
@@ -384,7 +407,7 @@ pub trait TreeNode: Sized {
     /// Stops recursion as soon as a matching node is found
     fn exists<F: FnMut(&Self) -> bool>(&self, mut f: F) -> bool {
         let mut found = false;
-        self.apply(&mut |n| {
+        self.apply(|n| {
             Ok(if f(n) {
                 found = true;
                 TreeNodeRecursion::Stop
@@ -574,9 +597,7 @@ impl TreeNodeRecursion {
 /// - [`TreeNode`],
 /// - [`TreeNode::rewrite`],
 /// - [`TreeNode::transform_down`],
-/// - [`TreeNode::transform_down_mut`],
 /// - [`TreeNode::transform_up`],
-/// - [`TreeNode::transform_up_mut`],
 /// - [`TreeNode::transform_down_up`]
 #[derive(PartialEq, Debug)]
 pub struct Transformed<T> {
@@ -1485,7 +1506,7 @@ mod tests {
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
                 let mut visits = vec![];
-                tree.apply(&mut |node| {
+                tree.apply(|node| {
                     visits.push(format!("f_down({})", node.data));
                     $F(node)
                 })?;
@@ -1574,10 +1595,7 @@ mod tests {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
-                assert_eq!(
-                    tree.transform_down_up(&mut $F_DOWN, &mut $F_UP,)?,
-                    $EXPECTED_TREE
-                );
+                assert_eq!(tree.transform_down_up($F_DOWN, $F_UP,)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1589,7 +1607,7 @@ mod tests {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
-                assert_eq!(tree.transform_down_mut(&mut $F)?, $EXPECTED_TREE);
+                assert_eq!(tree.transform_down($F)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1601,7 +1619,7 @@ mod tests {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
-                assert_eq!(tree.transform_up_mut(&mut $F)?, $EXPECTED_TREE);
+                assert_eq!(tree.transform_up($F)?, $EXPECTED_TREE);
 
                 Ok(())
             }

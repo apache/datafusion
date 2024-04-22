@@ -154,7 +154,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 /// * `Result<i64>` - An `Ok` variant containing the constant result if evaluation is successful,
 ///   or an `Err` variant containing an error message if evaluation fails.
 ///
-/// <https://github.com/apache/arrow-datafusion/issues/9821> tracks a more general solution
+/// <https://github.com/apache/datafusion/issues/9821> tracks a more general solution
 fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
     match expr {
         Expr::Literal(ScalarValue::Int64(Some(s))) => Ok(*s),

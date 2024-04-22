@@ -570,7 +570,7 @@ async fn csv_explain_verbose_plans() {
 #[rstest]
 #[tokio::test]
 async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
-    // repro for https://github.com/apache/arrow-datafusion/issues/917
+    // repro for https://github.com/apache/datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -719,7 +719,7 @@ async fn csv_explain_analyze_order_by() {
         .to_string();
 
     // Ensure that the ordering is not optimized away from the plan
-    // https://github.com/apache/arrow-datafusion/issues/6379
+    // https://github.com/apache/datafusion/issues/6379
     let needle =
         "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);

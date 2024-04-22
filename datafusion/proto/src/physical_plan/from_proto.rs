@@ -34,7 +34,6 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
-use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
@@ -44,7 +43,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
-    functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
+    ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::config::{
     ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
@@ -340,24 +339,10 @@ pub fn parse_physical_expr(
             convert_required!(e.arrow_type)?,
         )),
         ExprType::ScalarFunction(e) => {
-            let scalar_function =
-                protobuf::ScalarFunction::try_from(e.fun).map_err(|_| {
-                    proto_error(
-                        format!("Received an unknown scalar function: {}", e.fun,),
-                    )
-                })?;
-
-            let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
-
-            // TODO Do not create new the ExecutionProps
-            let execution_props = ExecutionProps::new();
-
-            functions::create_builtin_physical_expr(
-                &(&scalar_function).into(),
-                &args,
-                input_schema,
-                &execution_props,
-            )?
+            return Err(proto_error(format!(
+                "Received an unknown scalar function: {}",
+                e.fun,
+            )));
         }
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {

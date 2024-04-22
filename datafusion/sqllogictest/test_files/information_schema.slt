@@ -320,14 +320,14 @@ SHOW datafusion.execution.batch_size VERBOSE
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # show_time_zone_default_utc
-# https://github.com/apache/arrow-datafusion/issues/3255
+# https://github.com/apache/datafusion/issues/3255
 query TT
 SHOW TIME ZONE
 ----
 datafusion.execution.time_zone +00:00
 
 # show_timezone_default_utc
-# https://github.com/apache/arrow-datafusion/issues/3255
+# https://github.com/apache/datafusion/issues/3255
 query TT
 SHOW TIMEZONE
 ----
@@ -335,14 +335,14 @@ datafusion.execution.time_zone +00:00
 
 
 # show_time_zone_default_utc_verbose
-# https://github.com/apache/arrow-datafusion/issues/3255
+# https://github.com/apache/datafusion/issues/3255
 query TTT
 SHOW TIME ZONE VERBOSE
 ----
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 
 # show_timezone_default_utc
-# https://github.com/apache/arrow-datafusion/issues/3255
+# https://github.com/apache/datafusion/issues/3255
 query TTT
 SHOW TIMEZONE VERBOSE
 ----

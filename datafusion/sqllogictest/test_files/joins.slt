@@ -265,7 +265,7 @@ CREATE TABLE b(a INT, b INT, c INT) AS VALUES
 (4, 400, 800)
 
 # issue_3002
-#    // repro case for https://github.com/apache/arrow-datafusion/issues/3002
+#    // repro case for https://github.com/apache/datafusion/issues/3002
 
 query II
 select a.a, b.b from a join b on a.a = b.b
@@ -1272,7 +1272,7 @@ ORDER BY t1_id
 NULL e
 
 # Error left anti join
-# https://github.com/apache/arrow-datafusion/issues/4366
+# https://github.com/apache/datafusion/issues/4366
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -2010,7 +2010,8 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
-# Right as inner table nested loop join
+# Planning inner nested loop join 
+# inputs are swapped due to inexact statistics + join reordering caused additional projection
 
 query TT
 EXPLAIN
@@ -2027,17 +2028,18 @@ logical_plan
 05)----Filter: join_t2.t2_int > UInt32(1)
 06)------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
-01)NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
-02)--CoalesceBatchesExec: target_batch_size=2
-03)----FilterExec: t1_id@0 > 10
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
-06)--CoalescePartitionsExec
-07)----ProjectionExec: expr=[t2_id@0 as t2_id]
-08)------CoalesceBatchesExec: target_batch_size=2
-09)--------FilterExec: t2_int@1 > 1
-10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id]
+02)--NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[t2_id@0 as t2_id]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------FilterExec: t2_int@1 > 1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+09)----CoalesceBatchesExec: target_batch_size=2
+10)------FilterExec: t1_id@0 > 10
+11)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -3473,9 +3475,9 @@ logical_plan
 05)----TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
 01)NestedLoopJoinExec: join_type=Inner, filter=a@1 < a@0
-02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
-04)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # Currently datafusion cannot pushdown filter conditions with scalar UDF into
 # cross join.

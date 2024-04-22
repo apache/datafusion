@@ -128,7 +128,7 @@
 //!
 //! There are many additional annotated examples of using DataFusion in the [datafusion-examples] directory.
 //!
-//! [datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples
+//! [datafusion-examples]: https://github.com/apache/datafusion/tree/main/datafusion-examples
 //!
 //! ## Customization and Extension
 //!
@@ -170,7 +170,7 @@
 //! You can find a formal description of DataFusion's architecture in our
 //! [SIGMOD 2024 Paper].
 //!
-//! [SIGMOD 2024 Paper]: https://github.com/apache/arrow-datafusion/files/14789704/DataFusion_Query_Engine___SIGMOD_2024-FINAL.pdf
+//! [SIGMOD 2024 Paper]: https://github.com/apache/datafusion/files/14789704/DataFusion_Query_Engine___SIGMOD_2024-FINAL.pdf
 //!
 //! ## Overview  Presentations
 //!
@@ -306,7 +306,7 @@
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
 //! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -379,7 +379,7 @@
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/arrow-datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
+//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## Thread Scheduling
@@ -488,7 +488,7 @@ pub use parquet;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
-// for details, see https://github.com/apache/arrow-datafusion/issues/6648
+// for details, see https://github.com/apache/datafusion/issues/6648
 
 /// re-export of [`datafusion_common`] crate
 pub mod common {

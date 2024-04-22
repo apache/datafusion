@@ -212,7 +212,7 @@ impl FileFormat for ParquetFormat {
         // object stores (like local file systems) the order returned from list
         // is not deterministic. Thus, to ensure deterministic schema inference
         // sort the files first.
-        // https://github.com/apache/arrow-datafusion/pull/6629
+        // https://github.com/apache/datafusion/pull/6629
         schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
         let schemas = schemas
@@ -1040,7 +1040,7 @@ pub(crate) mod test_util {
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
         // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
-        // https://github.com/apache/arrow-datafusion/pull/6629
+        // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
                 .map(|_| NamedTempFile::new().expect("creating temp file"))

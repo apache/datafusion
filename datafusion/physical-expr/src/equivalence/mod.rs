@@ -97,7 +97,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
             col.name(),
             offset + col.index(),

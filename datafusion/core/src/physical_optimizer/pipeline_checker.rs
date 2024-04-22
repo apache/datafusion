@@ -50,7 +50,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))
+        plan.transform_up(|p| check_finiteness_requirements(p, &config.optimizer))
             .data()
     }
 

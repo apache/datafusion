@@ -285,7 +285,7 @@ pub fn convert_sort_expr_with_filter_schema(
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
         let converted_filter_expr = expr
-            .transform_up(&|p| {
+            .transform_up(|p| {
                 convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
                     match transformed {
                         Some(transformed) => Transformed::yes(transformed),

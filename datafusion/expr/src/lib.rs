@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [DataFusion](https://github.com/apache/arrow-datafusion)
+//! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
 //! [Apache Arrow](https://arrow.apache.org) as its in-memory format.
 //!
@@ -26,7 +26,6 @@
 //! The [expr_fn] module contains functions for creating expressions.
 
 mod accumulator;
-mod built_in_function;
 mod built_in_window_function;
 mod columnar_value;
 mod literal;
@@ -60,7 +59,6 @@ pub mod window_state;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
-pub use built_in_function::BuiltinScalarFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{

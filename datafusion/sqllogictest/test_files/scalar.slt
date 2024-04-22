@@ -533,7 +533,7 @@ select ln(null);
 NULL
 
 # ln scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select ln(0);
 ----
@@ -582,7 +582,7 @@ select log(2, 2.0/3) a, log(10, 2.0/3) b;
 -0.584962500721 -0.176091259056
 
 # log scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
 select log(0) a, log(1, 64) b;
 ----
@@ -627,7 +627,7 @@ select log10(2.0/3);
 -0.176091259056
 
 # log10 scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select log10(0);
 ----
@@ -663,7 +663,7 @@ select log2(2.0/3);
 -0.584962500721
 
 # log2 scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select log2(0);
 ----
@@ -1276,7 +1276,7 @@ FROM t1
 999
 999
 
-# issue: https://github.com/apache/arrow-datafusion/issues/7004
+# issue: https://github.com/apache/datafusion/issues/7004
 query B
 select case c1
     when 'foo' then TRUE
@@ -1325,7 +1325,7 @@ NULL
 NULL
 4
 
-# issue: https://github.com/apache/arrow-datafusion/issues/6376
+# issue: https://github.com/apache/datafusion/issues/6376
 query I
 select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
 ----

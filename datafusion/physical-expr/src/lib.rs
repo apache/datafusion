@@ -18,7 +18,6 @@
 pub mod aggregate;
 pub mod analysis;
 pub mod binary_map;
-pub mod conditional_expressions;
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;

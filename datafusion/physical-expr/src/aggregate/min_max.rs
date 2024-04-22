@@ -248,7 +248,7 @@ impl AggregateExpr for Max {
             }
 
             // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/arrow-datafusion/issues/6906
+            // https://github.com/apache/datafusion/issues/6906
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!(
