@@ -19,15 +19,15 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, ScalarFunction, TryCast,
+    Placeholder, TryCast,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
 use crate::{
-    aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AggregateUDF, Expr, LogicalPlan, Operator,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
+    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
+    Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
@@ -477,23 +477,6 @@ pub fn is_unknown(expr: Expr) -> Expr {
 pub fn is_not_unknown(expr: Expr) -> Expr {
     Expr::IsNotUnknown(Box::new(expr))
 }
-
-macro_rules! nary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
-        #[doc = $DOC ]
-        pub fn $FUNC(args: Vec<Expr>) -> Expr {
-            Expr::ScalarFunction(ScalarFunction::new(
-                built_in_function::BuiltinScalarFunction::$ENUM,
-                args,
-            ))
-        }
-    };
-}
-
-// generate methods for creating the supported unary/binary expressions
-
-// math functions
-nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {

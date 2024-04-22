@@ -37,47 +37,14 @@ use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::Array;
 
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
-    type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
-    ScalarFunctionImplementation,
+    type_coercion::functions::data_types, ColumnarValue, ScalarFunctionImplementation,
 };
 use datafusion_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
 
 use crate::sort_properties::SortProperties;
-use crate::{conditional_expressions, PhysicalExpr, ScalarFunctionExpr};
-
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
-pub fn create_builtin_physical_expr(
-    fun: &BuiltinScalarFunction,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    _execution_props: &ExecutionProps,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_expr_types = input_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    // verify that input data types is consistent with function's `TypeSignature`
-    data_types(&input_expr_types, &fun.signature())?;
-
-    let data_type = fun.return_type(&input_expr_types)?;
-
-    let monotonicity = fun.monotonicity();
-
-    let fun_def = ScalarFunctionDefinition::BuiltIn(*fun);
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        &format!("{fun}"),
-        fun_def,
-        input_phy_exprs.to_vec(),
-        data_type,
-        monotonicity,
-        fun.signature().type_signature.supports_zero_argument(),
-    )))
-}
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 
 /// Create a physical (function) expression.
 /// This function errors when `args`' can't be coerced to a valid argument type of the function.
@@ -197,24 +164,6 @@ where
             result.map(ColumnarValue::Array)
         }
     })
-}
-
-/// Create a physical scalar function.
-pub fn create_physical_fun(
-    fun: &BuiltinScalarFunction,
-) -> Result<ScalarFunctionImplementation> {
-    Ok(match fun {
-        // string functions
-        BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
-    })
-}
-
-#[deprecated(
-    since = "32.0.0",
-    note = "Moved to `expr` crate. Please use `BuiltinScalarFunction::monotonicity()` instead"
-)]
-pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
-    fun.monotonicity()
 }
 
 /// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
