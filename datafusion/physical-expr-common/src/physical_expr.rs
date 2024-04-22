@@ -30,7 +30,7 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result, 
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
+use datafusion_expr::{Between, BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
 
 use crate::expressions::binary::binary;
 use crate::expressions::cast::cast;
@@ -538,30 +538,30 @@ pub fn create_physical_expr(
         //         }
         //     }
         // }
-        // Expr::Between(Between {
-        //     expr,
-        //     negated,
-        //     low,
-        //     high,
-        // }) => {
-        //     let value_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
-        //     let low_expr = create_physical_expr(low, input_dfschema, execution_props)?;
-        //     let high_expr = create_physical_expr(high, input_dfschema, execution_props)?;
+        Expr::Between(Between {
+            expr,
+            negated,
+            low,
+            high,
+        }) => {
+            let value_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
+            let low_expr = create_physical_expr(low, input_dfschema, execution_props)?;
+            let high_expr = create_physical_expr(high, input_dfschema, execution_props)?;
 
-        //     // rewrite the between into the two binary operators
-        //     let binary_expr = binary(
-        //         binary(value_expr.clone(), Operator::GtEq, low_expr, input_schema)?,
-        //         Operator::And,
-        //         binary(value_expr.clone(), Operator::LtEq, high_expr, input_schema)?,
-        //         input_schema,
-        //     );
+            // rewrite the between into the two binary operators
+            let binary_expr = binary(
+                binary(value_expr.clone(), Operator::GtEq, low_expr, input_schema)?,
+                Operator::And,
+                binary(value_expr.clone(), Operator::LtEq, high_expr, input_schema)?,
+                input_schema,
+            );
 
-        //     if *negated {
-        //         expressions::not(binary_expr?)
-        //     } else {
-        //         binary_expr
-        //     }
-        // }
+            if *negated {
+                not(binary_expr?)
+            } else {
+                binary_expr
+            }
+        }
         Expr::InList(InList {
             expr,
             list,
