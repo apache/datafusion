@@ -2423,7 +2423,7 @@ mod tests {
         Ok(())
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Test issue: https://github.com/apache/datafusion/issues/7790
     // The join operation outputs two identical column names, but they belong to different relations.
     #[tokio::test]
     async fn with_column_join_same_columns() -> Result<()> {
@@ -2503,7 +2503,7 @@ mod tests {
     }
 
     // Table 't1' self join
-    // Supplementary test of issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Supplementary test of issue: https://github.com/apache/datafusion/issues/7790
     #[tokio::test]
     async fn with_column_self_join() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1"])?;

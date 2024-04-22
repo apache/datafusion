@@ -490,7 +490,7 @@ impl EquivalenceProperties {
     /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
     /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
-    /// dependency map, happen in issue 8838: <https://github.com/apache/arrow-datafusion/issues/8838>
+    /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
         let orderings = &self.oeq_class.orderings;
         let new_order = orderings

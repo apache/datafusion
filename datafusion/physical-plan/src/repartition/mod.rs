@@ -805,11 +805,11 @@ impl RepartitionExec {
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
-            // https://github.com/apache/arrow-datafusion/issues/5278.
+            // https://github.com/apache/datafusion/issues/5278.
             //
             // However, yielding on every batch causes a bottleneck
             // when running with multiple cores. See
-            // https://github.com/apache/arrow-datafusion/issues/6290
+            // https://github.com/apache/datafusion/issues/6290
             //
             // Thus, heuristically yield after producing num_partition
             // batches

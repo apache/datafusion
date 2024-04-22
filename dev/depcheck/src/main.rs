@@ -29,7 +29,7 @@ use cargo::util::config::Config;
 /// (which prevents publishing on crates.io) by parsing the Cargo.toml files and
 /// checking the dependency graph.
 ///
-/// See https://github.com/apache/arrow-datafusion/issues/9278 for more details
+/// See https://github.com/apache/datafusion/issues/9278 for more details
 fn main() -> CargoResult<()> {
     let config = Config::default()?;
     // This is the path for the depcheck binary

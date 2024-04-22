@@ -120,7 +120,7 @@ impl SimplifyExpressions {
         //
         // This is likely related to the fact that order of the columns must
         // match the order of the children. see
-        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
+        // https://github.com/apache/datafusion/pull/8780 for more details
         let simplifier = if let LogicalPlan::Join(_) = plan {
             simplifier.with_canonicalize(false)
         } else {

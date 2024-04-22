@@ -186,7 +186,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)
             .data()?
             .rewrite(&mut simplifier)
@@ -212,7 +212,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     // Would be nice if this API could use the SimplifyInfo
     // rather than creating an DFSchemaRef coerces rather than doing
     // it manually.
-    // https://github.com/apache/arrow-datafusion/issues/3793
+    // https://github.com/apache/datafusion/issues/3793
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
@@ -1728,7 +1728,7 @@ mod tests {
         // Would be nice if this API could use the SimplifyInfo
         // rather than creating an DFSchemaRef coerces rather than doing
         // it manually.
-        // https://github.com/apache/arrow-datafusion/issues/3793
+        // https://github.com/apache/datafusion/issues/3793
         let expr = simplifier.coerce(expr, schema).unwrap();
 
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
@@ -3085,7 +3085,7 @@ mod tests {
         // c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3103,7 +3103,7 @@ mod tests {
         // ISNULL(c2) OR c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3121,7 +3121,7 @@ mod tests {
         // --> c1 OR NOT(c2)
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3140,7 +3140,7 @@ mod tests {
         // --> c1 OR c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3392,7 +3392,7 @@ mod tests {
                     true,
                 )));
         // TODO: Further simplify this expression
-        // https://github.com/apache/arrow-datafusion/issues/8970
+        // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }

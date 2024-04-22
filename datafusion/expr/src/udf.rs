@@ -48,8 +48,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -213,7 +213,7 @@ where
 /// [`ScalarUDF`] for other available options.
 ///
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -424,7 +424,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 }
 
 /// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8578>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
 /// for more details)
 struct ScalarUdfLegacyWrapper {
     /// The name of the function

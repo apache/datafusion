@@ -46,10 +46,10 @@ resolver = "2"
 [workspace.package]
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-homepage = "https://github.com/apache/arrow-datafusion"
+homepage = "https://github.com/apache/datafusion"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/datafusion"
 rust-version = "1.73"
 version = "37.1.0"
 

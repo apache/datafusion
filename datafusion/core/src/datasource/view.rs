@@ -158,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_3242() -> Result<()> {
-        // regression test for https://github.com/apache/arrow-datafusion/pull/3242
+        // regression test for https://github.com/apache/datafusion/pull/3242
         let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );

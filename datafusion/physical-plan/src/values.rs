@@ -252,7 +252,7 @@ mod tests {
         let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/8763
+    // Test issue: https://github.com/apache/datafusion/issues/8763
     #[test]
     fn new_exec_with_non_nullable_schema() {
         let schema = Arc::new(Schema::new(vec![Field::new(
