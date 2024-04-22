@@ -25,15 +25,16 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_common::{internal_err, not_impl_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{BinaryExpr, ColumnarValue, Expr};
 
 use crate::expressions::binary::binary;
 use crate::expressions::column::Column;
-use crate::expressions::literal::Literal;
+use crate::expressions::in_list::in_list;
+use crate::expressions::literal::{lit, Literal};
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 
@@ -212,6 +213,29 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
             .as_any()
     } else {
         any
+    }
+}
+
+/// Checks whether the given physical expression slices are equal in the sense
+/// of bags (multi-sets), disregarding their orderings.
+pub fn physical_exprs_bag_equal(
+    lhs: &[Arc<dyn PhysicalExpr>],
+    rhs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    // TODO: Once we can use `HashMap`s with `Arc<dyn PhysicalExpr>`, this
+    //       function should use a `HashMap` to reduce computational complexity.
+    if lhs.len() == rhs.len() {
+        let mut rhs_vec = rhs.to_vec();
+        for expr in lhs {
+            if let Some(idx) = rhs_vec.iter().position(|e| expr.eq(e)) {
+                rhs_vec.swap_remove(idx);
+            } else {
+                return false;
+            }
+        }
+        true
+    } else {
+        false
     }
 }
 
@@ -533,23 +557,23 @@ pub fn create_physical_expr(
         //         binary_expr
         //     }
         // }
-        // Expr::InList(InList {
-        //     expr,
-        //     list,
-        //     negated,
-        // }) => match expr.as_ref() {
-        //     Expr::Literal(ScalarValue::Utf8(None)) => {
-        //         Ok(expressions::lit(ScalarValue::Boolean(None)))
-        //     }
-        //     _ => {
-        //         let value_expr =
-        //             create_physical_expr(expr, input_dfschema, execution_props)?;
+        Expr::InList(InList {
+            expr,
+            list,
+            negated,
+        }) => match expr.as_ref() {
+            Expr::Literal(ScalarValue::Utf8(None)) => {
+                Ok(lit(ScalarValue::Boolean(None)))
+            }
+            _ => {
+                let value_expr =
+                    create_physical_expr(expr, input_dfschema, execution_props)?;
 
-        //         let list_exprs =
-        //             create_physical_exprs(list, input_dfschema, execution_props)?;
-        //         expressions::in_list(value_expr, list_exprs, negated, input_schema)
-        //     }
-        // },
+                let list_exprs =
+                    create_physical_exprs(list, input_dfschema, execution_props)?;
+                in_list(value_expr, list_exprs, negated, input_schema)
+            }
+        },
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

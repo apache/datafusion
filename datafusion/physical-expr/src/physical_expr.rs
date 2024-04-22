@@ -21,6 +21,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::izip;
 
 pub use datafusion_physical_expr_common::physical_expr::down_cast_any_ref;
+pub use datafusion_physical_expr_common::physical_expr::physical_exprs_bag_equal;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -44,28 +45,6 @@ pub fn physical_exprs_equal(
     lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
 }
 
-/// Checks whether the given physical expression slices are equal in the sense
-/// of bags (multi-sets), disregarding their orderings.
-pub fn physical_exprs_bag_equal(
-    lhs: &[Arc<dyn PhysicalExpr>],
-    rhs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    // TODO: Once we can use `HashMap`s with `Arc<dyn PhysicalExpr>`, this
-    //       function should use a `HashMap` to reduce computational complexity.
-    if lhs.len() == rhs.len() {
-        let mut rhs_vec = rhs.to_vec();
-        for expr in lhs {
-            if let Some(idx) = rhs_vec.iter().position(|e| expr.eq(e)) {
-                rhs_vec.swap_remove(idx);
-            } else {
-                return false;
-            }
-        }
-        true
-    } else {
-        false
-    }
-}
 
 /// This utility function removes duplicates from the given `exprs` vector.
 /// Note that this function does not necessarily preserve its input ordering.

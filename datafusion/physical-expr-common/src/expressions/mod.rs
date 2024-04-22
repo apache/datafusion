@@ -22,5 +22,6 @@ pub mod binary;
 pub mod cast;
 pub mod column;
 pub mod datum;
+pub mod in_list;
 pub mod literal;
 pub mod try_cast;

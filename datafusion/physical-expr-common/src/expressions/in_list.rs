@@ -25,12 +25,11 @@ use std::sync::Arc;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
 use crate::physical_expr::PhysicalExpr;
 
-// use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
-use arrow::datatypes::{i256, DataType, Schema, TimeUnit};
+use arrow::datatypes::{i256, DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::array::{as_largestring_array, downcast_array, downcast_dictionary_array, Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BooleanArray};
@@ -457,7 +456,8 @@ pub fn in_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions;
+
+    use crate::expressions::cast::cast;
     use crate::expressions::column::col;
     use crate::expressions::literal::lit;
     use crate::expressions::try_cast::try_cast;
@@ -466,13 +466,17 @@ mod tests {
     use arrow::array::Date64Array;
     use arrow::array::Decimal128Array;
     use arrow::array::Float64Array;
+    use arrow::array::Int32Array;
     use arrow::array::Int64Array;
     use arrow::array::StringArray;
+    use arrow::array::TimestampMicrosecondArray;
+    use arrow::array::UInt16DictionaryArray;
     use datafusion_common::plan_err;
     use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     
     use arrow::datatypes::Field;
+    use arrow::datatypes::TimeUnit;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -1119,8 +1123,8 @@ mod tests {
         // list of phy expr
         let mut phy_exprs = vec![
             lit(1i64),
-            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
-            expressions::try_cast(lit(3.13f32), &schema, DataType::Int64)?,
+            cast(lit(2i32), &schema, DataType::Int64)?,
+            try_cast(lit(3.13f32), &schema, DataType::Int64)?,
         ];
         let result = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
@@ -1130,8 +1134,8 @@ mod tests {
 
         try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
         // cast(cast(lit())), but the cast to the same data type, one case will be ignored
-        phy_exprs.push(expressions::cast(
-            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
+        phy_exprs.push(cast(
+            cast(lit(2i32), &schema, DataType::Int64)?,
             &schema,
             DataType::Int64,
         )?);
@@ -1140,15 +1144,15 @@ mod tests {
         phy_exprs.clear();
 
         // case(cast(lit())), the cast to the diff data type
-        phy_exprs.push(expressions::cast(
-            expressions::cast(lit(2i32), &schema, DataType::Int64)?,
+        phy_exprs.push(cast(
+            cast(lit(2i32), &schema, DataType::Int64)?,
             &schema,
             DataType::Int32,
         )?);
         try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
         // column
-        phy_exprs.push(expressions::col("a", &schema)?);
+        phy_exprs.push(col("a", &schema)?);
         assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_err());
 
         Ok(())

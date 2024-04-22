@@ -19,7 +19,6 @@
 
 mod case;
 mod column;
-mod in_list;
 mod is_not_null;
 mod is_null;
 mod like;
@@ -81,7 +80,7 @@ pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExp
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
 pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
-pub use in_list::{in_list, InListExpr};
+pub use datafusion_physical_expr_common::expressions::in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use like::{like, LikeExpr};
