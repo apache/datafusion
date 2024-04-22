@@ -40,7 +40,7 @@ impl EliminateJoin {
 impl OptimizerRule for EliminateJoin {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         internal_err!("Should have called EliminateJoin::rewrite")
@@ -57,7 +57,7 @@ impl OptimizerRule for EliminateJoin {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
