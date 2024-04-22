@@ -24,21 +24,20 @@ use arrow::record_batch::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::{DFField, DFSchema};
 use datafusion::error::Result;
-use datafusion::functions_array::rewrite::ArrayFunctionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{
     analyze, create_physical_expr, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 use datafusion::prelude::*;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{ColumnarValue, ExprSchemable, Operator};
+use datafusion_expr::{
+    ColumnarValue, ExprSchemable, GetFieldAccess, GetIndexedField, Operator,
+};
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -310,12 +309,19 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
     // apply type coercion here to ensure types match
     let expr = simplifier.coerce(expr, df_schema.clone())?;
 
-    // Support array functions by rewriting expressions
-    let rewriter = ArrayFunctionRewriter::new();
-
+    // Support Expr::struct by rewriting expressions
     let expr = expr
-        .transform_up(|expr| {
-            rewriter.rewrite(expr, df_schema.as_ref(), &ConfigOptions::default())
+        .transform_up(&|expr| {
+            Ok(match expr {
+                Expr::GetIndexedField(GetIndexedField {
+                    expr,
+                    field: GetFieldAccess::NamedStructField { name },
+                }) => {
+                    let name = Expr::Literal(name);
+                    Transformed::yes(get_field(*expr, name))
+                }
+                _ => Transformed::no(expr),
+            })
         })?
         .data;
 

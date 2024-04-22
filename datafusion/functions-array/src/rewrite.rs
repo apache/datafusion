@@ -30,16 +30,8 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Operator};
 use datafusion_functions::expr_fn::get_field;
 
-/// Rewrites expressions such as `expr[field]` into function dor array functions
-#[derive(Debug, Default)]
-pub struct ArrayFunctionRewriter {}
-
-impl ArrayFunctionRewriter {
-    /// Create a new `ArrayFunctionRewriter`
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+/// Rewrites expressions into function calls to array functions
+pub(crate) struct ArrayFunctionRewriter {}
 
 impl FunctionRewrite for ArrayFunctionRewriter {
     fn name(&self) -> &str {
