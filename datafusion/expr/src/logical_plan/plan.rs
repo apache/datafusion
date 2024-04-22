@@ -65,7 +65,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// from leaves up to the root to produce the query result.
 ///
 /// # See also:
-/// * [`tree_node`]: visiting and rewriting API
+/// * [`tree_node`]: To inspect and rewrite `LogicalPlan` trees
 ///
 /// [`tree_node`]: crate::logical_plan::tree_node
 #[derive(Clone, PartialEq, Eq, Hash)]
