@@ -28,8 +28,8 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
-    aggregate_function, built_in_function, built_in_window_function, udaf,
-    BuiltinScalarFunction, ExprSchemable, Operator, Signature,
+    aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
+    Signature,
 };
 
 use arrow::datatypes::DataType;
@@ -362,10 +362,6 @@ impl Between {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Defines which implementation of a function for DataFusion to call.
 pub enum ScalarFunctionDefinition {
-    /// Resolved to a `BuiltinScalarFunction`
-    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
-    /// This variant is planned to be removed in long term
-    BuiltIn(BuiltinScalarFunction),
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
     /// A scalar function constructed with name. This variant can not be executed directly
@@ -393,7 +389,6 @@ impl ScalarFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            ScalarFunctionDefinition::BuiltIn(fun) => fun.name(),
             ScalarFunctionDefinition::UDF(udf) => udf.name(),
             ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
@@ -403,9 +398,6 @@ impl ScalarFunctionDefinition {
     /// when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
         match self {
-            ScalarFunctionDefinition::BuiltIn(fun) => {
-                Ok(fun.volatility() == crate::Volatility::Volatile)
-            }
             ScalarFunctionDefinition::UDF(udf) => {
                 Ok(udf.signature().volatility == crate::Volatility::Volatile)
             }
@@ -419,14 +411,6 @@ impl ScalarFunctionDefinition {
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression
-    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
-        Self {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }
-    }
-
     /// Create a new ScalarFunction expression with a user-defined function (UDF)
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self {
@@ -1282,7 +1266,7 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.name().eq("coalesce"))
             }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)

@@ -27,7 +27,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{
     expr::{ScalarFunction, Unnest},
-    BuiltInWindowFunction, BuiltinScalarFunction,
+    BuiltInWindowFunction,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
@@ -55,7 +55,6 @@ pub fn suggest_valid_function(
         // All scalar functions and aggregate functions
         let mut funcs = Vec::new();
 
-        funcs.extend(BuiltinScalarFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udfs_names());
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udafs_names());
@@ -111,7 +110,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             crate::utils::normalize_ident(name.0[0].clone())
         };
 
-        // user-defined function (UDF) should have precedence in case it has the same name as a scalar built-in function
+        // user-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
@@ -128,12 +127,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Self::check_unnest_arg(&expr, schema)?;
             return Ok(Expr::Unnest(Unnest::new(expr)));
         }
-
-        // next, scalar built-in
-        if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
-            let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
-        };
 
         if !order_by.is_empty() && is_function_window {
             return plan_err!(

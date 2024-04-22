@@ -1625,7 +1625,7 @@ drop table ts_data_secs
 
 
 ##########
-## Timezone impact on builtin scalar functions
+## Timezone impact on scalar functions
 #
 # server time = +07
 ##########
@@ -1690,7 +1690,7 @@ SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
 
 
 ##########
-## Timezone impact on builtin scalar functions
+## Timezone impact on scalar functions
 #
 # server time = UTC
 ##########
@@ -1773,7 +1773,7 @@ SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
 
 
 ##########
-## Timezone impact on builtin scalar functions
+## Timezone impact on scalar functions
 #
 # irregular offsets
 ##########
