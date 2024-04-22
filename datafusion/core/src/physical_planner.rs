@@ -87,6 +87,7 @@ use datafusion_expr::expr::{
     WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery,
@@ -108,6 +109,7 @@ fn create_function_physical_name(
     fun: &str,
     distinct: bool,
     args: &[Expr],
+    order_by: Option<&Vec<Expr>>,
 ) -> Result<String> {
     let names: Vec<String> = args
         .iter()
@@ -118,7 +120,12 @@ fn create_function_physical_name(
         true => "DISTINCT ",
         false => "",
     };
-    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+
+    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
+
+    Ok(order_by
+        .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))
+        .unwrap_or(phys_name))
 }
 
 fn physical_name(e: &Expr) -> Result<String> {
@@ -238,22 +245,30 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
-            create_function_physical_name(fun.name(), false, &fun.args)
+            create_function_physical_name(fun.name(), false, &fun.args, None)
         }
-        Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
-            create_function_physical_name(&fun.to_string(), false, args)
+        Expr::WindowFunction(WindowFunction {
+            fun,
+            args,
+            order_by,
+            ..
+        }) => {
+            create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
         }
         Expr::AggregateFunction(AggregateFunction {
             func_def,
             distinct,
             args,
             filter,
-            order_by: _,
+            order_by,
             null_treatment: _,
         }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn(..) => {
-                create_function_physical_name(func_def.name(), *distinct, args)
-            }
+            AggregateFunctionDefinition::BuiltIn(..) => create_function_physical_name(
+                func_def.name(),
+                *distinct,
+                args,
+                order_by.as_ref(),
+            ),
             AggregateFunctionDefinition::UDF(fun) => {
                 // TODO: Add support for filter by in AggregateUDF
                 if filter.is_some() {

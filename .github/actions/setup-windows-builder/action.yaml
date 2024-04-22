@@ -38,7 +38,7 @@ runs:
     - name: Setup Rust toolchain
       shell: bash
       run: |
-        # Avoid self update to avoid CI failures: https://github.com/apache/arrow-datafusion/issues/9653
+        # Avoid self update to avoid CI failures: https://github.com/apache/datafusion/issues/9653
         rustup toolchain install stable --no-self-update
         rustup default stable
         rustup component add rustfmt

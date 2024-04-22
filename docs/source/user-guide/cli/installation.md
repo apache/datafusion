@@ -55,7 +55,7 @@ that there is `.dockerignore` file in the root of the repository that may need t
 this to work.
 
 ```bash
-git clone https://github.com/apache/arrow-datafusion
+git clone https://github.com/apache/datafusion
 cd arrow-datafusion
 git checkout 12.0.0
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli

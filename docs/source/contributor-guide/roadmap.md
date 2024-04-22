@@ -26,7 +26,7 @@ align to that vision.
 ## Planning `EPIC`s
 
 DataFusion uses [GitHub
-issues](https://github.com/apache/arrow-datafusion/issues) to track
+issues](https://github.com/apache/datafusion/issues) to track
 planned work. We collect related tickets using tracking issues labeled
 with `[EPIC]` which contain discussion and links to more detailed items.
 
@@ -42,4 +42,4 @@ start a conversation using a github issue or the
 [dev@arrow.apache.org](mailto:dev@arrow.apache.org) mailing list to
 make review efficient and avoid surprises.
 
-[The current list of `EPIC`s can be found here](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+epic).
+[The current list of `EPIC`s can be found here](https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+epic).

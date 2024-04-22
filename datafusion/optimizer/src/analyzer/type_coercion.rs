@@ -108,7 +108,7 @@ fn analyze_internal(
         .into_iter()
         .map(|expr| {
             // ensure aggregate names don't change:
-            // https://github.com/apache/arrow-datafusion/issues/3555
+            // https://github.com/apache/datafusion/issues/3555
             rewrite_preserving_name(expr, &mut expr_rewrite)
         })
         .collect::<Result<Vec<_>>>()?;

@@ -196,7 +196,7 @@ mod tests {
     // For each variant in BuiltInWindowFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
-    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    // function suggestion. See https://github.com/apache/datafusion/issues/8082
     fn test_display_and_from_str() {
         for func_original in BuiltInWindowFunction::iter() {
             let func_name = func_original.to_string();

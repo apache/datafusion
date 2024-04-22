@@ -567,7 +567,7 @@ select * from (values (1)) LIMIT 10*100;
 1
 
 # More complex expressions in the limit is not supported yet.
-# See issue: https://github.com/apache/arrow-datafusion/issues/9821
+# See issue: https://github.com/apache/datafusion/issues/9821
 statement error DataFusion error: Error during planning: Unsupported operator for LIMIT clause
 select * from (values (1)) LIMIT 100/10;
 
@@ -604,7 +604,7 @@ END;
 2
 
 # Binary Expression for LargeUtf8
-# issue: https://github.com/apache/arrow-datafusion/issues/5893
+# issue: https://github.com/apache/datafusion/issues/5893
 statement ok
 CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
 
@@ -1461,7 +1461,7 @@ SELECT abs(x), abs(x) + abs(y) FROM t;
 statement ok
 DROP TABLE t;
 
-# related to https://github.com/apache/arrow-datafusion/issues/8814
+# related to https://github.com/apache/datafusion/issues/8814
 statement ok
 create table t(x int, y int) as values (1,1), (2,2), (3,3), (0,0), (4,0);
 
@@ -1510,7 +1510,7 @@ physical_plan
 01)ProjectionExec: expr=[y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@0 = 0 OR y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
-# due to the reason describe in https://github.com/apache/arrow-datafusion/issues/8927,
+# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
 # the following queries will fail
 query error
 select coalesce(1, y/x), coalesce(2, y/x) from t;
@@ -1593,7 +1593,7 @@ SELECT to_timestamp('I AM NOT A TIMESTAMP');
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 SELECT CAST('' AS int);
 
-# See issue: https://github.com/apache/arrow-datafusion/issues/8978
+# See issue: https://github.com/apache/datafusion/issues/8978
 statement ok
 create table users (id int, name varchar);
 

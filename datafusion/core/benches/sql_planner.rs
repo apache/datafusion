@@ -93,13 +93,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let ctx = create_context();
 
     // Test simplest
-    // https://github.com/apache/arrow-datafusion/issues/5157
+    // https://github.com/apache/datafusion/issues/5157
     c.bench_function("logical_select_one_from_700", |b| {
         b.iter(|| logical_plan(&ctx, "SELECT c1 FROM t700"))
     });
 
     // Test simplest
-    // https://github.com/apache/arrow-datafusion/issues/5157
+    // https://github.com/apache/datafusion/issues/5157
     c.bench_function("physical_select_one_from_700", |b| {
         b.iter(|| physical_plan(&ctx, "SELECT c1 FROM t700"))
     });

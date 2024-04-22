@@ -111,7 +111,7 @@ a
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
 
-# https://github.com/apache/arrow-datafusion/issues/9714
+# https://github.com/apache/datafusion/issues/9714
 ## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
 ## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
 #
@@ -138,7 +138,7 @@ create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
 #LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
 #
 # This triggers a panic (index out of bounds)
-# https://github.com/apache/arrow-datafusion/issues/9269
+# https://github.com/apache/datafusion/issues/9269
 #query
 #select * from validate_partitioned_escape_quote;
 

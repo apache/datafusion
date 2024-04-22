@@ -60,7 +60,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(&get_common_requirement_of_aggregate_input)
+        plan.transform_up(get_common_requirement_of_aggregate_input)
             .data()
     }
 

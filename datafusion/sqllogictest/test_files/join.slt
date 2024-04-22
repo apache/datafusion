@@ -19,7 +19,7 @@
 ## Join Tests
 ##########
 
-# Regression test: https://github.com/apache/arrow-datafusion/issues/4844
+# Regression test: https://github.com/apache/datafusion/issues/4844
 statement ok
 CREATE TABLE IF NOT EXISTS students(name TEXT, mark INT) AS VALUES
 ('Stuart', 28),
@@ -49,7 +49,7 @@ drop table IF EXISTS students;
 statement ok
 drop table IF EXISTS grades;
 
-# issue: https://github.com/apache/arrow-datafusion/issues/5382
+# issue: https://github.com/apache/datafusion/issues/5382
 statement ok
 CREATE TABLE IF NOT EXISTS test1(a int, b int) as select 1 as a, 2 as b;
 
@@ -702,7 +702,7 @@ drop table IF EXISTS full_join_test;
 statement ok
 set datafusion.execution.batch_size = 8192;
 
-# related to: https://github.com/apache/arrow-datafusion/issues/8374
+# related to: https://github.com/apache/datafusion/issues/8374
 statement ok
 CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
 

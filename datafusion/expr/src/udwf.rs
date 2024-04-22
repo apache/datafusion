@@ -46,8 +46,8 @@ use std::{
 ///
 /// [`PartitionEvaluator`]: crate::PartitionEvaluator
 /// [`create_udwf`]: crate::expr_fn::create_udwf
-/// [`simple_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-/// [`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 #[derive(Debug, Clone)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
@@ -194,7 +194,7 @@ where
 /// [`WindowUDF`] for other available options.
 ///
 ///
-/// [`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -315,7 +315,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 }
 
 /// Implementation of [`WindowUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8719>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8719>
 /// for more details)
 pub struct WindowUDFLegacyWrapper {
     /// name
