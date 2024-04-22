@@ -100,7 +100,7 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 /// check whether the expression is volatile predicates
 pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
     let mut is_volatile_expr = false;
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         Ok(if is_volatile(expr)? {
             is_volatile_expr = true;
             TreeNodeRecursion::Stop

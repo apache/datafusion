@@ -380,7 +380,7 @@ pub fn sort_exec(
 /// replaced with direct plan equality checks.
 pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
     context
-        .transform_up(&|node| {
+        .transform_up(|node| {
             let children_plans = node.plan.children();
             assert_eq!(node.children.len(), children_plans.len());
             for (child_plan, child_node) in

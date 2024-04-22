@@ -1175,7 +1175,7 @@ fn rewrite_column_expr(
     column_old: &phys_expr::Column,
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    e.transform(&|expr| {
+    e.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
                 return Ok(Transformed::yes(Arc::new(column_new.clone())));

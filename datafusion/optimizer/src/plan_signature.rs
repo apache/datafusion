@@ -73,7 +73,7 @@ impl LogicalPlanSignature {
 /// Get total number of [`LogicalPlan`]s in the plan.
 fn get_node_number(plan: &LogicalPlan) -> NonZeroUsize {
     let mut node_number = 0;
-    plan.apply_with_subqueries(&mut |_plan| {
+    plan.apply_with_subqueries(|_plan| {
         node_number += 1;
         Ok(TreeNodeRecursion::Continue)
     })

@@ -197,12 +197,12 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new_default(plan);
             let adjusted = plan_requirements
-                .transform_down(&adjust_input_keys_ordering)
+                .transform_down(adjust_input_keys_ordering)
                 .data()?;
             adjusted.plan
         } else {
             // Run a bottom-up process
-            plan.transform_up(&|plan| {
+            plan.transform_up(|plan| {
                 Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
             })
             .data()?
@@ -211,7 +211,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context = distribution_context
-            .transform_up(&|distribution_context| {
+            .transform_up(|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })
             .data()?;
@@ -1768,14 +1768,14 @@ pub(crate) mod tests {
                     let plan_requirements =
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
-                        .transform_down(&adjust_input_keys_ordering)
+                        .transform_down(adjust_input_keys_ordering)
                         .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
                 } else {
                     // Run reorder_join_keys_to_inputs rule
-                    $PLAN.clone().transform_up(&|plan| {
+                    $PLAN.clone().transform_up(|plan| {
                         Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
                     })
                     .data()?
@@ -1783,7 +1783,7 @@ pub(crate) mod tests {
 
                 // Then run ensure_distribution rule
                 DistributionContext::new_default(adjusted)
-                    .transform_up(&|distribution_context| {
+                    .transform_up(|distribution_context| {
                         ensure_distribution(distribution_context, &config)
                     })
                     .data()

@@ -218,7 +218,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
 // Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
-    predicate.apply(&mut |expr| match expr {
+    predicate.apply(|expr| match expr {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
@@ -993,7 +993,7 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    e.transform_up(&|expr| {
+    e.transform_up(|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
                 Some(new_c) => Transformed::yes(new_c.clone()),
@@ -1009,7 +1009,7 @@ pub fn replace_cols_by_name(
 /// check whether the expression uses the columns in `check_map`.
 fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match check_map.get(&c.flat_name()) {
                 Some(_) => {

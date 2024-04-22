@@ -34,7 +34,7 @@ use sqlparser::ast::Ident;
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone()
-        .transform_up(&|nested_expr| {
+        .transform_up(|nested_expr| {
             match nested_expr {
                 Expr::Column(col) => {
                     let (qualifier, field) =
@@ -72,7 +72,7 @@ pub(crate) fn rebase_expr(
     plan: &LogicalPlan,
 ) -> Result<Expr> {
     expr.clone()
-        .transform_down(&|nested_expr| {
+        .transform_down(|nested_expr| {
             if base_exprs.contains(&nested_expr) {
                 Ok(Transformed::yes(expr_as_column_expr(&nested_expr, plan)?))
             } else {
@@ -178,7 +178,7 @@ pub(crate) fn resolve_aliases_to_exprs(
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     expr.clone()
-        .transform_up(&|nested_expr| match nested_expr {
+        .transform_up(|nested_expr| match nested_expr {
             Expr::Column(c) if c.relation.is_none() => {
                 if let Some(aliased_expr) = aliases.get(&c.name) {
                     Ok(Transformed::yes(aliased_expr.clone()))

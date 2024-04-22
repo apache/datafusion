@@ -198,7 +198,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan
-                .transform_up(&|plan| {
+                .transform_up(|plan| {
                     if let Some(sort_req) =
                         plan.as_any().downcast_ref::<OutputRequirementExec>()
                     {

@@ -194,9 +194,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init
-        .transform_up_mut(&mut |node| builder.mutate(node))
-        .data()?;
+    let root = init.transform_up(|node| builder.mutate(node)).data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -204,7 +202,7 @@ where
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if !columns.iter().any(|c| c.eq(column)) {
                 columns.insert(column.clone());
@@ -224,7 +222,7 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(&|expr| {
+    pred.transform_down(|expr| {
         let expr_any = expr.as_any();
 
         if let Some(column) = expr_any.downcast_ref::<Column>() {

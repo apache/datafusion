@@ -293,7 +293,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     data: transformed_expr,
                     transformed,
                     tnr: _,
-                } = expr.transform_up_mut(&mut |expr: Expr| {
+                } = expr.transform_up(|expr: Expr| {
                     if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                         let column_name = expr.display_name()?;
                         unnest_columns.push(column_name.clone());

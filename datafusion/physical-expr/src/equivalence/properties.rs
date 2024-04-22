@@ -857,7 +857,7 @@ impl EquivalenceProperties {
     /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up(|expr| Ok(update_ordering(expr, self)))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
