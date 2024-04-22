@@ -319,7 +319,28 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            _ => not_impl_err!("Unsupported expression: {expr:?}"),
+            Expr::ScalarVariable(_, _) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::GetIndexedField(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::TryCast(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::Wildcard { qualifier: _ } => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::GroupingSet(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::Placeholder(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::OuterReferenceColumn(_, _) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
         }
     }
 
@@ -638,29 +659,71 @@ impl Unparser<'_> {
             }
             DataType::Date32 => Ok(ast::DataType::Date),
             DataType::Date64 => Ok(ast::DataType::Datetime(None)),
-            DataType::Time32(_) => todo!(),
-            DataType::Time64(_) => todo!(),
-            DataType::Duration(_) => todo!(),
-            DataType::Interval(_) => todo!(),
-            DataType::Binary => todo!(),
-            DataType::FixedSizeBinary(_) => todo!(),
-            DataType::LargeBinary => todo!(),
-            DataType::BinaryView => todo!(),
+            DataType::Time32(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Time64(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Duration(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Interval(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Binary => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::FixedSizeBinary(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeBinary => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::BinaryView => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
             DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
             DataType::LargeUtf8 => Ok(ast::DataType::Text),
-            DataType::Utf8View => todo!(),
-            DataType::List(_) => todo!(),
-            DataType::FixedSizeList(_, _) => todo!(),
-            DataType::LargeList(_) => todo!(),
-            DataType::ListView(_) => todo!(),
-            DataType::LargeListView(_) => todo!(),
-            DataType::Struct(_) => todo!(),
-            DataType::Union(_, _) => todo!(),
-            DataType::Dictionary(_, _) => todo!(),
-            DataType::Decimal128(_, _) => todo!(),
-            DataType::Decimal256(_, _) => todo!(),
-            DataType::Map(_, _) => todo!(),
-            DataType::RunEndEncoded(_, _) => todo!(),
+            DataType::Utf8View => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::List(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::FixedSizeList(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeList(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::ListView(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeListView(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Struct(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Union(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Dictionary(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal128(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal256(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Map(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::RunEndEncoded(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
         }
     }
 }

@@ -3662,16 +3662,14 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=Partitioned, join_type=Full, on=[(e@0, c@0)]
+03)----HashJoinExec: mode=CollectLeft, join_type=Full, on=[(e@0, c@0)]
 04)------ProjectionExec: expr=[1 as e, 3 as f]
 05)--------PlaceholderRowExec
-06)------CoalesceBatchesExec: target_batch_size=2
-07)--------RepartitionExec: partitioning=Hash([c@0], 1), input_partitions=2
-08)----------UnionExec
-09)------------ProjectionExec: expr=[1 as c, 2 as d]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as c, 3 as d]
-12)--------------PlaceholderRowExec
+06)------UnionExec
+07)--------ProjectionExec: expr=[1 as c, 2 as d]
+08)----------PlaceholderRowExec
+09)--------ProjectionExec: expr=[1 as c, 3 as d]
+10)----------PlaceholderRowExec
 
 query IIII rowsort
 SELECT * FROM (

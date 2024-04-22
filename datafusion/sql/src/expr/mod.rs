@@ -194,6 +194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
+                    let keys = keys.into_iter().map(|mak| mak.key).collect();
                     self.plan_indexed(
                         col(self.normalizer.normalize(id)),
                         keys,
