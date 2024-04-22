@@ -193,6 +193,11 @@ impl ScalarUDF {
     pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         self.inner.monotonicity()
     }
+
+    /// Get the circuits of inner implementation
+    pub fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -375,6 +380,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    fn short_circuits(&self) -> bool {
+        false
     }
 }
 
