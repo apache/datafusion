@@ -3362,7 +3362,7 @@ logical_plan
 08)----------TableScan: annotated_data projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallySorted([0])
+02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
@@ -3410,7 +3410,7 @@ logical_plan
 12)------------------TableScan: multiple_ordered_table projection=[a, d]
 physical_plan
 01)ProjectionExec: expr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd]
-02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d)], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]], ordering_mode=Sorted
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
@@ -3447,10 +3447,10 @@ physical_plan
 01)SortPreservingMergeExec: [a@0 ASC]
 02)--SortExec: expr=[a@0 ASC]
 03)----ProjectionExec: expr=[a@0 as a, LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS FIRST]]
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 2), input_partitions=2
-07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)]
+07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS FIRST]]
 08)--------------CoalesceBatchesExec: target_batch_size=2
 09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
 10)------------------CoalesceBatchesExec: target_batch_size=2
