@@ -729,6 +729,26 @@ backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> <
 <span class="w">   </span>............
 </pre></div>
 </div>
+<p>The backtraces are useful when debugging code. If there is a test in <code class="docutils literal notranslate"><span class="pre">datafusion/core/src/physical_planner.rs</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>#[tokio::test]
+async fn test_get_backtrace_for_failed_code() -&gt; Result&lt;()&gt; {
+    let ctx = SessionContext::new();
+
+    let sql = &quot;
+    select row_numer() over (partition by a order by a) from (select 1 a);
+    &quot;;
+
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    Ok(())
+}
+</pre></div>
+</div>
+<p>To obtain a backtrace:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--features<span class="o">=</span>backtrace
+<span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--features<span class="o">=</span>backtrace<span class="w"> </span>--package<span class="w"> </span>datafusion<span class="w"> </span>--lib<span class="w"> </span>--<span class="w"> </span>physical_planner::tests::test_get_backtrace_for_failed_code<span class="w"> </span>--exact<span class="w"> </span>--nocapture
+</pre></div>
+</div>
 <p>Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored</p>
 </section>
 </section>
@@ -775,7 +795,7 @@ backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> <
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.3.6.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.3.7.<br>
 </p>
     </div>
     
