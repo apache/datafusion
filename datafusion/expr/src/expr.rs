@@ -90,7 +90,6 @@ use sqlparser::ast::NullTreatment;
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::{DFSchema, Column};
 /// # use datafusion_expr::Expr;
-/// # use datafusion_expr::expr::exprs_from_schema;
 ///
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
