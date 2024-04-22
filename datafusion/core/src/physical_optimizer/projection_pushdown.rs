@@ -287,7 +287,7 @@ fn try_unifying_projections(
     // Merging these projections is not beneficial, e.g
     // If an expression is not trivial and it is referred more than 1, unifies projections will be
     // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
         *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
     }) {

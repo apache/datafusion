@@ -434,7 +434,7 @@ impl LogicalPlanBuilder {
     /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
     ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
     ///
-    /// See <https://github.com/apache/arrow-datafusion/issues/5065> for more details
+    /// See <https://github.com/apache/datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
@@ -495,7 +495,7 @@ impl LogicalPlanBuilder {
         // This handles the special case for
         // SELECT col as <alias> ORDER BY <alias>
         //
-        // As described in https://github.com/apache/arrow-datafusion/issues/5293
+        // As described in https://github.com/apache/datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
                 if let Expr::Alias(Alias { expr, .. }) = proj_expr {
@@ -1475,7 +1475,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //    join keys: [cast(a as int)]
             //
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
-            //  https://github.com/apache/arrow-datafusion/issues/4478
+            //  https://github.com/apache/datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
                 let alias = format!("{key}");
                 key.clone().alias(alias)

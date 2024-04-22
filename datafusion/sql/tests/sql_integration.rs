@@ -2615,7 +2615,7 @@ fn select_multibyte_column() {
 #[test]
 fn select_groupby_orderby() {
     // ensure that references are correctly resolved in the order by clause
-    // see https://github.com/apache/arrow-datafusion/issues/4854
+    // see https://github.com/apache/datafusion/issues/4854
     let sql = r#"SELECT
   avg(age) AS "value",
   date_trunc('month', birth_date) AS "birth_date"
@@ -3360,7 +3360,7 @@ fn hive_aggregate_with_filter() -> Result<()> {
 
 #[test]
 fn order_by_unaliased_name() {
-    // https://github.com/apache/arrow-datafusion/issues/3160
+    // https://github.com/apache/datafusion/issues/3160
     // This query was failing with:
     // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
@@ -3592,7 +3592,7 @@ fn test_noneq_with_filter_join() {
 #[test]
 fn test_one_side_constant_full_join() {
     // TODO: this sql should be parsed as join after
-    // https://github.com/apache/arrow-datafusion/issues/2877 is resolved.
+    // https://github.com/apache/datafusion/issues/2877 is resolved.
     let sql = "SELECT id, order_id \
             FROM person \
             FULL OUTER JOIN orders \

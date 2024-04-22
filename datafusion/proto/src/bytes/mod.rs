@@ -99,7 +99,7 @@ impl Serializeable for Expr {
         let bytes: Bytes = buffer.into();
 
         // the produced byte stream may lead to "recursion limit" errors, see
-        // https://github.com/apache/arrow-datafusion/issues/3968
+        // https://github.com/apache/datafusion/issues/3968
         // Until the underlying prost issue ( https://github.com/tokio-rs/prost/issues/736 ) is fixed, we try to
         // deserialize the data here and check for errors.
         //

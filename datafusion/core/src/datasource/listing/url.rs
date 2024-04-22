@@ -457,7 +457,7 @@ mod tests {
         test("/a/b*.txt", Some(("/a/", "b*.txt")));
         test("/a/b/**/c*.txt", Some(("/a/b/", "**/c*.txt")));
 
-        // https://github.com/apache/arrow-datafusion/issues/2465
+        // https://github.com/apache/datafusion/issues/2465
         test(
             "/a/b/c//alltypes_plain*.parquet",
             Some(("/a/b/c//", "alltypes_plain*.parquet")),

@@ -999,7 +999,7 @@ true
 true
 
 
-# issue: https://github.com/apache/arrow-datafusion/issues/7027
+# issue: https://github.com/apache/datafusion/issues/7027
 query TTTT rowsort
 SELECT * FROM
     (VALUES ('catan-prod1-daily', 'success')) as jobs(cron_job_name, status)
@@ -1038,7 +1038,7 @@ create table t(a bigint);
 
 # Result of query below shouldn't depend on
 # number of optimization passes
-# See issue: https://github.com/apache/arrow-datafusion/issues/8296
+# See issue: https://github.com/apache/datafusion/issues/8296
 statement ok
 set datafusion.optimizer.max_passes = 1;
 

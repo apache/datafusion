@@ -614,7 +614,7 @@ mod tests {
         valid.append(true);
 
         // NULL with non-zero value length
-        // Issue https://github.com/apache/arrow-datafusion/issues/9932
+        // Issue https://github.com/apache/datafusion/issues/9932
         values.push(Some("?"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(false);

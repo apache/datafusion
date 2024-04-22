@@ -43,4 +43,4 @@ checked in `Cargo.lock` file to ensure reproducible builds.
 However, the `datafusion` and sub crates are intended for use as libraries and
 thus do not have a `Cargo.lock` file checked in.
 
-[`datafusion cargo.toml`]: https://github.com/apache/arrow-datafusion/blob/main/Cargo.toml
+[`datafusion cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml

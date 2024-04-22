@@ -1328,7 +1328,7 @@ from timestamp_utc order by ts;
 
 
 # date trunc in a timezone with DST across DST boundary (note the date-trunc hour value repeats)
-# Test for https://github.com/apache/arrow-datafusion/issues/8899
+# Test for https://github.com/apache/datafusion/issues/8899
 query PPPP
 select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
 from timestamp_berlin order by ts;
@@ -1412,7 +1412,7 @@ from timestamp_utc order by ts;
 
 
 # date trunc in a timezone with DST across DST boundary (note there is no midnight on 2018-11-04)
-# Test for https://github.com/apache/arrow-datafusion/issues/8899
+# Test for https://github.com/apache/datafusion/issues/8899
 query PPPP
 select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
 from timestamp_sao_paulo order by ts;

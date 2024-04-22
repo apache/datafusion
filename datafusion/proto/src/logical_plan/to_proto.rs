@@ -980,7 +980,7 @@ pub fn serialize_expr(
         | Expr::Exists { .. }
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
+            // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
         Expr::GetIndexedField(GetIndexedField { expr, field }) => {

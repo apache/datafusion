@@ -156,7 +156,7 @@ pub(crate) fn resolve_positions_to_exprs(
 ) -> Option<Expr> {
     match expr {
         // sql_expr_to_logical_expr maps number to i64
-        // https://github.com/apache/arrow-datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
+        // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
         Expr::Literal(ScalarValue::Int64(Some(position)))
             if position > &0_i64 && position <= &(select_exprs.len() as i64) =>
         {

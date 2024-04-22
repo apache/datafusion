@@ -49,7 +49,7 @@ use super::ParquetFileMetrics;
 /// did not filter out that row group.
 ///
 /// Note: This method currently ignores ColumnOrder
-/// <https://github.com/apache/arrow-datafusion/issues/8335>
+/// <https://github.com/apache/datafusion/issues/8335>
 pub(crate) fn prune_row_groups_by_statistics(
     arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
@@ -63,7 +63,7 @@ pub(crate) fn prune_row_groups_by_statistics(
         if let Some(range) = &range {
             // figure out where the first dictionary page (or first data page are)
             // note don't use the location of metadata
-            // <https://github.com/apache/arrow-datafusion/issues/5995>
+            // <https://github.com/apache/datafusion/issues/5995>
             let col = metadata.column(0);
             let offset = col
                 .dictionary_page_offset()
