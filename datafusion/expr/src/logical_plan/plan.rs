@@ -358,7 +358,7 @@ impl LogicalPlan {
     pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
-        self.apply_with_subqueries(&mut |plan| {
+        self.apply_with_subqueries(|plan| {
             if let LogicalPlan::Join(Join {
                 join_constraint: JoinConstraint::Using,
                 on,
@@ -554,7 +554,7 @@ impl LogicalPlan {
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
                 let predicate = predicate
-                    .transform_down(&|expr| {
+                    .transform_down(|expr| {
                         match expr {
                             Expr::Exists { .. }
                             | Expr::ScalarSubquery(_)
@@ -1017,10 +1017,10 @@ impl LogicalPlan {
         self,
         param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
-        self.transform_up_with_subqueries(&|plan| {
+        self.transform_up_with_subqueries(|plan| {
             let schema = plan.schema().clone();
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(&|e| {
+                e.infer_placeholder_types(&schema)?.transform_up(|e| {
                     if let Expr::Placeholder(Placeholder { id, .. }) = e {
                         let value = param_values.get_placeholders_with_values(&id)?;
                         Ok(Transformed::yes(Expr::Literal(value)))
@@ -1039,9 +1039,9 @@ impl LogicalPlan {
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
-        self.apply_with_subqueries(&mut |plan| {
+        self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
-                expr.apply(&mut |expr| {
+                expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
@@ -3170,7 +3170,7 @@ digraph {
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
         let plan = plan
-            .transform(&|plan| match plan {
+            .transform(|plan| match plan {
                 LogicalPlan::TableScan(table) => {
                     let filter = Filter::try_new(
                         external_filter.clone(),

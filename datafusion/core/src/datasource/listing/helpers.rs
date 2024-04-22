@@ -50,7 +50,7 @@ use object_store::{ObjectMeta, ObjectStore};
 /// was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
