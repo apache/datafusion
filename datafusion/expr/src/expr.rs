@@ -1266,7 +1266,7 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.name().eq("coalesce"))
+                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.short_circuits())
             }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
