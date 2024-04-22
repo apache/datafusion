@@ -120,6 +120,10 @@ impl ScalarUDFImpl for CoalesceFunc {
             Ok(result)
         }
     }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
