@@ -119,7 +119,7 @@ impl JoinLeftData {
 /// #### 2. Probe phase
 /// Sequentially polling batches from the probe-side input and processing them according to the
 /// following logic:
-/// - apply join filter (`ON` clause) to Carthesian product of probe batch adn build side data
+/// - apply join filter (`ON` clause) to Cartesian product of probe batch adn build side data
 ///   -- filter evaluation is executed once per build-side data row
 /// - update shared bitmap of joined ("visited") build-side row indices, if required -- allows
 ///   to produce unmatched build-side data in case of e.g. LEFT/FULL JOIN after probing phase
