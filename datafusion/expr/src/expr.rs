@@ -32,7 +32,7 @@ use crate::{
     Signature,
 };
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
@@ -83,6 +83,32 @@ use sqlparser::ast::NullTreatment;
 ///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
+/// ```
+///
+/// Return a list of [`Expr::Column`] from a schema's columns
+///
+/// Example:
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::{DFSchema, Column};
+/// # use datafusion_expr::Expr;
+/// # use datafusion_expr::expr::exprs_from_schema;
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+///    Field::new("c2", DataType::Float64, false),
+/// ]);
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+///
+/// // Form a list of expressions for each item in the schema
+/// let exprs: Vec<_> = df_schema.iter()
+///   .map(Expr::from)
+///   .collect();
+///
+/// assert_eq!(exprs, vec![
+///   Expr::from(Column::from_qualified_name("t1.c1")),
+///   Expr::from(Column::from_qualified_name("t1.c2")),
+/// ]);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
@@ -187,6 +213,23 @@ pub enum Expr {
 impl Default for Expr {
     fn default() -> Self {
         Expr::Literal(ScalarValue::Null)
+    }
+}
+
+/// Create an [`Expr`] from a [`Column`]
+impl From<Column> for Expr {
+    fn from(value: Column) -> Self {
+        Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from an optional qualifier and a [`FieldRef`]. This is
+/// useful for creating [`Expr`] from a [`DFSchema`].
+///
+/// See example on [`Expr`]
+impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
+    fn from(value: (Option<&'a TableReference>, &'a FieldRef)) -> Self {
+        Expr::from(Column::from(value))
     }
 }
 
