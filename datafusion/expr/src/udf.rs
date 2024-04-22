@@ -376,6 +376,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
     }
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    fn short_circuits(&self) -> bool {
+        false
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
