@@ -1361,9 +1361,13 @@ dependencies = [
 name = "datafusion-physical-expr-common"
 version = "37.1.0"
 dependencies = [
+ "ahash",
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "half",
+ "hashbrown 0.14.3",
  "paste",
 ]
 

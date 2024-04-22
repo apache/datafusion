@@ -45,7 +45,6 @@ pub fn physical_exprs_equal(
     lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
 }
 
-
 /// This utility function removes duplicates from the given `exprs` vector.
 /// Note that this function does not necessarily preserve its input ordering.
 pub fn deduplicate_physical_exprs(exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {

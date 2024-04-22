@@ -22,9 +22,14 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
 use crate::physical_expr::PhysicalExpr;
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
 
+use arrow::array::downcast_primitive_array;
+use arrow::array::{
+    as_largestring_array, downcast_array, downcast_dictionary_array, Array,
+    ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BooleanArray,
+};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq;
@@ -32,8 +37,6 @@ use arrow::compute::take;
 use arrow::datatypes::{i256, DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
-use arrow::array::{as_largestring_array, downcast_array, downcast_dictionary_array, Array, ArrayAccessor, ArrayData, ArrayIter, ArrayRef, BooleanArray};
-use arrow::array::downcast_primitive_array;
 use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
@@ -474,7 +477,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    
+
     use arrow::datatypes::Field;
     use arrow::datatypes::TimeUnit;
 

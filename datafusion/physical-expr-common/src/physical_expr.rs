@@ -26,16 +26,24 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, InList};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{Between, BinaryExpr, Cast, ColumnarValue, Expr, Like, Operator, TryCast};
+use datafusion_expr::var_provider::{is_system_variables, VarType};
+use datafusion_expr::{
+    Between, BinaryExpr, Cast, ColumnarValue, Expr, GetFieldAccess, GetIndexedField,
+    Like, Operator, TryCast,
+};
 
 use crate::expressions::binary::binary;
 use crate::expressions::cast::cast;
 use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
+use crate::expressions::is_not_null::is_not_null;
+use crate::expressions::is_null::is_null;
 use crate::expressions::like::like;
 use crate::expressions::literal::{lit, Literal};
 use crate::expressions::negative::negative;
@@ -330,25 +338,25 @@ pub fn create_physical_expr(
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        // Expr::ScalarVariable(_, variable_names) => {
-        //     if is_system_variables(variable_names) {
-        //         match execution_props.get_var_provider(VarType::System) {
-        //             Some(provider) => {
-        //                 let scalar_value = provider.get_value(variable_names.clone())?;
-        //                 Ok(Arc::new(Literal::new(scalar_value)))
-        //             }
-        //             _ => plan_err!("No system variable provider found"),
-        //         }
-        //     } else {
-        //         match execution_props.get_var_provider(VarType::UserDefined) {
-        //             Some(provider) => {
-        //                 let scalar_value = provider.get_value(variable_names.clone())?;
-        //                 Ok(Arc::new(Literal::new(scalar_value)))
-        //             }
-        //             _ => plan_err!("No user defined variable provider found"),
-        //         }
-        //     }
-        // }
+        Expr::ScalarVariable(_, variable_names) => {
+            if is_system_variables(variable_names) {
+                match execution_props.get_var_provider(VarType::System) {
+                    Some(provider) => {
+                        let scalar_value = provider.get_value(variable_names.clone())?;
+                        Ok(Arc::new(Literal::new(scalar_value)))
+                    }
+                    _ => plan_err!("No system variable provider found"),
+                }
+            } else {
+                match execution_props.get_var_provider(VarType::UserDefined) {
+                    Some(provider) => {
+                        let scalar_value = provider.get_value(variable_names.clone())?;
+                        Ok(Arc::new(Literal::new(scalar_value)))
+                    }
+                    _ => plan_err!("No user defined variable provider found"),
+                }
+            }
+        }
         Expr::IsTrue(expr) => {
             let binary_op = datafusion_expr::binary_expr(
                 expr.as_ref().clone(),
@@ -486,33 +494,29 @@ pub fn create_physical_expr(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
         ),
-        // Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
-        //     expr,
-        //     input_dfschema,
-        //     execution_props,
-        // )?),
-        // Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
-        //     expr,
-        //     input_dfschema,
-        //     execution_props,
-        // )?),
-        // Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
-        //     GetFieldAccess::NamedStructField { name: _ } => {
-        //         internal_err!(
-        //             "NamedStructField should be rewritten in OperatorToFunction"
-        //         )
-        //     }
-        //     GetFieldAccess::ListIndex { key: _ } => {
-        //         internal_err!("ListIndex should be rewritten in OperatorToFunction")
-        //     }
-        //     GetFieldAccess::ListRange {
-        //         start: _,
-        //         stop: _,
-        //         stride: _,
-        //     } => {
-        //         internal_err!("ListRange should be rewritten in OperatorToFunction")
-        //     }
-        // },
+        Expr::IsNull(expr) => {
+            is_null(create_physical_expr(expr, input_dfschema, execution_props)?)
+        }
+        Expr::IsNotNull(expr) => {
+            is_not_null(create_physical_expr(expr, input_dfschema, execution_props)?)
+        }
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
+            GetFieldAccess::NamedStructField { name: _ } => {
+                internal_err!(
+                    "NamedStructField should be rewritten in OperatorToFunction"
+                )
+            }
+            GetFieldAccess::ListIndex { key: _ } => {
+                internal_err!("ListIndex should be rewritten in OperatorToFunction")
+            }
+            GetFieldAccess::ListRange {
+                start: _,
+                stop: _,
+                stride: _,
+            } => {
+                internal_err!("ListRange should be rewritten in OperatorToFunction")
+            }
+        },
 
         // Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
         //     let physical_args =
@@ -568,9 +572,7 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
-                Ok(lit(ScalarValue::Boolean(None)))
-            }
+            Expr::Literal(ScalarValue::Utf8(None)) => Ok(lit(ScalarValue::Boolean(None))),
             _ => {
                 let value_expr =
                     create_physical_expr(expr, input_dfschema, execution_props)?;
