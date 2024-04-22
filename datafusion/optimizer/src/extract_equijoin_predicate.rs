@@ -21,11 +21,10 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, DFSchema};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
 use std::sync::Arc;
-
 // equijoin predicate
 type EquijoinPredicate = (Expr, Expr);
 
@@ -80,7 +79,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 left,
                 right,
                 mut on,
-                filter,
+                filter: Some(expr),
                 join_type,
                 join_constraint,
                 schema,
@@ -88,44 +87,27 @@ impl OptimizerRule for ExtractEquijoinPredicate {
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
-                if let Some(expr) = filter {
-                    let (equijoin_predicates, non_equijoin_expr) =
-                        split_eq_and_noneq_join_predicate(
-                            expr,
-                            left_schema,
-                            right_schema,
-                        )?;
+                let (equijoin_predicates, non_equijoin_expr) =
+                    split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
 
-                    if !equijoin_predicates.is_empty() {
-                        on.extend(equijoin_predicates);
-                        Ok(Transformed::yes(LogicalPlan::Join(Join {
-                            left,
-                            right,
-                            on,
-                            filter: non_equijoin_expr,
-                            join_type,
-                            join_constraint,
-                            schema,
-                            null_equals_null,
-                        })))
-                    } else {
-                        Ok(Transformed::no(LogicalPlan::Join(Join {
-                            left,
-                            right,
-                            on,
-                            filter: non_equijoin_expr,
-                            join_type,
-                            join_constraint,
-                            schema,
-                            null_equals_null,
-                        })))
-                    }
+                if !equijoin_predicates.is_empty() {
+                    on.extend(equijoin_predicates);
+                    Ok(Transformed::yes(LogicalPlan::Join(Join {
+                        left,
+                        right,
+                        on,
+                        filter: non_equijoin_expr,
+                        join_type,
+                        join_constraint,
+                        schema,
+                        null_equals_null,
+                    })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
                         left,
                         right,
                         on,
-                        filter,
+                        filter: non_equijoin_expr,
                         join_type,
                         join_constraint,
                         schema,
@@ -138,37 +120,12 @@ impl OptimizerRule for ExtractEquijoinPredicate {
     }
 }
 
-/// split with ownership
-fn split_conjunction_own(expr: Expr) -> Vec<Expr> {
-    split_conjunction_own_impl(expr, vec![])
-}
-
-fn split_conjunction_own_impl(expr: Expr, mut exprs: Vec<Expr>) -> Vec<Expr> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr {
-            right,
-            op: Operator::And,
-            left,
-        }) => {
-            let mut left_exprs = split_conjunction_own_impl(*left, vec![]);
-            let mut right_exprs = split_conjunction_own_impl(*right, vec![]);
-            left_exprs.append(&mut right_exprs);
-            left_exprs
-        }
-        Expr::Alias(Alias { expr, .. }) => split_conjunction_own_impl(*expr, exprs),
-        other => {
-            exprs.push(other);
-            exprs
-        }
-    }
-}
-
 fn split_eq_and_noneq_join_predicate(
     filter: Expr,
     left_schema: &Arc<DFSchema>,
     right_schema: &Arc<DFSchema>,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
-    let exprs = split_conjunction_own(filter);
+    let exprs = split_conjunction_owned(filter);
 
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
     let mut accum_filters: Vec<Expr> = vec![];
