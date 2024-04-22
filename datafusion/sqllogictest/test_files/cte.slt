@@ -390,7 +390,7 @@ WITH RECURSIVE "recursive_cte" AS (
     SELECT
       2 as "val"
     FROM
-      "recursive_cte" 
+      "recursive_cte"
       FULL JOIN "sub_cte" ON 1 = 1
     WHERE
       "recursive_cte"."val" < 2
