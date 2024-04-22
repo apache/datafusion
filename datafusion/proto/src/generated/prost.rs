@@ -2841,7 +2841,7 @@ impl JoinConstraint {
 pub enum ScalarFunction {
     ///   0 was Abs before
     ///   The first enum value must be zero for open enums
-    Unknown = 0,
+    ///
     ///   1 was Acos
     ///   2 was Asin
     /// 3 was Atan
@@ -2904,7 +2904,7 @@ pub enum ScalarFunction {
     /// 60 was Translate
     /// Trim = 61;
     /// Upper = 62;
-    ///
+    /// 63 was Coalesce
     /// 64 was Power
     /// 65 was StructFun
     /// 66 was FromUnixtime
@@ -2978,7 +2978,7 @@ pub enum ScalarFunction {
     /// 136 was ToChar
     /// 137 was ToDate
     /// 138 was ToUnixtime
-    Coalesce = 63,
+    Unknown = 0,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2988,14 +2988,12 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Coalesce => "Coalesce",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Coalesce" => Some(Self::Coalesce),
             _ => None,
         }
     }

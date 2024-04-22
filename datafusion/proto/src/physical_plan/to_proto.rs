@@ -18,13 +18,11 @@
 
 use std::{
     convert::{TryFrom, TryInto},
-    str::FromStr,
     sync::Arc,
 };
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
@@ -545,44 +543,30 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
-        if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
-            let fun: protobuf::ScalarFunction = (&fun).try_into()?;
 
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarFunction(
-                    protobuf::PhysicalScalarFunctionNode {
-                        name: expr.name().to_string(),
-                        fun: fun.into(),
-                        args,
-                        return_type: Some(expr.return_type().try_into()?),
-                    },
-                )),
-            })
-        } else {
-            let mut buf = Vec::new();
-            match expr.fun() {
-                ScalarFunctionDefinition::UDF(udf) => {
-                    codec.try_encode_udf(udf, &mut buf)?;
-                }
-                _ => {
-                    return not_impl_err!(
-                        "Proto serialization error: Trying to serialize a unresolved function"
-                    );
-                }
+        let mut buf = Vec::new();
+        match expr.fun() {
+            ScalarFunctionDefinition::UDF(udf) => {
+                codec.try_encode_udf(udf, &mut buf)?;
             }
-
-            let fun_definition = if buf.is_empty() { None } else { Some(buf) };
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                    protobuf::PhysicalScalarUdfNode {
-                        name: expr.name().to_string(),
-                        args,
-                        fun_definition,
-                        return_type: Some(expr.return_type().try_into()?),
-                    },
-                )),
-            })
+            _ => {
+                return not_impl_err!(
+                    "Proto serialization error: Trying to serialize a unresolved function"
+                );
+            }
         }
+
+        let fun_definition = if buf.is_empty() { None } else { Some(buf) };
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
+                protobuf::PhysicalScalarUdfNode {
+                    name: expr.name().to_string(),
+                    args,
+                    fun_definition,
+                    return_type: Some(expr.return_type().try_into()?),
+                },
+            )),
+        })
     } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
