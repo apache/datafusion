@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
@@ -173,7 +173,7 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::column::{col, Column};
 
     use arrow::array::*;
     use arrow::datatypes::*;
