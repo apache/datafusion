@@ -27,7 +27,7 @@ notifications:
   jira_options: link label worklog
 github:
   description: "Apache DataFusion SQL Query Engine"
-  homepage: https://arrow.apache.org/datafusion
+  homepage: https://datafusion.apache.org/
   labels:
     - arrow
     - big-data
@@ -50,7 +50,6 @@ github:
         required_approving_review_count: 1
 
 # publishes the content of the `asf-site` branch to
-# https://arrow.apache.org/datafusion/
+# https://datafusion.apache.org/
 publish:
   whoami: asf-site
-  subdir: datafusion
