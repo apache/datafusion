@@ -58,8 +58,6 @@ pub struct ScalarFunctionExpr {
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
-    // Whether this function can be invoked with zero arguments
-    supports_zero_argument: bool,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -70,7 +68,6 @@ impl Debug for ScalarFunctionExpr {
             .field("args", &self.args)
             .field("return_type", &self.return_type)
             .field("monotonicity", &self.monotonicity)
-            .field("supports_zero_argument", &self.supports_zero_argument)
             .finish()
     }
 }
@@ -83,7 +80,6 @@ impl ScalarFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
-        supports_zero_argument: bool,
     ) -> Self {
         Self {
             fun,
@@ -91,7 +87,6 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             monotonicity,
-            supports_zero_argument,
         }
     }
 
@@ -173,7 +168,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             children,
             self.return_type().clone(),
             self.monotonicity.clone(),
-            self.supports_zero_argument,
         )))
     }
 

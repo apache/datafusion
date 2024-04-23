@@ -360,7 +360,6 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
-                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(

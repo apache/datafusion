@@ -52,6 +52,7 @@ pub fn data_types(
             );
         }
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
