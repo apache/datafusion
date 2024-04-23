@@ -506,7 +506,7 @@ fn build_common_expr_project_plan(
 
     for (qualifier, field) in input.schema().iter() {
         if fields_set.insert(qualified_name(qualifier, field.name())) {
-            project_exprs.push(Expr::Column(Column::from((qualifier, field.as_ref()))));
+            project_exprs.push(Expr::from((qualifier, field)));
         }
     }
 
@@ -525,10 +525,7 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let col_exprs = schema
-        .iter()
-        .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field.as_ref()))))
-        .collect();
+    let col_exprs = schema.iter().map(Expr::from).collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
