@@ -21,8 +21,8 @@ use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Va
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
-    Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -142,9 +142,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         _ => false,
                     }) {
-                        Some((qualifier, df_field)) => {
-                            Expr::Column(Column::from((qualifier, df_field.as_ref())))
-                        }
+                        Some((qualifier, df_field)) => Expr::from((qualifier, df_field)),
                         None => Expr::Column(col),
                     }
                 }

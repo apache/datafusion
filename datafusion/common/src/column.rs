@@ -17,7 +17,7 @@
 
 //! Column
 
-use arrow_schema::Field;
+use arrow_schema::{Field, FieldRef};
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
@@ -63,6 +63,8 @@ impl Column {
     }
 
     /// Create Column from unqualified name.
+    ///
+    /// Alias for `Column::new_unqualified`
     pub fn from_name(name: impl Into<String>) -> Self {
         Self {
             relation: None,
@@ -342,6 +344,13 @@ impl From<String> for Column {
 /// Create a column, use qualifier and field name
 impl From<(Option<&TableReference>, &Field)> for Column {
     fn from((relation, field): (Option<&TableReference>, &Field)) -> Self {
+        Self::new(relation.cloned(), field.name())
+    }
+}
+
+/// Create a column, use qualifier and field name
+impl From<(Option<&TableReference>, &FieldRef)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &FieldRef)) -> Self {
         Self::new(relation.cloned(), field.name())
     }
 }

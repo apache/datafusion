@@ -127,7 +127,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .skip(on_expr.len())
                     .zip(schema.iter())
                     .map(|((new_qualifier, new_field), (old_qualifier, old_field))| {
-                        Ok(col(Column::from((new_qualifier, new_field.as_ref())))
+                        Ok(col(Column::from((new_qualifier, new_field)))
                             .alias_qualified(old_qualifier.cloned(), old_field.name()))
                     })
                     .collect::<Result<Vec<Expr>>>()?;

@@ -218,13 +218,7 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .iter()
-                .map(|(qualifier, field)| {
-                    Expr::Column(Column::from((qualifier, field.as_ref())))
-                })
-                .collect();
+            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
