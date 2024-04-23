@@ -274,7 +274,7 @@ backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
    3: std::backtrace::Backtrace::capture
              at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
    4: datafusion_common::error::DataFusionError::get_back_trace
-             at /arrow-datafusion/datafusion/common/src/error.rs:436:30
+             at /datafusion/datafusion/common/src/error.rs:436:30
    5: datafusion_sql::expr::function::<impl datafusion_sql::planner::SqlToRel<S>>::sql_function_to_expr
    ............
 ```

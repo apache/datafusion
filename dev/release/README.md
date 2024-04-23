@@ -223,7 +223,7 @@ Here is my vote:
 +1
 
 [1]: https://github.com/apache/datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0
+[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-datafusion-5.1.0
 [3]: https://github.com/apache/datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
 ```
 
@@ -249,7 +249,7 @@ NOTE: steps in this section can only be done by PMC members.
 ### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
 ```shell
@@ -437,7 +437,7 @@ svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
 Delete a release candidate:
 
 ```bash
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-7.1.0-rc1/
 ```
 
 #### Deleting old releases from `release` svn
@@ -453,7 +453,7 @@ svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
 Delete a release:
 
 ```bash
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-7.0.0
 ```
 
 ### Publish the User Guide to the Arrow Site

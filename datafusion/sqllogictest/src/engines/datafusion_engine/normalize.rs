@@ -142,21 +142,21 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
 fn workspace_root() -> &'static object_store::path::Path {
     static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
     WORKSPACE_ROOT_LOCK.get_or_init(|| {
-        // e.g. /Software/arrow-datafusion/datafusion/core
+        // e.g. /Software/datafusion/datafusion/core
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        // e.g. /Software/arrow-datafusion/datafusion
+        // e.g. /Software/datafusion/datafusion
         let workspace_root = dir
             .parent()
             .expect("Can not find parent of datafusion/core")
-            // e.g. /Software/arrow-datafusion
+            // e.g. /Software/datafusion
             .parent()
             .expect("parent of datafusion")
             .to_string_lossy();
 
         let sanitized_workplace_root = if cfg!(windows) {
-            // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
-            // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
+            // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
+            // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
             workspace_root
                 .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
         } else {
