@@ -31,7 +31,7 @@ To run the examples, use the `cargo run` command, such as:
 
 ```bash
 git clone https://github.com/apache/datafusion
-cd arrow-datafusion
+cd datafusion
 # Download test data
 git submodule update --init
 
