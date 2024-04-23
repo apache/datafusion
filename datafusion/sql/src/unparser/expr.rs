@@ -965,4 +965,20 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn custom_dialect_none() -> Result<()> {
+        let dialect = CustomDialect::new(None);
+        let unparser = Unparser::new(&dialect);
+
+        let expr = col("a").gt(lit(4));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+
+        let expected = r#"(a > 4)"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
 }
