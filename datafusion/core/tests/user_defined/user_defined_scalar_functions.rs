@@ -434,15 +434,10 @@ impl ScalarUDFImpl for RandomUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let len: usize = match &args[0] {
-            // This udf is always invoked with zero argument so its argument
-            // is a null array indicating the batch size.
-            ColumnarValue::Array(array) if array.data_type().is_null() => array.len(),
-            _ => {
-                return Err(datafusion::error::DataFusionError::Internal(
-                    "Invalid argument type".to_string(),
-                ))
-            }
+        let len = if args.is_empty() {
+            1
+        } else {
+            return internal_err!("Invalid argument type");
         };
         let mut rng = thread_rng();
         let values = iter::repeat_with(|| rng.gen_range(0.1..1.0)).take(len);
