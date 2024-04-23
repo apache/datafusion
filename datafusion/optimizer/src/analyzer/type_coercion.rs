@@ -106,16 +106,30 @@ fn analyze_internal(
     };
 
     let preserver = NamePreserver::new(&plan);
-    Ok(plan
-        .map_expressions(|expr| {
-            // ensure aggregate names don't change:
-            // https://github.com/apache/datafusion/issues/3555
-            let original_name = preserver.save(&expr)?;
-            expr.rewrite(&mut expr_rewrite)?
-                .map_data(|expr| original_name.restore(expr))
-        })?
-        // propagate the the transformation information from children
-        .update_transformed(children_transformed))
+    let transformed_plan = plan.map_expressions(|expr| {
+        // ensure aggregate names don't change:
+        // https://github.com/apache/datafusion/issues/3555
+        let original_name = preserver.save(&expr)?;
+        expr.rewrite(&mut expr_rewrite)?
+            .map_data(|expr| original_name.restore(expr))
+    })?;
+
+    // if any of the expressions were rewritten, we need to recreate the plan to
+    // recalculate the schema. At the moment this requires a copy
+    if transformed_plan.transformed || children_transformed {
+        // TODO avoid this copy
+        let plan = transformed_plan.data;
+        let new_inputs = plan
+            .inputs()
+            .into_iter()
+            .map(|input| input.clone())
+            .collect::<Vec<_>>();
+
+        plan.with_new_exprs(plan.expressions(), new_inputs)
+            .map(Transformed::yes)
+    } else {
+        Ok(transformed_plan)
+    }
 }
 
 pub(crate) struct TypeCoercionRewriter {

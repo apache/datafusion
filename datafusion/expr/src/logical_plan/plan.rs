@@ -815,6 +815,7 @@ impl LogicalPlan {
             }
         }
     }
+
     /// Replaces placeholder param values (like `$1`, `$2`) in [`LogicalPlan`]
     /// with the specified `param_values`.
     ///
