@@ -21,9 +21,9 @@
 # https://cwiki.apache.org/confluence/display/INFRA/Git+-+.asf.yaml+features
 
 notifications:
-  commits: commits@arrow.apache.org
-  issues: github@arrow.apache.org
-  pullrequests: github@arrow.apache.org
+  commits: commits@datafusion.apache.org
+  issues: github@datafusion.apache.org
+  pullrequests: github@datafusion.apache.org
   jira_options: link label worklog
 github:
   description: "Apache DataFusion SQL Query Engine"
