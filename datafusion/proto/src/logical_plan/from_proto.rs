@@ -852,7 +852,7 @@ pub fn parse_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
-    use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
+    use protobuf::{logical_expr_node::ExprType, window_expr_node};
 
     let expr_type = proto
         .expr_type
@@ -1264,14 +1264,6 @@ pub fn parse_expr(
                 Some(qualifier.clone())
             },
         }),
-        ExprType::ScalarFunction(expr) => {
-            let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
-                .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;
-
-            match scalar_function {
-                ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-            }
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,
