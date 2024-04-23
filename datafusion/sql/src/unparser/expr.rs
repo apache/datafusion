@@ -358,7 +358,7 @@ impl Unparser<'_> {
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: Some(self.dialect.identifier_quote_style().unwrap_or('"')),
+            quote_style: self.dialect.identifier_quote_style(),
         }
     }
 
@@ -961,6 +961,22 @@ mod tests {
         let actual = format!("{}", ast);
 
         let expected = r#"('a' > 4)"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_none() -> Result<()> {
+        let dialect = CustomDialect::new(None);
+        let unparser = Unparser::new(&dialect);
+
+        let expr = col("a").gt(lit(4));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+
+        let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
 
         Ok(())
