@@ -308,15 +308,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
                 ScalarFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
-                        args.as_slice(),
+                        args,
                         &self.schema,
                         fun.signature(),
                     )?;
-                    let new_expr = coerce_arguments_for_fun(
-                        new_expr.as_slice(),
-                        &self.schema,
-                        &fun,
-                    )?;
+                    let new_expr =
+                        coerce_arguments_for_fun(new_expr, &self.schema, &fun)?;
                     Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(fun, new_expr),
                     )))
@@ -353,7 +350,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
-                        args.as_slice(),
+                        args,
                         &self.schema,
                         fun.signature(),
                     )?;
@@ -549,12 +546,12 @@ fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr
 ///
 /// See the module level documentation for more detail on coercion.
 fn coerce_arguments_for_signature(
-    expressions: &[Expr],
+    expressions: Vec<Expr>,
     schema: &DFSchema,
     signature: &Signature,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
-        return Ok(vec![]);
+        return Ok(expressions);
     }
 
     let current_types = expressions
@@ -565,40 +562,34 @@ fn coerce_arguments_for_signature(
     let new_types = data_types(&current_types, signature)?;
 
     expressions
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
-        .collect::<Result<Vec<_>>>()
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .collect()
 }
 
 fn coerce_arguments_for_fun(
-    expressions: &[Expr],
+    expressions: Vec<Expr>,
     schema: &DFSchema,
     fun: &Arc<ScalarUDF>,
 ) -> Result<Vec<Expr>> {
-    if expressions.is_empty() {
-        return Ok(vec![]);
-    }
-    let mut expressions: Vec<Expr> = expressions.to_vec();
-
     // Cast Fixedsizelist to List for array functions
     if fun.name() == "make_array" {
-        expressions = expressions
+        expressions
             .into_iter()
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
                 if let DataType::FixedSizeList(field, _) = data_type {
-                    let field = field.as_ref().clone();
-                    let to_type = DataType::List(Arc::new(field));
+                    let to_type = DataType::List(field.clone());
                     expr.cast_to(&to_type, schema)
                 } else {
                     Ok(expr)
                 }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect()
+    } else {
+        Ok(expressions)
     }
-
-    Ok(expressions)
 }
 
 /// Cast `expr` to the specified type, if possible
