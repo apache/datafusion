@@ -249,7 +249,7 @@ NOTE: steps in this section can only be done by PMC members.
 ### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/arrow/datafusion-5.1.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
 ```shell
