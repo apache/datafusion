@@ -17,9 +17,8 @@
 
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
+    ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch
 };
-use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -36,9 +35,7 @@ use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::{thread_rng, Rng};
 use std::any::Any;
-use std::iter;
 use std::sync::Arc;
 
 /// test that casting happens on udfs.
@@ -404,118 +401,6 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 #[derive(Debug)]
-pub struct RandomUDF {
-    signature: Signature,
-}
-
-impl RandomUDF {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::any(0, Volatility::Volatile),
-        }
-    }
-}
-
-impl ScalarUDFImpl for RandomUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "random_udf"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let len = if args.is_empty() {
-            1
-        } else {
-            return internal_err!("Invalid argument type");
-        };
-        let mut rng = thread_rng();
-        let values = iter::repeat_with(|| rng.gen_range(0.1..1.0)).take(len);
-        let array = Float64Array::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
-    }
-}
-
-/// Ensure that a user defined function with zero argument will be invoked
-/// with a null array indicating the batch size.
-#[tokio::test]
-async fn test_user_defined_functions_zero_argument() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "index",
-        DataType::UInt8,
-        false,
-    )]));
-
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(UInt8Array::from_iter_values([1, 2, 3]))],
-    )?;
-
-    ctx.register_batch("data_table", batch)?;
-
-    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
-    ctx.register_udf(random_normal_udf);
-
-    let result = plan_and_collect(
-        &ctx,
-        "SELECT random_udf() AS random_udf, random() AS native_random FROM data_table",
-    )
-    .await?;
-
-    assert_eq!(result.len(), 1);
-    let batch = &result[0];
-    let random_udf = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .unwrap();
-    let native_random = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .unwrap();
-
-    assert_eq!(random_udf.len(), native_random.len());
-
-    let mut previous = -1.0;
-    for i in 0..random_udf.len() {
-        assert!(random_udf.value(i) >= 0.0 && random_udf.value(i) < 1.0);
-        assert!(random_udf.value(i) != previous);
-        previous = random_udf.value(i);
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn deregister_udf() -> Result<()> {
-    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
-    let ctx = SessionContext::new();
-
-    ctx.register_udf(random_normal_udf.clone());
-
-    assert!(ctx.udfs().contains("random_udf"));
-
-    ctx.deregister_udf("random_udf");
-
-    assert!(!ctx.udfs().contains("random_udf"));
-
-    Ok(())
-}
-
-#[derive(Debug)]
 struct CastToI64UDF {
     signature: Signature,
 }
@@ -606,6 +491,22 @@ async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
         ],
         &result
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn deregister_udf() -> Result<()> {
+    let cast2i64 = ScalarUDF::from(CastToI64UDF::new());
+    let ctx = SessionContext::new();
+
+    ctx.register_udf(cast2i64.clone());
+
+    assert!(ctx.udfs().contains("cast_to_i64"));
+
+    ctx.deregister_udf("cast_to_i64");
+
+    assert!(!ctx.udfs().contains("cast_to_i64"));
 
     Ok(())
 }

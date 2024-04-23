@@ -16,15 +16,12 @@
 // under the License.
 
 use std::any::Any;
-use std::iter;
-use std::sync::Arc;
 
-use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -64,40 +61,9 @@ impl ScalarUDFImpl for RandomFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        random(args)
-    }
-}
-
-fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let len = if args.is_empty() {
-        1
-    } else {
-        return exec_err!("Expect random function to take no param");
-    };
-
-    let mut rng = thread_rng();
-    let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-    let array = Float64Array::from_iter_values(values);
-    Ok(ColumnarValue::Array(Arc::new(array)))
-}
-
-#[cfg(test)]
-mod test {
-    use datafusion_common::cast::as_float64_array;
-
-    use super::*;
-
-    #[test]
-    fn test_random_expression() {
-        let array = random(&[])
-            .expect("failed to initialize function random")
-            .into_array(1)
-            .expect("Failed to convert to array");
-        let floats =
-            as_float64_array(&array).expect("failed to initialize function random");
-
-        assert_eq!(floats.len(), 1);
-        assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let mut rng = thread_rng();
+        let val = rng.gen_range(0.0..1.0);
+        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(val))))
     }
 }

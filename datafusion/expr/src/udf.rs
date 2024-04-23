@@ -322,11 +322,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// The function will be invoked passed with the slice of [`ColumnarValue`]
     /// (either scalar or array).
     ///
-    /// # Zero Argument Functions
-    /// If the function has zero parameters (e.g. `now()`) it will be passed a
-    /// single element slice which is a a null array to indicate the batch's row
-    /// count (so the function can know the resulting array size).
-    ///
     /// # Performance
     ///
     /// For the best performance, the implementations of `invoke` should handle
