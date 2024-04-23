@@ -65,34 +65,32 @@ impl ScalarUDFImpl for RandomFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let len = if args.is_empty() {
-            1
-        } else {
-            return exec_err!("Expect {} function to take no param", self.name());
-        };
-
-        let mut rng = thread_rng();
-        let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-        let array = Float64Array::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+        random(args)
     }
+}
+
+fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let len = if args.is_empty() {
+        1
+    } else {
+        return exec_err!("Expect random function to take no param");
+    };
+
+    let mut rng = thread_rng();
+    let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
+    let array = Float64Array::from_iter_values(values);
+    Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use arrow::array::NullArray;
-
     use datafusion_common::cast::as_float64_array;
-    use datafusion_expr::ColumnarValue;
 
-    use crate::math::random::random;
+    use super::*;
 
     #[test]
     fn test_random_expression() {
-        let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
-        let array = random(&args)
+        let array = random(&[])
             .expect("failed to initialize function random")
             .into_array(1)
             .expect("Failed to convert to array");
