@@ -39,7 +39,7 @@ Arrow](https://arrow.apache.org/).
 
 ## Features
 
-- Feature-rich [SQL support](https://arrow.apache.org/datafusion/user-guide/sql/index.html) and [DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+- Feature-rich [SQL support](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
 - Blazingly fast, vectorized, multi-threaded, streaming execution engine.
 - Native support for Parquet, CSV, JSON, and Avro file formats. Support
   for custom file formats and non file datasources via the `TableProvider` trait.
@@ -49,7 +49,7 @@ Arrow](https://arrow.apache.org/).
   Azure Blob Storage, and Google Cloud Storage (Other storage systems are supported via the
   `ObjectStore` trait).
 - [Excellent Documentation](https://docs.rs/datafusion/latest) and a
-  [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
+  [welcoming community](https://datafusion.apache.org/contributor-guide/communication.html).
 - A state of the art query optimizer with expression coercion and
   simplification, projection and filter pushdown, sort and distribution
   aware optimizations, automatic join reordering, and more.
