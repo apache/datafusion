@@ -103,3 +103,9 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
+
+.. toctree::
+   :caption: Other
+   :hidden:
+
+   user-guide/cli
