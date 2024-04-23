@@ -171,26 +171,26 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ))))
             }
             Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
-                &expr,
+                *expr,
                 &self.schema,
             )?))),
             Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::Like(Like {
                 negated,
@@ -333,7 +333,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let new_expr = coerce_agg_exprs_for_signature(
                         &fun,
-                        &args,
+                        args,
                         &self.schema,
                         &fun.signature(),
                     )?;
@@ -384,7 +384,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
-                            &args,
+                            args,
                             &self.schema,
                             &fun.signature(),
                         )?
@@ -535,10 +535,10 @@ fn coerce_window_frame(
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
+fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
-    cast_expr(expr, &DataType::Boolean, schema)
+    expr.cast_to(&DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -592,22 +592,17 @@ fn coerce_arguments_for_fun(
     }
 }
 
-/// Cast `expr` to the specified type, if possible
-fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
-    expr.clone().cast_to(to_type, schema)
-}
-
 /// Returns the coerced exprs for each `input_exprs`.
 /// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
 /// data type of `input_exprs` need to be coerced.
 fn coerce_agg_exprs_for_signature(
     agg_fun: &AggregateFunction,
-    input_exprs: &[Expr],
+    input_exprs: Vec<Expr>,
     schema: &DFSchema,
     signature: &Signature,
 ) -> Result<Vec<Expr>> {
     if input_exprs.is_empty() {
-        return Ok(vec![]);
+        return Ok(input_exprs);
     }
     let current_types = input_exprs
         .iter()
@@ -618,10 +613,10 @@ fn coerce_agg_exprs_for_signature(
         type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
 
     input_exprs
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, expr)| cast_expr(expr, &coerced_types[i], schema))
-        .collect::<Result<Vec<_>>>()
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
+        .collect()
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
