@@ -17,8 +17,8 @@
 
 //! [`EliminateOneUnion`]  eliminates single element `Union`
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
-use datafusion_expr::logical_plan::{LogicalPlan, Union};
+use datafusion_common::{internal_err, tree_node::Transformed, Result};
+use datafusion_expr::logical_plan::{tree_node::unwrap_arc, LogicalPlan, Union};
 
 use crate::optimizer::ApplyOrder;
 
@@ -36,19 +36,31 @@ impl EliminateOneUnion {
 impl OptimizerRule for EliminateOneUnion {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Union(Union { inputs, .. }) if inputs.len() == 1 => {
-                Ok(inputs.first().map(|input| input.as_ref().clone()))
-            }
-            _ => Ok(None),
-        }
+        internal_err!("Should have called EliminateOneUnion::rewrite")
     }
 
     fn name(&self) -> &str {
         "eliminate_one_union"
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        match plan {
+            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => {
+                Ok(Transformed::yes(unwrap_arc(inputs.pop().unwrap())))
+            }
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
