@@ -358,7 +358,7 @@ impl Unparser<'_> {
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: Some(self.dialect.identifier_quote_style().unwrap_or('"')),
+            quote_style: self.dialect.identifier_quote_style(),
         }
     }
 
