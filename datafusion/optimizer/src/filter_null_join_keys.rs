@@ -19,9 +19,11 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
+    logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
 };
 use std::sync::Arc;
 
@@ -32,24 +34,34 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct FilterNullJoinKeys {}
 
-impl FilterNullJoinKeys {
-    pub const NAME: &'static str = "filter_null_join_keys";
-}
-
 impl OptimizerRule for FilterNullJoinKeys {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        internal_err!("Should have called FilterNullJoinKeys::rewrite")
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
         if !config.options().optimizer.filter_null_join_keys {
-            return Ok(None);
+            return Ok(Transformed::no(plan));
         }
 
         match plan {
-            LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                let mut join = join.clone();
-
+            LogicalPlan::Join(mut join) if join.join_type == JoinType::Inner => {
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
 
@@ -69,29 +81,22 @@ impl OptimizerRule for FilterNullJoinKeys {
                 if !left_filters.is_empty() {
                     let predicate = create_not_null_predicate(left_filters);
                     join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        join.left.clone(),
+                        predicate, join.left,
                     )?));
                 }
                 if !right_filters.is_empty() {
                     let predicate = create_not_null_predicate(right_filters);
                     join.right = Arc::new(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        join.right.clone(),
+                        predicate, join.right,
                     )?));
                 }
-                Ok(Some(LogicalPlan::Join(join)))
+                Ok(Transformed::yes(LogicalPlan::Join(join)))
             }
-            _ => Ok(None),
+            _ => Ok(Transformed::no(plan)),
         }
     }
-
     fn name(&self) -> &str {
-        Self::NAME
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
+        "filter_null_join_keys"
     }
 }
 
@@ -100,11 +105,9 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
         .into_iter()
         .map(|c| Expr::IsNotNull(Box::new(c)))
         .collect();
-    // combine the IsNotNull expressions with AND
-    not_null_exprs
-        .iter()
-        .skip(1)
-        .fold(not_null_exprs[0].clone(), |a, b| and(a, b.clone()))
+
+    // directly unwrap since it should always have a value
+    conjunction(not_null_exprs).unwrap()
 }
 
 #[cfg(test)]
