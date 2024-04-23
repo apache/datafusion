@@ -46,10 +46,10 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction, ColumnarValue, Expr,
-    ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, ScalarUDFImpl,
-    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    Accumulator, AggregateFunction, ColumnarValue, ExprSchemable, LogicalPlan, Operator,
+    PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,

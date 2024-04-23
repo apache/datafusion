@@ -1687,11 +1687,8 @@ mod tests {
         sync::Arc,
     };
 
-    use arrow::datatypes::{DataType, Field, Schema};
-
     use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;

@@ -287,8 +287,7 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFSchema, ScalarValue, TableReference};
+    use datafusion_common::ScalarValue;
 
     #[derive(Default)]
     struct RecordingRewriter {

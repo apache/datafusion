@@ -661,7 +661,6 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::{
@@ -674,7 +673,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    use datafusion_physical_expr::{Partitioning, PhysicalExpr};
+    use datafusion_physical_expr::PhysicalExpr;
 
     fn build_table(
         a: (&str, &Vec<i32>),

@@ -28,7 +28,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
+    expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
     LogicalPlanBuilder, ScalarUDF, Volatility,
 };
 use datafusion_functions::{math, string};

@@ -219,9 +219,8 @@ impl ExecutionPlan for WorkTableExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    use arrow_array::{ArrayRef, Int32Array};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
-    use std::sync::Arc;
 
     #[test]
     fn test_work_table() {

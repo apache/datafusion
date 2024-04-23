@@ -773,7 +773,7 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
-    use crate::datasource::listing::{FileRange, ListingOptions, PartitionedFile};
+    use crate::datasource::listing::{FileRange, ListingOptions};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::physical_plan::displayable;
@@ -790,7 +790,7 @@ mod tests {
         StructArray,
     };
 
-    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder};
+    use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
     use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
@@ -799,9 +799,7 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
 
     use chrono::{TimeZone, Utc};
-    use futures::StreamExt;
     use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;

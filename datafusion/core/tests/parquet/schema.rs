@@ -18,7 +18,6 @@
 //! Tests for parquet schema handling
 use std::{collections::HashMap, fs, path::Path};
 
-use ::parquet::arrow::ArrowWriter;
 use tempfile::TempDir;
 
 use super::*;

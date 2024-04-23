@@ -385,8 +385,6 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::logical_plan::LogicalPlanBuilder;
     use datafusion_expr::{
         col, lit, max, min, out_ref_col, scalar_subquery, sum, Between,
     };

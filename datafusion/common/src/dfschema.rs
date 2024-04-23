@@ -19,7 +19,6 @@
 //! fields with optional relation names.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -453,7 +452,7 @@ impl DFSchema {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok((matches[0].0, &matches[0].1)),
+            1 => Ok((matches[0].0, (matches[0].1))),
             _ => {
                 // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
                 // Because name may generate from Alias/... . It means that it don't own qualifier.
@@ -1004,7 +1003,6 @@ mod tests {
     use crate::assert_contains;
 
     use super::*;
-    use arrow::datatypes::DataType;
 
     #[test]
     fn qualifier_in_name() -> Result<()> {

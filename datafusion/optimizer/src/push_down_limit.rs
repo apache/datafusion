@@ -279,11 +279,7 @@ mod test {
     use super::*;
     use crate::test::*;
 
-    use datafusion_expr::{
-        col, exists,
-        logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan},
-        max,
-    };
+    use datafusion_expr::{col, exists, logical_plan::builder::LogicalPlanBuilder, max};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)

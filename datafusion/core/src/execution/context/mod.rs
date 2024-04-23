@@ -20,7 +20,6 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
-use std::string::String;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
@@ -2359,19 +2358,15 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 mod tests {
     use std::env;
     use std::path::PathBuf;
-    use std::sync::Weak;
 
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
-    use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use crate::variable::VarType;
 
     use datafusion_common_runtime::SpawnedTask;
-    use datafusion_expr::Expr;
 
     use async_trait::async_trait;
     use tempfile::TempDir;

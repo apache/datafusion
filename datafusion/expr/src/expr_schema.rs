@@ -545,8 +545,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{DataType, Fields, SchemaBuilder};
-    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use arrow::datatypes::{Fields, SchemaBuilder};
+    use datafusion_common::{DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

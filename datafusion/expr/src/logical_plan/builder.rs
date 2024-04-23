@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -1611,8 +1610,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
 
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{SchemaError, TableReference};
+    use datafusion_common::SchemaError;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {

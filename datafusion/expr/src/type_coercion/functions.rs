@@ -467,12 +467,11 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use crate::Volatility;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::Field;
 
     #[test]
     fn test_maybe_data_types() {

@@ -582,8 +582,6 @@ pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
 mod tests {
     use super::*;
 
-    use arrow::datatypes::DataType;
-
     #[test]
     fn test_aggregate_coerce_types() {
         // test input args with error number input types

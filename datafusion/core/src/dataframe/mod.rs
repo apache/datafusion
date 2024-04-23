@@ -1570,19 +1570,17 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::assert_batches_sorted_eq;
     use crate::execution::context::SessionConfig;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
-    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use arrow::array::{self, Int32Array};
-    use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        cast, count_distinct, create_udf, expr, lit, sum, BuiltInWindowFunction,
+        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};

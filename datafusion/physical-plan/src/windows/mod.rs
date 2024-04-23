@@ -18,7 +18,6 @@
 //! Physical expressions for window functions
 
 use std::borrow::Borrow;
-use std::convert::TryInto;
 use std::sync::Arc;
 
 use crate::{
@@ -559,7 +558,6 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_execution::TaskContext;
 
     use futures::FutureExt;

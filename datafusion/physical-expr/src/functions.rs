@@ -222,15 +222,14 @@ fn func_order_in_one_dimension(
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{Array, ArrayRef, UInt64Array},
+        array::UInt64Array,
         datatypes::{DataType, Field},
     };
     use arrow_schema::DataType::Utf8;
 
     use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::DataFusionError;
     use datafusion_common::{internal_err, plan_err};
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::{Signature, Volatility};
 
     use crate::expressions::try_cast;

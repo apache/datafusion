@@ -1942,17 +1942,9 @@ pub fn is_volatile(expr: &Expr) -> Result<bool> {
 
 #[cfg(test)]
 mod test {
-    use crate::expr::Cast;
     use crate::expr_fn::col;
-    use crate::{
-        case, lit, ColumnarValue, Expr, ScalarFunctionDefinition, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility,
-    };
-    use arrow::datatypes::DataType;
-    use datafusion_common::Column;
-    use datafusion_common::{Result, ScalarValue};
+    use crate::{case, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl, Volatility};
     use std::any::Any;
-    use std::sync::Arc;
 
     #[test]
     fn format_case_when() -> Result<()> {

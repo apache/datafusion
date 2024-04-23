@@ -681,12 +681,8 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
 
 #[cfg(test)]
 mod tests {
-    use crate::ScalarValue;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-    use arrow_array::Array;
-    use std::ops::Range;
-    use std::sync::Arc;
 
     use super::*;
 
