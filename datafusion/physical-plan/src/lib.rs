@@ -84,8 +84,9 @@ pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+    expressions, functions, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
 };
+pub use datafusion_physical_expr_common::udf;
 
 // Backwards compatibility
 pub use crate::stream::EmptyRecordBatchStream;

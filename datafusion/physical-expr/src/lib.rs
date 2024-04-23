@@ -26,8 +26,6 @@ pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
-mod scalar_function;
-pub mod udf;
 pub mod utils;
 pub mod window;
 
@@ -53,8 +51,8 @@ pub use datafusion_physical_expr_common::sort_expr::{
     PhysicalSortRequirement,
 };
 
+pub use datafusion_physical_expr_common::scalar_function::ScalarFunctionExpr;
 pub use planner::{create_physical_expr, create_physical_exprs};
-pub use scalar_function::ScalarFunctionExpr;
 
 pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::split_conjunction;

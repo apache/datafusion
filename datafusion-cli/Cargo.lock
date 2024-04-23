@@ -1368,6 +1368,7 @@ dependencies = [
  "datafusion-expr",
  "half",
  "hashbrown 0.14.3",
+ "itertools",
  "paste",
 ]
 

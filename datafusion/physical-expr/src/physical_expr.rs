@@ -18,10 +18,10 @@
 use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use itertools::izip;
 
 pub use datafusion_physical_expr_common::physical_expr::down_cast_any_ref;
 pub use datafusion_physical_expr_common::physical_expr::physical_exprs_bag_equal;
+pub use datafusion_physical_expr_common::physical_expr::physical_exprs_equal;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -35,14 +35,6 @@ pub fn physical_exprs_contains(
     physical_exprs
         .iter()
         .any(|physical_expr| physical_expr.eq(expr))
-}
-
-/// Checks whether the given physical expression slices are equal.
-pub fn physical_exprs_equal(
-    lhs: &[Arc<dyn PhysicalExpr>],
-    rhs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
 }
 
 /// This utility function removes duplicates from the given `exprs` vector.

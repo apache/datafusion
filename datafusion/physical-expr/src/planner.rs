@@ -33,8 +33,9 @@ use datafusion_expr::{
 
 use crate::{
     expressions::{self, binary, like, Column, Literal},
-    udf, PhysicalExpr,
+    PhysicalExpr,
 };
+use datafusion_physical_expr_common::udf;
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.

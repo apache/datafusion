@@ -45,4 +45,5 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
+itertools = { workspace = true, features = ["use_std"] }
 paste = "^1.0"

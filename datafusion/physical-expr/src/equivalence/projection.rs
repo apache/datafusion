@@ -129,9 +129,9 @@ mod tests {
     };
     use crate::equivalence::EquivalenceProperties;
     use crate::expressions::{col, BinaryExpr};
-    use crate::udf::create_physical_expr;
     use crate::utils::tests::TestScalarUDF;
     use crate::PhysicalSortExpr;
+    use datafusion_physical_expr_common::udf::create_physical_expr;
 
     use super::*;
 

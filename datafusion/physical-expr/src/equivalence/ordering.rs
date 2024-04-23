@@ -225,6 +225,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
+    use datafusion_physical_expr_common::udf;
     use itertools::Itertools;
 
     use datafusion_common::{DFSchema, Result};
@@ -285,21 +286,21 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let floor_a = &crate::udf::create_physical_expr(
+        let floor_a = &udf::create_physical_expr(
             &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
             &[],
             &DFSchema::empty(),
         )?;
-        let floor_f = &crate::udf::create_physical_expr(
+        let floor_f = &udf::create_physical_expr(
             &test_fun,
             &[col("f", &test_schema)?],
             &test_schema,
             &[],
             &DFSchema::empty(),
         )?;
-        let exp_a = &crate::udf::create_physical_expr(
+        let exp_a = &udf::create_physical_expr(
             &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
@@ -812,7 +813,7 @@ mod tests {
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
             let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-            let floor_a = crate::udf::create_physical_expr(
+            let floor_a = udf::create_physical_expr(
                 &test_fun,
                 &[col("a", &test_schema)?],
                 &test_schema,

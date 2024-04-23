@@ -30,12 +30,12 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, InList};
+use datafusion_expr::expr::{Alias, InList, ScalarFunction};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, ColumnarValue, Expr, GetFieldAccess, GetIndexedField,
-    Like, Operator, TryCast,
+    Like, Operator, ScalarFunctionDefinition, TryCast,
 };
 
 use crate::expressions::binary::binary;
@@ -50,7 +50,10 @@ use crate::expressions::negative::negative;
 use crate::expressions::not::not;
 use crate::expressions::try_cast::try_cast;
 use crate::sort_properties::SortProperties;
+use crate::udf;
 use crate::utils::scatter;
+
+use itertools::izip;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
 /// for examples of creating `PhysicalExpr` from `Expr`
@@ -251,6 +254,14 @@ pub fn physical_exprs_bag_equal(
     } else {
         false
     }
+}
+
+/// Checks whether the given physical expression slices are equal.
+pub fn physical_exprs_equal(
+    lhs: &[Arc<dyn PhysicalExpr>],
+    rhs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
 }
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -517,32 +528,23 @@ pub fn create_physical_expr(
                 internal_err!("ListRange should be rewritten in OperatorToFunction")
             }
         },
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            let physical_args =
+                create_physical_exprs(args, input_dfschema, execution_props)?;
 
-        // Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-        //     let physical_args =
-        //         create_physical_exprs(args, input_dfschema, execution_props)?;
-
-        //     match func_def {
-        //         ScalarFunctionDefinition::BuiltIn(fun) => {
-        //             functions::create_builtin_physical_expr(
-        //                 fun,
-        //                 &physical_args,
-        //                 input_schema,
-        //                 execution_props,
-        //             )
-        //         }
-        //         ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
-        //             fun.clone().as_ref(),
-        //             &physical_args,
-        //             input_schema,
-        //             args,
-        //             input_dfschema,
-        //         ),
-        //         ScalarFunctionDefinition::Name(_) => {
-        //             internal_err!("Function `Expr` with name should be resolved.")
-        //         }
-        //     }
-        // }
+            match func_def {
+                ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
+                    fun.clone().as_ref(),
+                    &physical_args,
+                    input_schema,
+                    args,
+                    input_dfschema,
+                ),
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            }
+        }
         Expr::Between(Between {
             expr,
             negated,

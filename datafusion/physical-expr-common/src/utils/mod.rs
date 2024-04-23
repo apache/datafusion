@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod test_utils;
+
 use arrow::{
     array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
     compute::{and_kleene, is_not_null, SlicesIterator},

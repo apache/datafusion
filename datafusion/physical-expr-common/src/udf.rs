@@ -26,7 +26,7 @@ use datafusion_expr::{
     type_coercion::functions::data_types, Expr, ScalarFunctionDefinition,
 };
 
-use crate::{PhysicalExpr, ScalarFunctionExpr};
+use crate::{physical_expr::PhysicalExpr, scalar_function::ScalarFunctionExpr};
 
 /// Create a physical expression of the UDF.
 ///
@@ -68,8 +68,10 @@ mod tests {
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::ScalarUDF;
 
-    use crate::utils::tests::TestScalarUDF;
-    use crate::ScalarFunctionExpr;
+    use crate::{
+        expressions::literal::lit, scalar_function::ScalarFunctionExpr,
+        utils::test_utils::TestScalarUDF,
+    };
 
     use super::create_physical_expr;
 
@@ -78,7 +80,7 @@ mod tests {
         // create and register the udf
         let udf = ScalarUDF::from(TestScalarUDF::new());
 
-        let e = crate::expressions::lit(1.1);
+        let e = lit(1.1);
         let p_expr =
             create_physical_expr(&udf, &[e], &Schema::empty(), &[], &DFSchema::empty())?;
 

@@ -43,9 +43,9 @@ use datafusion_expr::{
 };
 
 use crate::functions::out_ordering;
+use crate::physical_expr::PhysicalExpr;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {

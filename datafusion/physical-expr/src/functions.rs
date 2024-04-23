@@ -30,7 +30,6 @@
 //! an argument i32 is passed to a function that supports f64, the
 //! argument is automatically is coerced to f64.
 
-use std::ops::Neg;
 use std::sync::Arc;
 
 use arrow::{array::ArrayRef, datatypes::Schema};
@@ -43,9 +42,10 @@ use datafusion_expr::{
 };
 use datafusion_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
 
-use crate::sort_properties::SortProperties;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 
+/// TODO: Duplicated code from datafusion/physical-expr-common/src/udf.rs, remove this one.
+///
 /// Create a physical (function) expression.
 /// This function errors when `args`' can't be coerced to a valid argument type of the function.
 pub fn create_physical_expr(
@@ -164,59 +164,6 @@ where
             result.map(ColumnarValue::Array)
         }
     })
-}
-
-/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
-/// and the function's behavior depending on its arguments.
-pub fn out_ordering(
-    func: &FuncMonotonicity,
-    arg_orderings: &[SortProperties],
-) -> SortProperties {
-    func.iter().zip(arg_orderings).fold(
-        SortProperties::Singleton,
-        |prev_sort, (item, arg)| {
-            let current_sort = func_order_in_one_dimension(item, arg);
-
-            match (prev_sort, current_sort) {
-                (_, SortProperties::Unordered) => SortProperties::Unordered,
-                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
-                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
-                    if prev.descending != current.descending =>
-                {
-                    SortProperties::Unordered
-                }
-                _ => prev_sort,
-            }
-        },
-    )
-}
-
-/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
-fn func_order_in_one_dimension(
-    func_monotonicity: &Option<bool>,
-    arg: &SortProperties,
-) -> SortProperties {
-    if *arg == SortProperties::Singleton {
-        SortProperties::Singleton
-    } else {
-        match func_monotonicity {
-            None => SortProperties::Unordered,
-            Some(false) => {
-                if let SortProperties::Ordered(_) = arg {
-                    arg.neg()
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-            Some(true) => {
-                if let SortProperties::Ordered(_) = arg {
-                    *arg
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
