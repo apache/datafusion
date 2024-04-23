@@ -17,9 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-mod case;
 mod column;
-mod no_op;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -67,10 +65,10 @@ pub use datafusion_functions_aggregate::first_last::{
     FirstValuePhysicalExpr as FirstValue, LastValuePhysicalExpr as LastValue,
 };
 
-pub use case::{case, CaseExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
 pub use datafusion_physical_expr_common::expressions::binary::{binary, BinaryExpr};
+pub use datafusion_physical_expr_common::expressions::case::{case, CaseExpr};
 pub use datafusion_physical_expr_common::expressions::cast::{
     cast, cast_with_options, CastExpr,
 };
@@ -85,9 +83,9 @@ pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
 pub use datafusion_physical_expr_common::expressions::negative::{
     negative, NegativeExpr,
 };
+pub use datafusion_physical_expr_common::expressions::no_op::NoOp;
 pub use datafusion_physical_expr_common::expressions::not::{not, NotExpr};
 pub use datafusion_physical_expr_common::expressions::try_cast::{try_cast, TryCastExpr};
-pub use no_op::NoOp;
 
 #[cfg(test)]
 pub(crate) mod tests {

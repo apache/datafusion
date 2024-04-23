@@ -39,6 +39,7 @@ use datafusion_expr::{
 };
 
 use crate::expressions::binary::binary;
+use crate::expressions::case;
 use crate::expressions::cast::cast;
 use crate::expressions::column::Column;
 use crate::expressions::in_list::in_list;
@@ -332,7 +333,6 @@ pub fn physical_exprs_equal(
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///                      to qualified or unqualified fields by name.
-#[allow(clippy::only_used_in_recursion)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
@@ -451,43 +451,43 @@ pub fn create_physical_expr(
                 input_schema,
             )
         }
-        // Expr::Case(case) => {
-        //     let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
-        //         Some(create_physical_expr(
-        //             e.as_ref(),
-        //             input_dfschema,
-        //             execution_props,
-        //         )?)
-        //     } else {
-        //         None
-        //     };
-        //     let (when_expr, then_expr): (Vec<&Expr>, Vec<&Expr>) = case
-        //         .when_then_expr
-        //         .iter()
-        //         .map(|(w, t)| (w.as_ref(), t.as_ref()))
-        //         .unzip();
-        //     let when_expr =
-        //         create_physical_exprs(when_expr, input_dfschema, execution_props)?;
-        //     let then_expr =
-        //         create_physical_exprs(then_expr, input_dfschema, execution_props)?;
-        //     let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
-        //         when_expr
-        //             .iter()
-        //             .zip(then_expr.iter())
-        //             .map(|(w, t)| (w.clone(), t.clone()))
-        //             .collect();
-        //     let else_expr: Option<Arc<dyn PhysicalExpr>> =
-        //         if let Some(e) = &case.else_expr {
-        //             Some(create_physical_expr(
-        //                 e.as_ref(),
-        //                 input_dfschema,
-        //                 execution_props,
-        //             )?)
-        //         } else {
-        //             None
-        //         };
-        //     Ok(expressions::case(expr, when_then_expr, else_expr)?)
-        // }
+        Expr::Case(case) => {
+            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
+                Some(create_physical_expr(
+                    e.as_ref(),
+                    input_dfschema,
+                    execution_props,
+                )?)
+            } else {
+                None
+            };
+            let (when_expr, then_expr): (Vec<&Expr>, Vec<&Expr>) = case
+                .when_then_expr
+                .iter()
+                .map(|(w, t)| (w.as_ref(), t.as_ref()))
+                .unzip();
+            let when_expr =
+                create_physical_exprs(when_expr, input_dfschema, execution_props)?;
+            let then_expr =
+                create_physical_exprs(then_expr, input_dfschema, execution_props)?;
+            let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
+                when_expr
+                    .iter()
+                    .zip(then_expr.iter())
+                    .map(|(w, t)| (w.clone(), t.clone()))
+                    .collect();
+            let else_expr: Option<Arc<dyn PhysicalExpr>> =
+                if let Some(e) = &case.else_expr {
+                    Some(create_physical_expr(
+                        e.as_ref(),
+                        input_dfschema,
+                        execution_props,
+                    )?)
+                } else {
+                    None
+                };
+            Ok(case::case(expr, when_then_expr, else_expr)?)
+        }
         Expr::Cast(Cast { expr, data_type }) => cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
@@ -603,4 +603,43 @@ where
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
         .collect::<Result<Vec<_>>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{col, lit};
+
+    use super::create_physical_expr;
+
+    #[test]
+    fn test_create_physical_expr_scalar_input_output() -> Result<()> {
+        let expr = col("letter").eq(lit("A"));
+
+        let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
+        let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;
+        let p = create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "A", "B", "C", "D",
+            ]))],
+        )?;
+        let result = p.evaluate(&batch)?;
+        let result = result.into_array(4).expect("Failed to convert to array");
+
+        assert_eq!(
+            &result,
+            &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
+        );
+
+        Ok(())
+    }
 }

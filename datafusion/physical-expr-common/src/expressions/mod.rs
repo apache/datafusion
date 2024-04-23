@@ -19,6 +19,7 @@
 
 #[macro_use]
 pub mod binary;
+pub mod case;
 pub mod cast;
 pub mod column;
 pub mod datum;
@@ -28,5 +29,6 @@ pub mod is_null;
 pub mod like;
 pub mod literal;
 pub mod negative;
+pub mod no_op;
 pub mod not;
 pub mod try_cast;

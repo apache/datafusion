@@ -27,7 +27,7 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 

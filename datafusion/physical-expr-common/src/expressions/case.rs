@@ -19,9 +19,10 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::{try_cast, NoOp};
+use crate::expressions::no_op::NoOp;
+use crate::expressions::try_cast::try_cast;
 use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::array::*;
 use arrow::compute::kernels::cmp::eq;
@@ -413,7 +414,11 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{binary, cast, col, lit};
+
+    use crate::expressions::binary::binary;
+    use crate::expressions::cast::cast;
+    use crate::expressions::column::col;
+    use crate::expressions::literal::{lit, Literal};
 
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
@@ -957,16 +962,15 @@ mod tests {
         let expr2 = expr
             .clone()
             .transform(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {
@@ -979,16 +983,15 @@ mod tests {
         let expr3 = expr
             .clone()
             .transform_down(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {
