@@ -451,12 +451,12 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
     target_type: &DataType,
-    value: &ScalarValue,
+    value: ScalarValue,
 ) -> Result<ScalarValue> {
-    coerce_scalar(target_type, value).or_else(|err| {
+    coerce_scalar(target_type, &value).or_else(|err| {
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, value).map_or_else(
+            coerce_scalar(largest_type, &value).map_or_else(
                 |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
@@ -481,7 +481,7 @@ fn get_widest_type_in_family(given_type: &DataType) -> Option<&DataType> {
 /// Coerces the given (window frame) `bound` to `target_type`.
 fn coerce_frame_bound(
     target_type: &DataType,
-    bound: &WindowFrameBound,
+    bound: WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     match bound {
         WindowFrameBound::Preceding(v) => {
@@ -527,9 +527,8 @@ fn coerce_window_frame(
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
     };
-    window_frame.start_bound =
-        coerce_frame_bound(target_type, &window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, &window_frame.end_bound)?;
+    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
 
