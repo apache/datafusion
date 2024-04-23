@@ -61,9 +61,10 @@ impl ScalarUDFImpl for UuidFunc {
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let len: usize = match &args[0] {
-            ColumnarValue::Array(array) => array.len(),
-            _ => return exec_err!("Expect uuid function to take no param"),
+        let len = if args.is_empty() {
+            1
+        } else {
+            return exec_err!("Expect {} function to take no param", self.name());
         };
 
         let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);

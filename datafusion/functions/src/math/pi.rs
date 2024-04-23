@@ -63,9 +63,10 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if !matches!(&args[0], ColumnarValue::Array(_)) {
-            return exec_err!("Expect pi function to take no param");
-        }
+        if !args.is_empty() {
+            return exec_err!("Expect {} function to take no param", self.name());
+        };
+
         let array = Float64Array::from_value(std::f64::consts::PI, 1);
         Ok(ColumnarValue::Array(Arc::new(array)))
     }

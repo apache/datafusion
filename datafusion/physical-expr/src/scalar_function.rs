@@ -142,21 +142,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
-        // indicating the batch size (as a convention)
-        let inputs = match self.args.is_empty() {
-            // If the function supports zero argument, we pass in a null array indicating the batch size.
-            // This is for user-defined functions.
-            // MakeArray support zero argument but has the different behavior from the array with one null.
-            true if self.supports_zero_argument && self.name != "make_array" => {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            _ => self
-                .args
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
-        };
+        let inputs = self
+            .args
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
         match self.fun {

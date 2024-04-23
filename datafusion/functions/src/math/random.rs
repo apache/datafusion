@@ -65,20 +65,17 @@ impl ScalarUDFImpl for RandomFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        random(args)
-    }
-}
+        let len = if args.is_empty() {
+            1
+        } else {
+            return exec_err!("Expect {} function to take no param", self.name());
+        };
 
-/// Random SQL function
-fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let len: usize = match &args[0] {
-        ColumnarValue::Array(array) => array.len(),
-        _ => return exec_err!("Expect random function to take no param"),
-    };
-    let mut rng = thread_rng();
-    let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-    let array = Float64Array::from_iter_values(values);
-    Ok(ColumnarValue::Array(Arc::new(array)))
+        let mut rng = thread_rng();
+        let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
+        let array = Float64Array::from_iter_values(values);
+        Ok(ColumnarValue::Array(Arc::new(array)))
+    }
 }
 
 #[cfg(test)]
