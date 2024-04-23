@@ -463,7 +463,7 @@ svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist
 - Checkout the `asf-site` branch
 - Copy content from `docs/build/html/*` to the `datafusion` directory in arrow-site
 - Create a PR against the `asf-site` branch ([example](https://github.com/apache/arrow-site/pull/237))
-- Once the PR is merged, the content will be published to https://arrow.apache.org/datafusion/ by GitHub Pages (this
+- Once the PR is merged, the content will be published to https://datafusion.apache.org/ by GitHub Pages (this
   can take some time).
 
 ### Optional: Write a blog post announcing the release
