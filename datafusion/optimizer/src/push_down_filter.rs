@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{
@@ -705,9 +704,7 @@ impl OptimizerRule for PushDownFilter {
 
                             (qualified_name(qualifier, field.name()), expr)
                         })
-                        .partition(|(_, value)| {
-                            is_volatile_expression(value).unwrap_or(true)
-                        });
+                        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];

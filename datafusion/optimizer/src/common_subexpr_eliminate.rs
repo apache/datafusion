@@ -21,7 +21,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::{DataType, Field};
@@ -664,7 +663,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         // related to https://github.com/apache/datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
-        if expr.short_circuits() || is_volatile_expression(expr)? {
+        if expr.short_circuits() || expr.is_volatile()? {
             self.visit_stack
                 .push(VisitRecord::JumpMark(self.node_count));
             return Ok(TreeNodeRecursion::Jump); // go to f_up
@@ -720,7 +719,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        if expr.short_circuits() || is_volatile_expression(&expr)? {
+        if expr.short_circuits() || expr.is_volatile()? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
