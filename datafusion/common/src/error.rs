@@ -818,6 +818,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(feature = "backtrace"))]
     fn test_strip_error_name() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
