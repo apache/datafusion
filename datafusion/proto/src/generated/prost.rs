@@ -572,7 +572,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -616,8 +616,6 @@ pub mod logical_expr_node {
         InList(::prost::alloc::boxed::Box<super::InListNode>),
         #[prost(message, tag = "15")]
         Wildcard(super::Wildcard),
-        #[prost(message, tag = "16")]
-        ScalarFunction(super::ScalarFunctionNode),
         #[prost(message, tag = "17")]
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
         /// window expressions
@@ -838,14 +836,6 @@ pub struct InListNode {
     pub list: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bool, tag = "3")]
     pub negated: bool,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ScalarFunctionNode {
-    #[prost(enumeration = "ScalarFunction", tag = "1")]
-    pub fun: i32,
-    #[prost(message, repeated, tag = "2")]
-    pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2060,7 +2050,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -2097,8 +2087,6 @@ pub mod physical_expr_node {
         Negative(::prost::alloc::boxed::Box<super::PhysicalNegativeNode>),
         #[prost(message, tag = "12")]
         InList(::prost::alloc::boxed::Box<super::PhysicalInListNode>),
-        #[prost(message, tag = "13")]
-        ScalarFunction(super::PhysicalScalarFunctionNode),
         #[prost(message, tag = "14")]
         TryCast(::prost::alloc::boxed::Box<super::PhysicalTryCastNode>),
         /// window expressions
@@ -2272,18 +2260,6 @@ pub struct PhysicalCaseNode {
     pub when_then_expr: ::prost::alloc::vec::Vec<PhysicalWhenThen>,
     #[prost(message, optional, boxed, tag = "3")]
     pub else_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalScalarFunctionNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
-    #[prost(enumeration = "ScalarFunction", tag = "2")]
-    pub fun: i32,
-    #[prost(message, repeated, tag = "3")]
-    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
-    #[prost(message, optional, tag = "4")]
-    pub return_type: ::core::option::Option<ArrowType>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2832,168 +2808,6 @@ impl JoinConstraint {
         match value {
             "ON" => Some(Self::On),
             "USING" => Some(Self::Using),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum ScalarFunction {
-    ///   0 was Abs before
-    ///   The first enum value must be zero for open enums
-    ///
-    ///   1 was Acos
-    ///   2 was Asin
-    /// 3 was Atan
-    /// 4 was Ascii
-    /// 5 was Ceil
-    /// 6 was Cos
-    /// 7 was Digest
-    /// 8 was Exp
-    /// 9 was Floor
-    /// 10 was Ln
-    /// 11 was Log
-    /// 12 was Log10
-    /// 13 was Log2
-    /// 14 was Round
-    /// 15 was Signum
-    /// 16 was Sin
-    /// 17 was Sqrt
-    /// Tan = 18;
-    /// 19 was Trunc
-    /// 20 was Array
-    /// RegexpMatch = 21;
-    /// 22 was BitLength
-    /// 23 was Btrim
-    /// 24 was CharacterLength
-    /// 25 was Chr
-    /// 26 was Concat
-    /// 27 was ConcatWithSeparator
-    /// 28 was DatePart
-    /// 29 was DateTrunc
-    /// 30 was InitCap
-    /// 31 was Left
-    /// 32 was Lpad
-    /// 33 was Lower
-    /// 34 was Ltrim
-    /// 35 was MD5
-    ///   36 was NullIf
-    /// 37 was OctetLength
-    /// 38 was Random
-    /// 39 was RegexpReplace
-    /// 40 was Repeat
-    /// 41 was Replace
-    /// 42 was Reverse
-    /// 43 was Right
-    /// 44 was Rpad
-    /// 45 was Rtrim
-    /// 46 was SHA224
-    /// 47 was SHA256
-    /// 48 was SHA384
-    /// 49 was SHA512
-    /// 50 was SplitPart
-    /// StartsWith = 51;
-    /// 52 was Strpos
-    /// 53 was Substr
-    /// ToHex = 54;
-    /// 55 was ToTimestamp
-    /// 56 was ToTimestampMillis
-    /// 57 was ToTimestampMicros
-    /// 58 was ToTimestampSeconds
-    /// 59 was Now
-    /// 60 was Translate
-    /// Trim = 61;
-    /// Upper = 62;
-    /// 63 was Coalesce
-    /// 64 was Power
-    /// 65 was StructFun
-    /// 66 was FromUnixtime
-    /// 67 Atan2
-    /// 68 was DateBin
-    /// 69 was ArrowTypeof
-    /// 70 was CurrentDate
-    /// 71 was CurrentTime
-    /// 72 was Uuid
-    /// 73 was Cbrt
-    /// 74 Acosh
-    /// 75 was Asinh
-    /// 76 was Atanh
-    /// 77 was Sinh
-    /// 78 was Cosh
-    /// Tanh = 79
-    /// 80 was Pi
-    /// 81 was Degrees
-    /// 82 was Radians
-    /// 83 was Factorial
-    /// 84 was Lcm
-    /// 85 was Gcd
-    /// 86 was ArrayAppend
-    /// 87 was ArrayConcat
-    /// 88 was ArrayDims
-    /// 89 was ArrayRepeat
-    /// 90 was ArrayLength
-    /// 91 was ArrayNdims
-    /// 92 was ArrayPosition
-    /// 93 was ArrayPositions
-    /// 94 was ArrayPrepend
-    /// 95 was ArrayRemove
-    /// 96 was ArrayReplace
-    /// 97 was ArrayToString
-    /// 98 was Cardinality
-    /// 99 was ArrayElement
-    /// 100 was ArraySlice
-    /// 103 was Cot
-    /// 104 was ArrayHas
-    /// 105 was ArrayHasAny
-    /// 106 was ArrayHasAll
-    /// 107 was ArrayRemoveN
-    /// 108 was ArrayReplaceN
-    /// 109 was ArrayRemoveAll
-    /// 110 was ArrayReplaceAll
-    /// 111 was Nanvl
-    /// 112 was Flatten
-    /// 113 was IsNan
-    /// 114 was Iszero
-    /// 115 was ArrayEmpty
-    /// 116 was ArrayPopBack
-    /// 117 was StringToArray
-    /// 118 was ToTimestampNanos
-    /// 119 was ArrayIntersect
-    /// 120 was ArrayUnion
-    /// 121 was OverLay
-    /// 122 is Range
-    /// 123 is ArrayExcept
-    /// 124 was ArrayPopFront
-    /// 125 was Levenshtein
-    /// 126 was SubstrIndex
-    /// 127 was FindInSet
-    /// 128 was ArraySort
-    /// 129 was ArrayDistinct
-    /// 130 was ArrayResize
-    /// 131 was EndsWith
-    /// 132 was InStr
-    /// 133 was MakeDate
-    /// 134 was ArrayReverse
-    /// 135 is RegexpLike
-    /// 136 was ToChar
-    /// 137 was ToDate
-    /// 138 was ToUnixtime
-    Unknown = 0,
-}
-impl ScalarFunction {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            ScalarFunction::Unknown => "unknown",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "unknown" => Some(Self::Unknown),
             _ => None,
         }
     }
