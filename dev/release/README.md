@@ -453,7 +453,7 @@ svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
 Delete a release:
 
 ```bash
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/datafusion-7.0.0
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-7.0.0
 ```
 
 ### Publish the User Guide to the Arrow Site
