@@ -625,6 +625,12 @@ impl<T> Transformed<T> {
         Self::new(data, false, TreeNodeRecursion::Continue)
     }
 
+    /// If not already, sets `self.transformed` to true if `transformed` is true.
+    pub fn update_transformed(mut self, transformed: bool) -> Self {
+        self.transformed |= transformed;
+        self
+    }
+
     /// Applies the given `f` to the data of this [`Transformed`] object.
     pub fn update_data<U, F: FnOnce(T) -> U>(self, f: F) -> Transformed<U> {
         Transformed::new(f(self.data), self.transformed, self.tnr)

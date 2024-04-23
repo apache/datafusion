@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue,
@@ -31,8 +31,8 @@ use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
     InSubquery, Like, ScalarFunction, WindowFunction,
 };
-use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
@@ -51,6 +51,7 @@ use datafusion_expr::{
 };
 
 use crate::analyzer::AnalyzerRule;
+use crate::utils::NamePreserver;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -67,26 +68,27 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        analyze_internal(&DFSchema::empty(), &plan)
+        Ok(analyze_internal(&DFSchema::empty(), plan)?.data)
     }
 }
 
 fn analyze_internal(
     // use the external schema to handle the correlated subqueries case
     external_schema: &DFSchema,
-    plan: &LogicalPlan,
-) -> Result<LogicalPlan> {
-    // optimize child plans first
-    let new_inputs = plan
-        .inputs()
-        .iter()
-        .map(|p| analyze_internal(external_schema, p))
-        .collect::<Result<Vec<_>>>()?;
+    plan: LogicalPlan,
+) -> Result<Transformed<LogicalPlan>> {
+    // optimize child plans first (since we use external_schema here, can't use LogicalPlan::transform)
+    let Transformed {
+        data: plan,
+        transformed: children_transformed,
+        ..
+    } = plan.map_children(|plan| analyze_internal(external_schema, plan))?;
+
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let mut schema = merge_schema(new_inputs.iter().collect());
+    let mut schema = merge_schema(plan.inputs());
 
-    if let LogicalPlan::TableScan(ts) = plan {
+    if let LogicalPlan::TableScan(ts) = &plan {
         let source_schema = DFSchema::try_from_qualified_schema(
             ts.table_name.clone(),
             &ts.source.schema(),
@@ -103,17 +105,17 @@ fn analyze_internal(
         schema: Arc::new(schema),
     };
 
-    let new_expr = plan
-        .expressions()
-        .into_iter()
-        .map(|expr| {
+    let preserver = NamePreserver::new(&plan);
+    Ok(plan
+        .map_expressions(|expr| {
             // ensure aggregate names don't change:
             // https://github.com/apache/datafusion/issues/3555
-            rewrite_preserving_name(expr, &mut expr_rewrite)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    plan.with_new_exprs(new_expr, new_inputs)
+            let original_name = preserver.save(&expr)?;
+            expr.rewrite(&mut expr_rewrite)?
+                .map_data(|expr| original_name.restore(expr))
+        })?
+        // propagate the the transformation information from children
+        .update_transformed(children_transformed))
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -132,14 +134,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery)?;
+                let new_plan = analyze_internal(&self.schema, unwrap_arc(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
+                let new_plan =
+                    analyze_internal(&self.schema, unwrap_arc(subquery.subquery))?.data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -153,7 +156,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
+                let new_plan =
+                    analyze_internal(&self.schema, unwrap_arc(subquery.subquery))?.data;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
