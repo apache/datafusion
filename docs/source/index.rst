@@ -50,6 +50,17 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
 .. _communication: contributor-guide/communication.html
 
+.. _toc.asf-links:
+.. toctree::
+   :maxdepth: 1
+   :caption: ASF Links
+
+   Apache Software Foundation <https://apache.org>
+   License <https://www.apache.org/licenses/>
+   Donate <https://www.apache.org/foundation/sponsorship.html>
+   Thanks <https://www.apache.org/foundation/thanks.html>
+   Security <https://www.apache.org/security/>
+
 .. _toc.links:
 .. toctree::
    :maxdepth: 1
