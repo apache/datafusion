@@ -437,7 +437,7 @@ svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
 Delete a release candidate:
 
 ```bash
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-datafusion-7.1.0-rc1/
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-7.1.0-rc1/
 ```
 
 #### Deleting old releases from `release` svn
