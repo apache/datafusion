@@ -497,7 +497,8 @@ impl LogicalPlan {
         mut expr: Vec<Expr>,
         mut inputs: Vec<LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        match self {
+
+            match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
             LogicalPlan::Projection(Projection { .. }) => {
@@ -813,6 +814,63 @@ impl LogicalPlan {
                 let input = inputs.swap_remove(0);
                 unnest_with_options(input, columns.clone(), options.clone())
             }
+        }
+    }
+
+    /// Recalculates the schema of a LogicalPlan. This should be invoked if the
+    /// types of any expressions or inputs are changed (e.g. by an analyzer pass) using the tree node API.
+    pub fn recalculate_schema(self) -> Result<LogicalPlan> {
+        match self {
+            /*
+            LogicalPlan::Projection(Projection{ expr, input, schema: _ }) => {
+                Projection::try_new(expr, input)
+                    .map(LogicalPlan::Projection)
+            }
+            */
+
+            // These nodes do not change their schema
+            //LogicalPlan::Filter(_) => Ok(self),
+            /*
+            LogicalPlan::Window(_) => {}
+            LogicalPlan::Aggregate(_) => {}
+            LogicalPlan::Sort(_) => {}
+            LogicalPlan::Join(_) => {}
+            LogicalPlan::CrossJoin(_) => {}
+            LogicalPlan::Repartition(_) => {}
+            LogicalPlan::Union(_) => {}
+            LogicalPlan::TableScan(_) => {}
+            LogicalPlan::EmptyRelation(_) => {}
+            LogicalPlan::Subquery(_) => {}
+            LogicalPlan::SubqueryAlias(_) => {}
+            LogicalPlan::Limit(_) => {}
+            LogicalPlan::Statement(_) => {}
+            LogicalPlan::Values(_) => {}
+            LogicalPlan::Explain(_) => {}
+            LogicalPlan::Analyze(_) => {}
+            LogicalPlan::Extension(_) => {}
+            LogicalPlan::Distinct(_) => {}
+            LogicalPlan::Prepare(_) => {}
+            LogicalPlan::Dml(_) => {}
+            LogicalPlan::Ddl(_) => {}
+            LogicalPlan::Copy(_) => {}
+            LogicalPlan::DescribeTable(_) => {}
+            LogicalPlan::Unnest(_) => {}
+            LogicalPlan::RecursiveQuery(_) => {}
+
+             */
+
+            _ => {
+                // default implementation avoids a copy
+                // TODO avoid this copy
+                let new_inputs = self
+                    .inputs()
+                    .into_iter()
+                    .map(|input| input.clone())
+                    .collect::<Vec<_>>();
+
+                self.with_new_exprs(self.expressions(), new_inputs)
+            }
+
         }
     }
 
