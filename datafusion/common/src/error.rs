@@ -281,64 +281,7 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match *self {
-            DataFusionError::ArrowError(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "Arrow error: {desc}{backtrace}")
-            }
-            #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {desc}")
-            }
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {desc}")
-            }
-            DataFusionError::IoError(ref desc) => {
-                write!(f, "IO error: {desc}")
-            }
-            DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "SQL error: {desc:?}{backtrace}")
-            }
-            DataFusionError::Configuration(ref desc) => {
-                write!(f, "Invalid or Unsupported Configuration: {desc}")
-            }
-            DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "This feature is not implemented: {desc}")
-            }
-            DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {desc}.\nThis was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker")
-            }
-            DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {desc}")
-            }
-            DataFusionError::SchemaError(ref desc, ref backtrace) => {
-                let backtrace: &str =
-                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
-                write!(f, "Schema error: {desc}{backtrace}")
-            }
-            DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {desc}")
-            }
-            DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {desc}")
-            }
-            DataFusionError::External(ref desc) => {
-                write!(f, "External error: {desc}")
-            }
-            #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {desc}")
-            }
-            DataFusionError::Context(ref desc, ref err) => {
-                write!(f, "{}\ncaused by\n{}", desc, *err)
-            }
-            DataFusionError::Substrait(ref desc) => {
-                write!(f, "Substrait error: {desc}")
-            }
-        }
+        self.format_err(f)
     }
 }
 
@@ -419,6 +362,9 @@ impl DataFusionError {
         Self::Context(description.into(), Box::new(self))
     }
 
+    /// Strips backtrace out of the error message
+    /// If backtrace enabled then error has a format "message" [`Self::BACK_TRACE_SEP`] "backtrace"
+    /// The method strips the backtrace and outputs "message"
     pub fn strip_backtrace(&self) -> String {
         self.to_string()
             .split(Self::BACK_TRACE_SEP)
@@ -449,6 +395,99 @@ impl DataFusionError {
 
         #[cfg(not(feature = "backtrace"))]
         "".to_owned()
+    }
+
+    fn get_error_name(&self) -> &'static str {
+        match self {
+            DataFusionError::ArrowError(_, _) => "Arrow error: ",
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(_) => "Parquet error: ",
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(_) => "Avro error: ",
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(_) => "Object Store error: ",
+            DataFusionError::IoError(_) => "IO error: ",
+            DataFusionError::SQL(_, _) => "SQL error: ",
+            DataFusionError::NotImplemented(_) => "This feature is not implemented: ",
+            DataFusionError::Internal(_) => "Internal error: ",
+            DataFusionError::Plan(_) => "Error during planning: ",
+            DataFusionError::Configuration(_) => "Invalid or Unsupported Configuration: ",
+            DataFusionError::SchemaError(_, _) => "Schema error: ",
+            DataFusionError::Execution(_) => "Execution error: ",
+            DataFusionError::ResourcesExhausted(_) => "Resources exhausted: ",
+            DataFusionError::External(_) => "External error: ",
+            DataFusionError::Context(_, _) => "",
+            DataFusionError::Substrait(_) => "Substrait error: ",
+        }
+    }
+
+    fn format_err(&self, f: &mut Formatter) -> std::fmt::Result {
+        let error_name = self.get_error_name();
+        match *self {
+            DataFusionError::ArrowError(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                write!(f, "{error_name}{desc}{backtrace}")
+            }
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::IoError(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::SQL(ref desc, ref backtrace) => {
+                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
+                write!(f, "{error_name}{desc:?}{backtrace}")
+            }
+            DataFusionError::Configuration(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::NotImplemented(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::Internal(ref desc) => {
+                write!(f, "{error_name}{desc}.\nThis was likely caused by a bug in DataFusion's \
+                    code and we would welcome that you file an bug report in our issue tracker")
+            }
+            DataFusionError::Plan(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::SchemaError(ref desc, ref backtrace) => {
+                let backtrace: &str =
+                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
+                write!(f, "{error_name}{desc}{backtrace}")
+            }
+            DataFusionError::Execution(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::ResourcesExhausted(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::External(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+            DataFusionError::Context(ref desc, ref err) => {
+                write!(f, "{error_name}{desc}\ncaused by\n{}", *err)
+            }
+            DataFusionError::Substrait(ref desc) => {
+                write!(f, "{error_name}{desc}")
+            }
+        }
+    }
+
+    /// Strips error description out of the error message
+    /// Error has a format `{error_name}{`error`}
+    /// The method strips the `error_name` from level and outputs 'error``
+    pub fn strip_error_name(self) -> String {
+        self.to_string().replace(self.get_error_name(), "")
     }
 }
 
@@ -776,6 +815,20 @@ mod test {
             res.strip_backtrace(),
             "Error during planning: Err \"extra1\" \"extra2\""
         );
+    }
+
+    #[test]
+    fn test_strip_error_name() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let res = res.unwrap_err();
+        assert_eq!(res.strip_error_name(), "Err");
+
+        // Test only top level stripped
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let res2: Result<(), DataFusionError> =
+            exec_err!("{}", res.unwrap_err().strip_backtrace());
+        let res2 = res2.unwrap_err();
+        assert_eq!(res2.strip_error_name(), "Error during planning: Err");
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:
