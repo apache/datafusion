@@ -16,9 +16,7 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{
-    ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch
-};
+use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
