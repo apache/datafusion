@@ -1271,7 +1271,16 @@ impl Expr {
 
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
-        self.exists(|expr| matches!(expr, Expr::OuterReferenceColumn { .. }))
+        self.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn { .. })))
+            .unwrap()
+    }
+
+    /// Returns true if the expression is volatile, i.e. whether it can return different
+    /// results when evaluated multiple times with the same input.
+    pub fn is_volatile(&self) -> Result<bool> {
+        self.exists(|expr| {
+            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func_def.is_volatile()?))
+        })
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -1929,15 +1938,6 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
         .map(create_name)
         .collect::<Result<Vec<String>>>()?
         .join(", "))
-}
-
-/// Whether the given expression is volatile, i.e. whether it can return different results
-/// when evaluated multiple times with the same input.
-pub fn is_volatile(expr: &Expr) -> Result<bool> {
-    match expr {
-        Expr::ScalarFunction(func) => func.func_def.is_volatile(),
-        _ => Ok(false),
-    }
 }
 
 #[cfg(test)]

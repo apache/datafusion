@@ -405,18 +405,17 @@ pub trait TreeNode: Sized {
     /// Returns true if `f` returns true for any node in the tree.
     ///
     /// Stops recursion as soon as a matching node is found
-    fn exists<F: FnMut(&Self) -> bool>(&self, mut f: F) -> bool {
+    fn exists<F: FnMut(&Self) -> Result<bool>>(&self, mut f: F) -> Result<bool> {
         let mut found = false;
         self.apply(|n| {
-            Ok(if f(n) {
+            Ok(if f(n)? {
                 found = true;
                 TreeNodeRecursion::Stop
             } else {
                 TreeNodeRecursion::Continue
             })
         })
-        .unwrap();
-        found
+        .map(|_| found)
     }
 
     /// Low-level API used to implement other APIs.
