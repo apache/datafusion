@@ -1240,7 +1240,7 @@ impl Expr {
     /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
     /// have type `int32`.
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<Expr> {
-        self.transform(&|mut expr| {
+        self.transform(|mut expr| {
             // Default to assuming the arguments are the same type
             if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
                 rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
@@ -1266,7 +1266,7 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.name().eq("coalesce"))
+                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.short_circuits())
             }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)

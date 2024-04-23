@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 
 use crate::expressions::Column;
 use crate::PhysicalExpr;
@@ -59,7 +59,7 @@ impl ProjectionMapping {
                 let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
                 expression
                     .clone()
-                    .transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+                    .transform_down(|e| match e.as_any().downcast_ref::<Column>() {
                         Some(col) => {
                             // Sometimes, an expression and its name in the input_schema
                             // doesn't match. This can cause problems, so we make sure
@@ -67,6 +67,10 @@ impl ProjectionMapping {
                             // Conceptually, `source_expr` and `expression` should be the same.
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
+                            if col.name() != matching_input_field.name() {
+                                return internal_err!("Input field name {} does not match with the projection expression {}",
+                                    matching_input_field.name(),col.name())
+                                }
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
                             Ok(Transformed::yes(Arc::new(matching_input_column)))

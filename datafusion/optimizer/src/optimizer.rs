@@ -411,7 +411,7 @@ impl Optimizer {
                     (Err(e), Some(orig_plan)) => {
                         // Note to future readers: if you see this warning it signals a
                         // bug in the DataFusion optimizer. Please consider filing a ticket
-                        // https://github.com/apache/arrow-datafusion
+                        // https://github.com/apache/datafusion
                         warn!(
                             "Skipping optimizer rule '{}' due to unexpected error: {}",
                             rule.name(),

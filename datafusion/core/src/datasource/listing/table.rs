@@ -244,7 +244,7 @@ pub struct ListingOptions {
     /// the future be automatically determined, for example using
     /// parquet metadata.
     ///
-    /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    /// See <https://github.com/apache/datafusion/issues/4177>
     /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
     ///       where each ordering consists of an individual lexicographic
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
