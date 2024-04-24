@@ -48,5 +48,5 @@ export_functions!(
     (r#struct, args, "Returns a struct with the given arguments"),
     (named_struct, args, "Returns a struct with the given names and arguments pairs"),
     (get_field, arg_1 arg_2, "Returns the value of the field with the given name from the struct"),
-    (coalesce, args, "Returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL")
+    (coalesce, args, "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL")
 );
