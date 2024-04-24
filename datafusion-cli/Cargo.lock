@@ -1364,6 +1364,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "sqlparser",
 ]
 
 [[package]]

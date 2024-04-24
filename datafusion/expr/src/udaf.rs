@@ -17,6 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::expr::AggregateFunction;
 use crate::function::AccumulatorArgs;
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
@@ -195,6 +196,11 @@ impl AggregateUDF {
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
     }
+
+    /// See [`AggregateUDFImpl::reverse_expr`] for more details.
+    pub fn reverse_expr(&self) -> ReversedExpr {
+        self.inner.reverse_expr()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -354,6 +360,24 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    /// Construct an expression that calculates the aggregate in reverse.
+    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+    /// For aggregates that do not support calculation in reverse,
+    /// returns None (which is the default value).
+    fn reverse_expr(&self) -> ReversedExpr {
+        ReversedExpr::NotSupported
+    }
+}
+
+#[derive(Debug)]
+pub enum ReversedExpr {
+    /// The expression is the same as the original expression, like SUM, COUNT
+    Identical,
+    /// The expression does not support reverse calculation, like ArrayAgg
+    NotSupported,
+    /// The expression is different from the original expression
+    Reversed(AggregateFunction),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to

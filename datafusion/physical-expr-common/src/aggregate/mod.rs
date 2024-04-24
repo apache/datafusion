@@ -19,10 +19,13 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::ReversedExpr;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
+use sqlparser::ast::NullTreatment;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -147,7 +150,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 }
 
 /// Physical aggregate expression of a UDAF.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
@@ -272,6 +275,31 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        match self.fun.reverse_expr() {
+            ReversedExpr::NotSupported => None,
+            ReversedExpr::Identical => Some(Arc::new(self.clone())),
+            ReversedExpr::Reversed(AggregateFunction {
+                func_def: _,
+                args: _,
+                distinct: _,
+                filter: _,
+                order_by: _,
+                null_treatment,
+            }) => {
+                let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
+                    == NullTreatment::IgnoreNulls;
+
+                // TODO: Do the actual conversion from logical expr
+                // for other fields
+                let mut expr = self.clone();
+                expr.ignore_nulls = ignore_nulls;
+
+                Some(Arc::new(expr))
+            }
+        }
     }
 }
 

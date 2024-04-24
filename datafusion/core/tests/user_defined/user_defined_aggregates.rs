@@ -18,16 +18,18 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+use std::fmt::Debug;
+
 use arrow::{array::AsArray, datatypes::Fields};
 use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
 use arrow_schema::Schema;
+use datafusion_physical_plan::udaf::create_aggregate_expr;
+use sqlparser::ast::NullTreatment;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
-use datafusion::datasource::MemTable;
-use datafusion::test_util::plan_and_collect;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float64Array, TimestampNanosecondArray},
@@ -43,10 +45,11 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
+use datafusion::{datasource::MemTable, test_util::plan_and_collect};
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
-    SimpleAggregateUDF,
+    create_udaf, expr::AggregateFunction, function::AccumulatorArgs, AggregateUDFImpl,
+    GroupsAccumulator, ReversedExpr, SimpleAggregateUDF,
 };
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -794,4 +797,90 @@ impl GroupsAccumulator for TestGroupsAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of::<u64>()
     }
+}
+
+#[derive(Clone)]
+struct TestReverseUDAF {
+    signature: Signature,
+    // accumulator: AccumulatorFactoryFunction,
+    // state_fields: Vec<Field>,
+}
+
+impl Debug for TestReverseUDAF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("TestReverseUDAF")
+            .field("name", &self.name())
+            .field("signature", self.signature())
+            .finish()
+    }
+}
+
+impl AggregateUDFImpl for TestReverseUDAF {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "test_reverse"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        todo!("no need")
+    }
+
+    fn state_fields(
+        &self,
+        _name: &str,
+        _value_type: DataType,
+        _ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
+        Ok(vec![])
+    }
+
+    fn reverse_expr(&self) -> ReversedExpr {
+        ReversedExpr::Reversed(AggregateFunction::new_udf(
+            Arc::new(self.clone().into()),
+            vec![],
+            false,
+            None,
+            None,
+            Some(NullTreatment::RespectNulls),
+        ))
+    }
+}
+
+/// tests the creation, registration and usage of a UDAF
+#[tokio::test]
+async fn test_reverse_udaf() -> Result<()> {
+    let my_reverse = AggregateUDF::from(TestReverseUDAF {
+        signature: Signature::exact(vec![], Volatility::Immutable),
+    });
+
+    let empty_schema = Schema::empty();
+    let e = create_aggregate_expr(
+        &my_reverse,
+        &[],
+        &[],
+        &[],
+        &empty_schema,
+        "test_reverse_udaf",
+        true,
+    )?;
+
+    // TODO: We don't have a nice way to test the change without introducing many other things
+    // We check with the output string. `ignore nulls` is expeceted to be false.
+    let res = e.reverse_expr();
+    let res_str = format!("{:?}", res.unwrap());
+
+    assert_eq!(&res_str, "AggregateFunctionExpr { fun: AggregateUDF { inner: TestReverseUDAF { name: \"test_reverse\", signature: Signature { type_signature: Exact([]), volatility: Immutable } } }, args: [], data_type: Float64, name: \"test_reverse_udaf\", schema: Schema { fields: [], metadata: {} }, sort_exprs: [], ordering_req: [], ignore_nulls: false, ordering_fields: [] }");
+
+    Ok(())
 }
