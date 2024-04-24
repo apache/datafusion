@@ -132,11 +132,11 @@ mod test {
 
     use datafusion_expr::ScalarUDFImpl;
 
-    use crate::math;
+    use crate::core;
 
     #[test]
     fn test_coalesce_return_types() {
-        let coalesce = math::coalesce::CoalesceFunc::new();
+        let coalesce = core::coalesce::CoalesceFunc::new();
         let return_type = coalesce
             .return_type(&[DataType::Date32, DataType::Date32])
             .unwrap();
