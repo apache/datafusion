@@ -347,9 +347,22 @@ impl DFSchema {
         matches.next()
     }
 
-    /// Find the index of the column with the given qualifier and name
-    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `None` if not found
+    ///
+    /// See [Self::index_of_column] for a version that returns an error if the
+    /// column is not found
+    pub fn maybe_index_of_column(&self, col: &Column) -> Option<usize> {
         self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+    }
+
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `Err` if not found
+    ///
+    /// See [Self::maybe_index_of_column] for a version that returns `None` if
+    /// the column is not found
+    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        self.maybe_index_of_column(col)
             .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
