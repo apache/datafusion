@@ -21,7 +21,6 @@ use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 pub mod abs;
-pub mod coalesce;
 pub mod cot;
 pub mod factorial;
 pub mod gcd;
@@ -47,7 +46,6 @@ make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
 make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, None);
 make_math_unary_udf!(CeilFunc, CEIL, ceil, ceil, Some(vec![Some(true)]));
-make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
 make_math_unary_udf!(CosFunc, COS, cos, cos, None);
 make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
 make_udf_function!(cot::CotFunc, COT, cot);
@@ -128,11 +126,6 @@ pub mod expr_fn {
     #[doc = "nearest integer greater than or equal to argument"]
     pub fn ceil(num: Expr) -> Expr {
         super::ceil().call(vec![num])
-    }
-
-    #[doc = "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL"]
-    pub fn coalesce(args: Vec<Expr>) -> Expr {
-        super::coalesce().call(args)
     }
 
     #[doc = "cosine"]
@@ -289,7 +282,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         atanh(),
         cbrt(),
         ceil(),
-        coalesce(),
         cos(),
         cosh(),
         cot(),
