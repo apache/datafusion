@@ -1370,6 +1370,9 @@ pub struct TableParquetOptions {
     pub global: ParquetOptions,
     /// Column specific options. Default usage is parquet.XX::column.
     pub column_specific_options: HashMap<String, ColumnOptions>,
+    /// Additional metadata to be inserted into the key_value_metadata
+    /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
+    pub key_value_metadata: HashMap<String, Option<String>>,
 }
 
 impl ConfigField for TableParquetOptions {

@@ -24,7 +24,10 @@ use crate::{
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
-    file::properties::{EnabledStatistics, WriterProperties, WriterVersion},
+    file::{
+        metadata::KeyValue,
+        properties::{EnabledStatistics, WriterProperties, WriterVersion},
+    },
     schema::types::ColumnPath,
 };
 
@@ -79,6 +82,19 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             maximum_buffered_record_batches_per_stream: _,
         } = &parquet_options.global;
 
+        let key_value_metadata = if !parquet_options.key_value_metadata.is_empty() {
+            Some(
+                parquet_options
+                    .key_value_metadata
+                    .clone()
+                    .drain()
+                    .map(|(key, value)| KeyValue { key, value })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
@@ -88,7 +104,8 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_enabled);
+            .set_bloom_filter_enabled(*bloom_filter_enabled)
+            .set_key_value_metadata(key_value_metadata);
 
         if let Some(encoding) = &encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
