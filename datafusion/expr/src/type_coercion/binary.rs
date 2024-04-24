@@ -643,9 +643,8 @@ fn dictionary_coercion(
             Dictionary(_lhs_index_type, lhs_value_type),
             Dictionary(_rhs_index_type, rhs_value_type),
         ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ Dictionary(_, value_type), other_type)
-        | (other_type, d @ Dictionary(_, value_type))
-            if preserve_dictionaries && value_type.as_ref() == other_type =>
+        (d @ Dictionary(_, _), other_type) | (other_type, d @ Dictionary(_, _))
+            if preserve_dictionaries && can_cast_types(other_type, d) =>
         {
             Some(d.clone())
         }
