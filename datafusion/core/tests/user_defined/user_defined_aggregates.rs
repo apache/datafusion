@@ -802,8 +802,6 @@ impl GroupsAccumulator for TestGroupsAccumulator {
 #[derive(Clone)]
 struct TestReverseUDAF {
     signature: Signature,
-    // accumulator: AccumulatorFactoryFunction,
-    // state_fields: Vec<Field>,
 }
 
 impl Debug for TestReverseUDAF {
