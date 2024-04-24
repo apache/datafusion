@@ -283,10 +283,37 @@ OPTIONS (
 'format.statistics_enabled::col2' none,
 'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
-'format.bloom_filter_ndv' 100
+'format.bloom_filter_ndv' 100,
+'format.metadata' 'foo:bar baz'
 )
 ----
 2
+
+# valid vs invalid metadata
+
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.metadata' ''
+)
+
+statement error
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.metadata' 'foo:bar:extra'
+)
+
+statement error
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.wrong-metadata-key' 'foo:bar baz'
+)
 
 # validate multiple parquet file output with all options set
 statement ok

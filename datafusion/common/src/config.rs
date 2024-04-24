@@ -1386,6 +1386,20 @@ impl ConfigField for TableParquetOptions {
         // Determine the key if it's a global or column-specific setting
         if key.contains("::") {
             self.column_specific_options.set(key, value)
+        } else if key.eq("metadata") {
+            for maybe_pair in value.split('_') {
+                let (k, v) = match maybe_pair.split(':').collect::<Vec<_>>()[..] {
+                    [k, v] => (k.into(), Some(v.into())),
+                    [k] => (k.into(), None),
+                    _ => {
+                        return Err(DataFusionError::Configuration(format!(
+                            "Invalid metadata provided \"{maybe_pair}\""
+                        )))
+                    }
+                };
+                self.key_value_metadata.insert(k, v);
+            }
+            Ok(())
         } else {
             self.global.set(key, value)
         }
