@@ -25,21 +25,26 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 
 ## Branching Policy
 
-- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- When we prepare a new release, we create a release branch, such as `branch-37` in the Apache repository (not in a fork)
 - We update the crate version and generate the changelog in this branch and create a PR against the main branch
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
 #### How to add changes to `branch-*` branch?
 
-If you would like to propose your change for inclusion in a release branch
+If you would like to propose your change for inclusion in a release branch for a
+patch release:
 
-1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
-2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
+1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
+1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-## Prerequisite
+[example release issue]: https://github.com/apache/datafusion/issues/9904
+[example backport pr]: https://github.com/apache/datafusion/pull/10123
 
-- Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
+## Release Prerequisite
+
+- Have upstream git repo `git@github.com:apache/datafusion.git` add as git remote `apache`.
 - Created a personal access token in GitHub for changelog automation script.
   - Github PAT should be created with `repo` access
 - Make sure your signing key is added to the following files in SVN:
@@ -91,7 +96,7 @@ pip3 install PyGitHub
 Run the following command to generate the changelog content.
 
 ```bash
-$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
@@ -111,9 +116,9 @@ This process is not fully automated, so there are some additional manual steps:
 - Add the following content (copy from the previous version's changelog and update as appropriate:
 
 ```
-## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
+## [24.0.0](https://github.com/apache/datafusion/tree/24.0.0) (2023-05-06)
 
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+[Full Changelog](https://github.com/apache/datafusion/compare/23.0.0...24.0.0)
 ```
 
 ## Prepare release commits and PR
@@ -121,7 +126,7 @@ This process is not fully automated, so there are some additional manual steps:
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
-See [#801](https://github.com/apache/arrow-datafusion/pull/801) for an example.
+See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
 
 Here are the commands that could be used to prepare the `5.1.0` release:
 
@@ -194,12 +199,11 @@ Send the email output from the script to dev@arrow.apache.org. The email should 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][DataFusion] Release Apache Arrow DataFusion 5.1.0 RC0
+Subject: [VOTE][DataFusion] Release Apache DataFusion 5.1.0 RC0
 
 Hi,
 
-I would like to propose a release of Apache Arrow DataFusion Implementation,
-version 5.1.0.
+I would like to propose a release of Apache DataFusion version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
 The proposed release artifacts and signatures are hosted at [2].
@@ -210,17 +214,17 @@ and vote on the release.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Arrow DataFusion 5.1.0
+[ ] +1 Release this as Apache DataFusion 5.1.0
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
+[ ] -1 Do not release this as Apache DataFusion 5.1.0 because...
 
 Here is my vote:
 
 +1
 
-[1]: https://github.com/apache/arrow-datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0
-[3]: https://github.com/apache/arrow-datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
+[1]: https://github.com/apache/datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
+[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-datafusion-5.1.0
+[3]: https://github.com/apache/datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
 ```
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.
@@ -245,7 +249,7 @@ NOTE: steps in this section can only be done by PMC members.
 ### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-5.1.0/, using
 the `release-tarball.sh` script:
 
 ```shell
@@ -433,7 +437,7 @@ svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
 Delete a release candidate:
 
 ```bash
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-7.1.0-rc1/
 ```
 
 #### Deleting old releases from `release` svn
@@ -449,7 +453,7 @@ svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
 Delete a release:
 
 ```bash
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-7.0.0
 ```
 
 ### Publish the User Guide to the Arrow Site
@@ -459,7 +463,7 @@ svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist
 - Checkout the `asf-site` branch
 - Copy content from `docs/build/html/*` to the `datafusion` directory in arrow-site
 - Create a PR against the `asf-site` branch ([example](https://github.com/apache/arrow-site/pull/237))
-- Once the PR is merged, the content will be published to https://arrow.apache.org/datafusion/ by GitHub Pages (this
+- Once the PR is merged, the content will be published to https://datafusion.apache.org/ by GitHub Pages (this
   can take some time).
 
 ### Optional: Write a blog post announcing the release

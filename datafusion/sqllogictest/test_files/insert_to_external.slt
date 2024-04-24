@@ -448,7 +448,7 @@ LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q3/';
 
 # verify that the sort order of the insert query is maintained into the
 # insert (there should be a SortExec in the following plan)
-# See https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178 for more background
+# See https://github.com/apache/datafusion/pull/6354#discussion_r1195284178 for more background
 query TT
 explain insert into table_without_values select c1 from aggregate_test_100 order by c1;
 ----

@@ -91,7 +91,7 @@ impl AnalyzerRule for MyAnalyzerRule {
 
 impl MyAnalyzerRule {
     fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
-        plan.transform(&|plan| {
+        plan.transform(|plan| {
             Ok(match plan {
                 LogicalPlan::Filter(filter) => {
                     let predicate = Self::analyze_expr(filter.predicate.clone())?;
@@ -107,7 +107,7 @@ impl MyAnalyzerRule {
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
-        expr.transform(&|expr| {
+        expr.transform(|expr| {
             // closure is invoked for all sub expressions
             Ok(match expr {
                 Expr::Literal(ScalarValue::Int64(i)) => {
@@ -163,7 +163,7 @@ impl OptimizerRule for MyOptimizerRule {
 
 /// use rewrite_expr to modify the expression tree.
 fn my_rewrite(expr: Expr) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         // closure is invoked for all sub expressions
         Ok(match expr {
             Expr::Between(Between {

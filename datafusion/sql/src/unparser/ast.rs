@@ -19,7 +19,7 @@
 //! not exported as they will eventually be move to the SQLparser package.
 //!
 //!
-//! See <https://github.com/apache/arrow-datafusion/issues/8661>
+//! See <https://github.com/apache/datafusion/issues/8661>
 
 use core::fmt;
 

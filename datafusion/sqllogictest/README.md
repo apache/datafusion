@@ -225,7 +225,7 @@ query <type_string> <sort_mode>
 <expected_result>
 ```
 
-- `test_name`: Uniquely identify the test name (arrow-datafusion only)
+- `test_name`: Uniquely identify the test name (Datafusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result
   column. There is one character in the <type_string> for each result column. The characters codes are:
   - 'B' - **B**oolean,

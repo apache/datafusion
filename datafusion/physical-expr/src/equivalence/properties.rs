@@ -490,7 +490,7 @@ impl EquivalenceProperties {
     /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
     /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
-    /// dependency map, happen in issue 8838: <https://github.com/apache/arrow-datafusion/issues/8838>
+    /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
         let orderings = &self.oeq_class.orderings;
         let new_order = orderings
@@ -857,7 +857,7 @@ impl EquivalenceProperties {
     /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up(|expr| Ok(update_ordering(expr, self)))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
@@ -1295,13 +1295,11 @@ impl Hash for ExprWrapper {
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, SortOptions, TimeUnit};
-    use itertools::Itertools;
+    use arrow_schema::{Fields, TimeUnit};
 
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::add_offset_to_expr;
@@ -1312,7 +1310,6 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
-    use crate::PhysicalSortExpr;
 
     use super::*;
 

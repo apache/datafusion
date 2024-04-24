@@ -144,7 +144,6 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
-    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn nullif_int32() -> Result<()> {

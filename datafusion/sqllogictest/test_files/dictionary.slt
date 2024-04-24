@@ -206,7 +206,7 @@ true false NULL true true false true NULL
 true false NULL true true false true NULL
 
 
-# Reproducer for https://github.com/apache/arrow-datafusion/issues/8738
+# Reproducer for https://github.com/apache/datafusion/issues/8738
 # This query should work correctly
 query P?TT rowsort
 SELECT

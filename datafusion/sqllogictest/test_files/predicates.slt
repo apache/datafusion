@@ -468,7 +468,7 @@ DROP TABLE test_float;
 
 #########
 # Predicates on memory tables / statistics generation
-# Reproducer for https://github.com/apache/arrow-datafusion/issues/7125
+# Reproducer for https://github.com/apache/datafusion/issues/7125
 #########
 
 statement ok
@@ -508,7 +508,7 @@ DROP TABLE t;
 
 ########
 # Test query with bloom filter
-# Refer to https://github.com/apache/arrow-datafusion/pull/7821#pullrequestreview-1688062599
+# Refer to https://github.com/apache/datafusion/pull/7821#pullrequestreview-1688062599
 ########
 
 statement ok

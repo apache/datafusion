@@ -22,7 +22,6 @@ use arrow::{
     datatypes::Float64Type,
 };
 use arrow_schema::DataType;
-use datafusion::datasource::file_format::options::CsvReadOptions;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;

@@ -139,23 +139,6 @@ impl ExprSchemable for Expr {
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, &fun.signature()).map_err(|_| {
-                            plan_datafusion_err!(
-                                "{}",
-                                utils::generate_signature_error_msg(
-                                    &format!("{fun}"),
-                                    fun.signature(),
-                                    &arg_data_types,
-                                )
-                            )
-                        })?;
-
-                        // perform additional function arguments validation (due to limited
-                        // expressiveness of `TypeSignature`), then infer return type
-                        fun.return_type(&arg_data_types)
-                    }
                     ScalarFunctionDefinition::UDF(fun) => {
                         // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                         data_types(&arg_data_types, fun.signature()).map_err(|_| {
@@ -562,8 +545,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{DataType, Fields, SchemaBuilder};
-    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use arrow::datatypes::{Fields, SchemaBuilder};
+    use datafusion_common::{DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

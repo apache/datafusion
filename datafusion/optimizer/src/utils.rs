@@ -21,9 +21,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::is_volatile;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
@@ -95,20 +93,6 @@ pub(crate) fn replace_qualified_name(
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
-}
-
-/// check whether the expression is volatile predicates
-pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
-    let mut is_volatile_expr = false;
-    e.apply(&mut |expr| {
-        Ok(if is_volatile(expr)? {
-            is_volatile_expr = true;
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(is_volatile_expr)
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -294,7 +278,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 /// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
 /// expression should be preserved: `3 as "1 + 2"`
 ///
-/// See <https://github.com/apache/arrow-datafusion/issues/3555> for details
+/// See <https://github.com/apache/datafusion/issues/3555> for details
 pub struct NamePreserver {
     use_alias: bool,
 }

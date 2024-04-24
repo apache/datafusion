@@ -90,7 +90,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
-        // See https://github.com/apache/arrow-datafusion/issues/9162
+        // See https://github.com/apache/datafusion/issues/9162
         let mut combined_schema = base_plan.schema().as_ref().clone();
         combined_schema.merge(projected_plan.schema());
 
@@ -293,7 +293,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     data: transformed_expr,
                     transformed,
                     tnr: _,
-                } = expr.transform_up_mut(&mut |expr: Expr| {
+                } = expr.transform_up(|expr: Expr| {
                     if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                         let column_name = expr.display_name()?;
                         unnest_columns.push(column_name.clone());

@@ -605,7 +605,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::ArrayRef;
     use arrow_array::{BinaryArray, LargeBinaryArray, StringArray};
     use hashbrown::HashMap;
 

@@ -28,11 +28,11 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
-    aggregate_function, built_in_function, built_in_window_function, udaf,
-    BuiltinScalarFunction, ExprSchemable, Operator, Signature,
+    aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
+    Signature,
 };
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
@@ -83,6 +83,29 @@ use sqlparser::ast::NullTreatment;
 ///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
+/// ```
+///
+/// ## Return a list of [`Expr::Column`] from a schema's columns
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::{DFSchema, Column};
+/// # use datafusion_expr::Expr;
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+///    Field::new("c2", DataType::Float64, false),
+/// ]);
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+///
+/// // Form a list of expressions for each item in the schema
+/// let exprs: Vec<_> = df_schema.iter()
+///   .map(Expr::from)
+///   .collect();
+///
+/// assert_eq!(exprs, vec![
+///   Expr::from(Column::from_qualified_name("t1.c1")),
+///   Expr::from(Column::from_qualified_name("t1.c2")),
+/// ]);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
@@ -182,6 +205,29 @@ pub enum Expr {
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
     Unnest(Unnest),
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Literal(ScalarValue::Null)
+    }
+}
+
+/// Create an [`Expr`] from a [`Column`]
+impl From<Column> for Expr {
+    fn from(value: Column) -> Self {
+        Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from an optional qualifier and a [`FieldRef`]. This is
+/// useful for creating [`Expr`] from a [`DFSchema`].
+///
+/// See example on [`Expr`]
+impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
+    fn from(value: (Option<&'a TableReference>, &'a FieldRef)) -> Self {
+        Expr::from(Column::from(value))
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -356,10 +402,6 @@ impl Between {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Defines which implementation of a function for DataFusion to call.
 pub enum ScalarFunctionDefinition {
-    /// Resolved to a `BuiltinScalarFunction`
-    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
-    /// This variant is planned to be removed in long term
-    BuiltIn(BuiltinScalarFunction),
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
     /// A scalar function constructed with name. This variant can not be executed directly
@@ -387,7 +429,6 @@ impl ScalarFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            ScalarFunctionDefinition::BuiltIn(fun) => fun.name(),
             ScalarFunctionDefinition::UDF(udf) => udf.name(),
             ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
@@ -397,9 +438,6 @@ impl ScalarFunctionDefinition {
     /// when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
         match self {
-            ScalarFunctionDefinition::BuiltIn(fun) => {
-                Ok(fun.volatility() == crate::Volatility::Volatile)
-            }
             ScalarFunctionDefinition::UDF(udf) => {
                 Ok(udf.signature().volatility == crate::Volatility::Volatile)
             }
@@ -413,14 +451,6 @@ impl ScalarFunctionDefinition {
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression
-    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
-        Self {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }
-    }
-
     /// Create a new ScalarFunction expression with a user-defined function (UDF)
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self {
@@ -1241,7 +1271,16 @@ impl Expr {
 
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
-        self.exists(|expr| matches!(expr, Expr::OuterReferenceColumn { .. }))
+        self.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn { .. })))
+            .unwrap()
+    }
+
+    /// Returns true if the expression is volatile, i.e. whether it can return different
+    /// results when evaluated multiple times with the same input.
+    pub fn is_volatile(&self) -> Result<bool> {
+        self.exists(|expr| {
+            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func_def.is_volatile()?))
+        })
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -1250,7 +1289,7 @@ impl Expr {
     /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
     /// have type `int32`.
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<Expr> {
-        self.transform(&|mut expr| {
+        self.transform(|mut expr| {
             // Default to assuming the arguments are the same type
             if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
                 rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
@@ -1276,7 +1315,7 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.short_circuits())
             }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
@@ -1901,28 +1940,11 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
         .join(", "))
 }
 
-/// Whether the given expression is volatile, i.e. whether it can return different results
-/// when evaluated multiple times with the same input.
-pub fn is_volatile(expr: &Expr) -> Result<bool> {
-    match expr {
-        Expr::ScalarFunction(func) => func.func_def.is_volatile(),
-        _ => Ok(false),
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use crate::expr::Cast;
     use crate::expr_fn::col;
-    use crate::{
-        case, lit, ColumnarValue, Expr, ScalarFunctionDefinition, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility,
-    };
-    use arrow::datatypes::DataType;
-    use datafusion_common::Column;
-    use datafusion_common::{Result, ScalarValue};
+    use crate::{case, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl, Volatility};
     use std::any::Any;
-    use std::sync::Arc;
 
     #[test]
     fn format_case_when() -> Result<()> {

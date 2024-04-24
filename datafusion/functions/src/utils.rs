@@ -177,5 +177,6 @@ pub mod test {
         };
     }
 
+    #[allow(unused_imports)]
     pub(crate) use test_function;
 }

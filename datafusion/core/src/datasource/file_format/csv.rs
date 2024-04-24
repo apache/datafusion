@@ -37,8 +37,8 @@ use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
+use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow::{self, datatypes::SchemaRef};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
@@ -537,12 +537,10 @@ mod tests {
     use arrow::compute::concat_batches;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{internal_err, FileType, GetExt};
+    use datafusion_common::{internal_err, GetExt};
     use datafusion_expr::{col, lit};
 
-    use bytes::Bytes;
     use chrono::DateTime;
-    use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use regex::Regex;

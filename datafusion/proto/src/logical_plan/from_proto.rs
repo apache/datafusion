@@ -37,12 +37,10 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    coalesce, concat_expr, concat_ws_expr, ends_with,
     expr::{self, InList, Sort, WindowFunction},
-    initcap,
     logical_plan::{PlanType, StringifiedPlan},
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -409,20 +407,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
-    fn from(f: &protobuf::ScalarFunction) -> Self {
-        use protobuf::ScalarFunction;
-        match f {
-            ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
-            ScalarFunction::EndsWith => Self::EndsWith,
-            ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Coalesce => Self::Coalesce,
         }
     }
 }
@@ -868,7 +852,7 @@ pub fn parse_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
-    use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
+    use protobuf::{logical_expr_node::ExprType, window_expr_node};
 
     let expr_type = proto
         .expr_type
@@ -1280,31 +1264,6 @@ pub fn parse_expr(
                 Some(qualifier.clone())
             },
         }),
-        ExprType::ScalarFunction(expr) => {
-            let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
-                .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;
-            let args = &expr.args;
-
-            match scalar_function {
-                ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::InitCap => {
-                    Ok(initcap(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Concat => {
-                    Ok(concat_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::ConcatWithSeparator => {
-                    Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::EndsWith => Ok(ends_with(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Coalesce => {
-                    Ok(coalesce(parse_exprs(args, registry, codec)?))
-                }
-            }
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,

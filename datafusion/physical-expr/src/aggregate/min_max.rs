@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -248,7 +247,7 @@ impl AggregateExpr for Max {
             }
 
             // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/arrow-datafusion/issues/6906
+            // https://github.com/apache/datafusion/issues/6906
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!(
@@ -1113,8 +1112,6 @@ mod tests {
     use crate::{generic_test_op, generic_test_op_new};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Decimal128;
 
     #[test]

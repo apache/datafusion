@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [features]
 # enable core functions
 core_expressions = []
@@ -88,6 +91,11 @@ criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[[bench]]
+harness = false
+name = "concat"
+required-features = ["string_expressions"]
 
 [[bench]]
 harness = false

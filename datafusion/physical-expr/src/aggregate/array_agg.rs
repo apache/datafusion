@@ -192,15 +192,12 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
-    use arrow::array::ArrayRef;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use arrow_array::Array;
     use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
     use datafusion_common::DataFusionError;
-    use datafusion_common::Result;
 
     macro_rules! test_op {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {

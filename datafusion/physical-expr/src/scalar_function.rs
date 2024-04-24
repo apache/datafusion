@@ -34,18 +34,18 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::functions::{create_physical_fun, out_ordering};
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
+
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
+};
+
+use crate::functions::out_ordering;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
-
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{
-    expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionDefinition,
-};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -122,7 +122,7 @@ impl ScalarFunctionExpr {
 }
 
 impl fmt::Display for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
     }
 }
@@ -144,24 +144,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
-        let inputs = match (
-            self.args.is_empty(),
-            self.name.parse::<BuiltinScalarFunction>(),
-        ) {
-            // MakeArray support zero argument but has the different behavior from the array with one null.
-            (true, Ok(scalar_fun))
-                if scalar_fun
-                    .signature()
-                    .type_signature
-                    .supports_zero_argument() =>
-            {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
+        let inputs = match self.args.is_empty() {
             // If the function supports zero argument, we pass in a null array indicating the batch size.
             // This is for user-defined functions.
-            (true, Err(_))
-                if self.supports_zero_argument && self.name != "make_array" =>
-            {
+            // MakeArray support zero argument but has the different behavior from the array with one null.
+            true if self.supports_zero_argument && self.name != "make_array" => {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
@@ -173,10 +160,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         // evaluate the function
         match self.fun {
-            ScalarFunctionDefinition::BuiltIn(ref fun) => {
-                let fun = create_physical_fun(fun)?;
-                (fun)(&inputs)
-            }
             ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
             ScalarFunctionDefinition::Name(_) => {
                 internal_err!(
