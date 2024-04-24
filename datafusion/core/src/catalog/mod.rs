@@ -175,7 +175,7 @@ impl CatalogProviderList for MemoryCatalogProviderList {
 ///  * [delta-rs]:  [`UnityCatalogProvider`] implementation that can
 ///  read from Delta Lake tables
 ///
-/// [`datafusion-cli`]: https://arrow.apache.org/datafusion/user-guide/cli.html
+/// [`datafusion-cli`]: https://datafusion.apache.org/user-guide/cli/index.html
 /// [`DynamicFileCatalogProvider`]: https://github.com/apache/datafusion/blob/31b9b48b08592b7d293f46e75707aad7dadd7cbc/datafusion-cli/src/catalog.rs#L75
 /// [`catalog.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/catalog.rs
 /// [delta-rs]: https://github.com/delta-io/delta-rs

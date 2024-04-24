@@ -214,7 +214,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field};
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {

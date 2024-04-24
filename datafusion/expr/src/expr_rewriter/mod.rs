@@ -218,13 +218,7 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .iter()
-                .map(|(qualifier, field)| {
-                    Expr::Column(Column::from((qualifier, field.as_ref())))
-                })
-                .collect();
+            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
@@ -293,8 +287,7 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFSchema, ScalarValue, TableReference};
+    use datafusion_common::ScalarValue;
 
     #[derive(Default)]
     struct RecordingRewriter {

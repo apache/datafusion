@@ -118,7 +118,6 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_int32_array;
-    use datafusion_common::Result;
 
     #[test]
     fn literal_i32() -> Result<()> {

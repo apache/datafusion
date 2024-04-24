@@ -18,7 +18,6 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -338,12 +337,6 @@ pub fn parse_physical_expr(
             )?,
             convert_required!(e.arrow_type)?,
         )),
-        ExprType::ScalarFunction(e) => {
-            return Err(proto_error(format!(
-                "Received an unknown scalar function: {}",
-                e.fun,
-            )));
-        }
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,

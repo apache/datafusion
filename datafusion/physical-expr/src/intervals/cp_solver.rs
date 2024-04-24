@@ -479,7 +479,8 @@ mod tests {
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::TimeUnit;
+    use arrow_schema::Field;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 

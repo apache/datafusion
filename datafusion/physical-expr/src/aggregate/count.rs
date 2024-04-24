@@ -338,9 +338,7 @@ mod tests {
     use crate::expressions::tests::aggregate;
     use crate::expressions::{col, lit};
     use crate::generic_test_op;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_common::Result;
 
     #[test]
     fn count_elements() -> Result<()> {

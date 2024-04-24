@@ -13809,9 +13809,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::Wildcard(v) => {
                     struct_ser.serialize_field("wildcard", v)?;
                 }
-                logical_expr_node::ExprType::ScalarFunction(v) => {
-                    struct_ser.serialize_field("scalarFunction", v)?;
-                }
                 logical_expr_node::ExprType::TryCast(v) => {
                     struct_ser.serialize_field("tryCast", v)?;
                 }
@@ -13903,8 +13900,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "in_list",
             "inList",
             "wildcard",
-            "scalar_function",
-            "scalarFunction",
             "try_cast",
             "tryCast",
             "window_expr",
@@ -13956,7 +13951,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             Negative,
             InList,
             Wildcard,
-            ScalarFunction,
             TryCast,
             WindowExpr,
             AggregateUdfExpr,
@@ -14012,7 +14006,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
                             "wildcard" => Ok(GeneratedField::Wildcard),
-                            "scalarFunction" | "scalar_function" => Ok(GeneratedField::ScalarFunction),
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "aggregateUdfExpr" | "aggregate_udf_expr" => Ok(GeneratedField::AggregateUdfExpr),
@@ -14157,13 +14150,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("wildcard"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Wildcard)
-;
-                        }
-                        GeneratedField::ScalarFunction => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("scalarFunction"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::ScalarFunction)
 ;
                         }
                         GeneratedField::TryCast => {
@@ -18526,9 +18512,6 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::InList(v) => {
                     struct_ser.serialize_field("inList", v)?;
                 }
-                physical_expr_node::ExprType::ScalarFunction(v) => {
-                    struct_ser.serialize_field("scalarFunction", v)?;
-                }
                 physical_expr_node::ExprType::TryCast(v) => {
                     struct_ser.serialize_field("tryCast", v)?;
                 }
@@ -18572,8 +18555,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "negative",
             "in_list",
             "inList",
-            "scalar_function",
-            "scalarFunction",
             "try_cast",
             "tryCast",
             "window_expr",
@@ -18598,7 +18579,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             Sort,
             Negative,
             InList,
-            ScalarFunction,
             TryCast,
             WindowExpr,
             ScalarUdf,
@@ -18636,7 +18616,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "sort" => Ok(GeneratedField::Sort),
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
-                            "scalarFunction" | "scalar_function" => Ok(GeneratedField::ScalarFunction),
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "scalarUdf" | "scalar_udf" => Ok(GeneratedField::ScalarUdf),
@@ -18745,13 +18724,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("inList"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::InList)
-;
-                        }
-                        GeneratedField::ScalarFunction => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("scalarFunction"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::ScalarFunction)
 ;
                         }
                         GeneratedField::TryCast => {
@@ -20108,151 +20080,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalPlanNode", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for PhysicalScalarFunctionNode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if !self.name.is_empty() {
-            len += 1;
-        }
-        if self.fun != 0 {
-            len += 1;
-        }
-        if !self.args.is_empty() {
-            len += 1;
-        }
-        if self.return_type.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalScalarFunctionNode", len)?;
-        if !self.name.is_empty() {
-            struct_ser.serialize_field("name", &self.name)?;
-        }
-        if self.fun != 0 {
-            let v = ScalarFunction::try_from(self.fun)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.fun)))?;
-            struct_ser.serialize_field("fun", &v)?;
-        }
-        if !self.args.is_empty() {
-            struct_ser.serialize_field("args", &self.args)?;
-        }
-        if let Some(v) = self.return_type.as_ref() {
-            struct_ser.serialize_field("returnType", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for PhysicalScalarFunctionNode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "name",
-            "fun",
-            "args",
-            "return_type",
-            "returnType",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Name,
-            Fun,
-            Args,
-            ReturnType,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "name" => Ok(GeneratedField::Name),
-                            "fun" => Ok(GeneratedField::Fun),
-                            "args" => Ok(GeneratedField::Args),
-                            "returnType" | "return_type" => Ok(GeneratedField::ReturnType),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = PhysicalScalarFunctionNode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.PhysicalScalarFunctionNode")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalScalarFunctionNode, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut name__ = None;
-                let mut fun__ = None;
-                let mut args__ = None;
-                let mut return_type__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Name => {
-                            if name__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("name"));
-                            }
-                            name__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Fun => {
-                            if fun__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fun"));
-                            }
-                            fun__ = Some(map_.next_value::<ScalarFunction>()? as i32);
-                        }
-                        GeneratedField::Args => {
-                            if args__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("args"));
-                            }
-                            args__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::ReturnType => {
-                            if return_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("returnType"));
-                            }
-                            return_type__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(PhysicalScalarFunctionNode {
-                    name: name__.unwrap_or_default(),
-                    fun: fun__.unwrap_or_default(),
-                    args: args__.unwrap_or_default(),
-                    return_type: return_type__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.PhysicalScalarFunctionNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalScalarUdfNode {
@@ -22782,184 +22609,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFixedSizeBinary {
             }
         }
         deserializer.deserialize_struct("datafusion.ScalarFixedSizeBinary", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ScalarFunction {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Unknown => "unknown",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for ScalarFunction {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "unknown",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ScalarFunction;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "unknown" => Ok(ScalarFunction::Unknown),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ScalarFunctionNode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.fun != 0 {
-            len += 1;
-        }
-        if !self.args.is_empty() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarFunctionNode", len)?;
-        if self.fun != 0 {
-            let v = ScalarFunction::try_from(self.fun)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.fun)))?;
-            struct_ser.serialize_field("fun", &v)?;
-        }
-        if !self.args.is_empty() {
-            struct_ser.serialize_field("args", &self.args)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ScalarFunctionNode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "fun",
-            "args",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Fun,
-            Args,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "fun" => Ok(GeneratedField::Fun),
-                            "args" => Ok(GeneratedField::Args),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ScalarFunctionNode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ScalarFunctionNode")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ScalarFunctionNode, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut fun__ = None;
-                let mut args__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Fun => {
-                            if fun__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fun"));
-                            }
-                            fun__ = Some(map_.next_value::<ScalarFunction>()? as i32);
-                        }
-                        GeneratedField::Args => {
-                            if args__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("args"));
-                            }
-                            args__ = Some(map_.next_value()?);
-                        }
-                    }
-                }
-                Ok(ScalarFunctionNode {
-                    fun: fun__.unwrap_or_default(),
-                    args: args__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.ScalarFunctionNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarNestedValue {

@@ -20,7 +20,6 @@
 //!
 //! [`Expr`]: crate::prelude::Expr
 use std::collections::HashSet;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::{
@@ -1551,15 +1550,15 @@ pub(crate) enum StatisticsType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
     use crate::logical_expr::{col, lit};
-    use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::array::Decimal128Array;
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
-        datatypes::{DataType, TimeUnit},
+        datatypes::TimeUnit,
     };
     use arrow_array::UInt64Array;
-    use datafusion_common::{ScalarValue, ToDFSchema};
+    use datafusion_common::ToDFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};

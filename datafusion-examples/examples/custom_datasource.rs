@@ -24,7 +24,6 @@ use std::time::Duration;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
@@ -34,7 +33,7 @@ use datafusion::physical_plan::{
     Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
-use datafusion_expr::{Expr, LogicalPlanBuilder};
+use datafusion_expr::LogicalPlanBuilder;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;

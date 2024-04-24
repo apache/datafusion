@@ -180,7 +180,6 @@ mod test {
 
     use super::*;
     use crate::expr_fn::col;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_lit_nonzero() {

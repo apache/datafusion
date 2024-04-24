@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -1113,8 +1112,6 @@ mod tests {
     use crate::{generic_test_op, generic_test_op_new};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Decimal128;
 
     #[test]

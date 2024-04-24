@@ -258,14 +258,12 @@ pub(crate) mod tests {
     use arrow_array::{ArrayRef, Float32Array, Float64Array};
     use std::any::Any;
     use std::fmt::{Display, Formatter};
-    use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
 
     use datafusion_expr::{
         ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,

@@ -21,7 +21,7 @@
 
 This folder contains the source content of the [User Guide](./source/user-guide)
 and [Contributor Guide](./source/contributor-guide). These are both published to
-https://arrow.apache.org/datafusion/ as part of the release process.
+https://datafusion.apache.org/ as part of the release process.
 
 ## Dependencies
 
@@ -55,7 +55,7 @@ automatically updated.
 
 ## Release Process
 
-This documentation is hosted at https://arrow.apache.org/datafusion/
+This documentation is hosted at https://datafusion.apache.org/
 
 When the PR is merged to the `main` branch of the DataFusion
 repository, a [github workflow](https://github.com/apache/datafusion/blob/main/.github/workflows/docs.yaml) which:
@@ -63,7 +63,7 @@ repository, a [github workflow](https://github.com/apache/datafusion/blob/main/.
 1. Builds the html content
 2. Pushes the html content to the [`asf-site`](https://github.com/apache/datafusion/tree/asf-site) branch in this repository.
 
-The Apache Software Foundation provides https://arrow.apache.org/,
+The Apache Software Foundation provides https://datafusion.apache.org/,
 which serves content based on the configuration in
 [.asf.yaml](https://github.com/apache/datafusion/blob/main/.asf.yaml),
-which specifies the target as https://arrow.apache.org/datafusion/.
+which specifies the target as https://datafusion.apache.org/.

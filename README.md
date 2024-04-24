@@ -46,10 +46,10 @@ in-memory format. [Python Bindings](https://github.com/apache/datafusion-python)
 
 Here are links to some important information
 
-- [Project Site](https://arrow.apache.org/datafusion)
-- [Installation](https://arrow.apache.org/datafusion/user-guide/cli/installation.html)
-- [Rust Getting Started](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
-- [Rust DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+- [Project Site](https://datafusion.apache.org/)
+- [Installation](https://datafusion.apache.org/user-guide/cli/installation.html)
+- [Rust Getting Started](https://datafusion.apache.org/user-guide/example-usage.html)
+- [Rust DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
 - [Rust Examples](https://github.com/apache/datafusion/tree/master/datafusion-examples)
 - [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
@@ -58,14 +58,14 @@ Here are links to some important information
 ## What can you do with this crate?
 
 DataFusion is great for building projects such as domain specific query engines, new database platforms and data pipelines, query languages and more.
-It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://arrow.apache.org/datafusion/user-guide/introduction.html#known-users) to see a list known users.
+It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://datafusion.apache.org/user-guide/introduction.html#known-users) to see a list known users.
 
 ## Contributing to DataFusion
 
 Please see the [contributor guide] and [communication] pages for more information.
 
-[contributor guide]: https://arrow.apache.org/datafusion/contributor-guide
-[communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
+[contributor guide]: https://datafusion.apache.org/contributor-guide
+[communication]: https://datafusion.apache.org/contributor-guide/communication.html
 
 ## Crate features
 

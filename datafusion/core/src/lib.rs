@@ -30,10 +30,10 @@
 //! additional data sources, query languages, functions, custom
 //! operators and more. See the [Architecture] section for more details.
 //!
-//! [DataFusion]: https://arrow.apache.org/datafusion/
+//! [DataFusion]: https://datafusion.apache.org/
 //! [Apache Arrow]: https://arrow.apache.org
-//! [use cases]: https://arrow.apache.org/datafusion/user-guide/introduction.html#use-cases
-//! [SQL]: https://arrow.apache.org/datafusion/user-guide/sql/index.html
+//! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
+//! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
 //! [`DataFrame`]: dataframe::DataFrame
 //! [Architecture]: #architecture
 //!

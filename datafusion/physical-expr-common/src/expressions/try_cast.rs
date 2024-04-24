@@ -159,7 +159,6 @@ mod tests {
         },
         datatypes::*,
     };
-    use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
