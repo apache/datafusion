@@ -295,12 +295,10 @@ fn take_optimizable_max(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::error::Result;
     use crate::logical_expr::Operator;
-    use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
     use crate::physical_plan::expressions::Count;

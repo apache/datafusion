@@ -315,13 +315,8 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use arrow::array::{
-        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    };
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::{
-        Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-        UInt32Type, UInt64Type, UInt8Type,
+        BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_array::Decimal256Array;
     use arrow_buffer::i256;

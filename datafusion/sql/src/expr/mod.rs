@@ -1030,7 +1030,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{Field, Schema};
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 

@@ -33,8 +33,8 @@ use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
-    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, ExprSchemable, LogicalPlanBuilder,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use rand::{thread_rng, Rng};
 use std::any::Any;

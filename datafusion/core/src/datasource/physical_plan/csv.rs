@@ -526,7 +526,6 @@ mod tests {
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::FileType;
 
-    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;

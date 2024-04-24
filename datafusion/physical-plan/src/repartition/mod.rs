@@ -1010,14 +1010,12 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::array::{StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
-    use futures::FutureExt;
     use tokio::task::JoinSet;
 
     #[tokio::test]

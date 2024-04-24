@@ -1028,7 +1028,6 @@ mod tests {
     use super::*;
     use std::any::Any;
     use std::fmt::{Debug, Formatter};
-    use std::sync::Arc;
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
@@ -1036,12 +1035,11 @@ mod tests {
     use crate::OptimizerContext;
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
-        ColumnarValue, Expr, Extension, LogicalPlanBuilder, Operator, ScalarUDF,
+        col, in_list, in_subquery, lit, sum, ColumnarValue, Extension, ScalarUDF,
         ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
         Volatility,
     };

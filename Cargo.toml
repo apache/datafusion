@@ -130,3 +130,6 @@ rpath = false
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
+
+[workspace.lints.rust]
+unused_imports = "deny"

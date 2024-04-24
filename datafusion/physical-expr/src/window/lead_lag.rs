@@ -397,10 +397,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_common::cast::as_int32_array;
-    use datafusion_common::Result;
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));

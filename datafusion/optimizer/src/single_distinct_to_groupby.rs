@@ -309,8 +309,8 @@ mod tests {
     use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
-        col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
-        min, sum, AggregateFunction,
+        count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
+        sum, AggregateFunction,
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

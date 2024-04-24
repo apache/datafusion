@@ -1335,7 +1335,7 @@ mod tests {
     };
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;

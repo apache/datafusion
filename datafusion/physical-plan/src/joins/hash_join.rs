@@ -1556,16 +1556,15 @@ impl Stream for HashJoinStream {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::{
-        common, expressions::Column, hash_utils::create_hashes, memory::MemoryExec,
-        repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
+        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
+        test::build_table_i32, test::exec::MockExec,
     };
 
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -1574,11 +1573,10 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
-    use rstest_reuse::{self, *};
+    use rstest_reuse::*;
 
     fn div_ceil(a: usize, b: usize) -> usize {
         (a + b - 1) / b

@@ -423,8 +423,6 @@ where
 mod tests {
     use std::ops::Not;
 
-    use futures::StreamExt;
-
     use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store_and_state;
 

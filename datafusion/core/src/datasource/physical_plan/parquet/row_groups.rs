@@ -359,7 +359,6 @@ mod tests {
     use crate::datasource::physical_plan::parquet::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use arrow::datatypes::DataType::Decimal128;
-    use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Result, ToDFSchema};
     use datafusion_expr::execution_props::ExecutionProps;
@@ -370,8 +369,7 @@ mod tests {
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::{
-        basic::Type as PhysicalType,
-        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
+        basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
     };
     use std::ops::Rem;

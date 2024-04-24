@@ -75,8 +75,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ToDFSchema;
     use datafusion_expr::{
-        expr_rewriter::coerce_plan_expr_for_schema,
-        logical_plan::{table_scan, Union},
+        expr_rewriter::coerce_plan_expr_for_schema, logical_plan::table_scan,
     };
     use std::sync::Arc;
 

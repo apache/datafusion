@@ -114,13 +114,12 @@ impl ProjectionMapping {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
     use itertools::Itertools;
 
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::tests::{

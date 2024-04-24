@@ -103,12 +103,12 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        max, out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, Expr,
-        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
 
