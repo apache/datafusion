@@ -69,7 +69,7 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.iter().flatten().collect()
             }
-            Expr::Column(_) 
+            Expr::Column(_)
             | Expr::Columns(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)

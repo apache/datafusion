@@ -28,7 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, TableReference
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError,
+    ExprSchema, Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -286,7 +287,10 @@ impl ExprSchemable for Expr {
 
             Expr::Column(c) => input_schema.nullable(c),
             Expr::Columns(c) => {
-                let column_nullables:Vec<bool> = c.iter().map(|col| input_schema.nullable(col)).collect::<Result<Vec<_>>>()?;
+                let column_nullables: Vec<bool> = c
+                    .iter()
+                    .map(|col| input_schema.nullable(col))
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(column_nullables.iter().any(|&x| x))
             }
             Expr::OuterReferenceColumn(_, _) => Ok(true),
@@ -337,8 +341,8 @@ impl ExprSchemable for Expr {
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
-            },
-            
+            }
+
             Expr::Wildcard { .. } => internal_err!(
                 "Wildcard expressions are not valid in a logical query plan"
             ),

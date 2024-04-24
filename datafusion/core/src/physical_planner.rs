@@ -145,9 +145,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             } else {
                 Ok(c.flat_name())
             }
-        },
+        }
         Expr::Columns(c) => {
-            let names:Vec<String> = c.iter().map(|c| c.flat_name()).collect();
+            let names: Vec<String> = c.iter().map(|c| c.flat_name()).collect();
             Ok(names.join(","))
         }
         Expr::Alias(Alias { name, .. }) => Ok(name.clone()),

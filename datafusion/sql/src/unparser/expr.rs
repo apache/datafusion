@@ -117,6 +117,13 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::Columns(cols) => {
+                let cols = cols
+                    .iter()
+                    .map(|c| self.col_to_sql(c))
+                    .collect::<Result<_, _>>()?;
+                Ok(ast::Expr::Tuple(cols))
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql(left.as_ref())?;
                 let r = self.expr_to_sql(right.as_ref())?;
