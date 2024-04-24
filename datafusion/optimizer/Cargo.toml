@@ -50,7 +50,7 @@ hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { workspace = true }
 log = { workspace = true }
 regex-syntax = "0.8.0"
-indexmap = "*"
+indexmap = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 datafusion-sql = { workspace = true }

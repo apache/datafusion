@@ -23,7 +23,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort};
-use hashbrown::HashSet;
 use indexmap::IndexSet;
 use std::hash::{Hash, Hasher};
 /// Optimization rule that eliminate duplicated expr.
@@ -114,10 +113,11 @@ impl OptimizerRule for EliminateDuplicatedExpr {
             }
             LogicalPlan::Aggregate(agg) => {
                 let len = agg.group_expr.len();
+
                 let unique_exprs: Vec<Expr> = agg
                     .group_expr
                     .into_iter()
-                    .collect::<HashSet<_>>()
+                    .collect::<IndexSet<_>>()
                     .into_iter()
                     .collect();
 
@@ -127,13 +127,8 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     Transformed::no
                 };
 
-                Aggregate::try_new_with_schema(
-                    agg.input,
-                    unique_exprs,
-                    agg.aggr_expr,
-                    agg.schema,
-                )
-                .map(|f| transformed(LogicalPlan::Aggregate(f)))
+                Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
+                    .map(|f| transformed(LogicalPlan::Aggregate(f)))
             }
             _ => Ok(Transformed::no(plan)),
         }
