@@ -34,8 +34,6 @@ use datafusion_common::{
 };
 use datafusion_expr::Accumulator;
 use std::any::Any;
-use std::convert::TryFrom;
-use std::convert::TryInto;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;

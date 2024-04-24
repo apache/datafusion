@@ -386,9 +386,8 @@ where
 #[cfg(test)]
 mod tests {
     use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field};
 
-    use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{col, lit};
 
     use super::*;

@@ -1290,31 +1290,21 @@ pub(crate) mod tests {
     use crate::physical_optimizer::test_utils::{
         check_integrity, coalesce_partitions_exec, repartition_exec,
     };
-    use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::{
-        utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
-    };
+    use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
-        expressions, expressions::binary, expressions::lit, expressions::Column,
-        LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+        expressions, expressions::binary, expressions::lit, LexOrdering,
+        PhysicalSortExpr, PhysicalSortRequirement,
     };
     use datafusion_physical_plan::PlanProperties;
 

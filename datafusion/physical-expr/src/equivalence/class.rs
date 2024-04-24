@@ -481,12 +481,10 @@ impl EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::equivalence::{EquivalenceClass, EquivalenceGroup};
-    use crate::expressions::{lit, Column, Literal};
+    use crate::expressions::{lit, Literal};
 
     use datafusion_common::{Result, ScalarValue};
 

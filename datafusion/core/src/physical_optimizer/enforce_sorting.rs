@@ -611,7 +611,6 @@ fn get_sort_exprs(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
@@ -622,7 +621,6 @@ mod tests {
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
-    use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{csv_exec_ordered, csv_exec_sorted, stream_exec_ordered};

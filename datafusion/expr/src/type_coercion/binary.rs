@@ -858,10 +858,8 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Operator;
 
-    use arrow::datatypes::DataType;
-    use datafusion_common::{assert_contains, Result};
+    use datafusion_common::assert_contains;
 
     #[test]
     fn test_coercion_error() -> Result<()> {

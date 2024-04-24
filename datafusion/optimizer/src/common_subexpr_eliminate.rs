@@ -765,13 +765,10 @@ fn replace_common_expr(
 mod test {
     use std::iter;
 
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::Schema;
 
-    use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
-    use datafusion_expr::{
-        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
-    };
+    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder, sum};
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
         SimpleAggregateUDF, Volatility,

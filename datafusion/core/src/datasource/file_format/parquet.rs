@@ -1021,10 +1021,7 @@ pub(crate) mod test_util {
     use super::*;
     use crate::test::object_store::local_unpartitioned_file;
 
-    use arrow::record_batch::RecordBatch;
-
     use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
     /// How many rows per page should be written
@@ -1112,7 +1109,6 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::record_batch::RecordBatch;
     use arrow_schema::Field;
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -1121,16 +1117,13 @@ mod tests {
         as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
-    use datafusion_common::config::TableParquetOptions;
     use datafusion_common::ScalarValue;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use futures::stream::BoxStream;
-    use futures::StreamExt;
     use log::error;
     use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
     use object_store::{
         GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
     };
@@ -1139,7 +1132,6 @@ mod tests {
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
-    use tokio::io::AsyncWrite;
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {

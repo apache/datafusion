@@ -599,7 +599,6 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::test;
 
-    use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;

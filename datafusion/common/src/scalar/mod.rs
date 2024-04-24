@@ -22,7 +22,7 @@ mod struct_builder;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
-use std::convert::{Infallible, TryFrom, TryInto};
+use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::iter::repeat;
@@ -52,7 +52,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{ArrowNativeTypeOp, Scalar};
 use arrow_buffer::Buffer;
 use arrow_schema::{UnionFields, UnionMode};
 
@@ -3424,8 +3423,6 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
-    use std::sync::Arc;
 
     use super::*;
     use crate::cast::{
@@ -3435,9 +3432,7 @@ mod tests {
     use crate::assert_batches_eq;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
-    use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_buffer::Buffer;
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;

@@ -125,7 +125,6 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{array::BooleanArray, datatypes::*};
-    use datafusion_common::Result;
 
     #[test]
     fn neg_op() -> Result<()> {

@@ -521,19 +521,13 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::FileMeta;
-    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
-    use crate::{
-        error::Result,
-        test::{make_partition, object_store::register_test_store},
-    };
+    use crate::test::{make_partition, object_store::register_test_store};
 
     use arrow_schema::Schema;
     use datafusion_common::{internal_err, Statistics};
 
     use bytes::Bytes;
-    use futures::StreamExt;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]

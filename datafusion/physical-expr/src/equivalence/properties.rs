@@ -1295,13 +1295,11 @@ impl Hash for ExprWrapper {
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, SortOptions, TimeUnit};
-    use itertools::Itertools;
+    use arrow_schema::{Fields, TimeUnit};
 
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::add_offset_to_expr;
@@ -1312,7 +1310,6 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
-    use crate::PhysicalSortExpr;
 
     use super::*;
 

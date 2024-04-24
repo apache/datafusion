@@ -34,7 +34,6 @@ use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -624,10 +623,7 @@ pub fn binary(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Literal};
-    use arrow::datatypes::{
-        ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
-    };
-    use datafusion_common::{plan_datafusion_err, Result};
+    use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary

@@ -475,16 +475,13 @@ fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::*;
-    use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
 
     use arrow::compute::{cast_with_options, CastOptions};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
+    use arrow::datatypes::Field;
+    use datafusion_common::tree_node::TransformedResult;
+    use datafusion_expr::{cast, col, in_list, try_cast};
 
     #[test]
     fn test_not_unwrap_cast_comparison() {

@@ -112,10 +112,9 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::col;
     use crate::PhysicalSortExpr;
 
     use arrow::compute::{lexsort_to_indices, SortColumn};

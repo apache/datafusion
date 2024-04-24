@@ -23,7 +23,6 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
-use std::convert::{From, TryFrom};
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 

@@ -115,9 +115,9 @@ mod tests {
     use super::*;
     use crate::test::assert_optimized_plan_eq;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Column, Result};
+    use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, LogicalPlanBuilder};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)

@@ -702,21 +702,18 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
-    use std::sync::Arc;
 
     use super::*;
     use crate::{
-        physical_plan::{
-            displayable, joins::PartitionMode, ColumnStatistics, Statistics,
-        },
+        physical_plan::{displayable, ColumnStatistics, Statistics},
         test::StatisticsExec,
     };
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column};
-    use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+    use datafusion_physical_expr::expressions::BinaryExpr;
+    use datafusion_physical_expr::PhysicalExprRef;
 
     use rstest::rstest;
 
@@ -1571,22 +1568,15 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
-    use std::sync::Arc;
 
     use self::tests_statistical::crosscheck_plans;
     use super::*;
-    use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
-    use crate::physical_plan::expressions::Column;
-    use crate::physical_plan::joins::PartitionMode;
-    use crate::physical_plan::projection::ProjectionExec;
     use crate::test_util::UnboundedExec;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::utils::DataPtr;
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::ExecutionPlanProperties;
 
     struct TestCase {
         case: String,
