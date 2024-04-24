@@ -83,7 +83,7 @@ struct Args {
         short = 'c',
         long,
         multiple_values = true,
-        help = "Execute the given command string(s), then exit. Commands should be non empty.",
+        help = "Execute the given command string(s), then exit. Commands are expected to be non empty.",
         validator(is_valid_command)
     )]
     command: Vec<String>,
@@ -290,7 +290,7 @@ fn is_valid_command(command: &str) -> Result<(), String> {
     if !command.is_empty() {
         Ok(())
     } else {
-        Err(format!("-c flag expects non empty commands"))
+        Err(format!("-c flag expects only non empty commands"))
     }
 }
 
