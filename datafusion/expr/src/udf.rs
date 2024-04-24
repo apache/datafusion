@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{not_impl_err, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -180,6 +180,13 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    /// Invoke the function without `args` but number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        self.inner.invoke_no_args(number_rows)
+    }
+
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
     pub fn fun(&self) -> ScalarFunctionImplementation {
@@ -197,6 +204,10 @@ impl ScalarUDF {
     /// Get the circuits of inner implementation
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
+    }
+
+    pub fn support_randomness(&self) -> bool {
+        self.inner.support_randomness()
     }
 }
 
@@ -330,7 +341,20 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke but called",
+            self.name()
+        )
+    }
+
+    /// Invoke the function without `args` but number of rows, returning the appropriate result
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke_no_args but called",
+            self.name()
+        )
+    }
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -381,6 +405,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// and thus any side effects (like divide by zero) may not be encountered
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the function supports randomness, This is useful for functions that need to generate
+    /// random values for each row. `invoke_no_args` can be called in this case.
+    fn support_randomness(&self) -> bool {
         false
     }
 }

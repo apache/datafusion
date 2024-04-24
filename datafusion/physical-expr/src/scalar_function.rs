@@ -145,7 +145,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         // evaluate the function
         match self.fun {
-            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
+            ScalarFunctionDefinition::UDF(ref fun) => {
+                if fun.support_randomness() {
+                    fun.invoke_no_args(batch.num_rows())
+                } else {
+                    fun.invoke(&inputs)
+                }
+            }
             ScalarFunctionDefinition::Name(_) => {
                 internal_err!(
                     "Name function must be resolved to one of the other variants prior to physical planning"

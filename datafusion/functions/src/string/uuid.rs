@@ -16,12 +16,14 @@
 // under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 
+use arrow::array::GenericStringArray;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 use uuid::Uuid;
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
@@ -55,11 +57,15 @@ impl ScalarUDFImpl for UuidFunc {
         Ok(Utf8)
     }
 
+    fn support_randomness(&self) -> bool {
+        true
+    }
+
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            Uuid::new_v4().to_string(),
-        ))))
+    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
+        let values = std::iter::repeat_with(|| Uuid::new_v4().to_string()).take(num_rows);
+        let array = GenericStringArray::<i32>::from_iter_values(values);
+        Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }

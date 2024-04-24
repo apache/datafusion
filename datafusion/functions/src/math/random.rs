@@ -16,12 +16,14 @@
 // under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 
+use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -61,9 +63,14 @@ impl ScalarUDFImpl for RandomFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn support_randomness(&self) -> bool {
+        true
+    }
+
+    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
         let mut rng = thread_rng();
-        let val = rng.gen_range(0.0..1.0);
-        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(val))))
+        let values = std::iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(num_rows);
+        let array = Float64Array::from_iter_values(values);
+        Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }
