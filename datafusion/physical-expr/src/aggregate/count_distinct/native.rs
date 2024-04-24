@@ -20,7 +20,6 @@
 //!
 //! [`Int64Array`]: arrow::array::Int64Array
 //! [`Float64Array`]: arrow::array::Float64Array
-use std::cmp::Eq;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;

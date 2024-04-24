@@ -158,8 +158,8 @@ Looking at the `EXPLAIN` output we can see that the optimizer has effectively re
 +---------------+-------------------------------------------------+
 ```
 
-If the expression name is not preserved, bugs such as [#3704](https://github.com/apache/arrow-datafusion/issues/3704)
-and [#3555](https://github.com/apache/arrow-datafusion/issues/3555) occur where the expected columns can not be found.
+If the expression name is not preserved, bugs such as [#3704](https://github.com/apache/datafusion/issues/3704)
+and [#3555](https://github.com/apache/datafusion/issues/3555) occur where the expected columns can not be found.
 
 ### Building Expression Names
 

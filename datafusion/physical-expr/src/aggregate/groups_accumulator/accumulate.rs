@@ -625,7 +625,6 @@ mod test {
     use super::*;
 
     use arrow_array::UInt32Array;
-    use arrow_buffer::BooleanBuffer;
     use hashbrown::HashSet;
     use rand::{rngs::ThreadRng, Rng};
 

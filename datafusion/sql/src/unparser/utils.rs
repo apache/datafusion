@@ -60,7 +60,7 @@ pub(crate) fn find_agg_node_within_select(
 /// into an actual aggregate expression COUNT(*) as identified in the aggregate node.
 pub(crate) fn unproject_agg_exprs(expr: &Expr, agg: &Aggregate) -> Result<Expr> {
     expr.clone()
-        .transform(&|sub_expr| {
+        .transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 // find the column in the agg schmea
                 if let Ok(n) = agg.schema.index_of_column(&c) {

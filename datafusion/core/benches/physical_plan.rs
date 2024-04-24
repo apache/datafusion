@@ -21,7 +21,7 @@ use criterion::{BatchSize, Criterion};
 extern crate arrow;
 extern crate datafusion;
 
-use std::{iter::FromIterator, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, Int64Array, StringArray},

@@ -197,12 +197,12 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new_default(plan);
             let adjusted = plan_requirements
-                .transform_down(&adjust_input_keys_ordering)
+                .transform_down(adjust_input_keys_ordering)
                 .data()?;
             adjusted.plan
         } else {
             // Run a bottom-up process
-            plan.transform_up(&|plan| {
+            plan.transform_up(|plan| {
                 Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
             })
             .data()?
@@ -211,7 +211,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context = distribution_context
-            .transform_up(&|distribution_context| {
+            .transform_up(|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })
             .data()?;
@@ -1290,31 +1290,21 @@ pub(crate) mod tests {
     use crate::physical_optimizer::test_utils::{
         check_integrity, coalesce_partitions_exec, repartition_exec,
     };
-    use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::{
-        utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
-    };
+    use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
-        expressions, expressions::binary, expressions::lit, expressions::Column,
-        LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+        expressions, expressions::binary, expressions::lit, LexOrdering,
+        PhysicalSortExpr, PhysicalSortRequirement,
     };
     use datafusion_physical_plan::PlanProperties;
 
@@ -1768,14 +1758,14 @@ pub(crate) mod tests {
                     let plan_requirements =
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
-                        .transform_down(&adjust_input_keys_ordering)
+                        .transform_down(adjust_input_keys_ordering)
                         .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
                 } else {
                     // Run reorder_join_keys_to_inputs rule
-                    $PLAN.clone().transform_up(&|plan| {
+                    $PLAN.clone().transform_up(|plan| {
                         Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
                     })
                     .data()?
@@ -1783,7 +1773,7 @@ pub(crate) mod tests {
 
                 // Then run ensure_distribution rule
                 DistributionContext::new_default(adjusted)
-                    .transform_up(&|distribution_context| {
+                    .transform_up(|distribution_context| {
                         ensure_distribution(distribution_context, &config)
                     })
                     .data()
@@ -3029,7 +3019,7 @@ pub(crate) mod tests {
 
     #[test]
     fn merge_does_not_need_sort() -> Result<()> {
-        // see https://github.com/apache/arrow-datafusion/issues/4331
+        // see https://github.com/apache/datafusion/issues/4331
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
             expr: col("a", &schema).unwrap(),
@@ -3647,7 +3637,7 @@ pub(crate) mod tests {
 
         // The groups must have only contiguous ranges of rows from the same file
         // if any group has rows from multiple files, the data is no longer sorted destroyed
-        // https://github.com/apache/arrow-datafusion/issues/8451
+        // https://github.com/apache/datafusion/issues/8451
         let expected = [
             "SortRequiredExec: [a@0 ASC]",
             "FilterExec: c@2 = 0",

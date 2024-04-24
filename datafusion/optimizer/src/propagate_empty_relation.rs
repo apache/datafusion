@@ -192,8 +192,7 @@ mod tests {
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
-        Operator,
+        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, Operator,
     };
 
     use super::*;

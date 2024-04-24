@@ -19,6 +19,7 @@
 
 pub mod arrow_cast;
 pub mod arrowtypeof;
+pub mod coalesce;
 pub mod getfield;
 pub mod named_struct;
 pub mod nullif;
@@ -35,6 +36,7 @@ make_udf_function!(arrowtypeof::ArrowTypeOfFunc, ARROWTYPEOF, arrow_typeof);
 make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
+make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
@@ -45,5 +47,6 @@ export_functions!(
     (arrow_typeof, arg_1, "Returns the Arrow type of the input expression."),
     (r#struct, args, "Returns a struct with the given arguments"),
     (named_struct, args, "Returns a struct with the given names and arguments pairs"),
-    (get_field, arg_1 arg_2, "Returns the value of the field with the given name from the struct")
+    (get_field, arg_1 arg_2, "Returns the value of the field with the given name from the struct"),
+    (coalesce, args, "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL")
 );

@@ -244,7 +244,7 @@ pub struct ListingOptions {
     /// the future be automatically determined, for example using
     /// parquet metadata.
     ///
-    /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    /// See <https://github.com/apache/datafusion/issues/4177>
     /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
     ///       where each ordering consists of an individual lexicographic
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
@@ -1004,23 +1004,18 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use super::*;
     #[cfg(feature = "parquet")]
-    use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
-        datasource::file_format::avro::AvroFormat,
-        logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
 
-    use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;

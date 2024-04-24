@@ -702,8 +702,6 @@ mod tests {
     use crate::generic_test_op;
     use arrow::array::*;
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
 
     #[test]
     fn bit_and_i32() -> Result<()> {

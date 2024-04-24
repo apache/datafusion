@@ -77,7 +77,7 @@ jobs:
         run: cargo check --all-targets --no-default-features -p datafusion-functions
 
       - name: Check workspace in debug mode
-        run: cargo check
+        run: cargo check --all-targets --workspace
 
       - name: Check workspace with avro,json features
         run: cargo check --workspace --benches --features avro,json
@@ -425,7 +425,7 @@ jobs:
           ci/scripts/rust_fmt.sh
 
   # Coverage job disabled due to
-  # https://github.com/apache/arrow-datafusion/issues/3678
+  # https://github.com/apache/datafusion/issues/3678
 
   # coverage:
   #   name: coverage

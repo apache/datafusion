@@ -23,12 +23,12 @@ use datafusion::common::{
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, BuiltinScalarFunction,
-    Case, Expr, LogicalPlan, Operator,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, Expr, LogicalPlan,
+    Operator, ScalarUDF,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, ScalarUDF, Subquery, WindowFrameBound, WindowFrameUnits,
+    Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -75,7 +75,6 @@ use crate::variation_const::{
 };
 
 enum ScalarFunctionType {
-    Builtin(BuiltinScalarFunction),
     Op(Operator),
     Expr(BuiltinExprBuilder),
     Udf(Arc<ScalarUDF>),
@@ -125,10 +124,6 @@ fn scalar_function_type_from_str(
 
     if let Ok(op) = name_to_op(name) {
         return Ok(ScalarFunctionType::Op(op));
-    }
-
-    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
-        return Ok(ScalarFunctionType::Builtin(fun));
     }
 
     if let Some(builder) = BuiltinExprBuilder::try_from_name(name) {
@@ -909,18 +904,6 @@ pub async fn from_substrait_rex(
                     Ok(Arc::new(Expr::ScalarFunction(
                         expr::ScalarFunction::new_udf(fun, args),
                     )))
-                }
-                ScalarFunctionType::Builtin(fun) => {
-                    let args = decode_arguments(
-                        ctx,
-                        input_schema,
-                        extensions,
-                        f.arguments.as_slice(),
-                    )
-                    .await?;
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        fun, args,
-                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {

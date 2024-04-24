@@ -68,13 +68,32 @@ impl Constraints {
         let constraints = constraints
             .iter()
             .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique {
-                    columns,
-                    is_primary,
-                    ..
-                } => {
+                TableConstraint::Unique { name, columns, .. } => {
                     let field_names = df_schema.field_names();
-                    // Get primary key and/or unique indices in the schema:
+                    // Get unique constraint indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|u| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == u.value)
+                                .ok_or_else(|| {
+                                    let name = name
+                                        .as_ref()
+                                        .map(|name| format!("with name '{name}' "))
+                                        .unwrap_or("".to_string());
+                                    DataFusionError::Execution(
+                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::Unique(indices))
+                }
+                TableConstraint::PrimaryKey { columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get primary key indices in the schema:
                     let indices = columns
                         .iter()
                         .map(|pk| {
@@ -82,18 +101,15 @@ impl Constraints {
                                 .iter()
                                 .position(|item| *item == pk.value)
                                 .ok_or_else(|| {
-                                    DataFusionError::Execution(
-                                        "Primary key doesn't exist".to_string(),
-                                    )
+                                    DataFusionError::Execution(format!(
+                                        "Column for primary key not found in schema: {}",
+                                        pk.value
+                                    ))
                                 })?;
                             Ok(idx)
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(if *is_primary {
-                        Constraint::PrimaryKey(indices)
-                    } else {
-                        Constraint::Unique(indices)
-                    })
+                    Ok(Constraint::PrimaryKey(indices))
                 }
                 TableConstraint::ForeignKey { .. } => {
                     _plan_err!("Foreign key constraints are not currently supported")

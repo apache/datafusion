@@ -23,8 +23,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::provider::{TableProvider, TableType};
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,

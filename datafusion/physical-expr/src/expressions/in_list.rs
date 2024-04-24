@@ -31,7 +31,6 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::cast::{
@@ -455,13 +454,11 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::StringArray, datatypes::Field};
 
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
     use datafusion_common::plan_err;
-    use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);

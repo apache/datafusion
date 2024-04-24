@@ -17,7 +17,7 @@
 
 
 # Use `interval` SQL literal syntax
-# the types should be the same: https://github.com/apache/arrow-datafusion/issues/5801
+# the types should be the same: https://github.com/apache/datafusion/issues/5801
 query TT
 select
   arrow_typeof(interval '5 months'),

@@ -29,7 +29,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
-/// Resolves issue: <https://github.com/apache/arrow-datafusion/issues/5473>
+/// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
 #[derive(Default)]
 pub struct CountWildcardRule {}
 
@@ -41,8 +41,7 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down_with_subqueries(&analyze_internal)
-            .data()
+        plan.transform_down_with_subqueries(analyze_internal).data()
     }
 
     fn name(&self) -> &str {
@@ -78,7 +77,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr)?;
-        let transformed_expr = expr.transform_up(&|expr| match expr {
+        let transformed_expr = expr.transform_up(|expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
             {
@@ -104,12 +103,12 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        max, out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, Expr,
-        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
 

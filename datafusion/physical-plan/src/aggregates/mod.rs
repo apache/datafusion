@@ -1185,12 +1185,9 @@ pub(crate) fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use std::sync::Arc;
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
@@ -1198,18 +1195,14 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::{
-        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
-        SendableRecordBatchStream, Statistics,
-    };
+    use crate::RecordBatchStream;
 
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::compute::{concat_batches, SortOptions};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
+    use arrow::datatypes::DataType;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
-        Result, ScalarValue,
+        ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
@@ -1217,10 +1210,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
-    use datafusion_physical_expr::{
-        reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
-        PhysicalSortExpr,
-    };
+    use datafusion_physical_expr::{reverse_order_bys, PhysicalSortExpr};
 
     use futures::{FutureExt, Stream};
 

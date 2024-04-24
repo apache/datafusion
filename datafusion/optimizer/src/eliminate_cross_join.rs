@@ -155,7 +155,7 @@ fn try_flatten_join_inputs(
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
             if join.filter.is_some() {
                 // The filter of inner join will lost, skip this rule.
-                // issue: https://github.com/apache/arrow-datafusion/issues/4844
+                // issue: https://github.com/apache/datafusion/issues/4844
                 return Ok(false);
             }
             possible_join_keys.extend(join.on.clone());
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    /// See https://github.com/apache/arrow-datafusion/issues/7530
+    /// See https://github.com/apache/datafusion/issues/7530
     fn eliminate_cross_not_possible_nested_inner_join_with_filter() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;

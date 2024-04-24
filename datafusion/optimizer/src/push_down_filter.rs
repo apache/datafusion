@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{
@@ -218,7 +217,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
 // Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
-    predicate.apply(&mut |expr| match expr {
+    predicate.apply(|expr| match expr {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
@@ -705,9 +704,7 @@ impl OptimizerRule for PushDownFilter {
 
                             (qualified_name(qualifier, field.name()), expr)
                         })
-                        .partition(|(_, value)| {
-                            is_volatile_expression(value).unwrap_or(true)
-                        });
+                        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];
@@ -993,7 +990,7 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    e.transform_up(&|expr| {
+    e.transform_up(|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
                 Some(new_c) => Transformed::yes(new_c.clone()),
@@ -1009,7 +1006,7 @@ pub fn replace_cols_by_name(
 /// check whether the expression uses the columns in `check_map`.
 fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match check_map.get(&c.flat_name()) {
                 Some(_) => {
@@ -1031,7 +1028,6 @@ mod tests {
     use super::*;
     use std::any::Any;
     use std::fmt::{Debug, Formatter};
-    use std::sync::Arc;
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
@@ -1039,12 +1035,11 @@ mod tests {
     use crate::OptimizerContext;
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
-        ColumnarValue, Expr, Extension, LogicalPlanBuilder, Operator, ScalarUDF,
+        col, in_list, in_subquery, lit, sum, ColumnarValue, Extension, ScalarUDF,
         ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
         Volatility,
     };

@@ -18,18 +18,18 @@
 .. image:: _static/images/2x_bgwhite_original.png
   :alt: DataFusion Logo
 
-=======================
-Apache Arrow DataFusion
-=======================
+=================
+Apache DataFusion
+=================
 
 .. Code from https://buttons.github.io/
 .. raw:: html
 
   <p>
     <!-- Place this tag where you want the button to render. -->
-    <a class="github-button" href="https://github.com/apache/arrow-datafusion" data-size="large" data-show-count="true" aria-label="Star apache/arrow-datafusion on GitHub">Star</a>
+    <a class="github-button" href="https://github.com/apache/datafusion" data-size="large" data-show-count="true" aria-label="Star apache/datafusion on GitHub">Star</a>
     <!-- Place this tag where you want the button to render. -->
-     <a class="github-button" href="https://github.com/apache/arrow-datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/arrow-datafusion on GitHub">Fork</a>
+     <a class="github-button" href="https://github.com/apache/datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/datafusion on GitHub">Fork</a>
   </p>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
@@ -46,19 +46,30 @@ The `example usage`_ section in the user guide and the `datafusion-examples`_ co
 Please see the `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
 
 .. _example usage: user-guide/example-usage.html
-.. _datafusion-examples: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
+.. _datafusion-examples: https://github.com/apache/datafusion/tree/master/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
 .. _communication: contributor-guide/communication.html
+
+.. _toc.asf-links:
+.. toctree::
+   :maxdepth: 1
+   :caption: ASF Links
+
+   Apache Software Foundation <https://apache.org>
+   License <https://www.apache.org/licenses/>
+   Donate <https://www.apache.org/foundation/sponsorship.html>
+   Thanks <https://www.apache.org/foundation/thanks.html>
+   Security <https://www.apache.org/security/>
 
 .. _toc.links:
 .. toctree::
    :maxdepth: 1
    :caption: Links
 
-   Github and Issue Tracker <https://github.com/apache/arrow-datafusion>
+   Github and Issue Tracker <https://github.com/apache/datafusion>
    crates.io <https://crates.io/crates/datafusion>
    API Docs <https://docs.rs/datafusion/latest/datafusion/>
-   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
+   Code of conduct <https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md>
 
 .. _toc.guide:
 .. toctree::

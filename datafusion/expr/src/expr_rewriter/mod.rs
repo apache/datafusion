@@ -62,7 +62,7 @@ pub trait FunctionRewrite {
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
@@ -91,7 +91,7 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
         return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
     }
 
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col =
@@ -119,7 +119,7 @@ pub fn normalize_cols(
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
@@ -140,7 +140,7 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = Column {
@@ -190,7 +190,7 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
                 Transformed::yes(Expr::Column(col))
@@ -218,13 +218,7 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .iter()
-                .map(|(qualifier, field)| {
-                    Expr::Column(Column::from((qualifier, field.as_ref())))
-                })
-                .collect();
+            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
@@ -293,8 +287,7 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFSchema, ScalarValue, TableReference};
+    use datafusion_common::ScalarValue;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -336,7 +329,7 @@ mod test {
         // rewrites "foo" --> "bar"
         let rewritten = col("state")
             .eq(lit("foo"))
-            .transform(&transformer)
+            .transform(transformer)
             .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
@@ -344,7 +337,7 @@ mod test {
         // doesn't rewrite
         let rewritten = col("state")
             .eq(lit("baz"))
-            .transform(&transformer)
+            .transform(transformer)
             .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));

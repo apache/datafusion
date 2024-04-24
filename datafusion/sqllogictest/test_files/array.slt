@@ -1378,7 +1378,7 @@ NULL 43
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # follow clickhouse and duckdb
 #query ?
 #select array_pop_back(null);
@@ -1556,7 +1556,7 @@ select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from large_arrays
 
 ## array_pop_front (aliases: `list_pop_front`)
 
-#TODO:https://github.com/apache/arrow-datafusion/issues/7142
+#TODO:https://github.com/apache/datafusion/issues/7142
 # array_pop_front scalar function with null
 # follow clickhouse and duckdb
 #query ?
@@ -3020,7 +3020,7 @@ select array_positions([1, 2, 3, 4, 5], null);
 ----
 []
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # array_positions with NULL (follow PostgreSQL)
 #query ?
 #select array_positions(null, 1);
@@ -4079,7 +4079,7 @@ select cardinality(arrow_cast(make_array(), 'LargeList(Null)')), cardinality(arr
 NULL 0
 
 #TODO
-#https://github.com/apache/arrow-datafusion/issues/9158
+#https://github.com/apache/datafusion/issues/9158
 #query II
 #select cardinality(arrow_cast(make_array(), 'FixedSizeList(1, Null)')), cardinality(arrow_cast(make_array(make_array()), 'FixedSizeList(1, List(Null))'))
 #----
@@ -4165,7 +4165,7 @@ select
 ----
 [1, , 3] [, 2.2, 3.3] [, bc]
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # follow PostgreSQL behavior
 #query ?
 #select
@@ -4385,7 +4385,7 @@ select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], 
 
 ## array_remove_all (aliases: `list_removes`)
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # array_remove_all with NULL elements
 #query ?
 #select array_remove_all(NULL, 1);
@@ -5257,7 +5257,7 @@ true false true false false false true true false false true false true
 
 ## array_distinct
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 #query ?
 #select array_distinct(null);
 #----
@@ -6056,7 +6056,7 @@ select array_concat(column1, [7]) from arrays_values_v2;
 
 # flatten
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # follow DuckDB
 #query ?
 #select flatten(NULL);
@@ -6144,7 +6144,7 @@ select empty(arrow_cast(make_array(), 'LargeList(Null)'));
 ----
 true
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/9158
+#TODO: https://github.com/apache/datafusion/issues/9158
 #query B
 #select empty(arrow_cast(make_array(), 'FixedSizeList(0, Null)'));
 #----
@@ -6166,7 +6166,7 @@ select empty(arrow_cast(make_array(NULL), 'FixedSizeList(1, Null)'));
 ----
 false
 
-#TODO: https://github.com/apache/arrow-datafusion/issues/7142
+#TODO: https://github.com/apache/datafusion/issues/7142
 # empty scalar function #4
 #query B
 #select empty(NULL);
@@ -6473,7 +6473,7 @@ select arrow_typeof(c) from test_create_array_table;
 List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # Test casting to array types
-# issue: https://github.com/apache/arrow-datafusion/issues/9440
+# issue: https://github.com/apache/datafusion/issues/9440
 query ??T
 select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
 ----

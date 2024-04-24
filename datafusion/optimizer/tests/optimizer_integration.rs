@@ -58,7 +58,7 @@ fn case_when() -> Result<()> {
 
 #[test]
 fn subquery_filter_with_cast() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    // regression test for https://github.com/apache/datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
       SELECT AVG(col_int32) FROM test \
@@ -102,7 +102,7 @@ fn unsigned_target_type() -> Result<()> {
 
 #[test]
 fn distribute_by() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3234
+    // regression test for https://github.com/apache/datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
     let expected = "Repartition: DistributeBy(col_utf8)\
@@ -113,7 +113,7 @@ fn distribute_by() -> Result<()> {
 
 #[test]
 fn semi_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -130,7 +130,7 @@ fn semi_join_with_join_filter() -> Result<()> {
 
 #[test]
 fn anti_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE NOT EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -262,7 +262,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
 }
 
 #[test]
-// issue: https://github.com/apache/arrow-datafusion/issues/5334
+// issue: https://github.com/apache/datafusion/issues/5334
 fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();

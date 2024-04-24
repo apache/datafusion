@@ -174,7 +174,7 @@ let udf = create_udf(
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
 
@@ -297,7 +297,7 @@ let smooth_it = create_udwf(
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-[`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -319,7 +319,7 @@ ctx.register_udwf(smooth_it);
 
 At this point, you can use the `smooth_it` function in your query:
 
-For example, if we have a [`cars.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
+For example, if we have a [`cars.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
 
 ```
 car,speed,time
@@ -500,7 +500,7 @@ let geometric_mean = create_udaf(
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
 
@@ -619,7 +619,7 @@ pretty::print_batches(&results)?;
 // +---+
 ```
 
-[1]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[2]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[3]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[4]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
+[1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+[2]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
+[3]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
+[4]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs

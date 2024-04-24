@@ -18,7 +18,8 @@
 //! [`EliminateJoin`] rewrites `INNER JOIN` with `true`/`null`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
     logical_plan::{EmptyRelation, LogicalPlan},
@@ -39,30 +40,10 @@ impl EliminateJoin {
 impl OptimizerRule for EliminateJoin {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
-                match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(true)))) => {
-                        Ok(Some(LogicalPlan::CrossJoin(CrossJoin {
-                            left: join.left.clone(),
-                            right: join.right.clone(),
-                            schema: join.schema.clone(),
-                        })))
-                    }
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => {
-                        Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: join.schema.clone(),
-                        })))
-                    }
-                    _ => Ok(None),
-                }
-            }
-            _ => Ok(None),
-        }
+        internal_err!("Should have called EliminateJoin::rewrite")
     }
 
     fn name(&self) -> &str {
@@ -71,6 +52,38 @@ impl OptimizerRule for EliminateJoin {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        match plan {
+            LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
+                match join.filter {
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(true)))) => {
+                        Ok(Transformed::yes(LogicalPlan::CrossJoin(CrossJoin {
+                            left: join.left,
+                            right: join.right,
+                            schema: join.schema,
+                        })))
+                    }
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
+                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema,
+                        })),
+                    ),
+                    _ => Ok(Transformed::no(LogicalPlan::Join(join))),
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        }
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
     }
 }
 
