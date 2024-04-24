@@ -269,6 +269,11 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
             }
+            Expr::Columns(cols) => {
+                cols.iter().for_each(|c| {
+                    accum.insert(c.clone());
+                });
+            }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well

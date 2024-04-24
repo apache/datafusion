@@ -69,7 +69,8 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.iter().flatten().collect()
             }
-            Expr::Column(_)
+            Expr::Column(_) 
+            | Expr::Columns(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
@@ -140,6 +141,7 @@ impl TreeNode for Expr {
     ) -> Result<Transformed<Self>> {
         Ok(match self {
             Expr::Column(_)
+            | Expr::Columns(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
             | Expr::OuterReferenceColumn(_, _)

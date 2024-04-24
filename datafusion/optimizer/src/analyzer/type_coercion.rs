@@ -403,6 +403,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }
             Expr::Alias(_)
             | Expr::Column(_)
+            | Expr::Columns(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::SimilarTo(_)

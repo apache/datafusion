@@ -35,6 +35,10 @@ message Column {
   ColumnRelation relation = 2;
 }
 
+message Columns {
+  repeated Column column = 1;
+}
+
 message DfField{
   Field field = 1;
   ColumnRelation qualifier = 2;
@@ -421,6 +425,8 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
     Unnest unnest = 35;
+
+    Columns columns = 36;
 
   }
 }

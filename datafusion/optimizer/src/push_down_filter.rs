@@ -219,6 +219,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
         Expr::Column(_)
+        | Expr::Columns(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),

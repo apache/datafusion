@@ -60,6 +60,14 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                     Ok(TreeNodeRecursion::Stop)
                 }
             }
+            Expr::Columns(cols) => {
+                is_applicable &= cols.iter().all(|col| col_names.contains(&col.name));
+                if is_applicable {
+                    Ok(TreeNodeRecursion::Jump)
+                } else {
+                    Ok(TreeNodeRecursion::Stop)
+                }
+            }
             Expr::Literal(_)
             | Expr::Alias(_)
             | Expr::OuterReferenceColumn(_, _)

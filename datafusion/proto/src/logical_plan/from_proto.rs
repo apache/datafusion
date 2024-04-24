@@ -937,6 +937,11 @@ pub fn parse_expr(
             )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
+        ExprType::Columns(columns) => {
+            let columns: Vec<Column> =
+                columns.column.iter().map(|c| c.into()).collect::<Vec<_>>();
+            Ok(Expr::Columns(columns))
+        }
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;
             Ok(Expr::Literal(scalar_value))

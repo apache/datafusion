@@ -113,6 +113,8 @@ pub enum Expr {
     Alias(Alias),
     /// A named reference to a qualified filed in a schema.
     Column(Column),
+    /// A collection of references to a qualified filed in a schema.
+    Columns(Vec<Column>),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
@@ -922,6 +924,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
+            Expr::Columns(..) => "Columns",
             Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GetIndexedField { .. } => "GetIndexedField",
@@ -1329,6 +1332,7 @@ impl Expr {
             | Expr::Between(..)
             | Expr::Cast(..)
             | Expr::Column(..)
+            | Expr::Columns(..)
             | Expr::Exists(..)
             | Expr::GetIndexedField(..)
             | Expr::GroupingSet(..)
@@ -1398,6 +1402,11 @@ impl fmt::Display for Expr {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
+            Expr::Columns(c) => {
+                Ok(
+                    c.iter().map(|column| write!(f, "{},", column)).collect::<Result<(), _>>()?
+                )
+            }
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
@@ -1657,6 +1666,10 @@ fn create_name(e: &Expr) -> Result<String> {
     match e {
         Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
+        Expr::Columns(c) => {
+            let names: Vec<String> = c.iter().map(|c| c.flat_name()).collect();
+            Ok(names.join(", "))
+        }
         Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),

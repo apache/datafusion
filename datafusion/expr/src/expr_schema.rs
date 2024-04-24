@@ -26,10 +26,9 @@ use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::data_types;
 use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
-    Result, TableReference,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, TableReference
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -109,6 +108,15 @@ impl ExprSchemable for Expr {
             },
             Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
+            Expr::Columns(c) => {
+                let fields = c.iter()
+                        .map(|col| {
+                            let data_type = schema.data_type(col)?;
+                            let nullable = schema.nullable(col)?;
+                            Ok(Field::new(col.name.clone(), data_type.clone(), nullable))
+                        }).collect::<Result<Vec<Field>,DataFusionError>>();
+                Ok(DataType::Struct(Fields::from(fields?)))
+            }
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.data_type()),
@@ -277,6 +285,10 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
+            Expr::Columns(c) => {
+                let column_nullables:Vec<bool> = c.iter().map(|col| input_schema.nullable(col)).collect::<Result<Vec<_>>>()?;
+                Ok(column_nullables.iter().any(|&x| x))
+            }
             Expr::OuterReferenceColumn(_, _) => Ok(true),
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::Case(case) => {
@@ -325,7 +337,8 @@ impl ExprSchemable for Expr {
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
-            }
+            },
+            
             Expr::Wildcard { .. } => internal_err!(
                 "Wildcard expressions are not valid in a logical query plan"
             ),

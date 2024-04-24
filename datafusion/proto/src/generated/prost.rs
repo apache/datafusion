@@ -15,6 +15,12 @@ pub struct Column {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Columns {
+    #[prost(message, repeated, tag = "1")]
+    pub column: ::prost::alloc::vec::Vec<Column>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DfField {
     #[prost(message, optional, tag = "1")]
     pub field: ::core::option::Option<Field>,
@@ -572,7 +578,11 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
+<<<<<<< HEAD
         tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+=======
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+>>>>>>> 9e879b56d (Support multi-columns expr)
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -657,6 +667,8 @@ pub mod logical_expr_node {
         Placeholder(super::PlaceholderNode),
         #[prost(message, tag = "35")]
         Unnest(super::Unnest),
+        #[prost(message, tag = "36")]
+        Columns(super::Columns),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]

@@ -515,6 +515,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
+            | Expr::Columns(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)

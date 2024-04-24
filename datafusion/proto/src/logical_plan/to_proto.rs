@@ -485,6 +485,17 @@ pub fn serialize_expr(
         Expr::Column(c) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Column(c.into())),
         },
+        Expr::Columns(columns) => {
+            let columns = crate::generated::datafusion::Columns {
+                column: columns
+                    .iter()
+                    .map(|c| c.into())
+                    .collect::<Vec<crate::generated::datafusion::Column>>(),
+            };
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::Columns(columns)),
+            }
+        }
         Expr::Alias(Alias {
             expr,
             relation,

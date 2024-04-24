@@ -3926,6 +3926,97 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
         deserializer.deserialize_struct("datafusion.ColumnStats", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Columns {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.column.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Columns", len)?;
+        if !self.column.is_empty() {
+            struct_ser.serialize_field("column", &self.column)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Columns {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "column",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Column,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "column" => Ok(GeneratedField::Column),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Columns;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Columns")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Columns, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut column__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Column => {
+                            if column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("column"));
+                            }
+                            column__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(Columns {
+                    column: column__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Columns", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CompressionTypeVariant {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -13866,6 +13957,9 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::Unnest(v) => {
                     struct_ser.serialize_field("unnest", v)?;
                 }
+                logical_expr_node::ExprType::Columns(v) => {
+                    struct_ser.serialize_field("columns", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -13932,6 +14026,7 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "similarTo",
             "placeholder",
             "unnest",
+            "columns",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -13970,6 +14065,7 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             SimilarTo,
             Placeholder,
             Unnest,
+            Columns,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14025,6 +14121,7 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "similarTo" | "similar_to" => Ok(GeneratedField::SimilarTo),
                             "placeholder" => Ok(GeneratedField::Placeholder),
                             "unnest" => Ok(GeneratedField::Unnest),
+                            "columns" => Ok(GeneratedField::Columns),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14283,6 +14380,13 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("unnest"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Unnest)
+;
+                        }
+                        GeneratedField::Columns => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columns"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Columns)
 ;
                         }
                     }
