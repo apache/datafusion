@@ -26,6 +26,10 @@ mod bit_length;
 mod btrim;
 mod chr;
 mod common;
+mod concat;
+mod concat_ws;
+mod ends_with;
+mod initcap;
 mod levenshtein;
 mod lower;
 mod ltrim;
@@ -45,6 +49,10 @@ make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
 make_udf_function!(chr::ChrFunc, CHR, chr);
+make_udf_function!(concat::ConcatFunc, CONCAT, concat);
+make_udf_function!(concat_ws::ConcatWsFunc, CONCAT_WS, concat_ws);
+make_udf_function!(ends_with::EndsWithFunc, ENDS_WITH, ends_with);
+make_udf_function!(initcap::InitcapFunc, INITCAP, initcap);
 make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(lower::LowerFunc, LOWER, lower);
@@ -80,6 +88,28 @@ pub mod expr_fn {
     #[doc = "Converts the Unicode code point to a UTF8 character"]
     pub fn chr(arg: Expr) -> Expr {
         super::chr().call(vec![arg])
+    }
+
+    #[doc = "Concatenates the text representations of all the arguments. NULL arguments are ignored"]
+    pub fn concat(args: Vec<Expr>) -> Expr {
+        super::concat().call(args)
+    }
+
+    #[doc = "Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored."]
+    pub fn concat_ws(delimiter: Expr, args: Vec<Expr>) -> Expr {
+        let mut args = args;
+        args.insert(0, delimiter);
+        super::concat_ws().call(args)
+    }
+
+    #[doc = "Returns true if the `string` ends with the `suffix`, false otherwise."]
+    pub fn ends_with(string: Expr, suffix: Expr) -> Expr {
+        super::ends_with().call(vec![string, suffix])
+    }
+
+    #[doc = "Converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase"]
+    pub fn initcap(string: Expr) -> Expr {
+        super::initcap().call(vec![string])
     }
 
     #[doc = "Returns the Levenshtein distance between the two given strings"]
@@ -160,6 +190,10 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         bit_length(),
         btrim(),
         chr(),
+        concat(),
+        concat_ws(),
+        ends_with(),
+        initcap(),
         levenshtein(),
         lower(),
         ltrim(),

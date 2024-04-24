@@ -107,10 +107,7 @@ impl ScalarUDFImpl for ToHexFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{
-        array::{Int32Array, StringArray},
-        datatypes::Int32Type,
-    };
+    use arrow::array::{Int32Array, StringArray};
 
     use datafusion_common::cast::as_string_array;
 

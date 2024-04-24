@@ -140,7 +140,7 @@ fn check_inner_plan(
     is_aggregate: bool,
     can_contain_outer_ref: bool,
 ) -> Result<()> {
-    if !can_contain_outer_ref && contains_outer_reference(inner_plan) {
+    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
     // We want to support as many operators as possible inside the correlated subquery
@@ -233,13 +233,6 @@ fn check_inner_plan(
     }
 }
 
-fn contains_outer_reference(inner_plan: &LogicalPlan) -> bool {
-    inner_plan
-        .expressions()
-        .iter()
-        .any(|expr| expr.contains_outer())
-}
-
 fn check_aggregation_in_scalar_subquery(
     inner_plan: &LogicalPlan,
     agg: &Aggregate,
@@ -283,7 +276,7 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
-    inner_plan.apply_with_subqueries(&mut |plan| {
+    inner_plan.apply_with_subqueries(|plan| {
         if let LogicalPlan::Filter(Filter { predicate, .. }) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()

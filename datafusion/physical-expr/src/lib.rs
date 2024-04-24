@@ -18,7 +18,6 @@
 pub mod aggregate;
 pub mod analysis;
 pub mod binary_map;
-pub mod conditional_expressions;
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;
@@ -28,7 +27,6 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-pub mod string_expressions;
 pub mod udf;
 pub mod utils;
 pub mod window;

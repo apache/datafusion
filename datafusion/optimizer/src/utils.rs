@@ -21,9 +21,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::is_volatile;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
@@ -95,20 +93,6 @@ pub(crate) fn replace_qualified_name(
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
-}
-
-/// check whether the expression is volatile predicates
-pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
-    let mut is_volatile_expr = false;
-    e.apply(&mut |expr| {
-        Ok(if is_volatile(expr)? {
-            is_volatile_expr = true;
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(is_volatile_expr)
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -287,4 +271,48 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 )]
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     expr_utils::merge_schema(inputs)
+}
+
+/// Handles ensuring the name of rewritten expressions is not changed.
+///
+/// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
+/// expression should be preserved: `3 as "1 + 2"`
+///
+/// See <https://github.com/apache/datafusion/issues/3555> for details
+pub struct NamePreserver {
+    use_alias: bool,
+}
+
+/// If the name of an expression is remembered, it will be preserved when
+/// rewriting the expression
+pub struct SavedName(Option<String>);
+
+impl NamePreserver {
+    /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
+    pub fn new(plan: &LogicalPlan) -> Self {
+        Self {
+            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+        }
+    }
+
+    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
+        let original_name = if self.use_alias {
+            Some(expr.name_for_alias()?)
+        } else {
+            None
+        };
+
+        Ok(SavedName(original_name))
+    }
+}
+
+impl SavedName {
+    /// Ensures the name of the rewritten expression is preserved
+    pub fn restore(self, expr: Expr) -> Result<Expr> {
+        let Self(original_name) = self;
+        match original_name {
+            Some(name) => expr.alias_if_changed(name),
+            None => Ok(expr),
+        }
+    }
 }

@@ -95,7 +95,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         if !expr_check_map.is_empty() {
                             rewrite_expr = rewrite_expr
                                 .clone()
-                                .transform_up(&|expr| {
+                                .transform_up(|expr| {
                                     if let Expr::Column(col) = &expr {
                                         if let Some(map_expr) =
                                             expr_check_map.get(&col.name)
@@ -152,7 +152,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 {
                                     let new_expr = rewrite_expr
                                         .clone()
-                                        .transform_up(&|expr| {
+                                        .transform_up(|expr| {
                                             if let Expr::Column(col) = &expr {
                                                 if let Some(map_expr) =
                                                     expr_check_map.get(&col.name)
@@ -385,8 +385,6 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::logical_plan::LogicalPlanBuilder;
     use datafusion_expr::{
         col, lit, max, min, out_ref_col, scalar_subquery, sum, Between,
     };
@@ -429,7 +427,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -485,7 +483,7 @@ mod tests {
         \n                      TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -523,7 +521,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -559,7 +557,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -593,7 +591,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -732,7 +730,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -798,7 +796,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -837,7 +835,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -877,7 +875,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -910,7 +908,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -942,7 +940,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -973,7 +971,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1030,7 +1028,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1079,7 +1077,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())

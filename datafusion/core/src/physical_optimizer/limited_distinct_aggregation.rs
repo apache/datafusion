@@ -107,7 +107,7 @@ impl LimitedDistinctAggregation {
         let mut found_match_aggr = false;
 
         let mut rewrite_applicable = true;
-        let mut closure = |plan: Arc<dyn ExecutionPlan>| {
+        let closure = |plan: Arc<dyn ExecutionPlan>| {
             if !rewrite_applicable {
                 return Ok(Transformed::no(plan));
             }
@@ -138,7 +138,7 @@ impl LimitedDistinctAggregation {
             rewrite_applicable = false;
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
+        let child = child.clone().transform_down(closure).data().ok()?;
         if is_global_limit {
             return Some(Arc::new(GlobalLimitExec::new(
                 child,
@@ -163,7 +163,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_distinct_aggregation_soft_limit {
-            plan.transform_down(&|plan| {
+            plan.transform_down(|plan| {
                 Ok(
                     if let Some(plan) =
                         LimitedDistinctAggregation::transform_limit(plan.clone())
@@ -191,15 +191,13 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::error::Result;
     use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
-    use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;

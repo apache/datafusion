@@ -33,19 +33,19 @@ query TT
 EXPLAIN SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
 ----
 logical_plan
-Inner Join: t1.a = t2.a Filter: CAST(t2.b AS Int64) * Int64(50) <= CAST(t1.b AS Int64)
---TableScan: t1 projection=[a, b]
---TableScan: t2 projection=[a, b]
+01)Inner Join: t1.a = t2.a Filter: CAST(t2.b AS Int64) * Int64(50) <= CAST(t1.b AS Int64)
+02)--TableScan: t1 projection=[a, b]
+03)--TableScan: t2 projection=[a, b]
 physical_plan
-SortMergeJoin: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
---SortExec: expr=[a@0 ASC]
-----CoalesceBatchesExec: target_batch_size=8192
-------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
---------MemoryExec: partitions=1, partition_sizes=[1]
---SortExec: expr=[a@0 ASC]
-----CoalesceBatchesExec: target_batch_size=8192
-------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
---------MemoryExec: partitions=1, partition_sizes=[1]
+01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
+02)--SortExec: expr=[a@0 ASC]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)--SortExec: expr=[a@0 ASC]
+07)----CoalesceBatchesExec: target_batch_size=8192
+08)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+09)--------MemoryExec: partitions=1, partition_sizes=[1]
 
 # inner join with join filter
 query TITI rowsort

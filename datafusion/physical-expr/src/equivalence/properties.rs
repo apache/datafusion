@@ -490,7 +490,7 @@ impl EquivalenceProperties {
     /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
     /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
-    /// dependency map, happen in issue 8838: <https://github.com/apache/arrow-datafusion/issues/8838>
+    /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
         let orderings = &self.oeq_class.orderings;
         let new_order = orderings
@@ -857,7 +857,7 @@ impl EquivalenceProperties {
     /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up(|expr| Ok(update_ordering(expr, self)))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
@@ -1295,13 +1295,11 @@ impl Hash for ExprWrapper {
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, SortOptions, TimeUnit};
-    use itertools::Itertools;
+    use arrow_schema::{Fields, TimeUnit};
 
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{Operator, ScalarUDF};
 
     use crate::equivalence::add_offset_to_expr;
@@ -1312,7 +1310,6 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
-    use crate::PhysicalSortExpr;
 
     use super::*;
 
@@ -2209,6 +2206,88 @@ mod tests {
             assert!(
                 expected.eq(&normalized),
                 "error in test: reqs: {reqs:?}, expected: {expected:?}, normalized: {normalized:?}"
+            );
+        }
+
+        Ok(())
+    }
+    #[test]
+    fn test_eliminate_redundant_monotonic_sorts() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let base_properties = EquivalenceProperties::new(schema.clone()).with_reorder(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|c| {
+                    col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
+                        expr,
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: true,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+
+        struct TestCase {
+            name: &'static str,
+            constants: Vec<Arc<dyn PhysicalExpr>>,
+            equal_conditions: Vec<[Arc<dyn PhysicalExpr>; 2]>,
+            sort_columns: &'static [&'static str],
+            should_satisfy_ordering: bool,
+        }
+
+        let col_a = col("a", schema.as_ref())?;
+        let col_b = col("b", schema.as_ref())?;
+        let col_c = col("c", schema.as_ref())?;
+        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None));
+
+        let cases = vec![
+            TestCase {
+                name: "(a, b, c) -> (c)",
+                // b is constant, so it should be removed from the sort order
+                constants: vec![col_b],
+                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
+                sort_columns: &["c"],
+                should_satisfy_ordering: true,
+            },
+            TestCase {
+                name: "not ordered because (b) is not constant",
+                // b is not constant anymore
+                constants: vec![],
+                // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
+                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
+                sort_columns: &["c"],
+                should_satisfy_ordering: false,
+            },
+        ];
+
+        for case in cases {
+            let mut properties = base_properties.clone().add_constants(case.constants);
+            for [left, right] in &case.equal_conditions {
+                properties.add_equal_conditions(left, right)
+            }
+
+            let sort = case
+                .sort_columns
+                .iter()
+                .map(|&name| {
+                    col(name, &schema).map(|col| PhysicalSortExpr {
+                        expr: col,
+                        options: SortOptions::default(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            assert_eq!(
+                properties.ordering_satisfy(&sort),
+                case.should_satisfy_ordering,
+                "failed test '{}'",
+                case.name
             );
         }
 

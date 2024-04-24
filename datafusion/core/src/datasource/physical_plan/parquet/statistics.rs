@@ -360,7 +360,7 @@ mod test {
     #[should_panic(
         expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
     )]
-    // Due to https://github.com/apache/arrow-datafusion/issues/8295
+    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
             input: timestamp_array([
@@ -470,7 +470,7 @@ mod test {
                 (None, None),
             ]),
         };
-        // Due to https://github.com/apache/arrow-datafusion/issues/8334,
+        // Due to https://github.com/apache/datafusion/issues/8334,
         // statistics for struct arrays are not supported
         test.expected_min =
             new_null_array(test.input.data_type(), test.expected_min.len());
@@ -483,7 +483,7 @@ mod test {
     #[should_panic(
         expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
     )]
-    // Due to https://github.com/apache/arrow-datafusion/issues/8295
+    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![

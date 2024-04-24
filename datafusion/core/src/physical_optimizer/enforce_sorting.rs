@@ -160,12 +160,12 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(&ensure_sorting)?.data;
+        let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
             let parallel = plan_with_coalesce_partitions
-                .transform_up(&parallelize_sorts)
+                .transform_up(parallelize_sorts)
                 .data()?;
             parallel.plan
         } else {
@@ -174,7 +174,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan = plan_with_pipeline_fixer
-            .transform_up(&|plan_with_pipeline_fixer| {
+            .transform_up(|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
@@ -188,11 +188,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?.data;
+        let adjusted = sort_pushdown.transform_down(pushdown_sorts)?.data;
 
         adjusted
             .plan
-            .transform_up(&|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
+            .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
             .data()
     }
 
@@ -611,7 +611,6 @@ fn get_sort_exprs(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
@@ -622,7 +621,6 @@ mod tests {
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
-    use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{csv_exec_ordered, csv_exec_sorted, stream_exec_ordered};
@@ -681,7 +679,7 @@ mod tests {
             {
                 let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
                 let adjusted = plan_requirements
-                    .transform_up(&ensure_sorting)
+                    .transform_up(ensure_sorting)
                     .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
@@ -690,7 +688,7 @@ mod tests {
                     let plan_with_coalesce_partitions =
                         PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
                     let parallel = plan_with_coalesce_partitions
-                        .transform_up(&parallelize_sorts)
+                        .transform_up(parallelize_sorts)
                         .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
@@ -701,7 +699,7 @@ mod tests {
 
                 let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
                 let updated_plan = plan_with_pipeline_fixer
-                    .transform_up(&|plan_with_pipeline_fixer| {
+                    .transform_up(|plan_with_pipeline_fixer| {
                         replace_with_order_preserving_variants(
                             plan_with_pipeline_fixer,
                             false,
@@ -716,7 +714,7 @@ mod tests {
                 let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
                 assign_initial_requirements(&mut sort_pushdown);
                 sort_pushdown
-                    .transform_down(&pushdown_sorts)
+                    .transform_down(pushdown_sorts)
                     .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.

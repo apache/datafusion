@@ -129,7 +129,7 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
 
     #[test]
     fn nvl_int32() -> Result<()> {

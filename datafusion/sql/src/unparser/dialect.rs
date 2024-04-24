@@ -26,7 +26,7 @@ pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
     fn identifier_quote_style(&self) -> Option<char> {
-        None
+        Some('"')
     }
 }
 

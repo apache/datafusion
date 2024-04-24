@@ -24,4 +24,4 @@ DataFusion's code structure and organization is described in the
 possible. You can find the most up to date version in the [source code].
 
 [crates.io documentation]: https://docs.rs/datafusion/latest/datafusion/index.html#architecture
-[source code]: https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/src/lib.rs
+[source code]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs

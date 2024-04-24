@@ -36,6 +36,7 @@ impl TreeNode for Expr {
     ) -> Result<TreeNodeRecursion> {
         let children = match self {
             Expr::Alias(Alias{expr,..})
+            | Expr::Unnest(Unnest{expr})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -60,7 +61,6 @@ impl TreeNode for Expr {
                     GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
             }
-            Expr::Unnest(Unnest { exprs }) |
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
             Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
@@ -283,9 +283,6 @@ impl TreeNode for Expr {
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
-                    }
                     ScalarFunctionDefinition::UDF(fun) => {
                         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
                     }

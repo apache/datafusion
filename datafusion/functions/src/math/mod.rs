@@ -22,13 +22,16 @@ use std::sync::Arc;
 
 pub mod abs;
 pub mod cot;
+pub mod factorial;
 pub mod gcd;
 pub mod iszero;
 pub mod lcm;
 pub mod log;
 pub mod nans;
+pub mod nanvl;
 pub mod pi;
 pub mod power;
+pub mod random;
 pub mod round;
 pub mod trunc;
 
@@ -42,10 +45,13 @@ make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
 make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
 make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, None);
+make_math_unary_udf!(CeilFunc, CEIL, ceil, ceil, Some(vec![Some(true)]));
 make_math_unary_udf!(CosFunc, COS, cos, cos, None);
 make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
 make_udf_function!(cot::CotFunc, COT, cot);
 make_math_unary_udf!(DegreesFunc, DEGREES, degrees, to_degrees, None);
+make_math_unary_udf!(ExpFunc, EXP, exp, exp, Some(vec![Some(true)]));
+make_udf_function!(factorial::FactorialFunc, FACTORIAL, factorial);
 make_math_unary_udf!(FloorFunc, FLOOR, floor, floor, Some(vec![Some(true)]));
 make_udf_function!(log::LogFunc, LOG, log);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
@@ -55,9 +61,11 @@ make_udf_function!(lcm::LcmFunc, LCM, lcm);
 make_math_unary_udf!(LnFunc, LN, ln, ln, Some(vec![Some(true)]));
 make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
 make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
+make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
 make_udf_function!(pi::PiFunc, PI, pi);
 make_udf_function!(power::PowerFunc, POWER, power);
 make_math_unary_udf!(RadiansFunc, RADIANS, radians, to_radians, None);
+make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
 make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, None);
 make_math_unary_udf!(SinFunc, SIN, sin, sin, None);
@@ -115,6 +123,11 @@ pub mod expr_fn {
         super::cbrt().call(vec![num])
     }
 
+    #[doc = "nearest integer greater than or equal to argument"]
+    pub fn ceil(num: Expr) -> Expr {
+        super::ceil().call(vec![num])
+    }
+
     #[doc = "cosine"]
     pub fn cos(num: Expr) -> Expr {
         super::cos().call(vec![num])
@@ -133,6 +146,16 @@ pub mod expr_fn {
     #[doc = "converts radians to degrees"]
     pub fn degrees(num: Expr) -> Expr {
         super::degrees().call(vec![num])
+    }
+
+    #[doc = "exponential"]
+    pub fn exp(num: Expr) -> Expr {
+        super::exp().call(vec![num])
+    }
+
+    #[doc = "factorial"]
+    pub fn factorial(num: Expr) -> Expr {
+        super::factorial().call(vec![num])
     }
 
     #[doc = "nearest integer less than or equal to argument"]
@@ -180,6 +203,11 @@ pub mod expr_fn {
         super::log10().call(vec![num])
     }
 
+    #[doc = "returns x if x is not NaN otherwise returns y"]
+    pub fn nanvl(x: Expr, y: Expr) -> Expr {
+        super::nanvl().call(vec![x, y])
+    }
+
     #[doc = "Returns an approximate value of π"]
     pub fn pi() -> Expr {
         super::pi().call(vec![])
@@ -193,6 +221,11 @@ pub mod expr_fn {
     #[doc = "converts degrees to radians"]
     pub fn radians(num: Expr) -> Expr {
         super::radians().call(vec![num])
+    }
+
+    #[doc = "Returns a random value in the range 0.0 <= x < 1.0"]
+    pub fn random() -> Expr {
+        super::random().call(vec![])
     }
 
     #[doc = "round to nearest integer"]
@@ -248,10 +281,13 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         atan2(),
         atanh(),
         cbrt(),
+        ceil(),
         cos(),
         cosh(),
         cot(),
         degrees(),
+        exp(),
+        factorial(),
         floor(),
         gcd(),
         isnan(),
@@ -261,9 +297,11 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         log(),
         log2(),
         log10(),
+        nanvl(),
         pi(),
         power(),
         radians(),
+        random(),
         round(),
         signum(),
         sin(),

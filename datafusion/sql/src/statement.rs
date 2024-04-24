@@ -94,13 +94,27 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
                 ast::ColumnOption::Unique {
-                    is_primary,
+                    is_primary: false,
                     characteristics,
                 } => constraints.push(ast::TableConstraint::Unique {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
-                    is_primary: *is_primary,
                     characteristics: *characteristics,
+                    index_name: None,
+                    index_type_display: ast::KeyOrIndexDisplay::None,
+                    index_type: None,
+                    index_options: vec![],
+                }),
+                ast::ColumnOption::Unique {
+                    is_primary: true,
+                    characteristics,
+                } => constraints.push(ast::TableConstraint::PrimaryKey {
+                    name: name.clone(),
+                    columns: vec![column.name.clone()],
+                    characteristics: *characteristics,
+                    index_name: None,
+                    index_type: None,
+                    index_options: vec![],
                 }),
                 ast::ColumnOption::ForeignKey {
                     foreign_table,
@@ -465,6 +479,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_alias,
                 replace_into,
                 priority,
+                insert_alias,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -503,6 +518,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Inserts with a `PRIORITY` clause not supported: {priority:?}"
                     )?
                 };
+                if insert_alias.is_some() {
+                    plan_err!("Inserts with an alias not supported")?;
+                }
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
             }
@@ -781,7 +799,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         if self.has_table("information_schema", "tables") {
             // we only support the basic "SHOW TABLES"
-            // https://github.com/apache/arrow-datafusion/issues/3188
+            // https://github.com/apache/datafusion/issues/3188
             if db_name.is_some() || filter.is_some() || full || extended {
                 plan_err!("Unsupported parameters to SHOW TABLES")
             } else {
@@ -1289,8 +1307,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ))
                         } else {
                             datafusion_expr::Expr::Column(Column::from((
-                                qualifier,
-                                field.as_ref(),
+                                qualifier, field,
                             )))
                         }
                     }

@@ -29,4 +29,4 @@ valid installation of [protoc] (see [installation instructions] for details).
 ```
 
 [protoc]: https://github.com/protocolbuffers/protobuf#protocol-compiler-installation
-[installation instructions]: https://arrow.apache.org/datafusion/contributor-guide/#protoc-installation
+[installation instructions]: https://datafusion.apache.org/contributor-guide/#protoc-installation

@@ -34,7 +34,7 @@ use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
+use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
@@ -277,7 +277,7 @@ impl TableProvider for StreamTable {
             None => None,
         };
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(self.0.clone())),
             self.0.schema.clone(),
