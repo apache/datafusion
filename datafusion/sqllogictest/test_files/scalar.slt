@@ -1790,26 +1790,26 @@ select  coalesce(column1, 'none_set') from test1;
 foo
 none_set
 
-# test coercion Int
-query I
+# test coercion Int and Dictionary
+query ?
 select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 34
 
 # test with Int
-query I
+query ?
 select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34);
 ----
 123
 
 # test with null
-query I
+query ?
 select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 34
 
 # test with null
-query T
+query ?
 select  coalesce(null, column1, 'none_set') from test1;
 ----
 foo
