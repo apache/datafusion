@@ -448,10 +448,34 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-    table_schema: &SchemaRef,
+    projection: Option<&[usize]>,
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
-    for output_ordering in &base_config.output_ordering {
+    'orderings: for output_ordering in &base_config.output_ordering {
+        let mut new_ordering = vec![];
+        for PhysicalSortExpr { expr, options } in output_ordering {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let name = col.name();
+                if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                    // Compute the new sort expression (with correct index) after projection:
+                    new_ordering.push(PhysicalSortExpr {
+                        expr: Arc::new(Column::new(name, idx)),
+                        options: *options,
+                    });
+                    continue;
+                }
+            }
+            // Cannot find expression in the projected_schema, stop iterating
+            // since rest of the orderings are violated
+            continue 'orderings;
+        }
+
+        // do not push empty entries
+        // otherwise we may have `Some(vec![])` at the output ordering.
+        if new_ordering.is_empty() {
+            continue;
+        }
+
         // Check if any file groups are not sorted
         if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
@@ -460,8 +484,9 @@ fn get_projected_output_ordering(
             }
 
             let statistics = match MinMaxStatistics::new_from_files(
-                output_ordering,
-                table_schema,
+                &new_ordering,
+                projected_schema,
+                projection,
                 group,
             ) {
                 Ok(statistics) => statistics,
@@ -478,31 +503,10 @@ fn get_projected_output_ordering(
                 Some file groups couldn't be determined to be sorted: {:?}",
                 base_config.output_ordering[0], base_config.file_groups
             );
-            return vec![];
+            continue;
         }
 
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr {
-                        expr: Arc::new(Column::new(name, idx)),
-                        options: *options,
-                    });
-                    continue;
-                }
-            }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
-        // do not push empty entries
-        // otherwise we may have `Some(vec![])` at the output ordering.
-        if !new_ordering.is_empty() {
-            all_orderings.push(new_ordering);
-        }
+        all_orderings.push(new_ordering);
     }
     all_orderings
 }
@@ -523,8 +527,9 @@ impl MinMaxStatistics {
     }
 
     fn new_from_files<'a>(
-        sort_order: &[PhysicalSortExpr],
-        table_schema: &SchemaRef,
+        projected_sort_order: &[PhysicalSortExpr],
+        projected_schema: &SchemaRef,
+        projection: Option<&[usize]>,
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
         use datafusion_common::ScalarValue;
@@ -541,6 +546,7 @@ impl MinMaxStatistics {
                 DataFusionError::Plan("Parquet file missing statistics".to_string())
             })?;
 
+        // Helper function to get min/max statistics for a given column of projected_schema
         let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
             Ok(statistics_and_partition_values
                 .iter()
@@ -564,26 +570,33 @@ impl MinMaxStatistics {
                 .unzip())
         };
 
-        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
-            DataFusionError::Plan("sort expression must be on column".to_string()),
-        )?;
+        let sort_columns = sort_columns_from_physical_sort_exprs(projected_sort_order)
+            .ok_or(DataFusionError::Plan(
+                "sort expression must be on column".to_string(),
+            ))?;
 
-        let projected_schema = Arc::new(
-            table_schema
+        // Project the schema & sort order down to just the relevant columns
+        let min_max_schema = Arc::new(
+            projected_schema
                 .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
         );
-
-        let (min_values, max_values): (Vec<_>, Vec<_>) = projected_schema
-            .fields()
+        let min_max_sort_order = sort_columns
             .iter()
-            .map(|field| {
-                let (min, max) =
-                    get_min_max(table_schema.index_of(field.name()).map_err(|e| {
-                        DataFusionError::ArrowError(
-                            e,
-                            Some(format!("get min/max for field: '{}'", field.name())),
-                        )
-                    })?)?;
+            .zip(projected_sort_order.iter())
+            .enumerate()
+            .map(|(i, (col, sort))| PhysicalSortExpr {
+                expr: Arc::new(Column::new(col.name(), i)),
+                options: sort.options,
+            })
+            .collect::<Vec<_>>();
+
+        let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
+            .iter()
+            .map(|c| {
+                let i = projection.map(|p| p[c.index()]).unwrap_or(c.index());
+                let (min, max) = get_min_max(i).map_err(|e| {
+                    e.context(format!("get min/max for column: '{}'", c.name()))
+                })?;
                 Ok((
                     ScalarValue::iter_to_array(min)?,
                     ScalarValue::iter_to_array(max)?,
@@ -595,14 +608,14 @@ impl MinMaxStatistics {
             .unzip();
 
         Self::new(
-            sort_order,
-            table_schema,
-            RecordBatch::try_new(Arc::clone(&projected_schema), min_values).map_err(
+            &min_max_sort_order,
+            &min_max_schema,
+            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
                 },
             )?,
-            RecordBatch::try_new(Arc::clone(&projected_schema), max_values).map_err(
+            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
                 },
@@ -612,7 +625,7 @@ impl MinMaxStatistics {
 
     fn new(
         sort_order: &[PhysicalSortExpr],
-        table_schema: &SchemaRef,
+        schema: &SchemaRef,
         min_values: RecordBatch,
         max_values: RecordBatch,
     ) -> Result<Self> {
@@ -622,7 +635,7 @@ impl MinMaxStatistics {
             .iter()
             .map(|expr| {
                 expr.expr
-                    .data_type(table_schema)
+                    .data_type(schema)
                     .map(|data_type| SortField::new_with_options(data_type, expr.options))
             })
             .collect::<Result<Vec<_>>>()

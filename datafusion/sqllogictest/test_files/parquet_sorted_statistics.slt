@@ -29,324 +29,245 @@ set datafusion.execution.collect_statistics = true;
 statement ok
 CREATE TABLE src_table (
   int_col INT,
+  descending_col INT,
   string_col TEXT,
   bigint_col BIGINT,
-  date_col DATE
+  date_col DATE,
+  overlapping_col INT,
+  constant_col INT
 ) AS VALUES
-(1, 'aaa', 100, 1),
-(2, 'bbb', 200, 2),
-(3, 'ccc', 300, 3),
-(4, 'ddd', 400, 4),
-(5, 'eee', 500, 5),
-(6, 'fff', 600, 6),
-(7, 'ggg', 700, 7),
-(8, 'hhh', 800, 8),
-(9, 'iii', 900, 9);
+-- first file
+(1, 3, 'aaa', 100, 1, 0, 0),
+(2, 2, 'bbb', 200, 2, 1, 0),
+(3, 1, 'ccc', 300, 3, 2, 0),
+-- second file
+(4, 6, 'ddd', 400, 4, 0, 0),
+(5, 5, 'eee', 500, 5, 1, 0),
+(6, 4, 'fff', 600, 6, 2, 0),
+-- third file
+(7, 9, 'ggg', 700, 7, 3, 0),
+(8, 8, 'hhh', 800, 8, 4, 0),
+(9, 7, 'iii', 900, 9, 5, 0);
 
-# Setup 2 files, i.e., as many as there are partitions:
+# Setup 3 files, in particular more files than there are partitions
 
 # File 1:
-query ITID
-COPY (SELECT * FROM src_table LIMIT 3)
-TO 'test_files/scratch/parquet/test_table/0.parquet'
+query IITIDII
+COPY (SELECT * FROM src_table ORDER BY int_col LIMIT 3)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet'
 STORED AS PARQUET;
 ----
 3
 
 # File 2:
-query ITID
-COPY (SELECT * FROM src_table WHERE int_col > 3 LIMIT 3)
-TO 'test_files/scratch/parquet/test_table/1.parquet'
+query IITIDII
+COPY (SELECT * FROM src_table WHERE int_col > 3 ORDER BY int_col LIMIT 3)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet'
 STORED AS PARQUET;
 ----
 3
-
-# Create a table from generated parquet files, without ordering:
-statement ok
-CREATE EXTERNAL TABLE test_table (
-  int_col INT,
-  string_col TEXT,
-  bigint_col BIGINT,
-  date_col DATE
-)
-STORED AS PARQUET
-WITH HEADER ROW
-LOCATION 'test_files/scratch/parquet/test_table';
-
-# Basic query:
-query ITID
-SELECT * FROM test_table ORDER BY int_col;
-----
-1 aaa 100 1970-01-02
-2 bbb 200 1970-01-03
-3 ccc 300 1970-01-04
-4 ddd 400 1970-01-05
-5 eee 500 1970-01-06
-6 fff 600 1970-01-07
-
-# Check output plan, expect no "output_ordering" clause in the physical_plan -> ParquetExec:
-query TT
-EXPLAIN SELECT int_col, string_col
-FROM test_table
-ORDER BY string_col, int_col;
-----
-logical_plan
-Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, string_col]
-physical_plan
-SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
---SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col]
-
-# Tear down test_table:
-statement ok
-DROP TABLE test_table;
-
-# Create test_table again, but with ordering:
-statement ok
-CREATE EXTERNAL TABLE test_table (
-  int_col INT,
-  string_col TEXT,
-  bigint_col BIGINT,
-  date_col DATE
-)
-STORED AS PARQUET
-WITH HEADER ROW
-WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
-LOCATION 'test_files/scratch/parquet/test_table';
-
-# Check output plan, expect an "output_ordering" clause in the physical_plan -> ParquetExec:
-query TT
-EXPLAIN SELECT int_col, string_col
-FROM test_table
-ORDER BY string_col, int_col;
-----
-logical_plan
-Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, string_col]
-physical_plan
-SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
---ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 
 # Add another file to the directory underlying test_table
-query ITID
-COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
-TO 'test_files/scratch/parquet/test_table/2.parquet'
+query IITIDII
+COPY (SELECT * FROM src_table WHERE int_col > 6 ORDER BY int_col LIMIT 3)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet'
 STORED AS PARQUET;
 ----
 3
 
-# Do one more test, but order by numeric columns:
-# This is to exercise file group sorting, which uses file-level statistics
-# DataFusion doesn't currently support string column statistics
+
+# Create a table from generated parquet files:
 statement ok
 CREATE EXTERNAL TABLE test_table (
+  partition_col TEXT NOT NULL,
   int_col INT NOT NULL,
+  descending_col INT NOT NULL,
   string_col TEXT NOT NULL,
   bigint_col BIGINT NOT NULL,
-  date_col DATE NOT NULL
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL
 )
 STORED AS PARQUET
-WITH HEADER ROW
+PARTITIONED BY (partition_col)
 WITH ORDER (int_col ASC NULLS LAST, bigint_col ASC NULLS LAST)
-LOCATION 'test_files/scratch/parquet/test_table';
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
-# Check output plan again, expect an "output_ordering" clause in the physical_plan -> ParquetExec:
-# After https://github.com/apache/arrow-datafusion/pull/9593 this should not require a sort.
+# Order by numeric columns
+# This is to exercise file group sorting, which uses file-level statistics
+# DataFusion doesn't currently support string column statistics
+# This should not require a sort.
 query TT
 EXPLAIN SELECT int_col, bigint_col
 FROM test_table
 ORDER BY int_col, bigint_col;
 ----
 logical_plan
-Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, bigint_col]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, bigint_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST]
+01)Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, bigint_col]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[int_col, bigint_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST]
+
+# Same query but check that the output is actually ordered:
+query IITIDIIT
+SELECT * FROM test_table ORDER BY int_col, bigint_col;
+----
+1 3 aaa 100 1970-01-02 0 0 A
+2 2 bbb 200 1970-01-03 1 0 A
+3 1 ccc 300 1970-01-04 2 0 A
+4 6 ddd 400 1970-01-05 0 0 B
+5 5 eee 500 1970-01-06 1 0 B
+6 4 fff 600 1970-01-07 2 0 B
+7 9 ggg 700 1970-01-08 3 0 C
+8 8 hhh 800 1970-01-09 4 0 C
+9 7 iii 900 1970-01-10 5 0 C
 
 
-# Clean up
+# Another planning test, but project on a column with unsupported statistics
+# We should be able to ignore this and look at only the relevant statistics
+query TT
+EXPLAIN SELECT string_col
+FROM test_table
+ORDER BY int_col, bigint_col;
+----
+logical_plan
+01)Projection: test_table.string_col
+02)--Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
+03)----Projection: test_table.string_col, test_table.int_col, test_table.bigint_col
+04)------TableScan: test_table projection=[int_col, string_col, bigint_col]
+physical_plan
+01)ProjectionExec: expr=[string_col@1 as string_col]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[int_col, string_col, bigint_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST]
+
+# Clean up & recreate but sort on descending column
 statement ok
 DROP TABLE test_table;
 
-# Setup alltypes_plain table:
 statement ok
-CREATE EXTERNAL TABLE alltypes_plain (
-  id INT NOT NULL,
-  bool_col BOOLEAN NOT NULL,
-  tinyint_col TINYINT NOT NULL,
-  smallint_col SMALLINT NOT NULL,
+CREATE EXTERNAL TABLE test_table (
+  partition_col TEXT NOT NULL,
   int_col INT NOT NULL,
+  descending_col INT NOT NULL,
+  string_col TEXT NOT NULL,
   bigint_col BIGINT NOT NULL,
-  float_col FLOAT NOT NULL,
-  double_col DOUBLE NOT NULL,
-  date_string_col BYTEA NOT NULL,
-  string_col VARCHAR NOT NULL,
-  timestamp_col TIMESTAMP NOT NULL,
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL
 )
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
+PARTITIONED BY (partition_col)
+WITH ORDER (descending_col DESC NULLS LAST, bigint_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
-# Test a basic query with a CAST:
-query IT
-SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
+# Query order by descending_col
+# This should order the files like [C, B, A]
+query TT
+EXPLAIN SELECT descending_col, bigint_col
+FROM test_table
+ORDER BY descending_col DESC NULLS LAST, bigint_col ASC NULLS LAST;
 ----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
+logical_plan
+01)Sort: test_table.descending_col DESC NULLS LAST, test_table.bigint_col ASC NULLS LAST
+02)--TableScan: test_table projection=[descending_col, bigint_col]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet]]}, projection=[descending_col, bigint_col], output_ordering=[descending_col@0 DESC NULLS LAST, bigint_col@1 ASC NULLS LAST]
 
-# Clean up
+# Clean up & re-create with partition columns in sort order
 statement ok
-DROP TABLE alltypes_plain;
-
-# Perform SELECT on table with fixed sized binary columns
+DROP TABLE test_table;
 
 statement ok
-CREATE EXTERNAL TABLE test_binary
+CREATE EXTERNAL TABLE test_table (
+  partition_col TEXT NOT NULL,
+  int_col INT NOT NULL,
+  descending_col INT NOT NULL,
+  string_col TEXT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL
+)
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../core/tests/data/test_binary.parquet';
+PARTITIONED BY (partition_col)
+WITH ORDER (partition_col ASC NULLS LAST, int_col ASC NULLS LAST, bigint_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
-# Check size of table:
-query I
-SELECT count(ids) FROM test_binary;
+# Order with partition column first
+# In particular, the partition column is a string
+# Even though statistics for string columns are not supported,
+# string partition columns are common and we do support sorting file groups on them
+query TT
+EXPLAIN SELECT int_col, bigint_col, partition_col
+FROM test_table
+ORDER BY partition_col, int_col, bigint_col;
 ----
-466
+logical_plan
+01)Sort: test_table.partition_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, bigint_col, partition_col]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[int_col, bigint_col, partition_col], output_ordering=[partition_col@2 ASC NULLS LAST, int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST]
 
-# Do the SELECT query:
-query ?
-SELECT ids FROM test_binary ORDER BY ids LIMIT 10;
-----
-008c7196f68089ab692e4739c5fd16b5
-00a51a7bc5ff8eb1627f8f3dc959dce8
-0166ce1d46129ad104fa4990c6057c91
-03a4893f3285b422820b4cd74c9b9786
-04999ac861e14682cd339eae2cc74359
-04b86bf8f228739fde391f850636a77d
-050fb9cf722a709eb94b70b3ee7dc342
-052578a65e8e91b8526b182d40e846e8
-05408e6a403e4296526006e20cc4a45a
-0592e6fb7d7169b888a4029b53abb701
-
-# Clean up
+# Clean up & re-create with overlapping column in sort order
+# This will test the ability to sort files with overlapping statistics
 statement ok
-DROP TABLE test_binary;
-
-# Perform a query with a window function and timestamp data:
+DROP TABLE test_table;
 
 statement ok
-CREATE EXTERNAL TABLE timestamp_with_tz
+CREATE EXTERNAL TABLE test_table (
+  partition_col TEXT NOT NULL,
+  int_col INT NOT NULL,
+  descending_col INT NOT NULL,
+  string_col TEXT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL
+)
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../core/tests/data/timestamp_with_tz.parquet';
+PARTITIONED BY (partition_col)
+WITH ORDER (overlapping_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
-# Check size of table:
-query I
-SELECT COUNT(*) FROM timestamp_with_tz;
+query TT
+EXPLAIN SELECT int_col, bigint_col, overlapping_col
+FROM test_table
+ORDER BY overlapping_col;
 ----
-131072
+logical_plan
+01)Sort: test_table.overlapping_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, bigint_col, overlapping_col]
+physical_plan
+01)SortPreservingMergeExec: [overlapping_col@2 ASC NULLS LAST]
+02)--ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[int_col, bigint_col, overlapping_col], output_ordering=[overlapping_col@2 ASC NULLS LAST]
 
-# Perform the query:
-query IPT
-SELECT
-  count,
-  LAG(timestamp, 1) OVER (ORDER BY timestamp),
-  arrow_typeof(LAG(timestamp, 1) OVER (ORDER BY timestamp))
-FROM timestamp_with_tz
-LIMIT 10;
-----
-0 NULL Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-4 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-14 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-
-# Test config listing_table_ignore_subdirectory:
-
-query ITID
-COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
-TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
-STORED AS PARQUET;
-----
-3
+# Clean up & re-create with constant column in sort order
+# This will require a sort because the # of required file groups (3)
+# exceeds the # of target partitions (2)
+statement ok
+DROP TABLE test_table;
 
 statement ok
-CREATE EXTERNAL TABLE listing_table
+CREATE EXTERNAL TABLE test_table (
+  partition_col TEXT NOT NULL,
+  int_col INT NOT NULL,
+  descending_col INT NOT NULL,
+  string_col TEXT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL
+)
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
+PARTITIONED BY (partition_col)
+WITH ORDER (constant_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
-statement ok
-set datafusion.execution.listing_table_ignore_subdirectory = true;
-
-# scan file: 0.parquet 1.parquet 2.parquet
-query I
-select count(*) from listing_table;
+query TT
+EXPLAIN SELECT constant_col
+FROM test_table
+ORDER BY constant_col;
 ----
-9
-
-statement ok
-set datafusion.execution.listing_table_ignore_subdirectory = false;
-
-# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
-query I
-select count(*) from listing_table;
-----
-12
-
-# Clean up
-statement ok
-DROP TABLE timestamp_with_tz;
-
-# Test a query from the single_nan data set:
-statement ok
-CREATE EXTERNAL TABLE single_nan
-STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/single_nan.parquet';
-
-# Check table size:
-query I
-SELECT COUNT(*) FROM single_nan;
-----
-1
-
-# Query for the single NULL:
-query R
-SELECT mycol FROM single_nan;
-----
-NULL
-
-# Clean up
-statement ok
-DROP TABLE single_nan;
-
-statement ok
-CREATE EXTERNAL TABLE list_columns
-STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/list_columns.parquet';
-
-query ??
-SELECT int64_list, utf8_list FROM list_columns
-----
-[1, 2, 3] [abc, efg, hij]
-[, 1] NULL
-[4] [efg, , hij, xyz]
-
-statement ok
-DROP TABLE list_columns;
-
-# Clean up
-statement ok
-DROP TABLE listing_table;
+logical_plan
+01)Sort: test_table.constant_col ASC NULLS LAST
+02)--TableScan: test_table projection=[constant_col]
+physical_plan
+01)SortPreservingMergeExec: [constant_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[constant_col@0 ASC NULLS LAST]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[constant_col]

@@ -142,15 +142,11 @@ impl FileScanConfig {
             Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
         );
 
-        let full_table_schema = {
-            let mut all_table_fields: Vec<_> =
-                self.file_schema.all_fields().into_iter().cloned().collect();
-            all_table_fields.extend(self.table_partition_cols.clone());
-            Arc::new(Schema::new(all_table_fields))
-        };
-
-        let projected_output_ordering =
-            get_projected_output_ordering(self, &projected_schema, &full_table_schema);
+        let projected_output_ordering = get_projected_output_ordering(
+            self,
+            &projected_schema,
+            self.projection.as_deref(),
+        );
 
         (projected_schema, table_stats, projected_output_ordering)
     }
@@ -231,6 +227,7 @@ impl FileScanConfig {
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
+            None,
             flattened_files.iter().copied(),
         )
         .map_err(|e| {
