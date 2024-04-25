@@ -116,6 +116,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                 let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
+                // note that this array has more entries than the expected output/input size
+                // because maparray is flatten
                 let original_data =  map_array.entries().column(1).to_data();
                 let capacity = Capacities::Array(original_data.len());
                 let mut mutable =
@@ -123,22 +125,19 @@ impl ScalarUDFImpl for GetFieldFunc {
                          capacity);
 
                 for entry in 0..map_array.len(){
-                    let end = map_array.value_offsets()[entry + 1] as usize;
                     let start = map_array.value_offsets()[entry] as usize;
+                    let end = map_array.value_offsets()[entry + 1] as usize;
 
-                    // at least one key matched
-                    let find_result =
-                                       keys.slice(start, end-start).
-                                       iter().enumerate().
-                                    find(|(_,t)| t.unwrap());
-                    if find_result.is_none(){
+                    let maybe_matched =
+                                        keys.slice(start, end-start).
+                                        iter().enumerate().
+                                        find(|(_, t)| t.unwrap());
+                    if maybe_matched.is_none(){
                         mutable.extend_nulls(1);
                         continue
                     }
-                    let (idx,_) = find_result.unwrap();
-
-                    // TODO: can this value have more than 1 column
-                    mutable.extend(0, start+idx, start+idx+1);
+                    let (match_offset,_) = maybe_matched.unwrap();
+                    mutable.extend(0, start + match_offset, start + match_offset + 1);
                 }
                 let data = mutable.freeze();
                 let data = make_array(data);
