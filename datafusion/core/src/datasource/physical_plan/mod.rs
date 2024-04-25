@@ -451,7 +451,7 @@ fn get_projected_output_ordering(
     projection: Option<&[usize]>,
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
-    'orderings: for output_ordering in &base_config.output_ordering {
+    for output_ordering in &base_config.output_ordering {
         let mut new_ordering = vec![];
         for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
@@ -467,7 +467,7 @@ fn get_projected_output_ordering(
             }
             // Cannot find expression in the projected_schema, stop iterating
             // since rest of the orderings are violated
-            continue 'orderings;
+            break;
         }
 
         // do not push empty entries
