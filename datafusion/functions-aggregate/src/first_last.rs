@@ -87,7 +87,8 @@ impl FirstValue {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
+        // self.requirement_satisfied = requirement_satisfied;
+        self.requirement_satisfied = false;
         self
     }
 }
@@ -232,7 +233,8 @@ impl FirstValueAccumulator {
     }
 
     pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
+        // self.requirement_satisfied = requirement_satisfied;
+        self.requirement_satisfied = false;
         self
     }
 
@@ -794,7 +796,8 @@ impl LastValue {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
+        // self.requirement_satisfied = requirement_satisfied;
+        self.requirement_satisfied = false;
         self
     }
 }
@@ -989,7 +992,8 @@ impl LastValueAccumulator {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
+        // self.requirement_satisfied = requirement_satisfied;
+        self.requirement_satisfied = false;
         self
     }
 }
