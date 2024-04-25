@@ -999,7 +999,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![None]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nError during planning: statistics not found"),
+                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found"),
             },
         ];
 

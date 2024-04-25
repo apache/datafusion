@@ -593,7 +593,11 @@ impl MinMaxStatistics {
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()
             .map(|c| {
+                // Reverse the projection to get the index of the column in the full statistics
+                // The file statistics contains _every_ column , but the sort column's index()
+                // refers to the index in projected_schema
                 let i = projection.map(|p| p[c.index()]).unwrap_or(c.index());
+
                 let (min, max) = get_min_max(i).map_err(|e| {
                     e.context(format!("get min/max for column: '{}'", c.name()))
                 })?;
