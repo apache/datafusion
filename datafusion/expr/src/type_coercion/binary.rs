@@ -638,21 +638,26 @@ fn dictionary_coercion(
     preserve_dictionaries: bool,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+    let maybe_preserve_dictionaries =
+        |index_type: &DataType, value_type: DataType| -> DataType {
+            if preserve_dictionaries {
+                Dictionary(Box::new(index_type.clone()), Box::new(value_type))
+            } else {
+                value_type
+            }
+        };
     match (lhs_type, rhs_type) {
         (
             Dictionary(_lhs_index_type, lhs_value_type),
             Dictionary(_rhs_index_type, rhs_value_type),
         ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ Dictionary(_, _), other_type) | (other_type, d @ Dictionary(_, _))
-            if preserve_dictionaries && can_cast_types(other_type, d) =>
-        {
-            Some(d.clone())
-        }
-        (Dictionary(_index_type, value_type), _) => {
+        (Dictionary(index_type, value_type), _) => {
             comparison_coercion(value_type, rhs_type)
+                .map(|new_type| maybe_preserve_dictionaries(index_type, new_type))
         }
-        (_, Dictionary(_index_type, value_type)) => {
+        (_, Dictionary(index_type, value_type)) => {
             comparison_coercion(lhs_type, value_type)
+                .map(|new_type| maybe_preserve_dictionaries(index_type, new_type))
         }
         _ => None,
     }
