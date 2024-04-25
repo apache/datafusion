@@ -75,9 +75,7 @@ pub use crate::window::rank::{dense_rank, percent_rank, rank};
 pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
 pub use crate::PhysicalSortExpr;
-pub use datafusion_functions_aggregate::first_last::{
-    FirstValuePhysicalExpr as FirstValue, LastValuePhysicalExpr as LastValue,
-};
+pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};

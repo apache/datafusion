@@ -66,11 +66,15 @@ use std::sync::Arc;
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::first_last::first_value;
+    pub use super::first_last::last_value;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<AggregateUDF>> = vec![first_last::first_value_udaf()];
+    let functions: Vec<Arc<AggregateUDF>> = vec![
+        first_last::first_value_udaf(),
+        first_last::last_value_udaf(),
+    ];
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;

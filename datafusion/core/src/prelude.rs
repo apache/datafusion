@@ -39,6 +39,7 @@ pub use datafusion_expr::{
     Expr,
 };
 pub use datafusion_functions::expr_fn::*;
+pub use datafusion_functions_aggregate::expr_fn::*;
 #[cfg(feature = "array_expressions")]
 pub use datafusion_functions_array::expr_fn::*;
 

@@ -31,20 +31,12 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::{
-    down_cast_any_ref, get_sort_options, ordering_fields,
-};
-use datafusion_physical_expr_common::aggregate::{
-    AggregateExpr, AggregateOrderSensitivity,
-};
+use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::expressions;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::reverse_order_bys;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 make_udaf_function!(
     FirstValue,
@@ -77,7 +69,7 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("FIRST_VALUE")],
+            aliases: vec![String::from("FIRST_VALUE"), String::from("first_value")],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
@@ -345,385 +337,509 @@ impl Accumulator for FirstValueAccumulator {
     }
 }
 
-/// TO BE DEPRECATED: Builtin FIRST_VALUE physical aggregate expression will be replaced by udf in the future
-#[derive(Debug, Clone)]
-pub struct FirstValuePhysicalExpr {
-    name: String,
-    input_data_type: DataType,
-    order_by_data_types: Vec<DataType>,
-    expr: Arc<dyn PhysicalExpr>,
-    ordering_req: LexOrdering,
-    requirement_satisfied: bool,
-    ignore_nulls: bool,
-    state_fields: Vec<Field>,
+// /// TO BE DEPRECATED: Builtin FIRST_VALUE physical aggregate expression will be replaced by udf in the future
+// #[derive(Debug, Clone)]
+// pub struct FirstValuePhysicalExpr {
+//     name: String,
+//     input_data_type: DataType,
+//     order_by_data_types: Vec<DataType>,
+//     expr: Arc<dyn PhysicalExpr>,
+//     ordering_req: LexOrdering,
+//     requirement_satisfied: bool,
+//     ignore_nulls: bool,
+//     state_fields: Vec<Field>,
+// }
+//
+// impl FirstValuePhysicalExpr {
+//     /// Creates a new FIRST_VALUE aggregation function.
+//     pub fn new(
+//         expr: Arc<dyn PhysicalExpr>,
+//         name: impl Into<String>,
+//         input_data_type: DataType,
+//         ordering_req: LexOrdering,
+//         order_by_data_types: Vec<DataType>,
+//         state_fields: Vec<Field>,
+//     ) -> Self {
+//         let requirement_satisfied = ordering_req.is_empty();
+//         Self {
+//             name: name.into(),
+//             input_data_type,
+//             order_by_data_types,
+//             expr,
+//             ordering_req,
+//             requirement_satisfied,
+//             ignore_nulls: false,
+//             state_fields,
+//         }
+//     }
+//
+//     pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+//         self.ignore_nulls = ignore_nulls;
+//         self
+//     }
+//
+//     /// Returns the name of the aggregate expression.
+//     pub fn name(&self) -> &str {
+//         &self.name
+//     }
+//
+//     /// Returns the input data type of the aggregate expression.
+//     pub fn input_data_type(&self) -> &DataType {
+//         &self.input_data_type
+//     }
+//
+//     /// Returns the data types of the order-by columns.
+//     pub fn order_by_data_types(&self) -> &Vec<DataType> {
+//         &self.order_by_data_types
+//     }
+//
+//     /// Returns the expression associated with the aggregate function.
+//     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+//         &self.expr
+//     }
+//
+//     /// Returns the lexical ordering requirements of the aggregate expression.
+//     pub fn ordering_req(&self) -> &LexOrdering {
+//         &self.ordering_req
+//     }
+//
+//     pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+//         self.requirement_satisfied = requirement_satisfied;
+//         self
+//     }
+//
+//     pub fn convert_to_last(self) -> LastValuePhysicalExpr {
+//         let mut name = format!("LAST{}", &self.name[5..]);
+//         replace_order_by_clause(&mut name);
+//
+//         let FirstValuePhysicalExpr {
+//             expr,
+//             input_data_type,
+//             ordering_req,
+//             order_by_data_types,
+//             ..
+//         } = self;
+//         LastValuePhysicalExpr::new(
+//             expr,
+//             name,
+//             input_data_type,
+//             reverse_order_bys(&ordering_req),
+//             order_by_data_types,
+//         )
+//     }
+// }
+//
+// impl AggregateExpr for FirstValuePhysicalExpr {
+//     /// Return a reference to Any that can be used for downcasting
+//     fn as_any(&self) -> &dyn Any {
+//         self
+//     }
+//
+//     fn field(&self) -> Result<Field> {
+//         Ok(Field::new(&self.name, self.input_data_type.clone(), true))
+//     }
+//
+//     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+//         FirstValueAccumulator::try_new(
+//             &self.input_data_type,
+//             &self.order_by_data_types,
+//             self.ordering_req.clone(),
+//             self.ignore_nulls,
+//         )
+//         .map(|acc| {
+//             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+//         })
+//     }
+//
+//     fn state_fields(&self) -> Result<Vec<Field>> {
+//         if !self.state_fields.is_empty() {
+//             return Ok(self.state_fields.clone());
+//         }
+//
+//         let mut fields = vec![Field::new(
+//             format_state_name(&self.name, "first_value"),
+//             self.input_data_type.clone(),
+//             true,
+//         )];
+//         fields.extend(ordering_fields(
+//             &self.ordering_req,
+//             &self.order_by_data_types,
+//         ));
+//         fields.push(Field::new(
+//             format_state_name(&self.name, "is_set"),
+//             DataType::Boolean,
+//             true,
+//         ));
+//         Ok(fields)
+//     }
+//
+//     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+//         vec![self.expr.clone()]
+//     }
+//
+//     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+//         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+//     }
+//
+//     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+//         // Can generate correct result, even if the ordering requirement is not satisfied at the input
+//         // (less efficient compared to ordering satisfied version)
+//         AggregateOrderSensitivity::Beneficial
+//     }
+//
+//     fn with_requirement_satisfied(
+//         self: Arc<Self>,
+//         requirement_satisfied: bool,
+//     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+//         let mut new_self = self.as_ref().clone();
+//         new_self.requirement_satisfied = requirement_satisfied;
+//         Ok(Some(Arc::new(new_self)))
+//     }
+//
+//     fn name(&self) -> &str {
+//         &self.name
+//     }
+//
+//     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+//         Some(Arc::new(self.clone().convert_to_last()))
+//     }
+//
+//     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+//         FirstValueAccumulator::try_new(
+//             &self.input_data_type,
+//             &self.order_by_data_types,
+//             self.ordering_req.clone(),
+//             self.ignore_nulls,
+//         )
+//         .map(|acc| {
+//             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+//         })
+//     }
+// }
+//
+// impl PartialEq<dyn Any> for FirstValuePhysicalExpr {
+//     fn eq(&self, other: &dyn Any) -> bool {
+//         down_cast_any_ref(other)
+//             .downcast_ref::<Self>()
+//             .map(|x| {
+//                 self.name == x.name
+//                     && self.input_data_type == x.input_data_type
+//                     && self.order_by_data_types == x.order_by_data_types
+//                     && self.expr.eq(&x.expr)
+//             })
+//             .unwrap_or(false)
+//     }
+// }
+//
+// /// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
+// #[derive(Debug, Clone)]
+// pub struct LastValuePhysicalExpr {
+//     name: String,
+//     input_data_type: DataType,
+//     order_by_data_types: Vec<DataType>,
+//     expr: Arc<dyn PhysicalExpr>,
+//     ordering_req: LexOrdering,
+//     requirement_satisfied: bool,
+//     ignore_nulls: bool,
+// }
+//
+// impl LastValuePhysicalExpr {
+//     /// Creates a new LAST_VALUE aggregation function.
+//     pub fn new(
+//         expr: Arc<dyn PhysicalExpr>,
+//         name: impl Into<String>,
+//         input_data_type: DataType,
+//         ordering_req: LexOrdering,
+//         order_by_data_types: Vec<DataType>,
+//     ) -> Self {
+//         let requirement_satisfied = ordering_req.is_empty();
+//         Self {
+//             name: name.into(),
+//             input_data_type,
+//             order_by_data_types,
+//             expr,
+//             ordering_req,
+//             requirement_satisfied,
+//             ignore_nulls: false,
+//         }
+//     }
+//
+//     pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+//         self.ignore_nulls = ignore_nulls;
+//         self
+//     }
+//
+//     /// Returns the name of the aggregate expression.
+//     pub fn name(&self) -> &str {
+//         &self.name
+//     }
+//
+//     /// Returns the input data type of the aggregate expression.
+//     pub fn input_data_type(&self) -> &DataType {
+//         &self.input_data_type
+//     }
+//
+//     /// Returns the data types of the order-by columns.
+//     pub fn order_by_data_types(&self) -> &Vec<DataType> {
+//         &self.order_by_data_types
+//     }
+//
+//     /// Returns the expression associated with the aggregate function.
+//     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+//         &self.expr
+//     }
+//
+//     /// Returns the lexical ordering requirements of the aggregate expression.
+//     pub fn ordering_req(&self) -> &LexOrdering {
+//         &self.ordering_req
+//     }
+//
+//     pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+//         self.requirement_satisfied = requirement_satisfied;
+//         self
+//     }
+//
+//     pub fn convert_to_first(self) -> FirstValuePhysicalExpr {
+//         let mut name = format!("FIRST{}", &self.name[4..]);
+//         replace_order_by_clause(&mut name);
+//
+//         let LastValuePhysicalExpr {
+//             expr,
+//             input_data_type,
+//             ordering_req,
+//             order_by_data_types,
+//             ..
+//         } = self;
+//         FirstValuePhysicalExpr::new(
+//             expr,
+//             name,
+//             input_data_type,
+//             reverse_order_bys(&ordering_req),
+//             order_by_data_types,
+//             vec![],
+//         )
+//     }
+// }
+//
+// impl AggregateExpr for LastValuePhysicalExpr {
+//     /// Return a reference to Any that can be used for downcasting
+//     fn as_any(&self) -> &dyn Any {
+//         self
+//     }
+//
+//     fn field(&self) -> Result<Field> {
+//         Ok(Field::new(&self.name, self.input_data_type.clone(), true))
+//     }
+//
+//     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+//         LastValueAccumulator::try_new(
+//             &self.input_data_type,
+//             &self.order_by_data_types,
+//             self.ordering_req.clone(),
+//             self.ignore_nulls,
+//         )
+//         .map(|acc| {
+//             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+//         })
+//     }
+//
+//     fn state_fields(&self) -> Result<Vec<Field>> {
+//         let mut fields = vec![Field::new(
+//             format_state_name(&self.name, "last_value"),
+//             self.input_data_type.clone(),
+//             true,
+//         )];
+//         fields.extend(ordering_fields(
+//             &self.ordering_req,
+//             &self.order_by_data_types,
+//         ));
+//         fields.push(Field::new(
+//             format_state_name(&self.name, "is_set"),
+//             DataType::Boolean,
+//             true,
+//         ));
+//         Ok(fields)
+//     }
+//
+//     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+//         vec![self.expr.clone()]
+//     }
+//
+//     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+//         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+//     }
+//
+//     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+//         // Can generate correct result, even if the ordering requirement is not satisfied at the input
+//         // (less efficient compared to ordering satisfied version)
+//         AggregateOrderSensitivity::Beneficial
+//     }
+//
+//     fn with_requirement_satisfied(
+//         self: Arc<Self>,
+//         requirement_satisfied: bool,
+//     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+//         let mut new_self = self.as_ref().clone();
+//         new_self.requirement_satisfied = requirement_satisfied;
+//         Ok(Some(Arc::new(new_self)))
+//     }
+//
+//     fn name(&self) -> &str {
+//         &self.name
+//     }
+//
+//     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+//         Some(Arc::new(self.clone().convert_to_first()))
+//     }
+//
+//     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+//         LastValueAccumulator::try_new(
+//             &self.input_data_type,
+//             &self.order_by_data_types,
+//             self.ordering_req.clone(),
+//             self.ignore_nulls,
+//         )
+//         .map(|acc| {
+//             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+//         })
+//     }
+// }
+//
+// impl PartialEq<dyn Any> for LastValuePhysicalExpr {
+//     fn eq(&self, other: &dyn Any) -> bool {
+//         down_cast_any_ref(other)
+//             .downcast_ref::<Self>()
+//             .map(|x| {
+//                 self.name == x.name
+//                     && self.input_data_type == x.input_data_type
+//                     && self.order_by_data_types == x.order_by_data_types
+//                     && self.expr.eq(&x.expr)
+//             })
+//             .unwrap_or(false)
+//     }
+// }
+
+make_udaf_function!(
+    LastValue,
+    last_value,
+    "Returns the last value in a group of values.",
+    last_value_udaf
+);
+
+pub struct LastValue {
+    signature: Signature,
+    aliases: Vec<String>,
 }
 
-impl FirstValuePhysicalExpr {
-    /// Creates a new FIRST_VALUE aggregation function.
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        input_data_type: DataType,
-        ordering_req: LexOrdering,
-        order_by_data_types: Vec<DataType>,
-        state_fields: Vec<Field>,
-    ) -> Self {
-        let requirement_satisfied = ordering_req.is_empty();
+impl Debug for LastValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("LastValue")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .field("accumulator", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl Default for LastValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LastValue {
+    pub fn new() -> Self {
         Self {
-            name: name.into(),
-            input_data_type,
-            order_by_data_types,
-            expr,
-            ordering_req,
-            requirement_satisfied,
-            ignore_nulls: false,
-            state_fields,
+            aliases: vec![String::from("LAST_VALUE"), String::from("last_value")],
+            signature: Signature::one_of(
+                vec![
+                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
-
-    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
-        self.ignore_nulls = ignore_nulls;
-        self
-    }
-
-    /// Returns the name of the aggregate expression.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the input data type of the aggregate expression.
-    pub fn input_data_type(&self) -> &DataType {
-        &self.input_data_type
-    }
-
-    /// Returns the data types of the order-by columns.
-    pub fn order_by_data_types(&self) -> &Vec<DataType> {
-        &self.order_by_data_types
-    }
-
-    /// Returns the expression associated with the aggregate function.
-    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    /// Returns the lexical ordering requirements of the aggregate expression.
-    pub fn ordering_req(&self) -> &LexOrdering {
-        &self.ordering_req
-    }
-
-    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
-    }
-
-    pub fn convert_to_last(self) -> LastValuePhysicalExpr {
-        let mut name = format!("LAST{}", &self.name[5..]);
-        replace_order_by_clause(&mut name);
-
-        let FirstValuePhysicalExpr {
-            expr,
-            input_data_type,
-            ordering_req,
-            order_by_data_types,
-            ..
-        } = self;
-        LastValuePhysicalExpr::new(
-            expr,
-            name,
-            input_data_type,
-            reverse_order_bys(&ordering_req),
-            order_by_data_types,
-        )
-    }
 }
 
-impl AggregateExpr for FirstValuePhysicalExpr {
-    /// Return a reference to Any that can be used for downcasting
+impl AggregateUDFImpl for LastValue {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
+    fn name(&self) -> &str {
+        "LAST_VALUE"
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        FirstValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+    fn signature(&self) -> &Signature {
+        &self.signature
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        if !self.state_fields.is_empty() {
-            return Ok(self.state_fields.clone());
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let mut all_sort_orders = vec![];
+
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = vec![];
+        for expr in acc_args.sort_exprs {
+            if let Expr::Sort(sort) = expr {
+                if let Expr::Column(col) = sort.expr.as_ref() {
+                    let name = &col.name;
+                    let e = expressions::column::col(name, acc_args.schema)?;
+                    sort_exprs.push(PhysicalSortExpr {
+                        expr: e,
+                        options: SortOptions {
+                            descending: !sort.asc,
+                            nulls_first: sort.nulls_first,
+                        },
+                    });
+                }
+            }
+        }
+        if !sort_exprs.is_empty() {
+            all_sort_orders.extend(sort_exprs);
         }
 
-        let mut fields = vec![Field::new(
-            format_state_name(&self.name, "first_value"),
-            self.input_data_type.clone(),
-            true,
-        )];
-        fields.extend(ordering_fields(
-            &self.ordering_req,
-            &self.order_by_data_types,
-        ));
-        fields.push(Field::new(
-            format_state_name(&self.name, "is_set"),
-            DataType::Boolean,
-            true,
-        ));
-        Ok(fields)
-    }
+        let ordering_req = all_sort_orders;
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
+        let ordering_dtypes = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
 
-    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
-    }
-
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // Can generate correct result, even if the ordering requirement is not satisfied at the input
-        // (less efficient compared to ordering satisfied version)
-        AggregateOrderSensitivity::Beneficial
-    }
-
-    fn with_requirement_satisfied(
-        self: Arc<Self>,
-        requirement_satisfied: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        let mut new_self = self.as_ref().clone();
-        new_self.requirement_satisfied = requirement_satisfied;
-        Ok(Some(Arc::new(new_self)))
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone().convert_to_last()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        FirstValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
-    }
-}
-
-impl PartialEq<dyn Any> for FirstValuePhysicalExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.input_data_type == x.input_data_type
-                    && self.order_by_data_types == x.order_by_data_types
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
-    }
-}
-
-/// TO BE DEPRECATED: Builtin LAST_VALUE physical aggregate expression will be replaced by udf in the future
-#[derive(Debug, Clone)]
-pub struct LastValuePhysicalExpr {
-    name: String,
-    input_data_type: DataType,
-    order_by_data_types: Vec<DataType>,
-    expr: Arc<dyn PhysicalExpr>,
-    ordering_req: LexOrdering,
-    requirement_satisfied: bool,
-    ignore_nulls: bool,
-}
-
-impl LastValuePhysicalExpr {
-    /// Creates a new LAST_VALUE aggregation function.
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        input_data_type: DataType,
-        ordering_req: LexOrdering,
-        order_by_data_types: Vec<DataType>,
-    ) -> Self {
         let requirement_satisfied = ordering_req.is_empty();
-        Self {
-            name: name.into(),
-            input_data_type,
-            order_by_data_types,
-            expr,
-            ordering_req,
-            requirement_satisfied,
-            ignore_nulls: false,
-        }
-    }
 
-    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
-        self.ignore_nulls = ignore_nulls;
-        self
-    }
-
-    /// Returns the name of the aggregate expression.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the input data type of the aggregate expression.
-    pub fn input_data_type(&self) -> &DataType {
-        &self.input_data_type
-    }
-
-    /// Returns the data types of the order-by columns.
-    pub fn order_by_data_types(&self) -> &Vec<DataType> {
-        &self.order_by_data_types
-    }
-
-    /// Returns the expression associated with the aggregate function.
-    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    /// Returns the lexical ordering requirements of the aggregate expression.
-    pub fn ordering_req(&self) -> &LexOrdering {
-        &self.ordering_req
-    }
-
-    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
-    }
-
-    pub fn convert_to_first(self) -> FirstValuePhysicalExpr {
-        let mut name = format!("FIRST{}", &self.name[4..]);
-        replace_order_by_clause(&mut name);
-
-        let LastValuePhysicalExpr {
-            expr,
-            input_data_type,
-            ordering_req,
-            order_by_data_types,
-            ..
-        } = self;
-        FirstValuePhysicalExpr::new(
-            expr,
-            name,
-            input_data_type,
-            reverse_order_bys(&ordering_req),
-            order_by_data_types,
-            vec![],
-        )
-    }
-}
-
-impl AggregateExpr for LastValuePhysicalExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         LastValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
+            acc_args.data_type,
+            &ordering_dtypes,
+            ordering_req,
+            acc_args.ignore_nulls,
         )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
+    fn state_fields(
+        &self,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
-            format_state_name(&self.name, "last_value"),
-            self.input_data_type.clone(),
+            format_state_name(name, "last_value"),
+            value_type,
             true,
         )];
-        fields.extend(ordering_fields(
-            &self.ordering_req,
-            &self.order_by_data_types,
-        ));
-        fields.push(Field::new(
-            format_state_name(&self.name, "is_set"),
-            DataType::Boolean,
-            true,
-        ));
+        fields.extend(ordering_fields);
+        fields.push(Field::new("is_set", DataType::Boolean, true));
         Ok(fields)
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
-    }
-
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // Can generate correct result, even if the ordering requirement is not satisfied at the input
-        // (less efficient compared to ordering satisfied version)
-        AggregateOrderSensitivity::Beneficial
-    }
-
-    fn with_requirement_satisfied(
-        self: Arc<Self>,
-        requirement_satisfied: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        let mut new_self = self.as_ref().clone();
-        new_self.requirement_satisfied = requirement_satisfied;
-        Ok(Some(Arc::new(new_self)))
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone().convert_to_first()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        LastValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
-    }
-}
-
-impl PartialEq<dyn Any> for LastValuePhysicalExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.input_data_type == x.input_data_type
-                    && self.order_by_data_types == x.order_by_data_types
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 
