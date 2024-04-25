@@ -261,7 +261,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             filter,
             order_by,
-            null_treatment: _,
+            ignore_nulls: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => create_function_physical_name(
                 func_def.name(),
@@ -1890,7 +1890,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             args,
             filter,
             order_by,
-            null_treatment,
+            ignore_nulls,
         }) => {
             let args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
@@ -1903,9 +1903,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
 
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let physical_sort_exprs = match order_by {
@@ -1925,7 +1922,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         &ordering_reqs,
                         physical_input_schema,
                         name,
-                        ignore_nulls,
+                        *ignore_nulls,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
                 }
@@ -1948,7 +1945,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         &ordering_reqs,
                         physical_input_schema,
                         name,
-                        ignore_nulls,
+                        *ignore_nulls,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
                 }

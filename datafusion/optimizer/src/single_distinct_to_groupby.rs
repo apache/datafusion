@@ -76,7 +76,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                     args,
                     filter,
                     order_by,
-                    null_treatment: _,
+                    ignore_nulls: _,
                 }) = expr
                 {
                     if filter.is_some() || order_by.is_some() {
@@ -200,7 +200,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                             false,
                                             None,
                                             None,
-                                            None,
+                                            false,
                                         ))
                                         .alias(&alias_str),
                                     );
@@ -210,7 +210,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         false,
                                         None,
                                         None,
-                                        None,
+                                        false,
                                     )))
                                 } else {
                                     Ok(Expr::AggregateFunction(AggregateFunction::new(
@@ -219,7 +219,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         false, // intentional to remove distinct here
                                         None,
                                         None,
-                                        None,
+                                        false,
                                     )))
                                 }
                             }
@@ -479,7 +479,7 @@ mod tests {
                         true,
                         None,
                         None,
-                        None,
+                        false,
                     )),
                 ],
             )?
@@ -544,7 +544,7 @@ mod tests {
                         true,
                         None,
                         None,
-                        None,
+                        false,
                     )),
                 ],
             )?
@@ -607,7 +607,7 @@ mod tests {
             false,
             Some(Box::new(col("a").gt(lit(5)))),
             None,
-            None,
+            false,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
@@ -630,7 +630,7 @@ mod tests {
             true,
             Some(Box::new(col("a").gt(lit(5)))),
             None,
-            None,
+            false,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
@@ -653,7 +653,7 @@ mod tests {
             false,
             None,
             Some(vec![col("a")]),
-            None,
+            false,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
@@ -676,7 +676,7 @@ mod tests {
             true,
             None,
             Some(vec![col("a")]),
-            None,
+            false,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
@@ -699,7 +699,7 @@ mod tests {
             true,
             Some(Box::new(col("a").gt(lit(5)))),
             Some(vec![col("a")]),
-            None,
+            false,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?

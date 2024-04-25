@@ -25,7 +25,7 @@ macro_rules! make_udaf_function {
                 distinct: bool,
                 filter: Option<Box<Expr>>,
                 order_by: Option<Vec<Expr>>,
-                null_treatment: Option<NullTreatment>
+                ignore_nulls: bool
             ) -> Expr {
                 Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                     $AGGREGATE_UDF_FN(),
@@ -33,7 +33,7 @@ macro_rules! make_udaf_function {
                     distinct,
                     filter,
                     order_by,
-                    null_treatment,
+                    ignore_nulls,
                 ))
             }
 

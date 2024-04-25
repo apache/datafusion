@@ -749,12 +749,14 @@ pub async fn from_substrait_agg_func(
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
+            expr::AggregateFunction::new_udf(
+                fun, args, distinct, filter, order_by, false,
+            ),
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by, false),
         )))
     } else {
         not_impl_err!(

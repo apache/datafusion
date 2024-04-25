@@ -137,7 +137,7 @@ impl AggregateUDF {
             false,
             None,
             None,
-            None,
+            false,
         ))
     }
 

@@ -321,7 +321,7 @@ impl TreeNode for Expr {
                 distinct,
                 filter,
                 order_by,
-                null_treatment,
+                ignore_nulls,
             }) => map_until_stop_and_collect!(
                 transform_vec(args, &mut f),
                 filter,
@@ -338,7 +338,7 @@ impl TreeNode for Expr {
                             distinct,
                             new_filter,
                             new_order_by,
-                            null_treatment,
+                            ignore_nulls,
                         )))
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
@@ -348,7 +348,7 @@ impl TreeNode for Expr {
                             false,
                             new_filter,
                             new_order_by,
-                            null_treatment,
+                            ignore_nulls,
                         )))
                     }
                     AggregateFunctionDefinition::Name(_) => {

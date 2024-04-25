@@ -98,7 +98,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                             false,
                             None,
                             sort_expr.clone(),
-                            None,
+                            false,
                         ))
                     })
                     .collect::<Vec<Expr>>();

@@ -646,7 +646,7 @@ pub fn serialize_expr(
             ref distinct,
             ref filter,
             ref order_by,
-            null_treatment: _,
+            ignore_nulls: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(fun) => {
                 let aggr_function = match fun {

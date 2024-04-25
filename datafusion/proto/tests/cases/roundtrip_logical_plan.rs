@@ -613,7 +613,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
-        first_value(vec![lit(1)], false, None, None, None),
+        first_value(vec![lit(1)], false, None, None, false),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1689,7 +1689,7 @@ fn roundtrip_count() {
         false,
         None,
         None,
-        None,
+        false,
     ));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1703,7 +1703,7 @@ fn roundtrip_count_distinct() {
         true,
         None,
         None,
-        None,
+        false,
     ));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1717,7 +1717,7 @@ fn roundtrip_approx_percentile_cont() {
         false,
         None,
         None,
-        None,
+        false,
     ));
 
     let ctx = SessionContext::new();
@@ -1774,7 +1774,7 @@ fn roundtrip_aggregate_udf() {
         false,
         Some(Box::new(lit(true))),
         None,
-        None,
+        false,
     ));
 
     let ctx = SessionContext::new();
