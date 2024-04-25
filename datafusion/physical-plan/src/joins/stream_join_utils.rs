@@ -285,7 +285,7 @@ pub fn convert_sort_expr_with_filter_schema(
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
         let converted_filter_expr = expr
-            .transform_up(&|p| {
+            .transform_up(|p| {
                 convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
                     match transformed {
                         Some(transformed) => Transformed::yes(transformed),
@@ -1121,22 +1121,12 @@ pub fn prepare_sorted_exprs(
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::joins::stream_join_utils::{
-        build_filter_input_order, check_filter_expr_contains_sort_information,
-        convert_sort_expr_with_filter_schema, PruningJoinHashMap,
-    };
-    use crate::{
-        expressions::{Column, PhysicalSortExpr},
-        joins::test_utils::complicated_filter,
-        joins::utils::{ColumnIndex, JoinFilter},
-    };
+    use crate::{joins::test_utils::complicated_filter, joins::utils::ColumnIndex};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::JoinSide;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col};
 

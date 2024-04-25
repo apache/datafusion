@@ -590,7 +590,7 @@ fn batch_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::Field;
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
@@ -614,7 +614,7 @@ mod tests {
         valid.append(true);
 
         // NULL with non-zero value length
-        // Issue https://github.com/apache/arrow-datafusion/issues/9932
+        // Issue https://github.com/apache/datafusion/issues/9932
         values.push(Some("?"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(false);

@@ -537,7 +537,7 @@ LIMIT 5
 # window_frame_large_range
 # Range offset 10000 is too big for Int8 (i.e. the type of c3).
 # In this case, we should be able to still produce correct results.
-# See the issue: https://github.com/apache/arrow-datafusion/issues/5346
+# See the issue: https://github.com/apache/datafusion/issues/5346
 # below over clause is equivalent to OVER(ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 # in terms of behaviour.
 query I
@@ -2457,7 +2457,7 @@ physical_plan
 
 # We should remove the type checking in physical plan after we don't skip
 # the failed optimizing rules by default.
-# (see more in https://github.com/apache/arrow-datafusion/issues/4615)
+# (see more in https://github.com/apache/datafusion/issues/4615)
 
 statement ok
 set datafusion.optimizer.skip_failed_rules = true

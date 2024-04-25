@@ -24,7 +24,7 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
+use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
 use std::collections::HashSet;
 
@@ -206,7 +206,6 @@ mod tests {
     use super::*;
     use crate::expressions::tests::assert_aggregate;
     use arrow::array::*;
-    use datafusion_common::Result;
     use datafusion_expr::AggregateFunction;
 
     fn run_update_batch(

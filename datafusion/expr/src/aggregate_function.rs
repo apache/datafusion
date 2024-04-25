@@ -30,7 +30,7 @@ use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
 // Contributor's guide for adding new aggregate functions
-// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
+// https://datafusion.apache.org/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// Count
@@ -422,7 +422,7 @@ mod tests {
     // For each variant in AggregateFuncion, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
-    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    // function suggestion. See https://github.com/apache/datafusion/issues/8082
     fn test_display_and_from_str() {
         for func_original in AggregateFunction::iter() {
             let func_name = func_original.to_string();

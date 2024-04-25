@@ -79,7 +79,6 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Float64Array;
 
     use datafusion_common::cast::as_boolean_array;
 

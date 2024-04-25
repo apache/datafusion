@@ -206,7 +206,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{col, lit, Operator};
+    use datafusion_expr::{col, Operator};
 
     #[test]
     fn test_null_handling() {

@@ -51,7 +51,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&|plan| {
+        plan.transform_down(|plan| {
             let transformed =
                 plan.as_any()
                     .downcast_ref::<AggregateExec>()
@@ -179,7 +179,7 @@ fn normalize_group_exprs(group_exprs: GroupExprsRef) -> GroupExprs {
 fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
     group_expr
         .clone()
-        .transform(&|expr| {
+        .transform(|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
                 match expr.as_any().downcast_ref::<Column>() {
                     Some(column) => Some(Arc::new(Column::new(column.name(), 0))),
@@ -201,16 +201,12 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
     use crate::physical_plan::expressions::lit;
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, Partitioning, Statistics};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_physical_expr::expressions::{col, Count, Sum};
-    use datafusion_physical_expr::AggregateExpr;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {

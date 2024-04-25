@@ -21,8 +21,8 @@ use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Va
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
-    Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -60,7 +60,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Virtual stack machine to convert SQLExpr to Expr
         // This allows visiting the expr tree in a depth-first manner which
         // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
-        // See https://github.com/apache/arrow-datafusion/issues/1444
+        // See https://github.com/apache/datafusion/issues/1444
         let mut stack = vec![StackEntry::SQLExpr(Box::new(sql))];
         let mut eval_stack = vec![];
 
@@ -142,9 +142,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         _ => false,
                     }) {
-                        Some((qualifier, df_field)) => {
-                            Expr::Column(Column::from((qualifier, df_field.as_ref())))
-                        }
+                        Some((qualifier, df_field)) => Expr::from((qualifier, df_field)),
                         None => Expr::Column(col),
                     }
                 }
@@ -194,6 +192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
+                    let keys = keys.into_iter().map(|mak| mak.key).collect();
                     self.plan_indexed(
                         col(self.normalizer.normalize(id)),
                         keys,
@@ -1031,7 +1030,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{Field, Schema};
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 

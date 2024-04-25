@@ -21,6 +21,30 @@
 
 use std::sync::Arc;
 
+use arrow::{
+    array::ArrayRef,
+    datatypes::{
+        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+        TimeUnit, UnionMode,
+    },
+    ipc::writer::{DictionaryTracker, IpcDataGenerator},
+    record_batch::RecordBatch,
+};
+
+use datafusion_common::{
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
+};
+use datafusion_expr::expr::{
+    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, Sort, Unnest,
+};
+use datafusion_expr::{
+    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
+    BuiltInWindowFunction, Expr, JoinConstraint, JoinType, TryCast, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
+
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -35,29 +59,6 @@ use crate::protobuf::{
     UnionField, UnionValue,
 };
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{
-        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-        TimeUnit, UnionMode,
-    },
-    ipc::writer::{DictionaryTracker, IpcDataGenerator},
-    record_batch::RecordBatch,
-};
-use datafusion_common::{
-    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
-};
-use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, Unnest,
-};
-use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
-};
-
 use super::LogicalExtensionCodec;
 
 #[derive(Debug)]
@@ -69,8 +70,6 @@ pub enum Error {
     InvalidScalarType(DataType),
 
     InvalidTimeUnit(TimeUnit),
-
-    UnsupportedScalarFunction(BuiltinScalarFunction),
 
     NotImplemented(String),
 }
@@ -92,9 +91,6 @@ impl std::fmt::Display for Error {
                     f,
                     "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {time_unit:?}"
                 )
-            }
-            Self::UnsupportedScalarFunction(function) => {
-                write!(f, "Unsupported scalar function {function:?}")
             }
             Self::NotImplemented(s) => {
                 write!(f, "Not implemented: {s}")
@@ -774,17 +770,6 @@ pub fn serialize_expr(
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
             let args = serialize_exprs(args, codec)?;
             match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let fun: protobuf::ScalarFunction = fun.try_into()?;
-                    protobuf::LogicalExprNode {
-                        expr_type: Some(ExprType::ScalarFunction(
-                            protobuf::ScalarFunctionNode {
-                                fun: fun.into(),
-                                args,
-                            },
-                        )),
-                    }
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
@@ -995,7 +980,7 @@ pub fn serialize_expr(
         | Expr::Exists { .. }
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
+            // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
         Expr::GetIndexedField(GetIndexedField { expr, field }) => {
@@ -1399,18 +1384,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
         }
-    }
-}
-
-impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
-    type Error = Error;
-
-    fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
-        let scalar_function = match scalar {
-            BuiltinScalarFunction::Coalesce => Self::Coalesce,
-        };
-
-        Ok(scalar_function)
     }
 }
 

@@ -27,7 +27,7 @@ project.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, [python bindings], extensive customization, a great community, and more.
 
-[python bindings]: https://github.com/apache/arrow-datafusion-python
+[python bindings]: https://github.com/apache/datafusion-python
 
 ## Project Goals
 
@@ -39,7 +39,7 @@ Arrow](https://arrow.apache.org/).
 
 ## Features
 
-- Feature-rich [SQL support](https://arrow.apache.org/datafusion/user-guide/sql/index.html) and [DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+- Feature-rich [SQL support](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
 - Blazingly fast, vectorized, multi-threaded, streaming execution engine.
 - Native support for Parquet, CSV, JSON, and Avro file formats. Support
   for custom file formats and non file datasources via the `TableProvider` trait.
@@ -49,7 +49,7 @@ Arrow](https://arrow.apache.org/).
   Azure Blob Storage, and Google Cloud Storage (Other storage systems are supported via the
   `ObjectStore` trait).
 - [Excellent Documentation](https://docs.rs/datafusion/latest) and a
-  [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
+  [welcoming community](https://datafusion.apache.org/contributor-guide/communication.html).
 - A state of the art query optimizer with expression coercion and
   simplification, projection and filter pushdown, sort and distribution
   aware optimizations, automatic join reordering, and more.
@@ -95,8 +95,8 @@ Here are some active projects using DataFusion:
  <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
-- [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
-- [Comet](https://github.com/apache/arrow-datafusion-comet) Apache Spark native query execution plugin
+- [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
+- [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
@@ -129,7 +129,7 @@ Here are some less active projects that used DataFusion:
 - [Flock](https://github.com/flock-lab/flock)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 
-[ballista]: https://github.com/apache/arrow-ballista
+[ballista]: https://github.com/apache/datafusion-ballista
 [blaze]: https://github.com/blaze-init/blaze
 [cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
 [cnosdb]: https://github.com/cnosdb/cnosdb
@@ -161,7 +161,7 @@ provide integrations with other systems, some of which are described below:
 ### Language Bindings
 
 - [datafusion-c](https://github.com/datafusion-contrib/datafusion-c)
-- [datafusion-python](https://github.com/apache/arrow-datafusion-python)
+- [datafusion-python](https://github.com/apache/datafusion-python)
 - [datafusion-ruby](https://github.com/datafusion-contrib/datafusion-ruby)
 - [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
 

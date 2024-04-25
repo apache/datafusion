@@ -345,10 +345,9 @@ mod tests {
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             test_home_path,
         );
-        let input =
-            "~/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = format!(
-            "{}{}Code{}arrow-datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
             test_home_path,
             MAIN_SEPARATOR,
             MAIN_SEPARATOR,

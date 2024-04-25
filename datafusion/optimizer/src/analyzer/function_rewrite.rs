@@ -64,7 +64,7 @@ impl ApplyFunctionRewrites {
             let original_name = name_preserver.save(&expr)?;
 
             // recursively transform the expression, applying the rewrites at each step
-            let transformed_expr = expr.transform_up(&|expr| {
+            let transformed_expr = expr.transform_up(|expr| {
                 let mut result = Transformed::no(expr);
                 for rewriter in self.function_rewrites.iter() {
                     result = result.transform_data(|expr| {
@@ -85,7 +85,7 @@ impl AnalyzerRule for ApplyFunctionRewrites {
     }
 
     fn analyze(&self, plan: LogicalPlan, options: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_up_with_subqueries(&|plan| self.rewrite_plan(plan, options))
+        plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan, options))
             .map(|res| res.data)
     }
 }

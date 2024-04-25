@@ -478,7 +478,7 @@ fn replace_on_columns_of_right_ordering(
             let new_expr = item
                 .expr
                 .clone()
-                .transform(&|e| {
+                .transform(|e| {
                     if e.eq(right_col) {
                         Ok(Transformed::yes(left_col.clone()))
                     } else {

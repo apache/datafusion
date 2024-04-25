@@ -805,11 +805,11 @@ impl RepartitionExec {
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
-            // https://github.com/apache/arrow-datafusion/issues/5278.
+            // https://github.com/apache/datafusion/issues/5278.
             //
             // However, yielding on every batch causes a bottleneck
             // when running with multiple cores. See
-            // https://github.com/apache/arrow-datafusion/issues/6290
+            // https://github.com/apache/datafusion/issues/6290
             //
             // Thus, heuristically yield after producing num_partition
             // batches
@@ -1010,14 +1010,12 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::array::{StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
-    use futures::FutureExt;
     use tokio::task::JoinSet;
 
     #[tokio::test]
