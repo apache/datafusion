@@ -1129,7 +1129,7 @@ mod tests {
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
 
@@ -1917,11 +1917,11 @@ mod tests {
         );
 
         let key_value_metadata = key_value_metadata.unwrap();
-        let my_metadata = key_value_metadata
-            .iter()
-            .filter(|kv| kv.key == "my-data")
-            .collect::<Vec<_>>();
-        assert_eq!(my_metadata.len(), 1);
+        let expected_metadata = vec![KeyValue {
+            key: "my-data".to_string(),
+            value: Some("stuff".to_string()),
+        }];
+        assert_eq!(key_value_metadata, expected_metadata);
 
         Ok(())
     }

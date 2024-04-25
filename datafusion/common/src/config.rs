@@ -1391,7 +1391,7 @@ impl ConfigField for TableParquetOptions {
         if key.contains("::") {
             self.column_specific_options.set(key, value)
         } else if key.eq("metadata") {
-            for maybe_pair in value.split('_') {
+            for maybe_pair in value.split(' ') {
                 let (k, v) = match maybe_pair.split(':').collect::<Vec<_>>()[..] {
                     [k, v] => (k.into(), Some(v.into())),
                     [k] => (k.into(), None),

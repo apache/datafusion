@@ -291,6 +291,7 @@ OPTIONS (
 
 # valid vs invalid metadata
 
+# accepts empty map
 statement ok
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
@@ -299,7 +300,35 @@ OPTIONS (
 'format.metadata' ''
 )
 
-statement error
+# accepts map with a single entry
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.metadata' 'key:value'
+)
+
+# accepts map with multiple entries
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.metadata' 'key1:value1 key2:value2'
+)
+
+# accepts entries which are key-only (no value)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+'format.metadata' 'key1 key2:value2 key3'
+)
+
+# errors for invalid key-value pair (extra `:`)
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata provided "foo:bar:extra"
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
@@ -307,13 +336,15 @@ OPTIONS (
 'format.metadata' 'foo:bar:extra'
 )
 
-statement error
+# errors for invalid property (not stating `format.metadata`)
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata-key" not found on ParquetOptions
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.wrong-metadata-key' 'foo:bar baz'
+'format.wrong-metadata-key' 'key:value'
 )
+
 
 # validate multiple parquet file output with all options set
 statement ok
