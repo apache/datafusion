@@ -83,6 +83,14 @@ pub fn create_aggregate_expr(
     }))
 }
 
+fn calc_fn_name_with_args(fn_name: &str, args: &[Arc<dyn PhysicalExpr>]) -> String {
+    let args = args
+        .iter()
+        .map(|sort_expr| format!("{sort_expr}"))
+        .collect::<Vec<_>>();
+    format!("{fn_name}({})", args.join(", "))
+}
+
 /// An aggregate expression that:
 /// * knows its resulting field
 /// * knows how to create its accumulator
@@ -332,17 +340,18 @@ impl AggregateExpr for AggregateFunctionExpr {
             .clone()
             .with_requirement_satisfied(requirement_satisfied)?
         {
-            return Ok(Some(Arc::new(AggregateFunctionExpr {
-                fun: updated_fn,
-                args: self.args.clone(),
-                data_type: self.data_type.clone(),
-                name: self.fun.name().to_string(),
-                schema: self.schema.clone(),
-                sort_exprs: self.sort_exprs.clone(),
-                ordering_req: self.ordering_req.clone(),
-                ignore_nulls: self.ignore_nulls,
-                ordering_fields: self.ordering_fields.clone(),
-            })));
+            let name = calc_fn_name_with_args(self.fun.name(), &self.args);
+            let aggr_expr = create_aggregate_expr(
+                &updated_fn,
+                &self.args,
+                &self.sort_exprs,
+                &self.ordering_req,
+                &self.schema,
+                name,
+                self.ignore_nulls,
+            )
+            .unwrap();
+            return Ok(Some(aggr_expr));
         }
         Ok(None)
     }
@@ -351,13 +360,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         if let Some(reverse_udf) = self.fun.reverse_udf() {
             let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
             let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
+            let name = calc_fn_name_with_args(self.fun.name(), &self.args);
             let reverse_aggr = create_aggregate_expr(
                 &reverse_udf,
                 &self.args,
                 &reverse_sort_exprs,
                 &reverse_ordering_req,
                 &self.schema,
-                self.fun.name(),
+                name,
                 self.ignore_nulls,
             )
             .unwrap();

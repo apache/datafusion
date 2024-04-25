@@ -198,7 +198,7 @@ impl AggregateUDF {
     }
 
     pub fn with_requirement_satisfied(
-        self: Self,
+        self,
         requirement_satisfied: bool,
     ) -> Result<Option<AggregateUDF>> {
         let updated_udf = self
@@ -378,7 +378,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     fn with_requirement_satisfied(
         self: Arc<Self>,
-        requirement_satisfied: bool,
+        _requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         // By default, no support for this optimization
         Ok(None)

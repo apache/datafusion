@@ -2019,7 +2019,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1) ORDER BY [col0@3 ASC NULLS LAST]]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1) ORDER BY [col0@3 ASC NULLS LAST]]
+07)------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(col1@4) ORDER BY [col0@3 ASC NULLS LAST]]
 08)--------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
 09)----------------CoalesceBatchesExec: target_batch_size=8192
 10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
@@ -2178,7 +2178,7 @@ logical_plan
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]
-02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [a@0 DESC]], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(c@2) ORDER BY [a@0 DESC]], ordering_mode=Sorted
 03)----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
@@ -2204,7 +2204,7 @@ logical_plan
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as last_c]
-02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c) ORDER BY [a@0 DESC]], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(c@2) ORDER BY [a@0 DESC]], ordering_mode=Sorted
 03)----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
@@ -2677,7 +2677,7 @@ logical_plan
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(amount@1) ORDER BY [amount@1 DESC], LAST_VALUE(amount@1) ORDER BY [amount@1 DESC]]
 03)----SortExec: expr=[amount@1 DESC]
 04)------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2708,7 +2708,7 @@ logical_plan
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], FIRST_VALUE(amount@1) ORDER BY [amount@1 ASC NULLS LAST], FIRST_VALUE(amount@1) ORDER BY [amount@1 ASC NULLS LAST]]
 03)----SortExec: expr=[amount@1 ASC NULLS LAST]
 04)------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2740,7 +2740,7 @@ logical_plan
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@2 as fv2, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@3 as amounts]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(amount@1) ORDER BY [amount@1 ASC NULLS LAST], FIRST_VALUE(amount@1) ORDER BY [amount@1 ASC NULLS LAST], ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
 03)----SortExec: expr=[amount@1 ASC NULLS LAST]
 04)------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2805,7 +2805,7 @@ logical_plan
 04)------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(amount@2) ORDER BY [ts@1 DESC], LAST_VALUE(amount@2) ORDER BY [ts@1 DESC], SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
@@ -2838,7 +2838,7 @@ logical_plan
 03)----TableScan: sales_global projection=[country, ts, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(amount@2) ORDER BY [ts@1 DESC], LAST_VALUE(amount@2) ORDER BY [ts@1 DESC], SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
@@ -2874,7 +2874,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[sn@2 ASC NULLS LAST]
 02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, LAST_VALUE(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
-03)----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[LAST_VALUE(e.amount) ORDER BY [e.sn ASC NULLS LAST]]
+03)----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[LAST_VALUE(amount@6) ORDER BY [sn@5 ASC NULLS LAST]]
 04)------ProjectionExec: expr=[zip_code@2 as zip_code, country@3 as country, sn@4 as sn, ts@5 as ts, currency@6 as currency, sn@0 as sn, amount@1 as amount]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1, projection=[sn@0, amount@3, zip_code@4, country@5, sn@6, ts@7, currency@8]
@@ -2919,11 +2919,11 @@ physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 02)--SortExec: expr=[country@0 ASC NULLS LAST]
 03)----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
-04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
+04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [ts@1 ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [ts@1 ASC NULLS LAST]]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
+08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(amount@2) ORDER BY [ts@1 ASC NULLS LAST], LAST_VALUE(amount@2) ORDER BY [ts@1 ASC NULLS LAST]]
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
@@ -2955,11 +2955,11 @@ physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 02)--SortExec: expr=[country@0 ASC NULLS LAST]
 03)----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
-04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [ts@1 ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [ts@1 DESC]]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(amount@2) ORDER BY [ts@1 ASC NULLS LAST], LAST_VALUE(amount@2) ORDER BY [ts@1 DESC]]
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
@@ -2991,9 +2991,9 @@ logical_plan
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
 01)ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv2]
-02)--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
+02)--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [ts@0 ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [ts@0 ASC NULLS LAST]]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(amount@1) ORDER BY [ts@0 ASC NULLS LAST], LAST_VALUE(amount@1) ORDER BY [ts@0 ASC NULLS LAST]]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 06)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3017,9 +3017,9 @@ logical_plan
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
 01)ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv2]
-02)--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+02)--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [ts@0 ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [ts@0 DESC]]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(amount@1) ORDER BY [ts@0 ASC NULLS LAST], LAST_VALUE(amount@1) ORDER BY [ts@0 DESC]]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 06)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3154,10 +3154,10 @@ physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 02)--SortExec: expr=[country@0 ASC NULLS LAST]
 03)----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
+04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], FIRST_VALUE(sales_global.amount) ORDER BY [amount@1 ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [amount@1 DESC]]
 05)--------CoalesceBatchesExec: target_batch_size=4
 06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-07)------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
+07)------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], LAST_VALUE(amount@1) ORDER BY [amount@1 DESC], LAST_VALUE(amount@1) ORDER BY [amount@1 DESC]]
 08)--------------SortExec: expr=[amount@1 DESC]
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 10)------------------MemoryExec: partitions=1, partition_sizes=[1]
@@ -3800,10 +3800,10 @@ logical_plan
 03)----TableScan: multiple_ordered_table projection=[a, c, d]
 physical_plan
 01)ProjectionExec: expr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST]@1 as first_a, LAST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]@2 as last_c]
-02)--AggregateExec: mode=FinalPartitioned, gby=[d@0 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST], LAST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]]
+02)--AggregateExec: mode=FinalPartitioned, gby=[d@0 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [a@0 ASC NULLS LAST], LAST_VALUE(multiple_ordered_table.c) ORDER BY [c@1 DESC]]
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([d@0], 8), input_partitions=8
-05)--------AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST], FIRST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]]
+05)--------AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(a@0) ORDER BY [a@0 ASC NULLS LAST], FIRST_VALUE(c@1) ORDER BY [c@1 ASC NULLS LAST]]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
 
@@ -3870,7 +3870,7 @@ logical_plan
 12)------------------TableScan: multiple_ordered_table projection=[a, d]
 physical_plan
 01)ProjectionExec: expr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd]
-02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(d@1) ORDER BY [a@0 ASC NULLS LAST]], ordering_mode=Sorted
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
