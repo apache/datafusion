@@ -22,7 +22,6 @@ use arrow_array::{
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 
-
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
