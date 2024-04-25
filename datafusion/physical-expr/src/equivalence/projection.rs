@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result};
+use datafusion_common::Result;
 
 use crate::expressions::Column;
 use crate::PhysicalExpr;

@@ -59,12 +59,17 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
+    let mut name = name.into();
+    if !ordering_req.is_empty(){
+        let reqs = ordering_req.iter().map(|sort_expr| format!("{sort_expr}")).collect::<Vec<_>>();
+        name = format!("{name} ORDER BY [{}]", reqs.join(", "));
+    }
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
-        name: name.into(),
+        name,
         schema: schema.clone(),
         sort_exprs: sort_exprs.to_vec(),
         ordering_req: ordering_req.to_vec(),

@@ -19,7 +19,6 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn, SortOptions};
@@ -38,7 +37,6 @@ use datafusion_expr::{
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::reverse_order_bys;
 
 use sqlparser::ast::NullTreatment;
 
