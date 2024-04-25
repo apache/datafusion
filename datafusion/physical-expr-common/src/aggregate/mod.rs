@@ -20,10 +20,10 @@ pub mod utils;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{exec_datafusion_err, not_impl_err, Result};
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
-use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -62,8 +62,11 @@ pub fn create_aggregate_expr(
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
     let mut name = name.into();
-    if !ordering_req.is_empty(){
-        let reqs = ordering_req.iter().map(|sort_expr| format!("{sort_expr}")).collect::<Vec<_>>();
+    if !ordering_req.is_empty() {
+        let reqs = ordering_req
+            .iter()
+            .map(|sort_expr| format!("{sort_expr}"))
+            .collect::<Vec<_>>();
         name = format!("{name} ORDER BY [{}]", reqs.join(", "));
     }
 
@@ -311,7 +314,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        if !self.ordering_req.is_empty(){
+        if !self.ordering_req.is_empty() {
             // If there is requirement, use the sensitive of the implementation
             self.fun.order_sensitivity()
         } else {
@@ -320,9 +323,16 @@ impl AggregateExpr for AggregateFunctionExpr {
         }
     }
 
-    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        if let Some(updated_fn) = self.fun.clone().with_requirement_satisfied(requirement_satisfied)?{
-            return Ok(Some(Arc::new(AggregateFunctionExpr{
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        requirement_satisfied: bool,
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        if let Some(updated_fn) = self
+            .fun
+            .clone()
+            .with_requirement_satisfied(requirement_satisfied)?
+        {
+            return Ok(Some(Arc::new(AggregateFunctionExpr {
                 fun: updated_fn,
                 args: self.args.clone(),
                 data_type: self.data_type.clone(),
@@ -338,20 +348,20 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        if let Some(reverse_udf) = self.fun.reverse_udf(){
+        if let Some(reverse_udf) = self.fun.reverse_udf() {
             let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
             let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
-            return Some(Arc::new(AggregateFunctionExpr{
-                fun: reverse_udf,
-                args: self.args.clone(),
-                data_type: self.data_type.clone(),
-                name: self.fun.name().to_string(),
-                schema: self.schema.clone(),
-                sort_exprs: reverse_sort_exprs,
-                ordering_req: reverse_ordering_req,
-                ignore_nulls: self.ignore_nulls,
-                ordering_fields: self.ordering_fields.clone(),
-            }))
+            let reverse_aggr = create_aggregate_expr(
+                &reverse_udf,
+                &self.args,
+                &reverse_sort_exprs,
+                &reverse_ordering_req,
+                &self.schema,
+                self.fun.name(),
+                self.ignore_nulls,
+            )
+            .unwrap();
+            return Some(reverse_aggr);
         }
         None
     }

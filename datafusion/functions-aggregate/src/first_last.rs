@@ -30,7 +30,7 @@ use datafusion_common::{
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
+use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
@@ -86,7 +86,7 @@ impl FirstValue {
         }
     }
 
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self{
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
         self.requirement_satisfied = requirement_satisfied;
         self
     }
@@ -173,8 +173,13 @@ impl AggregateUDFImpl for FirstValue {
         &self.aliases
     }
 
-    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        Ok(Some(Arc::new(FirstValue::new().with_requirement_satisfied(requirement_satisfied))))
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        requirement_satisfied: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(
+            FirstValue::new().with_requirement_satisfied(requirement_satisfied),
+        )))
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -788,7 +793,7 @@ impl LastValue {
         }
     }
 
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self{
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
         self.requirement_satisfied = requirement_satisfied;
         self
     }
@@ -873,14 +878,19 @@ impl AggregateUDFImpl for LastValue {
         &self.aliases
     }
 
-    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        Ok(Some(Arc::new(LastValue::new().with_requirement_satisfied(requirement_satisfied))))
+    fn with_requirement_satisfied(
+        self: Arc<Self>,
+        requirement_satisfied: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(
+            LastValue::new().with_requirement_satisfied(requirement_satisfied),
+        )))
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Beneficial
     }
-    
+
     fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
         Some(Arc::new(FirstValue::new()))
     }

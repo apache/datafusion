@@ -39,8 +39,8 @@ use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::Accumulator;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::Accumulator;
 
 /// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
