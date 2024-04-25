@@ -233,8 +233,7 @@ impl FirstValueAccumulator {
     }
 
     pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        // self.requirement_satisfied = requirement_satisfied;
-        self.requirement_satisfied = false;
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 
@@ -850,7 +849,7 @@ impl AggregateUDFImpl for LastValue {
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let requirement_satisfied = ordering_req.is_empty();
+        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
 
         LastValueAccumulator::try_new(
             acc_args.data_type,
@@ -992,8 +991,7 @@ impl LastValueAccumulator {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        // self.requirement_satisfied = requirement_satisfied;
-        self.requirement_satisfied = false;
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 }

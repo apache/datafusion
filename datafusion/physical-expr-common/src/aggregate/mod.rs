@@ -61,14 +61,7 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
-    let mut name = name.into();
-    if !ordering_req.is_empty() {
-        let reqs = ordering_req
-            .iter()
-            .map(|sort_expr| format!("{sort_expr}"))
-            .collect::<Vec<_>>();
-        name = format!("{name} ORDER BY [{}]", reqs.join(", "));
-    }
+    let name = name.into();
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
@@ -340,14 +333,14 @@ impl AggregateExpr for AggregateFunctionExpr {
             .clone()
             .with_requirement_satisfied(requirement_satisfied)?
         {
-            let name = calc_fn_name_with_args(self.fun.name(), &self.args);
+            // let name = calc_fn_name_with_args(self.fun.name(), &self.args);
             let aggr_expr = create_aggregate_expr(
                 &updated_fn,
                 &self.args,
                 &self.sort_exprs,
                 &self.ordering_req,
                 &self.schema,
-                name,
+                self.name(),
                 self.ignore_nulls,
             )
             .unwrap();
@@ -360,7 +353,11 @@ impl AggregateExpr for AggregateFunctionExpr {
         if let Some(reverse_udf) = self.fun.reverse_udf() {
             let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
             let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
-            let name = calc_fn_name_with_args(self.fun.name(), &self.args);
+            let mut name = self.name().to_string();
+            // let name = calc_fn_name_with_args(self.fun.name(), &self.args);
+            // let name = self.fun.name();
+            replace_order_by_clause(&mut name);
+            replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
             let reverse_aggr = create_aggregate_expr(
                 &reverse_udf,
                 &self.args,
@@ -394,4 +391,33 @@ impl PartialEq<dyn Any> for AggregateFunctionExpr {
             })
             .unwrap_or(false)
     }
+}
+
+fn replace_order_by_clause(order_by: &mut String) {
+    let suffixes = [
+        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+    ];
+
+    if let Some(start) = order_by.find("ORDER BY [") {
+        if let Some(end) = order_by[start..].find(']') {
+            let order_by_start = start + 9;
+            let order_by_end = start + end;
+
+            let column_order = &order_by[order_by_start..=order_by_end];
+            for &(suffix, replacement) in &suffixes {
+                if column_order.ends_with(suffix) {
+                    let new_order = column_order.replace(suffix, replacement);
+                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
+    *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }
