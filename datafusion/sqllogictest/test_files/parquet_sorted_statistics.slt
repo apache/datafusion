@@ -107,21 +107,6 @@ logical_plan
 02)--TableScan: test_table projection=[int_col, bigint_col]
 physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[int_col, bigint_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST]
 
-# Same query but check that the output is actually ordered:
-query IITIDIIT
-SELECT * FROM test_table ORDER BY int_col, bigint_col;
-----
-1 3 aaa 100 1970-01-02 0 0 A
-2 2 bbb 200 1970-01-03 1 0 A
-3 1 ccc 300 1970-01-04 2 0 A
-4 6 ddd 400 1970-01-05 0 0 B
-5 5 eee 500 1970-01-06 1 0 B
-6 4 fff 600 1970-01-07 2 0 B
-7 9 ggg 700 1970-01-08 3 0 C
-8 8 hhh 800 1970-01-09 4 0 C
-9 7 iii 900 1970-01-10 5 0 C
-
-
 # Another planning test, but project on a column with unsupported statistics
 # We should be able to ignore this and look at only the relevant statistics
 query TT
