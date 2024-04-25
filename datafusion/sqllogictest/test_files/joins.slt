@@ -2010,7 +2010,7 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
-# Planning inner nested loop join
+# Planning inner nested loop join 
 # inputs are swapped due to inexact statistics + join reordering caused additional projection
 
 query TT
