@@ -157,30 +157,29 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
-        self.options.set(key, &value.to_string()).unwrap();
-        self
+    pub fn set(self, key: &str, value: ScalarValue) -> Self {
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a boolean configuration option
     pub fn set_bool(self, key: &str, value: bool) -> Self {
-        self.set(key, ScalarValue::Boolean(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `u64` configuration option
     pub fn set_u64(self, key: &str, value: u64) -> Self {
-        self.set(key, ScalarValue::UInt64(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `usize` configuration option
     pub fn set_usize(self, key: &str, value: usize) -> Self {
-        let value: u64 = value.try_into().expect("convert usize to u64");
-        self.set(key, ScalarValue::UInt64(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `str` configuration option
-    pub fn set_str(self, key: &str, value: &str) -> Self {
-        self.set(key, ScalarValue::from(value))
+    pub fn set_str(mut self, key: &str, value: &str) -> Self {
+        self.options.set(key, value).unwrap();
+        self
     }
 
     /// Customize batch size
