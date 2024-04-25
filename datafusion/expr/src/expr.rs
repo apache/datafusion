@@ -1402,10 +1402,9 @@ impl fmt::Display for Expr {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
-            Expr::Columns(c) => Ok(c
-                .iter()
-                .map(|column| write!(f, "{},", column))
-                .collect::<Result<(), _>>()?),
+            Expr::Columns(c) => {
+                Ok(c.iter().try_for_each(|column| write!(f, "{},", column))?)
+            },
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
