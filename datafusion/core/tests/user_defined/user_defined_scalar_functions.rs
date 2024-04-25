@@ -34,8 +34,8 @@ use datafusion_common::{assert_contains, exec_err, internal_err, DataFusionError
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
-    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, ExprSchemable, LogicalPlanBuilder,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 
 use rand::{thread_rng, Rng};
@@ -857,7 +857,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 impl ScalarFunctionWrapper {
     // replaces placeholders with actual arguments
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
-        let result = expr.clone().transform(&|e| {
+        let result = expr.clone().transform(|e| {
             let r = match e {
                 Expr::Placeholder(placeholder) => {
                     let placeholder_position =

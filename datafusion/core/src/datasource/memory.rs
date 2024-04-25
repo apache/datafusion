@@ -363,7 +363,6 @@ impl DataSink for MemSink {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use super::*;
     use crate::datasource::provider_as_source;
@@ -375,8 +374,6 @@ mod tests {
     use arrow::error::ArrowError;
     use datafusion_common::DataFusionError;
     use datafusion_expr::LogicalPlanBuilder;
-
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {

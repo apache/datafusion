@@ -164,7 +164,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 impl ScalarFunctionWrapper {
     // replaces placeholders such as $1 with actual arguments (args[0]
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
-        let result = expr.clone().transform(&|e| {
+        let result = expr.clone().transform(|e| {
             let r = match e {
                 Expr::Placeholder(placeholder) => {
                     let placeholder_position =

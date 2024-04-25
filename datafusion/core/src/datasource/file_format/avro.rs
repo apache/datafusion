@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use arrow::{self, datatypes::SchemaRef};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::FileType;
 use datafusion_physical_expr::PhysicalExpr;

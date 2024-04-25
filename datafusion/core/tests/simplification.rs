@@ -28,7 +28,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
+    expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
     LogicalPlanBuilder, ScalarUDF, Volatility,
 };
 use datafusion_functions::{math, string};
@@ -299,7 +299,7 @@ fn select_date_plus_interval() -> Result<()> {
 
 #[test]
 fn simplify_project_scalar_fn() -> Result<()> {
-    // Issue https://github.com/apache/arrow-datafusion/issues/5996
+    // Issue https://github.com/apache/datafusion/issues/5996
     let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
     let plan = table_scan(Some("test"), &schema, None)?
         .project(vec![power(col("f"), lit(1.0))])?

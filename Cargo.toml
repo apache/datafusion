@@ -46,10 +46,10 @@ resolver = "2"
 [workspace.package]
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-homepage = "https://github.com/apache/arrow-datafusion"
+homepage = "https://github.com/apache/datafusion"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/datafusion"
 rust-version = "1.73"
 version = "37.1.0"
 
@@ -103,7 +103,7 @@ parquet = { version = "51.0.0", default-features = false, features = ["arrow", "
 rand = "0.8"
 rstest = "0.19.0"
 serde_json = "1"
-sqlparser = { version = "0.44.0", features = ["visitor"] }
+sqlparser = { version = "0.45.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
@@ -130,3 +130,6 @@ rpath = false
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
+
+[workspace.lints.rust]
+unused_imports = "deny"

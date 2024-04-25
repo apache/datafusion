@@ -244,7 +244,7 @@ impl ExecutionPlan for DataSinkExec {
         // Maintains ordering in the sense that the written file will reflect
         // the ordering of the input. For more context, see:
         //
-        // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
+        // https://github.com/apache/datafusion/pull/6354#discussion_r1195284178
         vec![true]
     }
 

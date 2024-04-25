@@ -108,7 +108,7 @@ NULL
 NULL
 
 ## Unnest with additional column
-## Issue: https://github.com/apache/arrow-datafusion/issues/9349
+## Issue: https://github.com/apache/datafusion/issues/9349
 query II
 select unnest(column1), column3 from unnest_table;
 ----

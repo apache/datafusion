@@ -283,9 +283,6 @@ impl TreeNode for Expr {
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
-                    }
                     ScalarFunctionDefinition::UDF(fun) => {
                         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
                     }

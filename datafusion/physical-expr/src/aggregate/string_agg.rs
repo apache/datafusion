@@ -173,7 +173,6 @@ mod tests {
     use super::*;
     use crate::expressions::tests::aggregate;
     use crate::expressions::{col, create_aggregate_expr, try_cast};
-    use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use arrow_array::LargeStringArray;

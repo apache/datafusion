@@ -126,7 +126,7 @@ SELECT column1 FROM parquet_table_with_order WHERE column1 <> 42 ORDER BY column
 200
 
 # explain should not have any groups with more than one file
-# https://github.com/apache/arrow-datafusion/issues/8451
+# https://github.com/apache/datafusion/issues/8451
 query TT
 EXPLAIN SELECT column1 FROM parquet_table_with_order WHERE column1 <> 42 ORDER BY column1;
 ----
@@ -240,7 +240,7 @@ DROP TABLE json_table;
 ###################
 
 ## Use pre-existing files we don't have a way to create arrow files yet
-## (https://github.com/apache/arrow-datafusion/issues/8504)
+## (https://github.com/apache/datafusion/issues/8504)
 statement ok
 CREATE EXTERNAL TABLE arrow_table
 STORED AS ARROW
@@ -248,7 +248,7 @@ LOCATION '../core/tests/data/example.arrow';
 
 
 # It would be great to see the file read as "4" groups with even sizes (offsets) eventually
-# https://github.com/apache/arrow-datafusion/issues/8503
+# https://github.com/apache/datafusion/issues/8503
 query TT
 EXPLAIN SELECT * FROM arrow_table
 ----

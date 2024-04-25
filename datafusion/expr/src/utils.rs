@@ -264,7 +264,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
 /// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
@@ -356,12 +356,7 @@ fn get_exprs_except_skipped(
     columns_to_skip: HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema
-            .iter()
-            .map(|(qualifier, field)| {
-                Expr::Column(Column::from((qualifier, field.as_ref())))
-            })
-            .collect::<Vec<Expr>>()
+        schema.iter().map(Expr::from).collect::<Vec<Expr>>()
     } else {
         schema
             .columns()
@@ -661,7 +656,7 @@ where
     F: Fn(&Expr) -> bool,
 {
     let mut exprs = vec![];
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if test_fn(expr) {
             if !(exprs.contains(expr)) {
                 exprs.push(expr.clone())
@@ -683,7 +678,7 @@ where
     F: FnMut(&Expr) -> Result<(), E>,
 {
     let mut err = Ok(());
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if let Err(e) = f(expr) {
             // save the error for later (it may not be a DataFusionError
             err = Err(e);
@@ -839,7 +834,7 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         if let Expr::Column(c) = expr {
             exprs.push(c.clone())
         }
@@ -855,7 +850,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
-            Ok(Expr::Column(Column::from((qualifier, field))))
+            Ok(Expr::from(Column::from((qualifier, field))))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
@@ -868,7 +863,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
     let mut indexes = vec![];
-    e.apply(&mut |expr| {
+    e.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
                 if let Ok(idx) = schema.index_of_column(qc) {

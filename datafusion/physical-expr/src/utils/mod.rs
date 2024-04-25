@@ -194,9 +194,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init
-        .transform_up_mut(&mut |node| builder.mutate(node))
-        .data()?;
+    let root = init.transform_up(|node| builder.mutate(node)).data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -204,7 +202,7 @@ where
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if !columns.iter().any(|c| c.eq(column)) {
                 columns.insert(column.clone());
@@ -224,7 +222,7 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(&|expr| {
+    pred.transform_down(|expr| {
         let expr_any = expr.as_any();
 
         if let Some(column) = expr_any.downcast_ref::<Column>() {
@@ -260,14 +258,12 @@ pub(crate) mod tests {
     use arrow_array::{ArrayRef, Float32Array, Float64Array};
     use std::any::Any;
     use std::fmt::{Display, Formatter};
-    use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
 
     use datafusion_expr::{
         ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,

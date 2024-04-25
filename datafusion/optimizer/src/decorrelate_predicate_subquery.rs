@@ -331,12 +331,7 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::{
-        and, binary_expr, col, exists, in_subquery, lit,
-        logical_plan::LogicalPlanBuilder, not_exists, not_in_subquery, or, out_ref_col,
-        Operator,
-    };
+    use datafusion_expr::{and, binary_expr, col, lit, or, out_ref_col};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(

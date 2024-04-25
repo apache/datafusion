@@ -181,8 +181,8 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::{DataType, Schema};
+    use arrow::array::Int32Array;
+    use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
     use arrow_array::types::Int32Type;
     use arrow_array::Array;

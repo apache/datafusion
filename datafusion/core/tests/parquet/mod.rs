@@ -43,6 +43,7 @@ use tempfile::NamedTempFile;
 
 mod custom_reader;
 mod file_statistics;
+#[cfg(not(target_family = "windows"))]
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;

@@ -73,7 +73,7 @@ impl LogicalPlanSignature {
 /// Get total number of [`LogicalPlan`]s in the plan.
 fn get_node_number(plan: &LogicalPlan) -> NonZeroUsize {
     let mut node_number = 0;
-    plan.apply_with_subqueries(&mut |_plan| {
+    plan.apply_with_subqueries(|_plan| {
         node_number += 1;
         Ok(TreeNodeRecursion::Continue)
     })
@@ -89,7 +89,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{self, lit, LogicalPlan};
+    use datafusion_expr::{lit, LogicalPlan};
 
     use crate::plan_signature::get_node_number;
 

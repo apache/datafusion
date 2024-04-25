@@ -775,7 +775,7 @@ SELECT upper(NULL)
 ----
 NULL
 
-# TODO issue: https://github.com/apache/arrow-datafusion/issues/6596
+# TODO issue: https://github.com/apache/datafusion/issues/6596
 # query ??
 #SELECT
 #    CAST([1,2,3,4] AS INT[]) as a,

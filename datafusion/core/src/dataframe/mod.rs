@@ -1332,7 +1332,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(Column::from((qualifier, field.as_ref())))
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect();
@@ -1402,9 +1402,9 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field.as_ref()))).alias(new_name)
+                    col(Column::from((qualifier, field))).alias(new_name)
                 } else {
-                    col(Column::from((qualifier, field.as_ref())))
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect::<Vec<_>>();
@@ -1570,19 +1570,17 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::assert_batches_sorted_eq;
     use crate::execution::context::SessionConfig;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
-    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use arrow::array::{self, Int32Array};
-    use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        cast, count_distinct, create_udf, expr, lit, sum, BuiltInWindowFunction,
+        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
@@ -2423,7 +2421,7 @@ mod tests {
         Ok(())
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Test issue: https://github.com/apache/datafusion/issues/7790
     // The join operation outputs two identical column names, but they belong to different relations.
     #[tokio::test]
     async fn with_column_join_same_columns() -> Result<()> {
@@ -2503,7 +2501,7 @@ mod tests {
     }
 
     // Table 't1' self join
-    // Supplementary test of issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Supplementary test of issue: https://github.com/apache/datafusion/issues/7790
     #[tokio::test]
     async fn with_column_self_join() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1"])?;

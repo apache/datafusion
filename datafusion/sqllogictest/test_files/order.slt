@@ -333,7 +333,7 @@ drop table foo;
 
 
 #####
-# Tests for https://github.com/apache/arrow-datafusion/issues/4854
+# Tests for https://github.com/apache/datafusion/issues/4854
 # Ordering / grouping by the same column
 #####
 statement ok
@@ -704,7 +704,7 @@ physical_plan
 
 
 # Minimal reproduction of issue 5970
-# https://github.com/apache/arrow-datafusion/issues/5970
+# https://github.com/apache/datafusion/issues/5970
 statement ok
 set datafusion.execution.target_partitions = 2;
 

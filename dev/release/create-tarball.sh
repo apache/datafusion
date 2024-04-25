@@ -95,7 +95,7 @@ on the release. The vote will be open for at least 72 hours.
 Only votes from PMC members are binding, but all members of the community are
 encouraged to test the release and vote with "(non-binding)".
 
-The standard verification procedure is documented at https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#verifying-release-candidates.
+The standard verification procedure is documented at https://github.com/apache/datafusion/blob/main/dev/release/README.md#verifying-release-candidates.
 
 [ ] +1 Release this as Apache DataFusion ${version}
 [ ] +0
@@ -105,9 +105,9 @@ Here is my vote:
 
 +1
 
-[1]: https://github.com/apache/arrow-datafusion/tree/${release_hash}
+[1]: https://github.com/apache/datafusion/tree/${release_hash}
 [2]: ${url}
-[3]: https://github.com/apache/arrow-datafusion/blob/${release_hash}/CHANGELOG.md
+[3]: https://github.com/apache/datafusion/blob/${release_hash}/CHANGELOG.md
 MAIL
 echo "---------------------------------------------------------"
 
