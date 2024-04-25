@@ -678,7 +678,7 @@ impl MinMaxStatistics {
         let [min, max] = [new_min_cols, new_max_cols].map(|cols| {
             let values = RecordBatch::try_new(
                 min_values.schema(),
-                cols.into_iter().map(Arc::clone).collect(),
+                cols.into_iter().cloned().collect(),
             )?;
             let sorting_columns = sort_order
                 .iter()
