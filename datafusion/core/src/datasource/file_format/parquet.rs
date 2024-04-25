@@ -1858,10 +1858,10 @@ mod tests {
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
             TableParquetOptions {
-                key_value_metadata: std::collections::HashMap::from([(
-                    "my-data".to_string(),
-                    Some("stuff".to_string()),
-                )]),
+                key_value_metadata: std::collections::HashMap::from([
+                    ("my-data".to_string(), Some("stuff".to_string())),
+                    ("my-data-bool-key".to_string(), None),
+                ]),
                 ..Default::default()
             },
         ));
@@ -1916,11 +1916,18 @@ mod tests {
             "output file metadata should contain col b"
         );
 
-        let key_value_metadata = key_value_metadata.unwrap();
-        let expected_metadata = vec![KeyValue {
-            key: "my-data".to_string(),
-            value: Some("stuff".to_string()),
-        }];
+        let mut key_value_metadata = key_value_metadata.unwrap();
+        key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
+        let expected_metadata = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
         assert_eq!(key_value_metadata, expected_metadata);
 
         Ok(())

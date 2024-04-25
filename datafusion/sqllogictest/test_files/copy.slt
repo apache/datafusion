@@ -284,21 +284,12 @@ OPTIONS (
 'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
 'format.bloom_filter_ndv' 100,
-'format.metadata' 'foo:bar baz'
+'format.metadata::key' 'value'
 )
 ----
 2
 
 # valid vs invalid metadata
-
-# accepts empty map
-statement ok
-COPY source_table
-TO 'test_files/scratch/copy/table_with_metadata/'
-STORED AS PARQUET
-OPTIONS (
-'format.metadata' ''
-)
 
 # accepts map with a single entry
 statement ok
@@ -306,43 +297,56 @@ COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.metadata' 'key:value'
+    'format.metadata::key' 'value'
 )
 
-# accepts map with multiple entries
+# accepts multiple entries (on different keys)
 statement ok
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.metadata' 'key1:value1 key2:value2'
+    'format.metadata::key1' '',
+    'format.metadata::key2' 'value',
+    'format.metadata::key3' 'value with spaces',
+    'format.metadata::key4' 'value with special chars :: :'
 )
 
-# accepts entries which are key-only (no value)
+# accepts multiple entries with the same key (will overwrite)
 statement ok
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.metadata' 'key1 key2:value2 key3'
+    'format.metadata::key1' 'value',
+    'format.metadata::key1' 'value'
 )
 
-# errors for invalid key-value pair (extra `:`)
-statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata provided "foo:bar:extra"
+# errors if key is missing
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, missing key in metadata::<key>
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.metadata' 'foo:bar:extra'
+    'format.metadata::' 'value'
+)
+
+# errors if key contains internal '::'
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, found too many '::' in "metadata::key::extra"
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key::extra' 'value'
 )
 
 # errors for invalid property (not stating `format.metadata`)
-statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata-key" not found on ParquetOptions
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ColumnOptions
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
 OPTIONS (
-'format.wrong-metadata-key' 'key:value'
+    'format.wrong-metadata::key' 'value'
 )
 
 
