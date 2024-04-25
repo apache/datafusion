@@ -1,5 +1,3 @@
----
----
 <?xml version="1.0"?>
 <?xml-stylesheet type="text/xsl"?>
 <rdf:RDF xml:lang="en"
@@ -23,15 +21,19 @@
     See the License for the specific language governing permissions and
     limitations under the License.
 -->
+  <!-- 
+    Apache DOAP file that drives https://projects.apache.org/project.html?datafusion
+    See https://projects.apache.org/create.html for syntax and details
+    --> 
   <Project rdf:about="https://datafusion.apache.org">
     <created>2024-04-17</created>
     <license rdf:resource="https://spdx.org/licenses/Apache-2.0" />
     <name>Apache DataFusion</name>
     <homepage rdf:resource="https://datafusion.apache.org" />
     <asfext:pmc rdf:resource="https://datafusion.apache.org" />
-    <shortdesc>Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems.</shortdesc>
+    <shortdesc>Apache DataFusion is a fast, extensible query engine for building high-quality data-centric systems in Rust.</shortdesc>
     <description>
-        Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems
+        Apache DataFusion is a fast, extensible query engine for building high-quality data-centric systems
         in Rust, using the Apache Arrow in-memory format. Python Bindings are also available. DataFusion offers SQL
         and Dataframe APIs, excellent performance, built-in support for CSV, Parquet, JSON, and Avro,
         extensive customization, and a great community.
