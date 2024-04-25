@@ -888,6 +888,16 @@ select column2, column1 from foo ORDER BY column2 desc, column1 desc;
 [1] 4
 [0] 2
 
+# Test issue: https://github.com/apache/datafusion/issues/10013
+query I
+SELECT
+   SUM(column1)
+FROM foo
+HAVING SUM(column1) > 0
+ORDER BY SUM(column1)
+----
+16
+
 # Cleanup
 statement ok
 drop table foo;
