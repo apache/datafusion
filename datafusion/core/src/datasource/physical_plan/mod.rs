@@ -527,9 +527,9 @@ impl MinMaxStatistics {
     }
 
     fn new_from_files<'a>(
-        projected_sort_order: &[PhysicalSortExpr],
-        projected_schema: &SchemaRef,
-        projection: Option<&[usize]>,
+        projected_sort_order: &[PhysicalSortExpr], // Sort order with respect to projected schema
+        projected_schema: &SchemaRef,              // Projected schema
+        projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
         use datafusion_common::ScalarValue;
