@@ -357,9 +357,11 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Median, true) => {
-            return not_impl_err!("MEDIAN(DISTINCT) aggregations are not available");
-        }
+        (AggregateFunction::Median, true) => Arc::new(expressions::DistinctMedian::new(
+            input_phy_exprs[0].clone(),
+            name,
+            data_type,
+        )),
         (AggregateFunction::FirstValue, _) => Arc::new(
             expressions::FirstValue::new(
                 input_phy_exprs[0].clone(),
