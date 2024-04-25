@@ -290,7 +290,7 @@ fn is_valid_command(command: &str) -> Result<(), String> {
     if !command.is_empty() {
         Ok(())
     } else {
-        Err(format!("-c flag expects only non empty commands"))
+        Err("-c flag expects only non empty commands".to_string())
     }
 }
 
