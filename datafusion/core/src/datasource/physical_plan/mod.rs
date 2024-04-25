@@ -492,7 +492,8 @@ fn get_projected_output_ordering(
                 Ok(statistics) => statistics,
                 Err(e) => {
                     log::trace!("Error fetching statistics for file group: {e}");
-                    return false;
+                    // we can't prove that it's ordered, so we have to reject it
+                    return true;
                 }
             };
 
