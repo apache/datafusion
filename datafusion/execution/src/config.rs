@@ -173,12 +173,7 @@ impl SessionConfig {
 
     /// Set a generic `usize` configuration option
     pub fn set_usize(self, key: &str, value: usize) -> Self {
-        self.set_str(
-            key,
-            &TryInto::<u64>::try_into(value)
-                .expect("convert usize to u64")
-                .to_string(),
-        )
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `str` configuration option
