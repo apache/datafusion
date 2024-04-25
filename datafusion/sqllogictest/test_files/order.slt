@@ -374,11 +374,11 @@ select * from t SORT BY time;
 
 
 # distinct on a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT value FROM t ORDER BY time;
 
 # distinct on an expression of a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
 
 # distinct on a column that is in the select list but aliasted should work

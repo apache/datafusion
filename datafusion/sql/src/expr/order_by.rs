@@ -25,7 +25,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
     ///
     /// If `literal_to_column` is true, treat any numeric literals (e.g. `2`) as a 1 based index
-    /// into the SELECT list (e.g. `SELECT a, b FROM table ORDER BY 2`).
+    /// into the SELECT list (e.g. `SELECT a, b FROM table ORDER BY 2`). The `literal_schema`
+    /// is the schema corresponding to the select list, and it will be used in this scenario.
+    ///
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
@@ -33,6 +35,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
+        literal_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         let mut expr_vec = vec![];
         for e in exprs {
@@ -52,15 +55,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         return plan_err!(
                             "Order by index starts at 1 for column indexes"
                         );
-                    } else if schema.fields().len() < field_index {
+                    } else if literal_schema.fields().len() < field_index {
                         return plan_err!(
                             "Order by column out of bounds, specified: {}, max: {}",
                             field_index,
-                            schema.fields().len()
+                            literal_schema.fields().len()
                         );
                     }
 
-                    Expr::Column(Column::from(schema.qualified_field(field_index - 1)))
+                    Expr::Column(Column::from(
+                        literal_schema.qualified_field(field_index - 1),
+                    ))
                 }
                 e => self.sql_expr_to_logical_expr(e.clone(), schema, planner_context)?,
             };
