@@ -21,9 +21,9 @@
 # Adapted from https://github.com/apache/arrow-rs/tree/master/dev/release/create-tarball.sh
 
 # This script creates a signed tarball in
-# dev/dist/apache-arrow-datafusion-<version>-<sha>.tar.gz and uploads it to
-# the "dev" area of the dist.apache.arrow repository and prepares an
-# email for sending to the dev@arrow.apache.org list for a formal
+# dev/dist/apache-datafusion-<version>-<sha>.tar.gz and uploads it to
+# the "dev" area of the dist.apache.datafusion repository and prepares an
+# email for sending to the dev@datafusion.apache.org list for a formal
 # vote.
 #
 # See release/README.md for full release instructions
@@ -65,21 +65,21 @@ tag="${version}-rc${rc}"
 echo "Attempting to create ${tarball} from tag ${tag}"
 release_hash=$(cd "${SOURCE_TOP_DIR}" && git rev-list --max-count=1 ${tag})
 
-release=apache-arrow-datafusion-${version}
+release=apache-datafusion-${version}
 distdir=${SOURCE_TOP_DIR}/dev/dist/${release}-rc${rc}
 tarname=${release}.tar.gz
 tarball=${distdir}/${tarname}
-url="https://dist.apache.org/repos/dist/dev/arrow/${release}-rc${rc}"
+url="https://dist.apache.org/repos/dist/dev/datafusion/${release}-rc${rc}"
 
 if [ -z "$release_hash" ]; then
     echo "Cannot continue: unknown git tag: ${tag}"
 fi
 
-echo "Draft email for dev@arrow.apache.org mailing list"
+echo "Draft email for dev@datafusion.apache.org mailing list"
 echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
-To: dev@arrow.apache.org
+To: dev@datafusion.apache.org
 Subject: [VOTE][RUST][DataFusion] Release Apache DataFusion ${version} RC${rc}
 Hi,
 
@@ -124,12 +124,12 @@ echo "Signing tarball and creating checksums"
 gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 # create signing with relative path of tarball
 # so that they can be verified with a command such as
-#  shasum --check apache-arrow-datafusion-4.1.0-rc2.tar.gz.sha512
+#  shasum --check apache-datafusion-38.0.0-rc1.tar.gz.sha512
 (cd ${distdir} && shasum -a 256 ${tarname}) > ${tarball}.sha256
 (cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
 
 
-echo "Uploading to apache dist/dev to ${url}"
-svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
+echo "Uploading to datafusion dist/dev to ${url}"
+svn co --depth=empty https://dist.apache.org/repos/dist/dev/datafusion ${SOURCE_TOP_DIR}/dev/dist
 svn add ${distdir}
 svn ci -m "Apache DataFusion ${version} ${rc}" ${distdir}
