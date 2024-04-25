@@ -28,6 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use arrow_array::make_array;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -42,6 +43,7 @@ use tempfile::NamedTempFile;
 
 mod custom_reader;
 mod file_statistics;
+#[cfg(not(target_family = "windows"))]
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
@@ -75,11 +77,15 @@ enum Scenario {
     DecimalLargePrecisionBloomFilter,
     ByteArray,
     PeriodsInColumnNames,
+    WithNullValues,
+    WithNullValuesPageLevel,
 }
 
 enum Unit {
-    RowGroup,
-    Page,
+    // pass max row per row_group in parquet writer
+    RowGroup(usize),
+    // pass max row per page in parquet writer
+    Page(usize),
 }
 
 /// Test fixture that has an execution context that has an external
@@ -182,13 +188,13 @@ impl ContextWithParquet {
         mut config: SessionConfig,
     ) -> Self {
         let file = match unit {
-            Unit::RowGroup => {
+            Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
-                make_test_file_rg(scenario).await
+                make_test_file_rg(scenario, row_per_group).await
             }
-            Unit::Page => {
+            Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
-                make_test_file_page(scenario).await
+                make_test_file_page(scenario, row_per_page).await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -630,6 +636,65 @@ fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![Arc::new(name), Arc::new(service_name)]).unwrap()
 }
 
+/// Return record batch with i8, i16, i32, and i64 sequences with Null values
+/// here 5 rows in page when using Unit::Page
+fn make_int_batches_with_null(
+    null_values: usize,
+    no_null_values_start: usize,
+    no_null_values_end: usize,
+) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i8", DataType::Int8, true),
+        Field::new("i16", DataType::Int16, true),
+        Field::new("i32", DataType::Int32, true),
+        Field::new("i64", DataType::Int64, true),
+    ]));
+
+    let v8: Vec<i8> = (no_null_values_start as _..no_null_values_end as _).collect();
+    let v16: Vec<i16> = (no_null_values_start as _..no_null_values_end as _).collect();
+    let v32: Vec<i32> = (no_null_values_start as _..no_null_values_end as _).collect();
+    let v64: Vec<i64> = (no_null_values_start as _..no_null_values_end as _).collect();
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            make_array(
+                Int8Array::from_iter(
+                    v8.into_iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(null_values)),
+                )
+                .to_data(),
+            ),
+            make_array(
+                Int16Array::from_iter(
+                    v16.into_iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(null_values)),
+                )
+                .to_data(),
+            ),
+            make_array(
+                Int32Array::from_iter(
+                    v32.into_iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(null_values)),
+                )
+                .to_data(),
+            ),
+            make_array(
+                Int64Array::from_iter(
+                    v64.into_iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(null_values)),
+                )
+                .to_data(),
+            ),
+        ],
+    )
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {
@@ -799,11 +864,26 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ),
             ]
         }
+        Scenario::WithNullValues => {
+            vec![
+                make_int_batches_with_null(5, 0, 0),
+                make_int_batches(1, 6),
+                make_int_batches_with_null(5, 0, 0),
+            ]
+        }
+        Scenario::WithNullValuesPageLevel => {
+            vec![
+                make_int_batches_with_null(5, 1, 6),
+                make_int_batches(1, 11),
+                make_int_batches_with_null(1, 1, 10),
+                make_int_batches_with_null(5, 1, 6),
+            ]
+        }
     }
 }
 
 /// Create a test parquet file with various data types
-async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
+async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_pruning")
         .suffix(".parquet")
@@ -811,7 +891,7 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(5)
+        .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
         .build();
 
@@ -829,17 +909,17 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
     output_file
 }
 
-async fn make_test_file_page(scenario: Scenario) -> NamedTempFile {
+async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_page_pruning")
         .suffix(".parquet")
         .tempfile()
         .expect("tempfile creation");
 
-    // set row count to 5, should get same result as rowGroup
+    // set row count to row_per_page, should get same result as rowGroup
     let props = WriterProperties::builder()
-        .set_data_page_row_count_limit(5)
-        .set_write_batch_size(5)
+        .set_data_page_row_count_limit(row_per_page)
+        .set_write_batch_size(row_per_page)
         .build();
 
     let batches = create_data_batch(scenario);

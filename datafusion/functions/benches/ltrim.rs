@@ -15,31 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+extern crate criterion;
+
+use arrow::array::{ArrayRef, StringArray};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::string_expressions::concat;
+use datafusion_functions::string;
 use std::sync::Arc;
 
-fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
-    let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
-    let scalar = ScalarValue::Utf8(Some(", ".to_string()));
+fn create_args(size: usize, characters: &str) -> Vec<ColumnarValue> {
+    let iter =
+        std::iter::repeat(format!("{}datafusion{}", characters, characters)).take(size);
+    let array = Arc::new(StringArray::from_iter_values(iter)) as ArrayRef;
     vec![
-        ColumnarValue::Array(array.clone()),
-        ColumnarValue::Scalar(scalar),
         ColumnarValue::Array(array),
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(characters.to_string()))),
     ]
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for size in [1024, 4096, 8192] {
-        let args = create_args(size, 32);
-        let mut group = c.benchmark_group("concat function");
-        group.bench_function(BenchmarkId::new("concat", size), |b| {
-            b.iter(|| criterion::black_box(concat(&args).unwrap()))
-        });
-        group.finish();
+    let ltrim = string::ltrim();
+    for char in ["\"", "Header:"] {
+        for size in [1024, 4096, 8192] {
+            let args = create_args(size, char);
+            c.bench_function(&format!("ltrim {}: {}", char, size), |b| {
+                b.iter(|| black_box(ltrim.invoke(&args)))
+            });
+        }
     }
 }
 

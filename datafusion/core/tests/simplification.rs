@@ -28,10 +28,11 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan,
+    expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
     LogicalPlanBuilder, ScalarUDF, Volatility,
 };
-use datafusion_functions::math;
+use datafusion_functions::{math, string};
+use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
@@ -109,14 +110,14 @@ fn test_table_scan() -> LogicalPlan {
         .expect("building plan")
 }
 
-fn get_optimized_plan_formatted(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
+fn get_optimized_plan_formatted(plan: LogicalPlan, date_time: &DateTime<Utc>) -> String {
     let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
-    let rule = SimplifyExpressions::new();
 
-    let optimized_plan = rule
-        .try_optimize(plan, &config)
-        .unwrap()
-        .expect("failed to optimize plan");
+    // Use Optimizer to do plan traversal
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+    let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
+    let optimized_plan = optimizer.optimize(plan, &config, observe).unwrap();
+
     format!("{optimized_plan:?}")
 }
 
@@ -216,7 +217,7 @@ fn fold_and_simplify() {
     let info: MyInfo = schema().into();
 
     // What will it do with the expression `concat('foo', 'bar') == 'foobar')`?
-    let expr = concat(&[lit("foo"), lit("bar")]).eq(lit("foobar"));
+    let expr = concat(vec![lit("foo"), lit("bar")]).eq(lit("foobar"));
 
     // Since datafusion applies both simplification *and* rewriting
     // some expressions can be entirely simplified
@@ -238,7 +239,7 @@ fn to_timestamp_expr_folded() -> Result<()> {
     let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
         .to_string();
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -262,7 +263,7 @@ fn now_less_than_timestamp() -> Result<()> {
     // expression down to a single constant (true)
     let expected = "Filter: Boolean(true)\
                         \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
     Ok(())
@@ -290,7 +291,7 @@ fn select_date_plus_interval() -> Result<()> {
     // expression down to a single constant (true)
     let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
     Ok(())
@@ -298,7 +299,7 @@ fn select_date_plus_interval() -> Result<()> {
 
 #[test]
 fn simplify_project_scalar_fn() -> Result<()> {
-    // Issue https://github.com/apache/arrow-datafusion/issues/5996
+    // Issue https://github.com/apache/datafusion/issues/5996
     let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
     let plan = table_scan(Some("test"), &schema, None)?
         .project(vec![power(col("f"), lit(1.0))])?
@@ -308,7 +309,7 @@ fn simplify_project_scalar_fn() -> Result<()> {
     // after simplify:  t.f as "power(t.f, 1.0)"
     let expected = "Projection: test.f AS power(test.f,Float64(1))\
                       \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -330,7 +331,7 @@ fn simplify_scan_predicate() -> Result<()> {
     // before simplify: t.g = power(t.f, 1.0)
     // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
     let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
-    let actual = get_optimized_plan_formatted(&plan, &Utc::now());
+    let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
 }
@@ -363,13 +364,13 @@ fn test_const_evaluator() {
 #[test]
 fn test_const_evaluator_scalar_functions() {
     // concat("foo", "bar") --> "foobar"
-    let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
+    let expr = string::expr_fn::concat(vec![lit("foo"), lit("bar")]);
     test_evaluate(expr, lit("foobar"));
 
     // ensure arguments are also constant folded
     // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-    let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
-    let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
+    let concat1 = string::expr_fn::concat(vec![lit("bar"), lit("baz")]);
+    let expr = string::expr_fn::concat(vec![lit("foo"), concat1]);
     test_evaluate(expr, lit("foobarbaz"));
 
     // Check non string arguments
@@ -461,7 +462,7 @@ fn multiple_now() -> Result<()> {
         .build()?;
 
     // expect the same timestamp appears in both exprs
-    let actual = get_optimized_plan_formatted(&plan, &time);
+    let actual = get_optimized_plan_formatted(plan, &time);
     let expected = format!(
         "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
@@ -567,4 +568,93 @@ fn test_simplify_power() {
         let expected = power(col("c3_non_null"), col("c4_non_null"));
         test_simplify(expr, expected)
     }
+}
+
+#[test]
+fn test_simplify_concat_ws() {
+    let null = lit(ScalarValue::Utf8(None));
+    // the delimiter is not a literal
+    {
+        let expr = concat_ws(col("c"), vec![lit("a"), null.clone(), lit("b")]);
+        let expected = concat_ws(col("c"), vec![lit("a"), lit("b")]);
+        test_simplify(expr, expected);
+    }
+
+    // the delimiter is an empty string
+    {
+        let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
+        let expected = concat(vec![col("a"), lit("cb")]);
+        test_simplify(expr, expected);
+    }
+
+    // the delimiter is a not-empty string
+    {
+        let expr = concat_ws(
+            lit("-"),
+            vec![
+                null.clone(),
+                col("c0"),
+                lit("hello"),
+                null.clone(),
+                lit("rust"),
+                col("c1"),
+                lit(""),
+                lit(""),
+                null,
+            ],
+        );
+        let expected = concat_ws(
+            lit("-"),
+            vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
+        );
+        test_simplify(expr, expected)
+    }
+}
+
+#[test]
+fn test_simplify_concat_ws_with_null() {
+    let null = lit(ScalarValue::Utf8(None));
+    // null delimiter -> null
+    {
+        let expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        test_simplify(expr, null.clone());
+    }
+
+    // filter out null args
+    {
+        let expr = concat_ws(lit("|"), vec![col("c1"), null.clone(), col("c2")]);
+        let expected = concat_ws(lit("|"), vec![col("c1"), col("c2")]);
+        test_simplify(expr, expected);
+    }
+
+    // nested test
+    {
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        let expr = concat_ws(lit("|"), vec![sub_expr, col("c3")]);
+        test_simplify(expr, concat_ws(lit("|"), vec![col("c3")]));
+    }
+
+    // null delimiter (nested)
+    {
+        let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
+        let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
+        test_simplify(expr, null);
+    }
+}
+
+#[test]
+fn test_simplify_concat() {
+    let null = lit(ScalarValue::Utf8(None));
+    let expr = concat(vec![
+        null.clone(),
+        col("c0"),
+        lit("hello "),
+        null.clone(),
+        lit("rust"),
+        col("c1"),
+        lit(""),
+        null,
+    ]);
+    let expected = concat(vec![col("c0"), lit("hello rust"), col("c1")]);
+    test_simplify(expr, expected)
 }

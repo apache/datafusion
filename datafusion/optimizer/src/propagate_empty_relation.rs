@@ -192,18 +192,17 @@ mod tests {
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
-        Operator,
+        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, Operator,
     };
 
     use super::*;
 
-    fn assert_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PropagateEmptyRelation::new()), plan, expected)
     }
 
     fn assert_together_optimized_plan_eq(
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         expected: &str,
     ) -> Result<()> {
         assert_optimized_plan_eq_with_rules(
@@ -226,7 +225,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_eq(&plan, expected)
+        assert_eq(plan, expected)
     }
 
     #[test]
@@ -249,7 +248,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -262,7 +261,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -287,7 +286,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test1\
             \n  TableScan: test4";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -312,7 +311,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -339,7 +338,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test2\
             \n  TableScan: test3";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -352,7 +351,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -367,7 +366,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -400,6 +399,6 @@ mod tests {
         let expected = "Projection: a, b, c\
         \n  TableScan: test";
 
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 }

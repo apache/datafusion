@@ -21,18 +21,12 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Not;
 
-use super::inlist_simplifier::ShortenInListSimplifier;
-use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
-
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
+
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
@@ -43,11 +37,19 @@ use datafusion_common::{
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
-    Operator, ScalarFunctionDefinition, Volatility,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator,
+    ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
+use super::inlist_simplifier::ShortenInListSimplifier;
+use super::utils::*;
 
 /// This structure handles API for expression simplification
 ///
@@ -184,7 +186,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)
             .data()?
             .rewrite(&mut simplifier)
@@ -210,7 +212,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     // Would be nice if this API could use the SimplifyInfo
     // rather than creating an DFSchemaRef coerces rather than doing
     // it manually.
-    // https://github.com/apache/arrow-datafusion/issues/3793
+    // https://github.com/apache/datafusion/issues/3793
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
@@ -523,9 +525,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    Self::volatility_ok(fun.volatility())
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     Self::volatility_ok(fun.signature().volatility)
                 }
@@ -1304,7 +1303,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
             }
-
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(udf),
                 args,
@@ -1316,29 +1314,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     }))
                 }
                 ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
-            },
-
-            // concat
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
-                args,
-            }) => Transformed::yes(simpl_concat(args)?),
-
-            // concat_ws
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(
-                        BuiltinScalarFunction::ConcatWithSeparator,
-                    ),
-                args,
-            }) => match &args[..] {
-                [delimiter, vals @ ..] => {
-                    Transformed::yes(simpl_concat_ws(delimiter, vals)?)
-                }
-                _ => Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::ConcatWithSeparator,
-                    args,
-                ))),
             },
 
             //
@@ -1712,14 +1687,13 @@ mod tests {
         sync::Arc,
     };
 
-    use super::*;
+    use datafusion_common::{assert_contains, ToDFSchema};
+    use datafusion_expr::{interval_arithmetic::Interval, *};
+
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, ToDFSchema};
-    use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_physical_expr::execution_props::ExecutionProps;
+    use super::*;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1751,7 +1725,7 @@ mod tests {
         // Would be nice if this API could use the SimplifyInfo
         // rather than creating an DFSchemaRef coerces rather than doing
         // it manually.
-        // https://github.com/apache/arrow-datafusion/issues/3793
+        // https://github.com/apache/datafusion/issues/3793
         let expr = simplifier.coerce(expr, schema).unwrap();
 
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
@@ -2654,95 +2628,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_concat_ws() {
-        let null = lit(ScalarValue::Utf8(None));
-        // the delimiter is not a literal
-        {
-            let expr = concat_ws(col("c"), vec![lit("a"), null.clone(), lit("b")]);
-            let expected = concat_ws(col("c"), vec![lit("a"), lit("b")]);
-            assert_eq!(simplify(expr), expected);
-        }
-
-        // the delimiter is an empty string
-        {
-            let expr = concat_ws(lit(""), vec![col("a"), lit("c"), lit("b")]);
-            let expected = concat(&[col("a"), lit("cb")]);
-            assert_eq!(simplify(expr), expected);
-        }
-
-        // the delimiter is a not-empty string
-        {
-            let expr = concat_ws(
-                lit("-"),
-                vec![
-                    null.clone(),
-                    col("c0"),
-                    lit("hello"),
-                    null.clone(),
-                    lit("rust"),
-                    col("c1"),
-                    lit(""),
-                    lit(""),
-                    null,
-                ],
-            );
-            let expected = concat_ws(
-                lit("-"),
-                vec![col("c0"), lit("hello-rust"), col("c1"), lit("-")],
-            );
-            assert_eq!(simplify(expr), expected)
-        }
-    }
-
-    #[test]
-    fn test_simplify_concat_ws_with_null() {
-        let null = lit(ScalarValue::Utf8(None));
-        // null delimiter -> null
-        {
-            let expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
-            assert_eq!(simplify(expr), null);
-        }
-
-        // filter out null args
-        {
-            let expr = concat_ws(lit("|"), vec![col("c1"), null.clone(), col("c2")]);
-            let expected = concat_ws(lit("|"), vec![col("c1"), col("c2")]);
-            assert_eq!(simplify(expr), expected);
-        }
-
-        // nested test
-        {
-            let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
-            let expr = concat_ws(lit("|"), vec![sub_expr, col("c3")]);
-            assert_eq!(simplify(expr), concat_ws(lit("|"), vec![col("c3")]));
-        }
-
-        // null delimiter (nested)
-        {
-            let sub_expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
-            let expr = concat_ws(sub_expr, vec![col("c3"), col("c4")]);
-            assert_eq!(simplify(expr), null);
-        }
-    }
-
-    #[test]
-    fn test_simplify_concat() {
-        let null = lit(ScalarValue::Utf8(None));
-        let expr = concat(&[
-            null.clone(),
-            col("c0"),
-            lit("hello "),
-            null.clone(),
-            lit("rust"),
-            col("c1"),
-            lit(""),
-            null,
-        ]);
-        let expected = concat(&[col("c0"), lit("hello rust"), col("c1")]);
-        assert_eq!(simplify(expr), expected)
-    }
-
-    #[test]
     fn test_simplify_regex() {
         // malformed regex
         assert_contains!(
@@ -3197,7 +3082,7 @@ mod tests {
         // c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3215,7 +3100,7 @@ mod tests {
         // ISNULL(c2) OR c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3233,7 +3118,7 @@ mod tests {
         // --> c1 OR NOT(c2)
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3252,7 +3137,7 @@ mod tests {
         // --> c1 OR c2
         //
         // Need to call simplify 2x due to
-        // https://github.com/apache/arrow-datafusion/issues/1160
+        // https://github.com/apache/datafusion/issues/1160
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
@@ -3504,7 +3389,7 @@ mod tests {
                     true,
                 )));
         // TODO: Further simplify this expression
-        // https://github.com/apache/arrow-datafusion/issues/8970
+        // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }

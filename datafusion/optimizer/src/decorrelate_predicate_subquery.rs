@@ -331,14 +331,9 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::{
-        and, binary_expr, col, exists, in_subquery, lit,
-        logical_plan::LogicalPlanBuilder, not_exists, not_in_subquery, or, out_ref_col,
-        Operator,
-    };
+    use datafusion_expr::{and, binary_expr, col, lit, or, out_ref_col};
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
             plan,
@@ -378,7 +373,7 @@ mod tests {
         \n    SubqueryAlias: __correlated_sq_2 [c:UInt32]\
         \n      Projection: sq_2.c [c:UInt32]\
         \n        TableScan: sq_2 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for IN subquery with additional AND filter
@@ -404,7 +399,7 @@ mod tests {
         \n        Projection: sq.c [c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for IN subquery with additional OR filter
@@ -430,7 +425,7 @@ mod tests {
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -458,7 +453,7 @@ mod tests {
         \n        Projection: sq2.c [c:UInt32]\
         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for nested IN subqueries
@@ -487,7 +482,7 @@ mod tests {
         \n            Projection: sq_nested.c [c:UInt32]\
         \n              TableScan: sq_nested [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for filter input modification in case filter not supported
@@ -519,7 +514,7 @@ mod tests {
         \n            Projection: sq_inner.c [c:UInt32]\
         \n              TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test multiple correlated subqueries
@@ -557,7 +552,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -607,7 +602,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -642,7 +637,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -675,7 +670,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -706,7 +701,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -739,7 +734,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -772,7 +767,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -806,7 +801,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
 
@@ -863,7 +858,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -896,7 +891,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -962,7 +957,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1000,7 +995,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1030,7 +1025,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1054,7 +1049,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1078,7 +1073,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1107,7 +1102,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1142,7 +1137,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1178,7 +1173,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1224,7 +1219,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1255,7 +1250,7 @@ mod tests {
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelatePredicateSubquery::new()),
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1289,7 +1284,7 @@ mod tests {
                         \n    SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]\
                         \n      Projection: orders.o_custkey [o_custkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test recursive correlated subqueries
@@ -1332,7 +1327,7 @@ mod tests {
                         \n          SubqueryAlias: __correlated_sq_2 [l_orderkey:Int64]\
                         \n            Projection: lineitem.l_orderkey [l_orderkey:Int64]\
                         \n              TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists subquery filter with additional subquery filters
@@ -1362,7 +1357,7 @@ mod tests {
                         \n        Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
                         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1387,7 +1382,7 @@ mod tests {
                         \n      Projection: orders.o_custkey [o_custkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for exists subquery with both columns in schema
@@ -1405,7 +1400,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), &plan)
+        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), plan)
     }
 
     /// Test for correlated exists subquery not equal
@@ -1433,7 +1428,7 @@ mod tests {
                         \n      Projection: orders.o_custkey [o_custkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists subquery less than
@@ -1461,7 +1456,7 @@ mod tests {
                         \n      Projection: orders.o_custkey [o_custkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists subquery filter with subquery disjunction
@@ -1490,7 +1485,7 @@ mod tests {
                         \n      Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists without projection
@@ -1516,7 +1511,7 @@ mod tests {
                         \n    SubqueryAlias: __correlated_sq_1 [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
                         \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists expressions
@@ -1544,7 +1539,7 @@ mod tests {
                         \n      Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists subquery filter with additional filters
@@ -1572,7 +1567,7 @@ mod tests {
                         \n        Projection: orders.o_custkey [o_custkey:Int64]\
                         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated exists subquery filter with disjustions
@@ -1599,7 +1594,7 @@ mod tests {
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for correlated EXISTS subquery filter
@@ -1624,7 +1619,7 @@ mod tests {
                         \n      Projection: sq.c, sq.a [c:UInt32, a:UInt32]\
                         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     /// Test for single exists subquery filter
@@ -1636,7 +1631,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), &plan)
+        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), plan)
     }
 
     /// Test for single NOT exists subquery filter
@@ -1648,7 +1643,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), &plan)
+        assert_optimization_skipped(Arc::new(DecorrelatePredicateSubquery::new()), plan)
     }
 
     #[test]
@@ -1687,7 +1682,7 @@ mod tests {
                         \n        Projection: sq2.c, sq2.a [c:UInt32, a:UInt32]\
                         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1713,7 +1708,7 @@ mod tests {
                         \n      Projection: UInt32(1), sq.a [UInt32(1):UInt32, a:UInt32]\
                         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1739,7 +1734,7 @@ mod tests {
                       \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
                       \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1767,7 +1762,7 @@ mod tests {
                         \n        Projection: sq.c, sq.a [c:UInt32, a:UInt32]\
                         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1795,7 +1790,7 @@ mod tests {
                         \n        Projection: sq.b + sq.c, sq.a [sq.b + sq.c:UInt32, a:UInt32]\
                         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -1823,6 +1818,6 @@ mod tests {
                         \n        Projection: UInt32(1), sq.c, sq.a [UInt32(1):UInt32, c:UInt32, a:UInt32]\
                         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }

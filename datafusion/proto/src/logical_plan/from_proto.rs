@@ -37,12 +37,10 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    ceil, coalesce, concat_expr, concat_ws_expr, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, initcap,
     logical_plan::{PlanType, StringifiedPlan},
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -409,23 +407,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
-    fn from(f: &protobuf::ScalarFunction) -> Self {
-        use protobuf::ScalarFunction;
-        match f {
-            ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Exp => Self::Exp,
-            ScalarFunction::Factorial => Self::Factorial,
-            ScalarFunction::Ceil => Self::Ceil,
-            ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
-            ScalarFunction::EndsWith => Self::EndsWith,
-            ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Coalesce => Self::Coalesce,
         }
     }
 }
@@ -871,7 +852,7 @@ pub fn parse_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
-    use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
+    use protobuf::{logical_expr_node::ExprType, window_expr_node};
 
     let expr_type = proto
         .expr_type
@@ -1260,8 +1241,11 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
-            Ok(Expr::Unnest(Unnest { exprs }))
+            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            if exprs.len() != 1 {
+                return Err(proto_error("Unnest must have exactly one expression"));
+            }
+            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
@@ -1280,36 +1264,6 @@ pub fn parse_expr(
                 Some(qualifier.clone())
             },
         }),
-        ExprType::ScalarFunction(expr) => {
-            let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
-                .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;
-            let args = &expr.args;
-
-            match scalar_function {
-                ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Factorial => {
-                    Ok(factorial(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::InitCap => {
-                    Ok(initcap(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Concat => {
-                    Ok(concat_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::ConcatWithSeparator => {
-                    Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::EndsWith => Ok(ends_with(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Coalesce => {
-                    Ok(coalesce(parse_exprs(args, registry, codec)?))
-                }
-            }
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,

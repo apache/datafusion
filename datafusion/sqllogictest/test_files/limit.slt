@@ -307,12 +307,12 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---Limit: skip=11, fetch=3
-----TableScan: t1 projection=[], fetch=14
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Limit: skip=11, fetch=3
+03)----TableScan: t1 projection=[], fetch=14
 physical_plan
-ProjectionExec: expr=[0 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[0 as COUNT(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
@@ -325,12 +325,12 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---Limit: skip=8, fetch=3
-----TableScan: t1 projection=[], fetch=11
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Limit: skip=8, fetch=3
+03)----TableScan: t1 projection=[], fetch=11
 physical_plan
-ProjectionExec: expr=[2 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[2 as COUNT(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
@@ -343,12 +343,12 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---Limit: skip=8, fetch=None
-----TableScan: t1 projection=[]
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Limit: skip=8, fetch=None
+03)----TableScan: t1 projection=[]
 physical_plan
-ProjectionExec: expr=[2 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[2 as COUNT(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
@@ -360,21 +360,21 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
---Projection: 
-----Limit: skip=6, fetch=3
-------Filter: t1.a > Int32(3)
---------TableScan: t1 projection=[a]
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Projection: 
+03)----Limit: skip=6, fetch=3
+04)------Filter: t1.a > Int32(3)
+05)--------TableScan: t1 projection=[a]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------ProjectionExec: expr=[]
-----------GlobalLimitExec: skip=6, fetch=3
-------------CoalesceBatchesExec: target_batch_size=8192
---------------FilterExec: a@0 > 3
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[]
+06)----------GlobalLimitExec: skip=6, fetch=3
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------FilterExec: a@0 > 3
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
@@ -396,14 +396,14 @@ query TT
 EXPLAIN SELECT DISTINCT i FROM t1000;
 ----
 logical_plan
-Aggregate: groupBy=[[t1000.i]], aggr=[[]]
---TableScan: t1000 projection=[i]
+01)Aggregate: groupBy=[[t1000.i]], aggr=[[]]
+02)--TableScan: t1000 projection=[i]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
---CoalesceBatchesExec: target_batch_size=8192
-----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
-------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
---------MemoryExec: partitions=4
+01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
+05)--------MemoryExec: partitions=4
 
 statement ok
 set datafusion.explain.show_sizes = true;

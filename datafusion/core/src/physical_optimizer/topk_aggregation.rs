@@ -102,7 +102,7 @@ impl TopKAggregation {
         };
 
         let mut cardinality_preserved = true;
-        let mut closure = |plan: Arc<dyn ExecutionPlan>| {
+        let closure = |plan: Arc<dyn ExecutionPlan>| {
             if !cardinality_preserved {
                 return Ok(Transformed::no(plan));
             }
@@ -120,7 +120,7 @@ impl TopKAggregation {
             }
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
+        let child = child.clone().transform_down(closure).data().ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
@@ -141,7 +141,7 @@ impl PhysicalOptimizerRule for TopKAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_topk_aggregation {
-            plan.transform_down(&|plan| {
+            plan.transform_down(|plan| {
                 Ok(
                     if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
                         Transformed::yes(plan)

@@ -20,7 +20,6 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
-use std::string::String;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
@@ -58,7 +57,10 @@ use crate::{
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
-use crate::{functions, functions_aggregate, functions_array};
+
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
+use crate::{functions, functions_aggregate};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -468,24 +470,37 @@ impl SessionContext {
     /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Ddl(ddl) => match ddl {
-                DdlStatement::CreateExternalTable(cmd) => {
-                    self.create_external_table(&cmd).await
+            LogicalPlan::Ddl(ddl) => {
+                // Box::pin avoids allocating the stack space within this function's frame
+                // for every one of these individual async functions, decreasing the risk of
+                // stack overflows.
+                match ddl {
+                    DdlStatement::CreateExternalTable(cmd) => {
+                        Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    }
+                    DdlStatement::CreateMemoryTable(cmd) => {
+                        Box::pin(self.create_memory_table(cmd))
+                    }
+                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateCatalogSchema(cmd) => {
+                        Box::pin(self.create_catalog_schema(cmd))
+                    }
+                    DdlStatement::CreateCatalog(cmd) => {
+                        Box::pin(self.create_catalog(cmd))
+                    }
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropCatalogSchema(cmd) => {
+                        Box::pin(self.drop_schema(cmd))
+                    }
+                    DdlStatement::CreateFunction(cmd) => {
+                        Box::pin(self.create_function(cmd))
+                    }
+                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
                 }
-                DdlStatement::CreateMemoryTable(cmd) => {
-                    self.create_memory_table(cmd).await
-                }
-                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
-                DdlStatement::CreateCatalogSchema(cmd) => {
-                    self.create_catalog_schema(cmd).await
-                }
-                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
-                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
-                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
-                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
-                DdlStatement::CreateFunction(cmd) => self.create_function(cmd).await,
-                DdlStatement::DropFunction(cmd) => self.drop_function(cmd).await,
-            },
+                .await
+            }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
@@ -1881,7 +1896,7 @@ impl SessionState {
 
             // optimize the child plan, capturing the output of each optimizer
             let optimized_plan = self.optimizer.optimize(
-                &analyzed_plan,
+                analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1911,7 +1926,7 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -1950,6 +1965,11 @@ impl SessionState {
     /// Return the [`SessionConfig`]
     pub fn config(&self) -> &SessionConfig {
         &self.config
+    }
+
+    /// Return the mutable [`SessionConfig`].
+    pub fn config_mut(&mut self) -> &mut SessionConfig {
+        &mut self.config
     }
 
     /// Return the physical optimizers
@@ -2338,19 +2358,15 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 mod tests {
     use std::env;
     use std::path::PathBuf;
-    use std::sync::Weak;
 
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
-    use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use crate::variable::VarType;
 
     use datafusion_common_runtime::SpawnedTask;
-    use datafusion_expr::Expr;
 
     use async_trait::async_trait;
     use tempfile::TempDir;

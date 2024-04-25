@@ -22,7 +22,7 @@ mod struct_builder;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
-use std::convert::{Infallible, TryFrom, TryInto};
+use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::iter::repeat;
@@ -52,7 +52,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{ArrowNativeTypeOp, Scalar};
 use arrow_buffer::Buffer;
 use arrow_schema::{UnionFields, UnionMode};
 
@@ -1575,6 +1574,18 @@ impl ScalarValue {
                     tz
                 )
             }
+            DataType::Duration(TimeUnit::Second) => {
+                build_array_primitive!(DurationSecondArray, DurationSecond)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                build_array_primitive!(DurationMillisecondArray, DurationMillisecond)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                build_array_primitive!(DurationMicrosecondArray, DurationMicrosecond)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                build_array_primitive!(DurationNanosecondArray, DurationNanosecond)
+            }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
             }
@@ -1605,7 +1616,10 @@ impl ScalarValue {
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())?
             }
-            DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Struct(_)
+            | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())?
@@ -1673,8 +1687,6 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Duration(_)
-            | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::Utf8View
@@ -3411,8 +3423,6 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
-    use std::sync::Arc;
 
     use super::*;
     use crate::cast::{
@@ -3422,9 +3432,7 @@ mod tests {
     use crate::assert_batches_eq;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
-    use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_buffer::Buffer;
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;

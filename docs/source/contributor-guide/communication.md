@@ -22,14 +22,14 @@
 We welcome participation from everyone and encourage you to join us, ask
 questions, and get involved.
 
-All participation in the Apache Arrow DataFusion project is governed by the
+All participation in the Apache DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
 ## GitHub
 
 The vast majority of communication occurs in the open on our
-[github repository](https://github.com/apache/arrow-datafusion) in the form of tickets, issues, discussions, and Pull Requests.
+[github repository](https://github.com/apache/datafusion) in the form of tickets, issues, discussions, and Pull Requests.
 
 ## Slack and Discord
 
@@ -37,7 +37,7 @@ We use the Slack and Discord platforms for informal discussions and coordination
 meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
 decisions are made fully in the open, on GitHub.
 
-Most of us use the `#arrow-datafusion` and `#arrow-rust` channels in the [ASF Slack workspace](https://s.apache.org/slack-invite) .
+Most of us use the `#datafusion` and `#arrow-rust` channels in the [ASF Slack workspace](https://s.apache.org/slack-invite) .
 Unfortunately, due to spammers, the ASF Slack workspace requires an invitation to join. To get an invitation,
 request one in the `Arrow Rust` channel of the [Arrow Rust Discord server](https://discord.gg/Qw5gKqHxUM).
 
@@ -45,8 +45,8 @@ request one in the `Arrow Rust` channel of the [Arrow Rust Discord server](https
 
 We also use arrow.apache.org's `dev@` mailing list for release coordination and occasional design discussions. Other
 than the release process, most DataFusion mailing list traffic will link to a GitHub issue or PR for discussion.
-([subscribe](mailto:dev-subscribe@arrow.apache.org),
-[unsubscribe](mailto:dev-unsubscribe@arrow.apache.org),
+([subscribe](mailto:dev-subscribe@datafusion.apache.org),
+[unsubscribe](mailto:dev-unsubscribe@datafusion.apache.org),
 [archives](https://lists.apache.org/list.html?dev@arrow.apache.org)).
 
 When emailing the dev list, please make sure to prefix the subject line with a

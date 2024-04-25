@@ -252,9 +252,7 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use crate::generic_test_op2;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_common::Result;
 
     #[test]
     fn correlation_f64_1() -> Result<()> {

@@ -526,7 +526,6 @@ mod tests {
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::FileType;
 
-    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -769,7 +768,7 @@ mod tests {
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
-        // errors due to https://github.com/apache/arrow-datafusion/issues/4918
+        // errors due to https://github.com/apache/datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
         let err = it.next().await.unwrap().unwrap_err().strip_backtrace();
         assert_eq!(

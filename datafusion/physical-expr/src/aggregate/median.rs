@@ -202,7 +202,6 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use crate::generic_test_op;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]

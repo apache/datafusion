@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [features]
 # enable core functions
 core_expressions = []
@@ -41,7 +44,6 @@ default = [
     "encoding_expressions",
     "math_expressions",
     "regex_expressions",
-    "crypto_expressions",
     "string_expressions",
     "unicode_expressions",
 ]
@@ -84,10 +86,16 @@ unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[[bench]]
+harness = false
+name = "concat"
+required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
@@ -113,3 +121,18 @@ required-features = ["datetime_expressions"]
 harness = false
 name = "substr_index"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "ltrim"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "lower"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "upper"
+required-features = ["string_expressions"]

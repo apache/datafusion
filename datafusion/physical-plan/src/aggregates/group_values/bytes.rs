@@ -101,7 +101,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 // if we only wanted to take the first n, insert the rest back
                 // into the map we could potentially avoid this reallocation, at
                 // the expense of much more complex code.
-                // see https://github.com/apache/arrow-datafusion/issues/9195
+                // see https://github.com/apache/datafusion/issues/9195
                 let emit_group_values = map_contents.slice(0, n);
                 let remaining_group_values =
                     map_contents.slice(n, map_contents.len() - n);

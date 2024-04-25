@@ -361,11 +361,10 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array, UInt64Array},
-        datatypes::{DataType, Field, Schema},
-        record_batch::RecordBatch,
+        datatypes::{DataType, Field},
     };
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::expressions::col;
 
     #[test]
     fn get_meet_of_orderings_helper_common_prefix_test() -> Result<()> {

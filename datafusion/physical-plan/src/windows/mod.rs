@@ -18,7 +18,6 @@
 //! Physical expressions for window functions
 
 use std::borrow::Borrow;
-use std::convert::TryInto;
 use std::sync::Arc;
 
 use crate::{
@@ -373,7 +372,7 @@ pub(crate) fn calc_requirements<
 /// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used,
 /// this vector will be [1, 0]. It means that when we iterate b, a columns with the order [1, 0]
 /// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
-pub(crate) fn get_ordered_partition_by_indices(
+pub fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
@@ -559,7 +558,6 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_execution::TaskContext;
 
     use futures::FutureExt;

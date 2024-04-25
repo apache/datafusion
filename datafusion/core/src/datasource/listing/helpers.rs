@@ -50,7 +50,7 @@ use object_store::{ObjectMeta, ObjectStore};
 /// was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
@@ -90,16 +90,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        match fun.volatility() {
-                            Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
-                            // TODO: Stable functions could be `applicable`, but that would require access to the context
-                            Volatility::Stable | Volatility::Volatile => {
-                                is_applicable = false;
-                                Ok(TreeNodeRecursion::Stop)
-                            }
-                        }
-                    }
                     ScalarFunctionDefinition::UDF(fun) => {
                         match fun.signature().volatility {
                             Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
@@ -432,8 +422,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
-
-    use futures::StreamExt;
 
     use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store_and_state;

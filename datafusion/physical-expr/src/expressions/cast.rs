@@ -228,8 +228,6 @@ mod tests {
         datatypes::*,
     };
 
-    use datafusion_common::Result;
-
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
     // 2. construct a physical expression of CAST(a AS B)
@@ -704,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: https://github.com/apache/arrow-datafusion/issues/5396
+    #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
     fn test_cast_decimal() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
         let a = Int64Array::from(vec![100]);

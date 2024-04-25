@@ -257,8 +257,7 @@ pub(crate) fn compute_array_dims(
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use arrow_array::ListArray;
-    use datafusion_common::{cast::as_list_array, utils::array_into_list_array};
+    use datafusion_common::utils::array_into_list_array;
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]

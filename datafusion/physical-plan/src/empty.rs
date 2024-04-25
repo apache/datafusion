@@ -122,7 +122,7 @@ impl ExecutionPlan for EmptyExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+        Ok(self)
     }
 
     fn execute(
@@ -162,8 +162,8 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test;
     use crate::with_new_children_if_necessary;
-    use crate::{common, test};
 
     #[tokio::test]
     async fn empty() -> Result<()> {

@@ -48,8 +48,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -193,6 +193,11 @@ impl ScalarUDF {
     pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         self.inner.monotonicity()
     }
+
+    /// Get the circuits of inner implementation
+    pub fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -213,7 +218,7 @@ where
 /// [`ScalarUDF`] for other available options.
 ///
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -376,6 +381,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
     }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    fn short_circuits(&self) -> bool {
+        false
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -424,7 +436,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 }
 
 /// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8578>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
 /// for more details)
 struct ScalarUdfLegacyWrapper {
     /// The name of the function
