@@ -164,7 +164,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 let output = fun.invoke(&inputs)?;
                 // Only arrow_typeof can bypass this rule
                 if fun.name() != "arrow_typeof" {
-                    let output_size = match array {
+                    let output_size = match &output {
                         ColumnarValue::Array(array) => array.len(),
                         ColumnarValue::Scalar(_) => 1,
                     };
