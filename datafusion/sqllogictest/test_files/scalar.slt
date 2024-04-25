@@ -1768,52 +1768,61 @@ SELECT make_array(1, 2, 3);
 [1, 2, 3]
 
 # coalesce static empty value
-query T
-SELECT COALESCE('', 'test')
+query TT
+SELECT       COALESCE('', 'test'),
+arrow_typeof(COALESCE('', 'test'))
 ----
-(empty)
+(empty) Utf8
 
 # coalesce static value with null
-query T
-SELECT COALESCE(NULL, 'test')
+query TT
+SELECT       COALESCE(NULL, 'test'),
+arrow_typeof(COALESCE(NULL, 'test'))
 ----
-test
+test Utf8
 
-
+# Create table with a dictionary value
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
 
-# test coercion string
-query ?
-select  coalesce(column1, 'none_set') from test1;
+# test coercion string (should preserve the dictionary type)
+query ?T
+select       coalesce(column1, 'none_set'),
+arrow_typeof(coalesce(column1, 'none_set'))
+from test1;
 ----
-foo
-none_set
+foo Dictionary(Int32, Utf8)
+none_set Dictionary(Int32, Utf8)
 
 # test coercion Int and Dictionary
-query ?
-select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+query ?T
+select       coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)')),
+arrow_typeof(coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)')))
 ----
-34
+34 Dictionary(Int32, Int64)
 
 # test with Int
-query ?
-select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34);
+query ?T
+select       coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34),
+arrow_typeof(coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34))
 ----
-123
+123 Dictionary(Int32, Int64)
 
 # test with null
-query ?
-select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+query ?T
+select       coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)')),
+arrow_typeof(coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)')))
 ----
-34
+34 Dictionary(Int32, Int64)
 
 # test with null
-query ?
-select  coalesce(null, column1, 'none_set') from test1;
+query ?T
+select       coalesce(null, column1, 'none_set'),
+arrow_typeof(coalesce(null, column1, 'none_set'))
+from test1;
 ----
-foo
-none_set
+foo Dictionary(Int32, Utf8)
+none_set Dictionary(Int32, Utf8)
 
 statement ok
 drop table test1
