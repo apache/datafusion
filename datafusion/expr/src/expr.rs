@@ -1404,7 +1404,7 @@ impl fmt::Display for Expr {
             Expr::Column(c) => write!(f, "{c}"),
             Expr::Columns(c) => {
                 Ok(c.iter().try_for_each(|column| write!(f, "{},", column))?)
-            },
+            }
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
