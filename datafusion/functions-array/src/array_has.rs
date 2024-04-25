@@ -318,9 +318,10 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
                 }
                 boolean_builder.append_value(res);
             }
-            (_,_) => {boolean_builder.append_null();}
-            // (None, _) => boolean_builder.append_null(),
-            // (_, None) => {}
+            (_, _) => {
+                boolean_builder.append_null();
+            } // (None, _) => boolean_builder.append_null(),
+              // (_, None) => {}
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
