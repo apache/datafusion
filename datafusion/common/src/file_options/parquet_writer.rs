@@ -182,7 +182,7 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             }
         }
 
-        // ParquetWriterOptions will have defaults for the remaining fields (e.g. key_value_metadata & sorting_columns)
+        // ParquetWriterOptions will have defaults for the remaining fields (e.g. sorting_columns)
         Ok(ParquetWriterOptions {
             writer_options: builder.build(),
         })

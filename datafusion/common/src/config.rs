@@ -1364,13 +1364,17 @@ impl TableOptions {
 
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
+///
+/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
+/// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {
     /// Global Parquet options that propagates to all columns.
     pub global: ParquetOptions,
     /// Column specific options. Default usage is parquet.XX::column.
     pub column_specific_options: HashMap<String, ColumnOptions>,
-    /// Additional metadata to be inserted into the key_value_metadata
+    /// Additional file-level metadata to include. Inserted into the key_value_metadata
     /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
     pub key_value_metadata: HashMap<String, Option<String>>,
 }
