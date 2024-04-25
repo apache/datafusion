@@ -114,6 +114,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "date_bin"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
 name = "to_char"
 required-features = ["datetime_expressions"]
 
