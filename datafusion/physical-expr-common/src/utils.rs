@@ -20,6 +20,7 @@ use arrow::{
     compute::{and_kleene, is_not_null, SlicesIterator},
 };
 use datafusion_common::Result;
+use datafusion_expr::Expr;
 
 use crate::sort_expr::PhysicalSortExpr;
 
@@ -77,6 +78,21 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
             options: !e.options,
         })
         .collect()
+}
+
+/// Reverses the ORDER BY expression()s.
+pub fn reverse_sort_exprs(sort_exprs: &[Expr]) -> Vec<Expr> {
+    sort_exprs
+        .iter()
+        .map(|e| {
+            if let Expr::Sort(s) = e {
+                Expr::Sort(s.reverse())
+            } else {
+                // TODO: Return error
+                unreachable!()
+            }
+        })
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
+use crate::utils::AggregateOrderSensitivity;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
@@ -195,6 +196,19 @@ impl AggregateUDF {
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
     }
+
+    pub fn with_requirement_satisfied(self: Self, requirement_satisfied: bool) -> Result<Option<AggregateUDF>> {
+        let updated_udf = self.inner.with_requirement_satisfied(requirement_satisfied)?;
+        Ok(updated_udf.map(|udf| Self{inner: udf}))
+    }
+
+    pub fn order_sensitivity(&self) -> AggregateOrderSensitivity{
+        self.inner.order_sensitivity()
+    }
+
+    pub fn reverse_udf(&self) -> Option<AggregateUDF>{
+        self.inner.reverse_udf().map(|reverse| Self{inner:reverse})
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -353,6 +367,20 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        // By default, no support for this optimization
+        Ok(None)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity{
+        // By default, requirement is hard if not specified.
+        AggregateOrderSensitivity::HardRequirement
+    }
+
+    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>>{
+        None
     }
 }
 

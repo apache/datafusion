@@ -23,11 +23,13 @@ use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use crate::utils::{reverse_order_bys, reverse_sort_exprs};
 
 use self::utils::{down_cast_any_ref, ordering_fields};
 
@@ -76,34 +78,6 @@ pub fn create_aggregate_expr(
         ignore_nulls,
         ordering_fields,
     }))
-}
-
-/// Represents the sensitivity of an aggregate expression to ordering.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum AggregateOrderSensitivity {
-    /// Indicates that the aggregate expression is insensitive to ordering. Ordering at the input
-    /// is not important for the result of the aggregator
-    Insensitive,
-    /// Indicates that the aggregate expression has a hard requirement on ordering. Aggregator cannot produce
-    /// correct result unless its ordering requirement is satisfied.
-    HardRequirement,
-    /// Indicates that ordering is beneficial for the aggregate expression. Aggregator can produce its result efficiently
-    /// when its required ordering is satisfied. However, it can still produce correct result (less efficiently)
-    /// when its required ordering is not satisfied.
-    Beneficial,
-}
-impl AggregateOrderSensitivity {
-    pub fn is_order_insensitive(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Insensitive)
-    }
-
-    pub fn is_order_beneficial(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Beneficial)
-    }
-
-    pub fn is_order_hard_required(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::HardRequirement)
-    }
 }
 
 /// An aggregate expression that:
@@ -334,6 +308,52 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        if !self.ordering_req.is_empty(){
+            // If there is requirement, use the sensitive of the implementation
+            self.fun.order_sensitivity()
+        } else {
+            // If no requirement, aggregator is order insensitive
+            AggregateOrderSensitivity::Insensitive
+        }
+    }
+
+    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        if let Some(updated_fn) = self.fun.clone().with_requirement_satisfied(requirement_satisfied)?{
+            return Ok(Some(Arc::new(AggregateFunctionExpr{
+                fun: updated_fn,
+                args: self.args.clone(),
+                data_type: self.data_type.clone(),
+                name: self.fun.name().to_string(),
+                schema: self.schema.clone(),
+                sort_exprs: self.sort_exprs.clone(),
+                ordering_req: self.ordering_req.clone(),
+                ignore_nulls: self.ignore_nulls,
+                ordering_fields: self.ordering_fields.clone(),
+            })));
+        }
+        Ok(None)
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        if let Some(reverse_udf) = self.fun.reverse_udf(){
+            let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
+            let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
+            return Some(Arc::new(AggregateFunctionExpr{
+                fun: reverse_udf,
+                args: self.args.clone(),
+                data_type: self.data_type.clone(),
+                name: self.fun.name().to_string(),
+                schema: self.schema.clone(),
+                sort_exprs: reverse_sort_exprs,
+                ordering_req: reverse_ordering_req,
+                ignore_nulls: self.ignore_nulls,
+                ordering_fields: self.ordering_fields.clone(),
+            }))
+        }
+        None
     }
 }
 

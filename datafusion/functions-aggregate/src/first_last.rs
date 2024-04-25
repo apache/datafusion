@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn, SortOptions};
@@ -29,7 +30,7 @@ use datafusion_common::{
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
@@ -50,6 +51,7 @@ make_udaf_function!(
 pub struct FirstValue {
     signature: Signature,
     aliases: Vec<String>,
+    requirement_satisfied: bool,
 }
 
 impl Debug for FirstValue {
@@ -80,7 +82,13 @@ impl FirstValue {
                 ],
                 Volatility::Immutable,
             ),
+            requirement_satisfied: false,
         }
+    }
+
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self{
+        self.requirement_satisfied = requirement_satisfied;
+        self
     }
 }
 
@@ -132,7 +140,9 @@ impl AggregateUDFImpl for FirstValue {
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let requirement_satisfied = ordering_req.is_empty();
+        // When requirement is empty, or it is signalled by outside caller:
+        // accumulator assumes ordering requirement is satisfied.
+        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(
             acc_args.data_type,
@@ -161,6 +171,18 @@ impl AggregateUDFImpl for FirstValue {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(FirstValue::new().with_requirement_satisfied(requirement_satisfied))))
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Beneficial
+    }
+
+    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
+        Some(Arc::new(LastValue::new()))
     }
 }
 
@@ -731,6 +753,7 @@ make_udaf_function!(
 pub struct LastValue {
     signature: Signature,
     aliases: Vec<String>,
+    requirement_satisfied: bool,
 }
 
 impl Debug for LastValue {
@@ -761,7 +784,13 @@ impl LastValue {
                 ],
                 Volatility::Immutable,
             ),
+            requirement_satisfied: false,
         }
+    }
+
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self{
+        self.requirement_satisfied = requirement_satisfied;
+        self
     }
 }
 
@@ -842,6 +871,18 @@ impl AggregateUDFImpl for LastValue {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn with_requirement_satisfied(self: Arc<Self>, requirement_satisfied: bool) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(LastValue::new().with_requirement_satisfied(requirement_satisfied))))
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Beneficial
+    }
+    
+    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
+        Some(Arc::new(FirstValue::new()))
     }
 }
 

@@ -35,7 +35,7 @@ use arrow_schema::{DataType, Field, Fields};
 use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr_common::aggregate::AggregateOrderSensitivity;
+use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
