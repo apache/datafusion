@@ -342,7 +342,6 @@ pub fn parse_physical_expr(
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
                 None => registry.udf(e.name.as_str())?,
             };
-            let signature = udf.signature();
             let scalar_fun_def = ScalarFunctionDefinition::UDF(udf.clone());
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
@@ -353,7 +352,6 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
-                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
