@@ -87,18 +87,15 @@ impl OptimizerRule for EliminateDuplicatedExpr {
         match plan {
             LogicalPlan::Sort(sort) => {
                 let len = sort.expr.len();
-                let normalized_sort_keys: Vec<_> = sort
+                let unique_exprs: Vec<_> = sort
                     .expr
                     .into_iter()
                     .map(|e| SortExprWrapper { expr: e })
+                    .collect::<IndexSet<_>>()
+                    .into_iter()
+                    .map(|wrapper| wrapper.expr)
                     .collect();
 
-                let mut index_set = IndexSet::new(); // use index_set instead of Hashset to preserve order
-                for wrapper in normalized_sort_keys {
-                    index_set.insert(wrapper);
-                }
-                let unique_exprs: Vec<_> =
-                    index_set.into_iter().map(|wrapper| wrapper.expr).collect();
                 let transformed = if len != unique_exprs.len() {
                     Transformed::yes
                 } else {
