@@ -148,7 +148,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             ScalarFunctionDefinition::UDF(ref fun) => {
                 let output = match self.args.is_empty() {
                     true => fun.invoke_no_args(batch.num_rows()),
-                    false => fun.invoke(&inputs)
+                    false => fun.invoke(&inputs),
                 }?;
                 // Only arrow_typeof can bypass this rule
                 if fun.name() != "arrow_typeof" {
