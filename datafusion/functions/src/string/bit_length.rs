@@ -31,6 +31,12 @@ pub struct BitLengthFunc {
     signature: Signature,
 }
 
+impl Default for BitLengthFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BitLengthFunc {
     pub fn new() -> Self {
         use DataType::*;
