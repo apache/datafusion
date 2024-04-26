@@ -56,8 +56,8 @@ use datafusion_common::{
 };
 
 impl TreeNode for LogicalPlan {
-    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
+    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
         self.inputs().into_iter().apply_until_stop(f)
