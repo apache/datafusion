@@ -1991,6 +1991,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (physical_name(e)?, e),
     };
+
     create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,

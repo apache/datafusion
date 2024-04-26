@@ -76,6 +76,7 @@ pub fn create_aggregate_expr(
     }))
 }
 
+#[allow(dead_code)]
 fn calc_fn_name_with_args(fn_name: &str, args: &[Arc<dyn PhysicalExpr>]) -> String {
     let args = args
         .iter()
