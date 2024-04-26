@@ -43,14 +43,14 @@ to the project.
 - **Contributors**: Anyone who contributes to the project, whether it be code,
   documentation, testing, issue reports, code, or some other forms.
 
-- **Committers**: Contributors who have been granted write access to the
-- project's source code repository. Committers are responsible for reviewing
-  and merging pull requests. Committers are chosen by the PMC.
+- **Committers**: Contributors who have been granted write access to the  
+  project's source code repository. Committers are responsible for reviewing and
+  merging pull requests. Committers are chosen by the PMC.
 
 - **Project Management Committee (PMC)**: The PMC is responsible for the
-- oversight of the project. The PMC is responsible for making decisions about
-  the project, including the addition of new committers and PMC members. The PMC
-  is also responsible for [voting] on releases and ensuring that the project follows
+  oversight of the project. The PMC is responsible for making decisions about the
+  project, including the addition of new committers and PMC members. The PMC is
+  also responsible for [voting] on releases and ensuring that the project follows
   the [Apache Way].
 
 [voting]: https://www.apache.org/foundation/voting.html
