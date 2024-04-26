@@ -163,6 +163,48 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
+struct Simple0ArgsScalarUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+}
+
+impl std::fmt::Debug for Simple0ArgsScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl ScalarUDFImpl for Simple0ArgsScalarUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
+    }
+
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
+    }
+}
+
 #[tokio::test]
 async fn scalar_udf_zero_params() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
@@ -174,20 +216,14 @@ async fn scalar_udf_zero_params() -> Result<()> {
     let ctx = SessionContext::new();
 
     ctx.register_batch("t", batch)?;
-    // create function just returns 100 regardless of inp
-    let myfunc = Arc::new(|_args: &[ColumnarValue]| {
-        Ok(ColumnarValue::Array(
-            Arc::new((0..1).map(|_| 100).collect::<Int32Array>()) as ArrayRef,
-        ))
-    });
 
-    ctx.register_udf(create_udf(
-        "get_100",
-        vec![],
-        Arc::new(DataType::Int32),
-        Volatility::Immutable,
-        myfunc,
-    ));
+    let get_100_udf = Simple0ArgsScalarUDF {
+        name: "get_100".to_string(),
+        signature: Signature::exact(vec![], Volatility::Immutable),
+        return_type: DataType::Int32,
+    };
+
+    ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
     let expected = [
