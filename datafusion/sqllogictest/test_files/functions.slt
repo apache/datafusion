@@ -1115,3 +1115,47 @@ query B
 SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false
+
+#######
+# verify that random() returns a different value for each row
+#######
+statement ok
+create table t as values (1), (2);
+
+statement ok
+create table rand_table as select random() as r from t;
+
+# should have 2 distinct values (not 1)
+query I
+select count(distinct r) from rand_table;
+----
+2
+
+statement ok
+drop table rand_table
+
+statement ok
+drop table t
+
+
+#######
+# verify that uuid() returns a different value for each row
+#######
+statement ok
+create table t as values (1), (2);
+
+statement ok
+create table uuid_table as select uuid() as u from t;
+
+# should have 2 distinct values (not 1)
+query I
+select count(distinct u) from uuid_table;
+----
+2
+
+statement ok
+drop table uuid_table
+
+statement ok
+drop table t
+
