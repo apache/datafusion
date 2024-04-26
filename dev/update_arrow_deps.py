@@ -17,7 +17,7 @@
 # limitations under the License.
 #
 
-# Script that updates the arrow dependencies in datafusion and ballista, locally
+# Script that updates the arrow dependencies in datafusion locally
 #
 # installation:
 # pip install tomlkit requests
