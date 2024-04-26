@@ -19,6 +19,7 @@
 #[cfg(feature = "backtrace")]
 use std::backtrace::{Backtrace, BacktraceStatus};
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -281,7 +282,9 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        self.format_err(f)
+        let error_name = self.error_name();
+        let message = self.message();
+        write!(f, "{error_name}{message}")
     }
 }
 
@@ -397,7 +400,7 @@ impl DataFusionError {
         "".to_owned()
     }
 
-    fn get_error_name(&self) -> &'static str {
+    fn error_name(&self) -> &'static str {
         match self {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
@@ -421,73 +424,43 @@ impl DataFusionError {
         }
     }
 
-    fn format_err(&self, f: &mut Formatter) -> std::fmt::Result {
-        let error_name = self.get_error_name();
+    fn message(&self) -> Cow<str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
                 let backtrace = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "{error_name}{desc}{backtrace}")
+                Cow::Owned(format!("{desc}{backtrace}"))
             }
             #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::ParquetError(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
-            DataFusionError::IoError(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SQL(ref desc, ref backtrace) => {
                 let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "{error_name}{desc:?}{backtrace}")
+                Cow::Owned(format!("{desc:?}{backtrace}"))
             }
-            DataFusionError::Configuration(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
-            DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
-            DataFusionError::Internal(ref desc) => {
-                write!(f, "{error_name}{desc}.\nThis was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker")
-            }
-            DataFusionError::Plan(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Internal(ref desc) => Cow::Owned(format!(
+                "{desc}.\nThis was likely caused by a bug in DataFusion's \
+            code and we would welcome that you file an bug report in our issue tracker"
+            )),
+            DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
                 let backtrace: &str =
                     &backtrace.as_ref().clone().unwrap_or("".to_owned());
-                write!(f, "{error_name}{desc}{backtrace}")
+                Cow::Owned(format!("{desc}{backtrace}"))
             }
-            DataFusionError::Execution(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
-            DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
-            DataFusionError::External(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::ObjectStore(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Context(ref desc, ref err) => {
-                write!(f, "{error_name}{desc}\ncaused by\n{}", *err)
+                Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
             }
-            DataFusionError::Substrait(ref desc) => {
-                write!(f, "{error_name}{desc}")
-            }
+            DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
         }
-    }
-
-    /// Strips error description out of the error message
-    /// Error has a format `{error_name}{`error`}
-    /// The method strips the `error_name` from level and outputs 'error``
-    pub fn strip_error_name(self) -> String {
-        self.to_string().replace(self.get_error_name(), "")
     }
 }
 
@@ -815,21 +788,6 @@ mod test {
             res.strip_backtrace(),
             "Error during planning: Err \"extra1\" \"extra2\""
         );
-    }
-
-    #[test]
-    #[cfg(not(feature = "backtrace"))]
-    fn test_strip_error_name() {
-        let res: Result<(), DataFusionError> = plan_err!("Err");
-        let res = res.unwrap_err();
-        assert_eq!(res.strip_error_name(), "Err");
-
-        // Test only top level stripped
-        let res: Result<(), DataFusionError> = plan_err!("Err");
-        let res2: Result<(), DataFusionError> =
-            exec_err!("{}", res.unwrap_err().strip_backtrace());
-        let res2 = res2.unwrap_err();
-        assert_eq!(res2.strip_error_name(), "Error during planning: Err");
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:
