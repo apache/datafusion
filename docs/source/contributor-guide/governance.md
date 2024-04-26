@@ -41,7 +41,7 @@ to the project.
 ## Roles
 
 - **Contributors**: Anyone who contributes to the project, whether it be code,
-  documentation, testing, issue reports, code, or some other form.
+  documentation, testing, issue reports, code, or some other forms.
 
 - **Committers**: Contributors who have been granted write access to the
 - project's source code repository. Committers are responsible for reviewing
