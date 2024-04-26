@@ -205,6 +205,11 @@ impl ScalarUDF {
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
+
+    /// Validate the number of rows for the function
+    pub fn validate_number_of_rows(&self) -> bool {
+        self.inner.validate_number_of_rows()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -404,6 +409,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Most of the UDFs should have the same number of input and output rows.
+    fn validate_number_of_rows(&self) -> bool {
+        true
     }
 }
 

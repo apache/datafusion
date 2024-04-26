@@ -69,4 +69,8 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
             "{input_data_type}"
         ))))
     }
+
+    fn validate_number_of_rows(&self) -> bool {
+        false
+    }
 }

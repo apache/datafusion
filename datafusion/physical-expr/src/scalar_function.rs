@@ -150,8 +150,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
                     true => fun.invoke_no_args(batch.num_rows()),
                     false => fun.invoke(&inputs),
                 }?;
-                // Only arrow_typeof can bypass this rule
-                if fun.name() != "arrow_typeof" {
+
+                if fun.validate_number_of_rows() {
                     let output_size = match &output {
                         ColumnarValue::Array(array) => array.len(),
                         ColumnarValue::Scalar(_) => 1,
