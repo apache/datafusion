@@ -20,7 +20,7 @@ use std::any::Any;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, FuncMonotonicity, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
@@ -61,6 +61,10 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
+    }
+
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
             std::f64::consts::PI,
         ))))

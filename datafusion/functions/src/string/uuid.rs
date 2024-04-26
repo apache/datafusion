@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 use uuid::Uuid;
 
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
@@ -57,8 +57,8 @@ impl ScalarUDFImpl for UuidFunc {
         Ok(Utf8)
     }
 
-    fn support_randomness(&self) -> bool {
-        true
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
     }
 
     /// Prints random (v4) uuid values per row

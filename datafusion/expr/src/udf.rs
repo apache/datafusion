@@ -205,10 +205,6 @@ impl ScalarUDF {
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
-
-    pub fn support_randomness(&self) -> bool {
-        self.inner.support_randomness()
-    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -333,6 +329,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// The function will be invoked passed with the slice of [`ColumnarValue`]
     /// (either scalar or array).
     ///
+    /// If the function does not take any arguments, please use [invoke_no_args]
+    /// instead and return [not_impl_err] for this function.
+    ///
+    ///
     /// # Performance
     ///
     /// For the best performance, the implementations of `invoke` should handle
@@ -341,14 +341,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "Function {} does not implement invoke but called",
-            self.name()
-        )
-    }
+    ///
+    /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
 
-    /// Invoke the function without `args` but number of rows, returning the appropriate result
+    /// Invoke the function without `args`, instead the number of rows are provided,
+    /// returning the appropriate result.
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         not_impl_err!(
             "Function {} does not implement invoke_no_args but called",
@@ -405,12 +403,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// and thus any side effects (like divide by zero) may not be encountered
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
-        false
-    }
-
-    /// Returns true if the function supports randomness, This is useful for functions that need to generate
-    /// random values for each row. `invoke_no_args` can be called in this case.
-    fn support_randomness(&self) -> bool {
         false
     }
 }

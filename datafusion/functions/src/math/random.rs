@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -63,8 +63,8 @@ impl ScalarUDFImpl for RandomFunc {
         Ok(Float64)
     }
 
-    fn support_randomness(&self) -> bool {
-        true
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
     }
 
     fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {

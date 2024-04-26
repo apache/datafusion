@@ -146,7 +146,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         match self.fun {
             ScalarFunctionDefinition::UDF(ref fun) => {
-                if fun.support_randomness() {
+                if self.args.is_empty() {
                     fun.invoke_no_args(batch.num_rows())
                 } else {
                     fun.invoke(&inputs)
