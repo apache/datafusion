@@ -467,7 +467,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 substring_from,
                 substring_for,
-                special: true,
+                ..
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,
@@ -475,13 +475,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
             ),
-
-            #[cfg(not(feature = "unicode_expressions"))]
-            SQLExpr::Substring { .. } => {
-                internal_err!(
-                    "statement substring requires compilation with feature flag: unicode_expressions."
-                )
-            }
 
             SQLExpr::Trim {
                 expr,
