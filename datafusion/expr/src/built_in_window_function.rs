@@ -71,7 +71,7 @@ pub enum BuiltInWindowFunction {
 }
 
 impl BuiltInWindowFunction {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
             RowNumber => "ROW_NUMBER",
