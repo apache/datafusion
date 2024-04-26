@@ -1897,7 +1897,8 @@ SELECT substring('alphabet' for 1);
 ----
 a
 
-# String arguments are not supported because they might contain regular expressions.
+# The 'from' and 'for' parameters don't support string types, because they should be treated as 
+# regular expressions, which we have not implemented yet.
 query error DataFusion error: Error during planning: No function matches the given name and argument types
 SELECT substring('alphabet' FROM '3')
 
