@@ -1871,6 +1871,17 @@ SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 
+
+query T
+SELECT substring('alphabet', 1)
+----
+alphabet
+
+query T
+SELECT substring('alphabet', 3, 2)
+----
+ph
+
 query T
 SELECT substring('alphabet' from 2 for 1);
 ----
@@ -1885,6 +1896,24 @@ query T
 SELECT substring('alphabet' for 1);
 ----
 a
+
+# The 'from' and 'for' parameters don't support string types, because they should be treated as 
+# regular expressions, which we have not implemented yet.
+query error DataFusion error: Error during planning: No function matches the given name and argument types
+SELECT substring('alphabet' FROM '3')
+
+query error DataFusion error: Error during planning: No function matches the given name and argument types
+SELECT substring('alphabet' FROM '3' FOR '2')
+
+query error DataFusion error: Error during planning: No function matches the given name and argument types
+SELECT substring('alphabet' FROM '3' FOR 2)
+
+query error DataFusion error: Error during planning: No function matches the given name and argument types
+SELECT substring('alphabet' FROM 3 FOR '2')
+
+query error DataFusion error: Error during planning: No function matches the given name and argument types
+SELECT substring('alphabet' FOR '2')
+
 
 ##### csv_query_nullif_divide_by_0
 

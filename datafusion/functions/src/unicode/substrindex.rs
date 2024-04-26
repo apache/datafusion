@@ -34,6 +34,12 @@ pub struct SubstrIndexFunc {
     aliases: Vec<String>,
 }
 
+impl Default for SubstrIndexFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubstrIndexFunc {
     pub fn new() -> Self {
         use DataType::*;

@@ -43,6 +43,13 @@ pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub struct StartsWithFunc {
     signature: Signature,
 }
+
+impl Default for StartsWithFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StartsWithFunc {
     pub fn new() -> Self {
         use DataType::*;

@@ -41,6 +41,12 @@ pub struct BTrimFunc {
     aliases: Vec<String>,
 }
 
+impl Default for BTrimFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BTrimFunc {
     pub fn new() -> Self {
         use DataType::*;

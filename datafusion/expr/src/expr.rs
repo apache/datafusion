@@ -669,6 +669,16 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
         }
     }
+
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.name(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
+        }
+    }
 }
 
 impl fmt::Display for WindowFunctionDefinition {

@@ -882,28 +882,6 @@ mod tests_statistical {
         (big, medium, small)
     }
 
-    pub(crate) fn crosscheck_plans(plan: Arc<dyn ExecutionPlan>) -> Result<()> {
-        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
-            Box::new(hash_join_convert_symmetric_subrule),
-            Box::new(hash_join_swap_subrule),
-        ];
-        let new_plan = plan
-            .transform_up(|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
-            .data()?;
-        // TODO: End state payloads will be checked here.
-        let config = ConfigOptions::new().optimizer;
-        let collect_left_threshold = config.hash_join_single_partition_threshold;
-        let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        let _ = new_plan.transform_up(|plan| {
-            statistical_join_selection_subrule(
-                plan,
-                collect_left_threshold,
-                collect_threshold_num_rows,
-            )
-        })?;
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_join_with_swap() {
         let (big, small) = create_big_and_small();
@@ -958,7 +936,6 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
-        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
@@ -1001,7 +978,6 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
-        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
@@ -1055,7 +1031,6 @@ mod tests_statistical {
                 Precision::Inexact(2097152)
             );
             assert_eq!(original_schema, swapped_join.schema());
-            crosscheck_plans(join).unwrap();
         }
     }
 
@@ -1078,7 +1053,6 @@ mod tests_statistical {
                 "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
                 expected_lines, actual_lines
             );
-            crosscheck_plans(plan).unwrap();
         };
     }
 
@@ -1180,7 +1154,6 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
-        crosscheck_plans(join).unwrap();
     }
 
     #[rstest(
@@ -1249,7 +1222,6 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
-        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[rstest(
@@ -1311,7 +1283,6 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
-        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
@@ -1523,7 +1494,6 @@ mod tests_statistical {
 
             assert_eq!(*swapped_join.partition_mode(), expected_mode);
         }
-        crosscheck_plans(join).unwrap();
     }
 }
 
@@ -1568,8 +1538,6 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
-
-    use self::tests_statistical::crosscheck_plans;
     use super::*;
     use crate::physical_optimizer::test_utils::SourceType;
     use crate::test_util::UnboundedExec;
@@ -2000,7 +1968,6 @@ mod hash_join_tests {
                 )
             );
         };
-        crosscheck_plans(plan).unwrap();
         Ok(())
     }
 }
