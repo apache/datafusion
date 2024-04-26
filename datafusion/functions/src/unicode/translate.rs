@@ -35,6 +35,12 @@ pub struct TranslateFunc {
     signature: Signature,
 }
 
+impl Default for TranslateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TranslateFunc {
     pub fn new() -> Self {
         use DataType::*;
