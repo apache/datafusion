@@ -472,8 +472,10 @@ SELECT median(distinct col_i8) FROM median_table
 ----
 100
 
-statement error DataFusion error: This feature is not implemented: MEDIAN\(DISTINCT\) aggregations are not available
+query II
 SELECT median(col_i8), median(distinct col_i8) FROM median_table
+----
+-14 100
 
 # approx_distinct_median_i8
 query I
