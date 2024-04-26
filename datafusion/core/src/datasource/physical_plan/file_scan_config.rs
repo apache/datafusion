@@ -142,11 +142,8 @@ impl FileScanConfig {
             Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
         );
 
-        let projected_output_ordering = get_projected_output_ordering(
-            self,
-            &projected_schema,
-            self.projection.as_deref(),
-        );
+        let projected_output_ordering =
+            get_projected_output_ordering(self, &projected_schema);
 
         (projected_schema, table_stats, projected_output_ordering)
     }

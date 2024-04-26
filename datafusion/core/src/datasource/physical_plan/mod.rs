@@ -448,7 +448,6 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-    projection: Option<&[usize]>,
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
@@ -486,7 +485,7 @@ fn get_projected_output_ordering(
             let statistics = match MinMaxStatistics::new_from_files(
                 &new_ordering,
                 projected_schema,
-                projection,
+                base_config.projection.as_deref(),
                 group,
             ) {
                 Ok(statistics) => statistics,
