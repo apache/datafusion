@@ -32,14 +32,20 @@ use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-/// MEDIAN aggregate expression. This uses a lot of memory because all values need to be
-/// stored in memory before a result can be computed. If an approximation is sufficient
-/// then APPROX_MEDIAN provides a much more efficient solution.
+/// MEDIAN aggregate expression. If using the non-distinct variation, then this uses a
+/// lot of memory because all values need to be stored in memory before a result can be
+/// computed. If an approximation is sufficient then APPROX_MEDIAN provides a much more
+/// efficient solution.
+///
+/// If using the distinct variation, the memory usage will be similarly high if the
+/// cardinality is high as it stores all distinct values in memory before computing the
+/// result, but if cardinality is low then memory usage will also be lower.
 #[derive(Debug)]
 pub struct Median {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
     data_type: DataType,
+    distinct: bool,
 }
 
 impl Median {
@@ -48,11 +54,13 @@ impl Median {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
+        distinct: bool,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             data_type,
+            distinct,
         }
     }
 }
@@ -71,10 +79,17 @@ impl AggregateExpr for Median {
         use arrow_array::types::*;
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                Ok(Box::new(MedianAccumulator::<$t> {
-                    data_type: $dt.clone(),
-                    all_values: vec![],
-                }))
+                if self.distinct {
+                    Ok(Box::new(DistinctMedianAccumulator::<$t> {
+                        data_type: $dt.clone(),
+                        distinct_values: HashSet::new(),
+                    }))
+                } else {
+                    Ok(Box::new(MedianAccumulator::<$t> {
+                        data_type: $dt.clone(),
+                        all_values: vec![],
+                    }))
+                }
             };
         }
         let dt = &self.data_type;
@@ -97,9 +112,14 @@ impl AggregateExpr for Median {
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new("item", self.data_type.clone(), true);
         let data_type = DataType::List(Arc::new(field));
+        let state_name = if self.distinct {
+            "distinct_median"
+        } else {
+            "median"
+        };
 
         Ok(vec![Field::new(
-            format_state_name(&self.name, "median"),
+            format_state_name(&self.name, state_name),
             data_type,
             true,
         )])
@@ -122,6 +142,7 @@ impl PartialEq<dyn Any> for Median {
                 self.name == x.name
                     && self.data_type == x.data_type
                     && self.expr.eq(&x.expr)
+                    && self.distinct == x.distinct
             })
             .unwrap_or(false)
     }
@@ -181,101 +202,6 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
             + self.all_values.capacity() * std::mem::size_of::<T::Native>()
-    }
-}
-
-/// MEDIAN(DISTINCT) aggregate expression. Similar to MEDIAN but computes after taking
-/// all unique values. This may use a lot of memory if the cardinality is high.
-#[derive(Debug)]
-pub struct DistinctMedian {
-    name: String,
-    expr: Arc<dyn PhysicalExpr>,
-    data_type: DataType,
-}
-
-impl DistinctMedian {
-    /// Create a new MEDIAN(DISTINCT) aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            expr,
-            data_type,
-        }
-    }
-}
-
-impl AggregateExpr for DistinctMedian {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        use arrow_array::types::*;
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(DistinctMedianAccumulator::<$t> {
-                    data_type: $dt.clone(),
-                    distinct_values: Default::default(),
-                }))
-            };
-        }
-        let dt = &self.data_type;
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "DistinctMedianAccumulator not supported for {} with {}",
-                self.name(),
-                self.data_type
-            ))),
-        }
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        // Intermediate state is a list of the unique elements we have
-        // collected so far
-        let field = Field::new("item", self.data_type.clone(), true);
-        let data_type = DataType::List(Arc::new(field));
-
-        Ok(vec![Field::new(
-            format_state_name(&self.name, "distinct_median"),
-            data_type,
-            true,
-        )])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl PartialEq<dyn Any> for DistinctMedian {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -375,7 +301,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
+    use crate::generic_test_distinct_op;
     use arrow::{array::*, datatypes::*};
 
     #[test]
@@ -388,10 +314,11 @@ mod tests {
                 .with_precision_and_scale(10, 4)?,
         );
 
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
             Median,
+            false,
             ScalarValue::Decimal128(Some(3), 10, 4)
         )
     }
@@ -404,10 +331,11 @@ mod tests {
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 4)?,
         );
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
             Median,
+            false,
             ScalarValue::Decimal128(Some(3), 10, 4)
         )
     }
@@ -421,10 +349,11 @@ mod tests {
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 4)?,
         );
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
             Median,
+            false,
             ScalarValue::Decimal128(None, 10, 4)
         )
     }
@@ -432,13 +361,25 @@ mod tests {
     #[test]
     fn median_i32_odd() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            false,
+            ScalarValue::from(3_i32)
+        )
     }
 
     #[test]
     fn median_i32_even() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
-        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            false,
+            ScalarValue::from(3_i32)
+        )
     }
 
     #[test]
@@ -450,20 +391,38 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3i32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            false,
+            ScalarValue::from(3i32)
+        )
     }
 
     #[test]
     fn median_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(a, DataType::Int32, Median, ScalarValue::Int32(None))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            false,
+            ScalarValue::Int32(None)
+        )
     }
 
     #[test]
     fn median_u32_odd() -> Result<()> {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+        generic_test_distinct_op!(
+            a,
+            DataType::UInt32,
+            Median,
+            false,
+            ScalarValue::from(3u32)
+        )
     }
 
     #[test]
@@ -471,14 +430,26 @@ mod tests {
         let a: ArrayRef = Arc::new(UInt32Array::from(vec![
             1_u32, 2_u32, 3_u32, 4_u32, 5_u32, 6_u32,
         ]));
-        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+        generic_test_distinct_op!(
+            a,
+            DataType::UInt32,
+            Median,
+            false,
+            ScalarValue::from(3u32)
+        )
     }
 
     #[test]
     fn median_f32_odd() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3_f32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Float32,
+            Median,
+            false,
+            ScalarValue::from(3_f32)
+        )
     }
 
     #[test]
@@ -486,14 +457,26 @@ mod tests {
         let a: ArrayRef = Arc::new(Float32Array::from(vec![
             1_f32, 2_f32, 3_f32, 4_f32, 5_f32, 6_f32,
         ]));
-        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3.5_f32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Float32,
+            Median,
+            false,
+            ScalarValue::from(3.5_f32)
+        )
     }
 
     #[test]
     fn median_f64_odd() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3_f64))
+        generic_test_distinct_op!(
+            a,
+            DataType::Float64,
+            Median,
+            false,
+            ScalarValue::from(3_f64)
+        )
     }
 
     #[test]
@@ -501,23 +484,30 @@ mod tests {
         let a: ArrayRef = Arc::new(Float64Array::from(vec![
             1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64,
         ]));
-        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3.5_f64))
+        generic_test_distinct_op!(
+            a,
+            DataType::Float64,
+            Median,
+            false,
+            ScalarValue::from(3.5_f64)
+        )
     }
 
     #[test]
     fn distinct_median_decimal() -> Result<()> {
         let array: ArrayRef = Arc::new(
-            vec![1, 1, 1, 1, 1, 1, 2, 3, 3]
+            vec![1, 1, 1, 1, 2, 3, 1, 1, 3]
                 .into_iter()
                 .map(Some)
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 4)?,
         );
 
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::Decimal128(Some(2), 10, 4)
         )
     }
@@ -525,15 +515,16 @@ mod tests {
     #[test]
     fn distinct_median_decimal_with_nulls() -> Result<()> {
         let array: ArrayRef = Arc::new(
-            vec![Some(1), Some(2), None, Some(3), Some(3), Some(3), Some(3)]
+            vec![Some(3), Some(1), None, Some(3), Some(2), Some(3), Some(3)]
                 .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 4)?,
         );
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::Decimal128(Some(2), 10, 4)
         )
     }
@@ -546,24 +537,37 @@ mod tests {
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 4)?,
         );
-        generic_test_op!(
+        generic_test_distinct_op!(
             array,
             DataType::Decimal128(10, 4),
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::Decimal128(None, 10, 4)
         )
     }
 
     #[test]
     fn distinct_median_i32_odd() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 1, 2, 3]));
-        generic_test_op!(a, DataType::Int32, DistinctMedian, ScalarValue::from(2_i32))
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![2, 1, 1, 2, 1, 3]));
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            true,
+            ScalarValue::from(2_i32)
+        )
     }
 
     #[test]
     fn distinct_median_i32_even() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 1, 1, 3]));
-        generic_test_op!(a, DataType::Int32, DistinctMedian, ScalarValue::from(2_i32))
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 3, 1, 1]));
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            true,
+            ScalarValue::from(2_i32)
+        )
     }
 
     #[test]
@@ -575,20 +579,38 @@ mod tests {
             Some(1),
             Some(3),
         ]));
-        generic_test_op!(a, DataType::Int32, DistinctMedian, ScalarValue::from(2i32))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            true,
+            ScalarValue::from(2i32)
+        )
     }
 
     #[test]
     fn distinct_median_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(a, DataType::Int32, DistinctMedian, ScalarValue::Int32(None))
+        generic_test_distinct_op!(
+            a,
+            DataType::Int32,
+            Median,
+            true,
+            ScalarValue::Int32(None)
+        )
     }
 
     #[test]
     fn distinct_median_u32_odd() -> Result<()> {
         let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 1_u32, 1_u32, 2_u32, 3_u32]));
-        generic_test_op!(a, DataType::UInt32, DistinctMedian, ScalarValue::from(2u32))
+            Arc::new(UInt32Array::from(vec![1_u32, 1_u32, 2_u32, 1_u32, 3_u32]));
+        generic_test_distinct_op!(
+            a,
+            DataType::UInt32,
+            Median,
+            true,
+            ScalarValue::from(2u32)
+        )
     }
 
     #[test]
@@ -596,17 +618,24 @@ mod tests {
         let a: ArrayRef = Arc::new(UInt32Array::from(vec![
             1_u32, 1_u32, 1_u32, 1_u32, 3_u32, 3_u32,
         ]));
-        generic_test_op!(a, DataType::UInt32, DistinctMedian, ScalarValue::from(2u32))
+        generic_test_distinct_op!(
+            a,
+            DataType::UInt32,
+            Median,
+            true,
+            ScalarValue::from(2u32)
+        )
     }
 
     #[test]
     fn distinct_median_f32_odd() -> Result<()> {
         let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 1_f32, 1_f32, 2_f32, 3_f32]));
-        generic_test_op!(
+            Arc::new(Float32Array::from(vec![3_f32, 2_f32, 1_f32, 1_f32, 1_f32]));
+        generic_test_distinct_op!(
             a,
             DataType::Float32,
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::from(2_f32)
         )
     }
@@ -615,10 +644,11 @@ mod tests {
     fn distinct_median_f32_even() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 1_f32, 1_f32, 1_f32, 2_f32]));
-        generic_test_op!(
+        generic_test_distinct_op!(
             a,
             DataType::Float32,
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::from(1.5_f32)
         )
     }
@@ -627,10 +657,11 @@ mod tests {
     fn distinct_median_f64_odd() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 1_f64, 1_f64, 2_f64, 3_f64]));
-        generic_test_op!(
+        generic_test_distinct_op!(
             a,
             DataType::Float64,
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::from(2_f64)
         )
     }
@@ -639,10 +670,11 @@ mod tests {
     fn distinct_median_f64_even() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 1_f64, 1_f64, 1_f64, 2_f64]));
-        generic_test_op!(
+        generic_test_distinct_op!(
             a,
             DataType::Float64,
-            DistinctMedian,
+            Median,
+            true,
             ScalarValue::from(1.5_f64)
         )
     }
