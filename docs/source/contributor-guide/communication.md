@@ -45,8 +45,8 @@ request one in the `Arrow Rust` channel of the [Arrow Rust Discord server](https
 
 We also use arrow.apache.org's `dev@` mailing list for release coordination and occasional design discussions. Other
 than the release process, most DataFusion mailing list traffic will link to a GitHub issue or PR for discussion.
-([subscribe](mailto:dev-subscribe@arrow.apache.org),
-[unsubscribe](mailto:dev-unsubscribe@arrow.apache.org),
+([subscribe](mailto:dev-subscribe@datafusion.apache.org),
+[unsubscribe](mailto:dev-unsubscribe@datafusion.apache.org),
 [archives](https://lists.apache.org/list.html?dev@arrow.apache.org)).
 
 When emailing the dev list, please make sure to prefix the subject line with a
