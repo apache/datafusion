@@ -420,6 +420,26 @@ statement error The SUBSTR function can only accept strings, but got Int64.
 SELECT substr(1, 3, 4)
 
 query T
+SELECT substring('alphabet', 1)
+---
+----
+alphabet
+
+query T
+SELECT substring('alphabet', 3, 2)
+----
+ph
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Substring \{ expr: Value\(SingleQuotedString\("alphabet"\)\), substring_from: Some\(Value\(Number\("3", false\)\)\), substring_for: None, special: false \}
+SELECT substring('alphabet' FROM 3)
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Substring \{ expr: Value\(SingleQuotedString\("alphabet"\)\), substring_from: Some\(Value\(Number\("3", false\)\)\), substring_for: Some\(Value\(Number\("2", false\)\)\), special: false \}
+SELECT substring('alphabet' FROM 3 FOR 2)
+
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Substring \{ expr: Value\(SingleQuotedString\("alphabet"\)\), substring_from: None, substring_for: Some\(Value\(Number\("2", false\)\)\), special: false \}
+SELECT substring('alphabet' FOR 2)
+
+query T
 SELECT translate('12345', '143', 'ax')
 ----
 a2x5
