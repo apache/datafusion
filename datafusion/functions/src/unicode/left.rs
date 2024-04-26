@@ -35,6 +35,12 @@ pub struct LeftFunc {
     signature: Signature,
 }
 
+impl Default for LeftFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeftFunc {
     pub fn new() -> Self {
         use DataType::*;

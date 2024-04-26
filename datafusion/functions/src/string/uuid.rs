@@ -32,6 +32,12 @@ pub struct UuidFunc {
     signature: Signature,
 }
 
+impl Default for UuidFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UuidFunc {
     pub fn new() -> Self {
         Self {
