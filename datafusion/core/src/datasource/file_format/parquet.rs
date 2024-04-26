@@ -1129,7 +1129,7 @@ mod tests {
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
 
@@ -1857,7 +1857,13 @@ mod tests {
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
-            TableParquetOptions::default(),
+            TableParquetOptions {
+                key_value_metadata: std::collections::HashMap::from([
+                    ("my-data".to_string(), Some("stuff".to_string())),
+                    ("my-data-bool-key".to_string(), None),
+                ]),
+                ..Default::default()
+            },
         ));
 
         // create data
@@ -1891,7 +1897,10 @@ mod tests {
         let (
             path,
             FileMetaData {
-                num_rows, schema, ..
+                num_rows,
+                schema,
+                key_value_metadata,
+                ..
             },
         ) = written.take(1).next().unwrap();
         let path_parts = path.parts().collect::<Vec<_>>();
@@ -1906,6 +1915,20 @@ mod tests {
             schema.iter().any(|col_schema| col_schema.name == "b"),
             "output file metadata should contain col b"
         );
+
+        let mut key_value_metadata = key_value_metadata.unwrap();
+        key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
+        let expected_metadata = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        assert_eq!(key_value_metadata, expected_metadata);
 
         Ok(())
     }

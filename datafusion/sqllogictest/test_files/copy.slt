@@ -283,10 +283,72 @@ OPTIONS (
 'format.statistics_enabled::col2' none,
 'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
-'format.bloom_filter_ndv' 100
+'format.bloom_filter_ndv' 100,
+'format.metadata::key' 'value'
 )
 ----
 2
+
+# valid vs invalid metadata
+
+# accepts map with a single entry
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key' 'value'
+)
+
+# accepts multiple entries (on different keys)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' '',
+    'format.metadata::key2' 'value',
+    'format.metadata::key3' 'value with spaces',
+    'format.metadata::key4' 'value with special chars :: :'
+)
+
+# accepts multiple entries with the same key (will overwrite)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' 'value',
+    'format.metadata::key1' 'value'
+)
+
+# errors if key is missing
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, missing key in metadata::<key>
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::' 'value'
+)
+
+# errors if key contains internal '::'
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, found too many '::' in "metadata::key::extra"
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key::extra' 'value'
+)
+
+# errors for invalid property (not stating `format.metadata`)
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ColumnOptions
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.wrong-metadata::key' 'value'
+)
+
 
 # validate multiple parquet file output with all options set
 statement ok
