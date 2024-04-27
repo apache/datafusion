@@ -36,6 +36,12 @@ pub struct StrposFunc {
     aliases: Vec<String>,
 }
 
+impl Default for StrposFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StrposFunc {
     pub fn new() -> Self {
         use DataType::*;

@@ -34,6 +34,12 @@ pub struct LevenshteinFunc {
     signature: Signature,
 }
 
+impl Default for LevenshteinFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LevenshteinFunc {
     pub fn new() -> Self {
         use DataType::*;

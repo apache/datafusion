@@ -35,6 +35,12 @@ pub struct FindInSetFunc {
     signature: Signature,
 }
 
+impl Default for FindInSetFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FindInSetFunc {
     pub fn new() -> Self {
         use DataType::*;

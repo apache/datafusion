@@ -33,6 +33,12 @@ pub struct CharacterLengthFunc {
     aliases: Vec<String>,
 }
 
+impl Default for CharacterLengthFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CharacterLengthFunc {
     pub fn new() -> Self {
         use DataType::*;

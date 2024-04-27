@@ -134,6 +134,40 @@ pub(crate) mod tests {
         }};
     }
 
+    /// Same as [`generic_test_op`] but with support for providing a 4th argument, usually
+    /// a boolean to indicate if using the distinct version of the op.
+    #[macro_export]
+    macro_rules! generic_test_distinct_op {
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $DISTINCT:expr, $EXPECTED:expr) => {
+            generic_test_distinct_op!(
+                $ARRAY,
+                $DATATYPE,
+                $OP,
+                $DISTINCT,
+                $EXPECTED,
+                $EXPECTED.data_type()
+            )
+        };
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $DISTINCT:expr, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
+
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
+
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+                $DISTINCT,
+            ));
+            let actual = aggregate(&batch, agg)?;
+            let expected = ScalarValue::from($EXPECTED);
+
+            assert_eq!(expected, actual);
+
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
+        }};
+    }
+
     /// macro to perform an aggregation using [`crate::GroupsAccumulator`] and verify the result.
     ///
     /// The difference between this and the above `generic_test_op` is that the former checks
