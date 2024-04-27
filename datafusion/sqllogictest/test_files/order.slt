@@ -889,6 +889,7 @@ select column2, column1 from foo ORDER BY column2 desc, column1 desc;
 [0] 2
 
 # Test issue: https://github.com/apache/datafusion/issues/10013
+# There is both a HAVING clause and an ORDER BY clause in the query.
 query I
 SELECT
    SUM(column1)

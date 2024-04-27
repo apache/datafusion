@@ -97,14 +97,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
-        let mut order_by_schema = projected_plan.schema().as_ref().clone();
-        order_by_schema.merge(base_plan.schema());
         let order_by_rex = self.order_by_to_sort_expr(
             &order_by,
-            &order_by_schema,
+            projected_plan.schema().as_ref(),
             planner_context,
             true,
-            projected_plan.schema().as_ref(),
+            Some(base_plan.schema().as_ref()),
         )?;
         let order_by_rex = normalize_cols(order_by_rex, &projected_plan)?;
 

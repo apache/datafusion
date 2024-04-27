@@ -54,7 +54,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
-                // We need to process `SELECT` and `ORDER BY` together.
+                // Order-by expressions may refer to columns in the `FROM` clause,
+                // so we need to process `SELECT` and `ORDER BY` together.
                 let plan =
                     self.select_to_plan(*select, query.order_by, planner_context)?;
                 let plan = self.limit(plan, query.offset, query.limit)?;
@@ -68,7 +69,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan.schema(),
                     planner_context,
                     true,
-                    plan.schema(),
+                    None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
                 self.limit(plan, query.offset, query.limit)

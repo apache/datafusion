@@ -150,7 +150,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
-                schema,
+                None,
             )?;
 
             let func_deps = schema.functional_dependencies();
@@ -225,7 +225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                     true,
-                    schema,
+                    None,
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
@@ -247,7 +247,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                     true,
-                    schema,
+                    None,
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
