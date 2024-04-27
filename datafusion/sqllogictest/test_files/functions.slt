@@ -1178,6 +1178,15 @@ select coalesce(null, null);
 ----
 NULL
 
+# test with empty args
+query error
+select coalesce();
+----
+DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce()'. You might need to add explicit type casts.
+	Candidate functions:
+	coalesce(T or Null, .., T or Null)
+
+
 # test with different types
 query error
 select coalesce(arrow_cast(1, 'Int32'), arrow_cast(1, 'Int64'));
@@ -1200,12 +1209,15 @@ DataFusion error: Error during planning: No function matches the given name and 
 	coalesce(T or Null, .., T or Null)
 
 
-query I
-select coalesce(b, c) from t1;
+# b, c has the same type i32
+query IT
+select 
+  coalesce(b, c),
+  arrow_typeof(coalesce(b, c))
+from t1;
 ----
-1
-2
-
+1 Int32
+2 Int32
 
 statement ok
 drop table t1;
@@ -1231,7 +1243,6 @@ NULL
 
 statement ok
 drop table t1;
-
 
 # coalesce static empty value
 query T
