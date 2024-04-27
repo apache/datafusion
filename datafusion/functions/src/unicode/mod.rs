@@ -21,17 +21,17 @@ use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
 
-mod character_length;
-mod find_in_set;
-mod left;
-mod lpad;
-mod reverse;
-mod right;
-mod rpad;
-mod strpos;
-mod substr;
-mod substrindex;
-mod translate;
+pub mod character_length;
+pub mod find_in_set;
+pub mod left;
+pub mod lpad;
+pub mod reverse;
+pub mod right;
+pub mod rpad;
+pub mod strpos;
+pub mod substr;
+pub mod substrindex;
+pub mod translate;
 
 // create UDFs
 make_udf_function!(

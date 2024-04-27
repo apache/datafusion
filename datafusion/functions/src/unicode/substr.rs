@@ -34,6 +34,12 @@ pub struct SubstrFunc {
     signature: Signature,
 }
 
+impl Default for SubstrFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubstrFunc {
     pub fn new() -> Self {
         use DataType::*;
