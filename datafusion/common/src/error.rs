@@ -282,9 +282,9 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let error_name = self.error_name();
+        let error_prefix = self.error_prefix();
         let message = self.message();
-        write!(f, "{error_name}{message}")
+        write!(f, "{error_prefix}{message}")
     }
 }
 
@@ -400,7 +400,7 @@ impl DataFusionError {
         "".to_owned()
     }
 
-    fn error_name(&self) -> &'static str {
+    fn error_prefix(&self) -> &'static str {
         match self {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
