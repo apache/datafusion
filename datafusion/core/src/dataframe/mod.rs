@@ -49,8 +49,8 @@ use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
-    TableProviderFilterPushDown, UNNAMED_TABLE,
+    avg, count, count_null, max, median, min, stddev,
+    utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
 use async_trait::async_trait;
@@ -534,7 +534,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(is_null(col(f.name()))).alias(f.name()))
+                    .map(|f| count_null(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // mean aggregation
