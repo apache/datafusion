@@ -2094,6 +2094,7 @@ pub mod physical_expr_node {
         /// window expressions
         #[prost(message, tag = "15")]
         WindowExpr(super::PhysicalWindowExprNode),
+        /// was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
         #[prost(message, tag = "18")]

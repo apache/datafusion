@@ -1313,11 +1313,11 @@ message PhysicalExprNode {
     PhysicalInListNode in_list = 12;
     //  was PhysicalScalarFunctionNode scalar_function = 13;
     PhysicalTryCastNode try_cast = 14;
-//    was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
 
     PhysicalScalarUdfNode scalar_udf = 16;
+    // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
   }
