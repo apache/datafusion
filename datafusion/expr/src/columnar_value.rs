@@ -28,7 +28,7 @@ use std::sync::Arc;
 /// The result of evaluating an expression.
 ///
 /// [`ColumnarValue::Scalar`] represents a single value repeated any number of
-/// times. THis is an important performance optimization for handling values
+/// times. This is an important performance optimization for handling values
 /// that do not change across rows.
 ///
 /// [`ColumnarValue::Array`] represents a column of data, stored as an  Arrow
