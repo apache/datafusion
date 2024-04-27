@@ -215,7 +215,7 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the count_null() aggregate function
+/// Create an expression to represent the COUNT(IS NULL x) aggregate function
 pub fn count_null(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Count,
