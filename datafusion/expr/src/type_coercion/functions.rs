@@ -206,8 +206,6 @@ fn get_valid_types(
                         vec![valid_types]
                     },
                 )
-
-            // vec![vec![current_types.first().unwrap().clone(); current_types.len()]]
         }
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(

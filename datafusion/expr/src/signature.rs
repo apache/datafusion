@@ -236,7 +236,7 @@ impl TypeSignature {
     }
 
     /// Skip coercion to match the signature.
-    pub fn skip_coercion(&self) -> bool {
+    pub(crate) fn skip_coercion(&self) -> bool {
         matches!(self, TypeSignature::VariadicEqualOrNull)
     }
 }
