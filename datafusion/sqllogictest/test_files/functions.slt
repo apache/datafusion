@@ -1203,6 +1203,28 @@ DataFusion error: Error during planning: No function matches the given name and 
 statement ok
 drop table t1;
 
+# test multi rows
+statement ok
+CREATE TABLE t1(
+  c1 int,
+  c2 int
+) as VALUES
+(1, 2),
+(NULL, 2),
+(1, NULL),
+(NULL, NULL);
+
+query I
+SELECT COALESCE(c1, c2) FROM t1
+----
+1
+2
+1
+NULL
+
+statement ok
+drop table t1;
+
 
 # coalesce static empty value
 query T
