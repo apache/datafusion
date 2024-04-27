@@ -28,7 +28,7 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
-use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
+use super::binary::comparison_coercion;
 
 /// Performs type coercion for function arguments.
 ///
@@ -62,11 +62,13 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
+    if !signature.type_signature.skip_coercion() {
+        // Try and coerce the argument types to match the signature, returning the
+        // coerced types from the first matching signature.
+        for valid_types in valid_types {
+            if let Some(types) = maybe_data_types(&valid_types, current_types) {
+                return Ok(types);
+            }
         }
     }
 
@@ -184,6 +186,29 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::VariadicEqualOrNull => {
+            current_types
+                .iter()
+                .find(|&t| t != &DataType::Null)
+                .map_or_else(
+                    || vec![vec![DataType::Null; current_types.len()]],
+                    |t| {
+                        let valid_types = current_types
+                            .iter()
+                            .map(|d| {
+                                if d != &DataType::Null {
+                                    t.clone()
+                                } else {
+                                    DataType::Null
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        vec![valid_types]
+                    },
+                )
+
+            // vec![vec![current_types.first().unwrap().clone(); current_types.len()]]
+        }
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
@@ -450,19 +475,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // More coerce rules.
-        // Note that not all rules in `comparison_coercion` can be reused here.
-        // For example, all numeric types can be coerced into Utf8 for comparison,
-        // but not for function arguments.
-        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
-            |coerced_type| {
-                if *type_into == coerced_type {
-                    Some(coerced_type)
-                } else {
-                    None
-                }
-            },
-        ),
+        _ => None,
     }
 }
 

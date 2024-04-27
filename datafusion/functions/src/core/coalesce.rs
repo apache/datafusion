@@ -23,7 +23,6 @@ use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -41,7 +40,7 @@ impl Default for CoalesceFunc {
 impl CoalesceFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_equal(Volatility::Immutable),
+            signature: Signature::variadic_equal_or_null(Volatility::Immutable),
         }
     }
 }
@@ -60,9 +59,11 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // COALESCE has multiple args and they might get coerced, get a preview of this
-        let coerced_types = data_types(arg_types, self.signature());
-        coerced_types.map(|types| types[0].clone())
+        Ok(arg_types
+            .iter()
+            .find(|&t| t != &DataType::Null)
+            .unwrap_or(&DataType::Null)
+            .clone())
     }
 
     /// coalesce evaluates to the first value which is not NULL

@@ -92,7 +92,7 @@ pub enum TypeSignature {
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
     /// One or more arguments of an arbitrary but equal type.
-    /// DataFusion attempts to coerce all argument types to match the first argument's type
+    /// DataFusion attempts to coerce all argument types to match to the common type with comparision coercion.
     ///
     /// # Examples
     /// Given types in signature should be coercible to the same final type.
@@ -100,6 +100,11 @@ pub enum TypeSignature {
     ///
     /// `make_array(i32, i64) -> make_array(i64, i64)`
     VariadicEqual,
+    /// One or more arguments of an arbitrary but equal type or Null.
+    /// No coercion is attempted.
+    ///
+    /// Functions like `coalesce` is `VariadicEqual`.
+    VariadicEqualOrNull,
     /// One or more arguments with arbitrary types
     VariadicAny,
     /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
@@ -193,6 +198,9 @@ impl TypeSignature {
             TypeSignature::VariadicEqual => {
                 vec!["CoercibleT, .., CoercibleT".to_string()]
             }
+            TypeSignature::VariadicEqualOrNull => {
+                vec!["T or Null, .., T or Null".to_string()]
+            }
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
@@ -226,6 +234,11 @@ impl TypeSignature {
             _ => false,
         }
     }
+
+    /// Skip coercion to match the signature.
+    pub fn skip_coercion(&self) -> bool {
+        matches!(self, TypeSignature::VariadicEqualOrNull)
+    }
 }
 
 /// Defines the supported argument types ([`TypeSignature`]) and [`Volatility`] for a function.
@@ -255,10 +268,17 @@ impl Signature {
             volatility,
         }
     }
-    /// An arbitrary number of arguments of the same type.
+    /// One or more number of arguments to the same type.
     pub fn variadic_equal(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicEqual,
+            volatility,
+        }
+    }
+    /// One or more number of arguments of the same type.
+    pub fn variadic_equal_or_null(volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::VariadicEqualOrNull,
             volatility,
         }
     }
