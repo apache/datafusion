@@ -1187,11 +1187,11 @@ DataFusion error: Error during planning: No function matches the given name and 
 	coalesce(T or Null, .., T or Null)
 
 
-# first non-null value is int32, but there is mixed types with value null, this should be error too.
-# expect `skip_coercion` works
 statement ok
 create table t1 (a bigint, b int, c int) as values (null, null, 1), (null, 2, null);
 
+# first non-null value is int32, but there are mixed types (i64, i32, i32), so error is expected
+# This test also validate `skip_coercion` works, without skipping, i32 is coerced to i64 and signature error is not thrown
 query error
 select coalesce(a, b, c) from t1;
 ----
