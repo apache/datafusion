@@ -117,7 +117,19 @@ pub mod udaf {
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str
+    where
+        Self: Sized,
+    {
+        Self::static_name()
+    }
+
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
+    fn static_name() -> &'static str
+    where
+        Self: Sized,
+    {
         let full_name = std::any::type_name::<Self>();
         let maybe_start_idx = full_name.rfind(':');
         match maybe_start_idx {
@@ -125,6 +137,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             None => "UNKNOWN",
         }
     }
+
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -873,7 +886,10 @@ mod tests {
     }
 
     impl ExecutionPlan for RenamedEmptyExec {
-        fn name(&self) -> &'static str {
+        fn static_name() -> &'static str
+        where
+            Self: Sized,
+        {
             "MyRenamedEmptyExec"
         }
 
