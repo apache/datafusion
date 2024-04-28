@@ -934,6 +934,7 @@ mod tests {
         let schema2 = Arc::new(Schema::empty());
         let renamed_exec = RenamedEmptyExec::new(schema2);
         assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
+        assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
     }
 }
 
