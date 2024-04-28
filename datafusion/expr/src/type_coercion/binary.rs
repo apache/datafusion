@@ -17,6 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::Operator;
@@ -29,8 +30,6 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
-
-use super::functions::coerced_from;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -291,15 +290,16 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 enum TypeCategory {
     Array,
     Boolean,
     Numeric,
-    String,
+    // String, well-defined type, but are considered as unknown type.
     DateTime,
     Composite,
     Unknown,
+    NotSupported,
 }
 
 fn data_type_category(data_type: &DataType) -> TypeCategory {
@@ -318,8 +318,10 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
         return TypeCategory::Array;
     }
 
-    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8) {
-        return TypeCategory::String;
+    // String literal is possible to cast to many other types like numeric or datetime,
+    // therefore, it is categorized as a unknown type
+    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8 | DataType::Null) {
+        return TypeCategory::Unknown;
     }
 
     if matches!(
@@ -342,7 +344,7 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
         return TypeCategory::Composite;
     }
 
-    TypeCategory::Unknown
+    TypeCategory::NotSupported
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of constructs including
@@ -369,10 +371,16 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
         .filter(|&t| t != &DataType::Null)
         .map(data_type_category)
         .collect();
-    if data_types_category
+    
+    if data_types_category.iter().any(|t| t == &TypeCategory::NotSupported) {
+        return None;
+    }
+
+    // check if there is only one category excluding Unknown
+    let categories : HashSet<TypeCategory>= HashSet::from_iter(data_types_category
         .iter()
-        .any(|t| t != &data_types_category[0])
-    {
+        .filter(|&c|c != &TypeCategory::Unknown).cloned());
+    if categories.len() > 1 {
         return None;
     }
 
@@ -383,27 +391,66 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-            // We need to find a new possible candidate type that candidate type is able to
-            // coerced to, but NOT vice versa, so uni-directional coercion `coerced_from` is required
-            if let Some(t) = coerced_from(data_type, candidate_t) {
-                candidate_type = Some(t);
-            } else if let Some(t) = coerced_from(candidate_t, data_type) {
-                // The reason why we check another direction is that:
-                // 1. Ensure that current type is able to coerced to candidate type
-                // 2. Coerced type may be different from the candidate and current data type
-                // For example, I64 and Decimal(7, 2) are expect to get coerced type Decimal(22, 2)
 
+            if let Some(t) = type_resolution_coercion(data_type, candidate_t) {
                 candidate_type = Some(t);
             } else {
-                // Not coercible, return None
                 return None;
-            }
+            } 
+
+            // // We need to find a new possible candidate type that candidate type is able to
+            // // coerced to, but NOT vice versa, so uni-directional coercion `coerced_from` is required
+            // if let Some(t) = coerced_from(data_type, candidate_t) {
+            //     candidate_type = Some(t);
+            // } else if let Some(t) = coerced_from(candidate_t, data_type) {
+            //     // The reason why we check another direction is that:
+            //     // 1. Ensure that current type is able to coerced to candidate type
+            //     // 2. Coerced type may be different from the candidate and current data type
+            //     // For example, I64 and Decimal(7, 2) are expect to get coerced type Decimal(22, 2)
+
+            //     candidate_type = Some(t);
+            // } else {
+            //     // Not coercible, return None
+            //     return None;
+            // }
         } else {
             candidate_type = Some(data_type.clone());
         }
     }
 
+    println!("candidate_type: {:?}", candidate_type);
+
     candidate_type
+}
+
+fn type_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    if lhs_type == rhs_type {
+        return Some(lhs_type.clone());
+    }
+    
+    if let Some(t) = binary_numeric_coercion(lhs_type, rhs_type) {
+        return Some(t);
+    }
+
+    match (lhs_type, rhs_type) {
+        // (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
+        //     decimal_coercion(lhs_type, rhs_type)
+        // }
+        // (Decimal128(_, _) | Decimal256(_, _), other_type)
+        // | (other_type, Decimal128(_, _) | Decimal256(_, _))
+        //     if matches!(other_type, Int8 | Int16 | Int32 | Int64) =>
+        // {
+        //     decimal_coercion(lhs_type, rhs_type)
+        // }
+        (data_type, Utf8 | LargeUtf8) |
+        (Utf8 | LargeUtf8, data_type) if data_type.is_numeric() => {
+            // let arrow_cast handle the actual casting
+            Some(data_type.clone())
+        }
+        // numeric types
+        _ => None,
+    }
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -414,7 +461,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
-    comparison_binary_numeric_coercion(lhs_type, rhs_type)
+    binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -478,9 +525,8 @@ fn string_temporal_coercion(
     match_rule(lhs_type, rhs_type).or_else(|| match_rule(rhs_type, lhs_type))
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// where one both are numeric
-pub(crate) fn comparison_binary_numeric_coercion(
+/// Coerce `lhs_type` and `rhs_type` to a common type where both are numeric
+pub(crate) fn binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

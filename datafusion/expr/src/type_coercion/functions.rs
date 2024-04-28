@@ -185,7 +185,9 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::VariadicEqualOrNull => {
+            println!("current_types: {:?}", current_types);
             if let Some(common_type) = type_resolution(current_types) {
+                println!("common_Type: {:?}", common_type);
                 vec![vec![common_type; current_types.len()]]
             } else {
                 vec![]
@@ -281,6 +283,9 @@ fn maybe_data_types(
         return None;
     }
 
+    println!("current_types: {:?}", current_types);
+    println!("valid_types: {:?}", valid_types);
+
     let mut new_type = Vec::with_capacity(valid_types.len());
     for (i, valid_type) in valid_types.iter().enumerate() {
         let current_type = &current_types[i];
@@ -289,12 +294,21 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
-            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
-                new_type.push(coerced_type)
+
+            if can_cast_types(current_type, valid_type) {
+                new_type.push(valid_type.clone());
+                
             } else {
                 // not possible
                 return None;
             }
+
+            // if let Some(coerced_type) = coerced_from(valid_type, current_type) {
+            //     new_type.push(coerced_type)
+            // } else {
+            //     // not possible
+            //     return None;
+            // }
         }
     }
     Some(new_type)

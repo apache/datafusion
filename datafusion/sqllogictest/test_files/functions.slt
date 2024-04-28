@@ -1377,8 +1377,14 @@ SELECT COALESCE(c1, c2) FROM test
 NULL
 
 # int and string are not coercible
-query error
+query I
 SELECT COALESCE(c1, c2, '-1') FROM test;
+----
+0
+1
+1
+1
+-1
 
 statement ok
 drop table test
