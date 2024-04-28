@@ -383,5 +383,8 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 5 3
 11 NULL
 
+query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
+select sum(unnest(generate_series(1,10)));
+
 statement ok
 drop table unnest_table;
