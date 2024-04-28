@@ -61,8 +61,9 @@ impl ScalarUDFImpl for CoalesceFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if let Some(common_type) = type_resolution(arg_types) {
-            println!("args: {:?}", arg_types);
-            println!("common_type: {:?}", common_type);
+            // println!("args: {:?}", arg_types);
+            // println!("common_type: {:?}", common_type);
+            // Ok(DataType::Decimal128(22, 2))
             return Ok(common_type);
         } else {
             return internal_err!("Error should be thrown via signature validation");

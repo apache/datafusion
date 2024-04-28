@@ -383,13 +383,13 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-            println!("data_Type: {:?}", data_type);
-            println!("candidate_type: {:?}", candidate_t);
+            // println!("data_Type: {:?}", data_type);
+            // println!("candidate_type: {:?}", candidate_t);
+            // coerced_from is mostly uni-directional, so we need to check both directions
             if let Some(t) = coerced_from(data_type, candidate_t) {
-                // if let Some(t) = type_resolution_coercion(data_type, &candidate_type) {
                 candidate_type = Some(t);
-            } else if coerced_from(candidate_t, data_type).is_some() {
-                // keep the candidate type
+            } else if let Some(t) = coerced_from(candidate_t, data_type) {
+                candidate_type = Some(t);
             } else {
                 // Not coercible, return None
                 return None;

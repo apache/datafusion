@@ -1241,19 +1241,20 @@ NULL
 statement ok
 drop table t1;
 
+# Decimal128(7, 2) and int64 are coerced to common wider type Decimal128(22, 2)
 query RT
 select 
   coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0))
 ----
-2 Decimal128(7, 2)
+2 Decimal128(22, 2)
 
 query RT
 select 
   coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0));
 ----
-2 Decimal256(7, 2)
+2 Decimal256(22, 2)
 
 # coalesce static empty value
 query T
@@ -1267,7 +1268,6 @@ SELECT COALESCE(NULL, 'test')
 ----
 test
 
-
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
 
@@ -1280,6 +1280,13 @@ DataFusion error: Error during planning: No function matches the given name and 
 	coalesce(T or Null, .., T or Null)
 
 
+# explicit cast to Utf8
+query T
+select coalesce(arrow_cast(column1, 'Utf8'), 'none_set') from test1;
+----
+foo
+none_set
+
 # test coercion Int
 query error
 select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
@@ -1288,6 +1295,14 @@ DataFusion error: Error during planning: No function matches the given name and 
 	Candidate functions:
 	coalesce(T or Null, .., T or Null)
 
+
+# explicit cast to Int8, and it will implicitly cast to Int64
+query IT
+select 
+  coalesce(arrow_cast(123, 'Int8'), 34),
+  arrow_typeof(coalesce(arrow_cast(123, 'Int8'), 34));
+----
+123 Int64
 
 # test with Int
 query error
