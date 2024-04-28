@@ -54,12 +54,7 @@ pub fn data_types(
         }
     }
 
-    println!("current_types: {:?}", current_types);
-    println!("type_signature: {:?}", &signature.type_signature);
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
-
-    println!("valid_types: {:?}", valid_types);
-
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -67,15 +62,11 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    println!("valid_types: {:?}", valid_types);
-
-    if true {
-        // Try and coerce the argument types to match the signature, returning the
-        // coerced types from the first matching signature.
-        for valid_types in valid_types {
-            if let Some(types) = maybe_data_types(&valid_types, current_types) {
-                return Ok(types);
-            }
+    // Try and coerce the argument types to match the signature, returning the
+    // coerced types from the first matching signature.
+    for valid_types in valid_types {
+        if let Some(types) = maybe_data_types(&valid_types, current_types) {
+            return Ok(types);
         }
     }
 
@@ -199,26 +190,6 @@ fn get_valid_types(
             } else {
                 vec![]
             }
-
-            // current_types
-            //     .iter()
-            //     .find(|&t| t != &DataType::Null)
-            //     .map_or_else(
-            //         || vec![vec![DataType::Null; current_types.len()]],
-            //         |t| {
-            //             let valid_types = current_types
-            //                 .iter()
-            //                 .map(|d| {
-            //                     if d != &DataType::Null {
-            //                         t.clone()
-            //                     } else {
-            //                         DataType::Null
-            //                     }
-            //                 })
-            //                 .collect::<Vec<_>>();
-            //             vec![valid_types]
-            //         },
-            //     )
         }
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
@@ -343,6 +314,8 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     false
 }
 
+/// Coerced_from implicitly casts between types.
+/// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
 pub(crate) fn coerced_from<'a>(
     type_into: &'a DataType,
     type_from: &'a DataType,
@@ -362,10 +335,6 @@ pub(crate) fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // coerce decimal
-        // (Decimal128(_, _) | Decimal256(_, _), Null) => {
-        //     Some(type_into.clone())
-        // }
         (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
             decimal_coercion(type_into, type_from)
         }
@@ -499,12 +468,6 @@ pub(crate) fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // (Decimal128(_, _), _) if matches!(type_from, Null | Int8 | Int16 | Int32 | Int64) => {
-        //     Some(type_into.clone())
-        // }
-        // (Decimal256(_, _), _) if matches!(type_from, Null | Int8 | Int16 | Int32 | Int64) => {
-        //     Some(type_into.clone())
-        // }
         _ => None,
     }
 }

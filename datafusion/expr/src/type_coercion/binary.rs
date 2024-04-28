@@ -342,12 +342,12 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
         return TypeCategory::Composite;
     }
 
-    return TypeCategory::Unknown;
+    TypeCategory::Unknown
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of constructs including
 /// CASE, ARRAY, VALUES, and the GREATEST and LEAST functions.
-/// See https://www.postgresql.org/docs/current/typeconv-union-case.html for more information.
+/// See <https://www.postgresql.org/docs/current/typeconv-union-case.html> for more information.
 pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -383,8 +383,6 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-            // println!("data_Type: {:?}", data_type);
-            // println!("candidate_type: {:?}", candidate_t);
             // coerced_from is mostly uni-directional, so we need to check both directions
             if let Some(t) = coerced_from(data_type, candidate_t) {
                 candidate_type = Some(t);
@@ -399,25 +397,11 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
         }
     }
 
-    println!("candidate_type: {:?}", candidate_type);
-
     candidate_type
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of type resolution
-/// Unlike [comparison_coercion], usually the coerced type is more `wider`.
-// fn type_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-//     if lhs_type == rhs_type {
-//         // same type => all good
-//         return Some(lhs_type.clone());
-//     }
-
-//     // binary numeric is able to reuse
-//     comparison_binary_numeric_coercion(lhs_type, rhs_type)
-// }
-
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// Unlike [type_resolution_coercion], usually the coerced type is for comparison only.
+/// Unlike [coerced_from], usually the coerced type is for comparison only.
 /// For example, compare with Dictionary and Dictionary, only value type is what we care about
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {

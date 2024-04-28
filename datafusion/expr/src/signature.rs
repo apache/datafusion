@@ -104,6 +104,9 @@ pub enum TypeSignature {
     /// No coercion is attempted.
     ///
     /// Functions like `coalesce` is `VariadicEqual`.
+    // TODO: Temporary Signature, to differentiate existing VariadicEqual.
+    // After we swtich `make_array` to VariadicEqualOrNull,
+    // we can reuse VariadicEqual.
     VariadicEqualOrNull,
     /// One or more arguments with arbitrary types
     VariadicAny,
@@ -233,11 +236,6 @@ impl TypeSignature {
                 .any(|type_sig| type_sig.supports_zero_argument()),
             _ => false,
         }
-    }
-
-    /// Skip coercion to match the signature.
-    pub(crate) fn skip_coercion(&self) -> bool {
-        matches!(self, TypeSignature::VariadicEqualOrNull)
     }
 }
 
