@@ -50,8 +50,6 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
-    // println!("return_type: {:?}", return_type);
-    // println!("input_expr_types: {:?}", input_expr_types);
     let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
