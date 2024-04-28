@@ -314,7 +314,11 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     false
 }
 
-/// Coerced_from implicitly casts between types.
+/// Find the coerced type for the given `type_into` and `type_from`.
+/// Returns `None` if coercion is not possible.
+///
+/// Expect uni-directional coercion, for example, i32 is coerced to i64, but i64 is not coerced to i32.
+///
 /// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
 pub(crate) fn coerced_from<'a>(
     type_into: &'a DataType,
@@ -362,12 +366,15 @@ pub(crate) fn coerced_from<'a>(
             Some(type_into.clone())
         }
         (UInt8, _) if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
+        (UInt8, _) if matches!(type_from, Null | Int8) => Some(Int16),
         (UInt16, _) if matches!(type_from, Null | UInt8 | UInt16) => {
             Some(type_into.clone())
         }
+        (UInt16, _) if matches!(type_from, Null | Int8 | Int16) => Some(Int32),
         (UInt32, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
             Some(type_into.clone())
         }
+        (UInt32, _) if matches!(type_from, Null | Int8 | Int16 | Int32) => Some(Int64),
         (UInt64, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
             Some(type_into.clone())
         }

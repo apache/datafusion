@@ -383,10 +383,16 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-            // `coerced_from` is designed uni-directional for `can_coerced_from` so we need to check both directions
+            // We need to find a new possible candidate type that candidate type is able to
+            // coerced to, but NOT vice versa, so uni-directional coercion `coerced_from` is required
             if let Some(t) = coerced_from(data_type, candidate_t) {
                 candidate_type = Some(t);
             } else if let Some(t) = coerced_from(candidate_t, data_type) {
+                // The reason why we check another direction is that:
+                // 1. Ensure that current type is able to coerced to candidate type
+                // 2. Coerced type may be different from the candidate and current data type
+                // For example, I64 and Decimal(7, 2) are expect to get coerced type Decimal(22, 2)
+
                 candidate_type = Some(t);
             } else {
                 // Not coercible, return None
@@ -987,7 +993,19 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 mod tests {
     use super::*;
 
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, ScalarValue};
+
+    #[test]
+    fn test_string_numeric() {
+        let a = ScalarValue::Utf8(Some(String::from("2")));
+        let dt = a.data_type();
+        let can_cast = can_cast_types(&dt, &DataType::Int32);
+        println!("{:?}", can_cast);
+        let a = ScalarValue::Utf8(Some(String::from("apple")));
+        let dt = a.data_type();
+        let can_cast = can_cast_types(&dt, &DataType::Int32);
+        println!("{:?}", can_cast);
+    }
 
     #[test]
     fn test_coercion_error() -> Result<()> {

@@ -1205,6 +1205,43 @@ select coalesce(arrow_cast(1, 'Int32'), arrow_cast(1, 'Int64'));
 ----
 1
 
+# i32 and u32, cast to wider type i64
+query IT
+select 
+  coalesce(arrow_cast(2, 'Int32'), arrow_cast(3, 'UInt32')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int32'), arrow_cast(3, 'UInt32')));
+----
+2 Int64
+
+query IT
+select
+  coalesce(arrow_cast(2, 'Int16'), arrow_cast(3, 'UInt16')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int16'), arrow_cast(3, 'UInt16')));
+----
+2 Int32
+
+query IT
+select
+  coalesce(arrow_cast(2, 'Int8'), arrow_cast(3, 'UInt8')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int8'), arrow_cast(3, 'UInt8')));
+----
+2 Int16
+
+# i64 and u32, cast to wider type i64
+query IT
+select 
+  coalesce(2, arrow_cast(3, 'UInt32')),
+  arrow_typeof(coalesce(2, arrow_cast(3, 'UInt32')));
+----
+2 Int64
+
+# TODO:
+# i64 and u64, should cast to i128 or decimal, not yet support
+query error
+select
+  coalesce(2, arrow_cast(3, 'UInt64')),
+  arrow_typeof(coalesce(2, arrow_cast(3, 'UInt64')));
+
 statement ok
 create table t1 (a bigint, b int, c int) as values (null, null, 1), (null, 2, null);
 
