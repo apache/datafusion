@@ -721,7 +721,7 @@ async fn csv_explain_analyze_order_by() {
     // Ensure that the ordering is not optimized away from the plan
     // https://github.com/apache/datafusion/issues/6379
     let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 
