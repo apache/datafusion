@@ -448,15 +448,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}"))
                         };
-                        
                         Ok(Arc::new(Field::new(
                             self.normalizer.normalize(field_name),
                             data_type,
-                            true, // TODO: confirm this 
+                            true,
                         )))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                    
                 Ok(DataType::Struct(Fields::from(fields)))
             }
             // Explicitly list all other types so that if sqlparser
