@@ -19,6 +19,8 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::internal_err;
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
@@ -56,29 +58,34 @@ use datafusion_expr::{Expr, LogicalPlan, Operator};
 ///
 /// ```sql
 /// where
-///   p_partkey = l_partkey
-///   and l_shipmode in (‘AIR’, ‘AIR REG’)
-///   and l_shipinstruct = ‘DELIVER IN PERSON’
-///   and (
 ///     (
+///       p_partkey = l_partkey
 ///       and p_brand = ‘[BRAND1]’
 ///       and p_container in ( ‘SM CASE’, ‘SM BOX’, ‘SM PACK’, ‘SM PKG’)
 ///       and l_quantity >= [QUANTITY1] and l_quantity <= [QUANTITY1] + 10
 ///       and p_size between 1 and 5
+///       and l_shipmode in (‘AIR’, ‘AIR REG’)
+///       and l_shipinstruct = ‘DELIVER IN PERSON’
 ///     )
 ///     or
 ///     (
+///       p_partkey = l_partkey
 ///       and p_brand = ‘[BRAND2]’
 ///       and p_container in (‘MED BAG’, ‘MED BOX’, ‘MED PKG’, ‘MED PACK’)
 ///       and l_quantity >= [QUANTITY2] and l_quantity <= [QUANTITY2] + 10
 ///       and p_size between 1 and 10
+///       and l_shipmode in (‘AIR’, ‘AIR REG’)
+///       and l_shipinstruct = ‘DELIVER IN PERSON’
 ///     )
 ///     or
 ///     (
+///       p_partkey = l_partkey
 ///       and p_brand = ‘[BRAND3]’
 ///       and p_container in ( ‘LG CASE’, ‘LG BOX’, ‘LG PACK’, ‘LG PKG’)
 ///       and l_quantity >= [QUANTITY3] and l_quantity <= [QUANTITY3] + 10
 ///       and p_size between 1 and 15
+///       and l_shipmode in (‘AIR’, ‘AIR REG’)
+///       and l_shipinstruct = ‘DELIVER IN PERSON’
 ///     )
 /// )
 /// ```
@@ -128,21 +135,10 @@ impl RewriteDisjunctivePredicate {
 impl OptimizerRule for RewriteDisjunctivePredicate {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(filter) => {
-                let predicate = predicate(&filter.predicate)?;
-                let rewritten_predicate = rewrite_predicate(predicate);
-                let rewritten_expr = normalize_predicate(rewritten_predicate);
-                Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                    rewritten_expr,
-                    filter.input.clone(),
-                )?)))
-            }
-            _ => Ok(None),
-        }
+        internal_err!("Should have called RewriteDisjunctivePredicate::rewrite")
     }
 
     fn name(&self) -> &str {
@@ -151,6 +147,29 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        match plan {
+            LogicalPlan::Filter(filter) => {
+                let predicate = predicate(filter.predicate)?;
+                let rewritten_predicate = rewrite_predicate(predicate);
+                let rewritten_expr = normalize_predicate(rewritten_predicate);
+                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                    rewritten_expr,
+                    filter.input,
+                )?)))
+            }
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 }
 
@@ -161,27 +180,23 @@ enum Predicate {
     Other { expr: Box<Expr> },
 }
 
-fn predicate(expr: &Expr) -> Result<Predicate> {
+fn predicate(expr: Expr) -> Result<Predicate> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::And => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                let args = vec![predicate(*left)?, predicate(*right)?];
                 Ok(Predicate::And { args })
             }
             Operator::Or => {
-                let args = vec![predicate(left)?, predicate(right)?];
+                let args = vec![predicate(*left)?, predicate(*right)?];
                 Ok(Predicate::Or { args })
             }
             _ => Ok(Predicate::Other {
-                expr: Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    left.clone(),
-                    *op,
-                    right.clone(),
-                ))),
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr::new(left, op, right))),
             }),
         },
         _ => Ok(Predicate::Other {
-            expr: Box::new(expr.clone()),
+            expr: Box::new(expr),
         }),
     }
 }
@@ -210,8 +225,8 @@ fn rewrite_predicate(predicate: Predicate) -> Predicate {
     match predicate {
         Predicate::And { args } => {
             let mut rewritten_args = Vec::with_capacity(args.len());
-            for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg.clone()));
+            for arg in args.into_iter() {
+                rewritten_args.push(rewrite_predicate(arg));
             }
             rewritten_args = flatten_and_predicates(rewritten_args);
             Predicate::And {
@@ -220,8 +235,8 @@ fn rewrite_predicate(predicate: Predicate) -> Predicate {
         }
         Predicate::Or { args } => {
             let mut rewritten_args = vec![];
-            for arg in args.iter() {
-                rewritten_args.push(rewrite_predicate(arg.clone()));
+            for arg in args.into_iter() {
+                rewritten_args.push(rewrite_predicate(arg));
             }
             rewritten_args = flatten_or_predicates(rewritten_args);
             delete_duplicate_predicates(&rewritten_args)
@@ -373,7 +388,7 @@ mod tests {
             and(equi_expr.clone(), gt_expr.clone()),
             and(equi_expr.clone(), lt_expr.clone()),
         );
-        let predicate = predicate(&expr)?;
+        let predicate = predicate(expr)?;
         assert_eq!(
             predicate,
             Predicate::Or {
