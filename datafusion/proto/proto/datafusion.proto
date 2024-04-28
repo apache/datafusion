@@ -389,6 +389,7 @@ message LogicalExprNode {
     NegativeNode negative = 13;
     InListNode in_list = 14;
     Wildcard wildcard = 15;
+    // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
     // window expressions
@@ -1310,12 +1311,13 @@ message PhysicalExprNode {
     PhysicalSortExprNode sort = 10;
     PhysicalNegativeNode negative = 11;
     PhysicalInListNode in_list = 12;
+    //  was PhysicalScalarFunctionNode scalar_function = 13;
     PhysicalTryCastNode try_cast = 14;
-
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
 
     PhysicalScalarUdfNode scalar_udf = 16;
+    // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
   }
