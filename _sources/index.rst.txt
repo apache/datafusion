@@ -113,4 +113,5 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    contributor-guide/architecture
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
+   contributor-guide/governance
    contributor-guide/specification/index
