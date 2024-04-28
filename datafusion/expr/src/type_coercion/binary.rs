@@ -532,7 +532,8 @@ pub(crate) fn comparison_binary_numeric_coercion(
     }
 }
 
-pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+/// Decimal coercion rules.
+pub(crate) fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
@@ -540,20 +541,19 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         (Decimal128(_, _), Decimal128(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (Decimal128(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal128(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
         (Decimal256(_, _), Decimal256(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (Decimal256(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal256(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
         (_, _) => None,
     }
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of
-/// a comparison operation where one is a decimal
-fn get_comparison_common_decimal_type(
+/// Coerce `lhs_type` and `rhs_type` to a common type.
+fn get_common_decimal_type(
     decimal_type: &DataType,
     other_type: &DataType,
 ) -> Option<DataType> {

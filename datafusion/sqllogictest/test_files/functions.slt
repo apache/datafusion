@@ -1178,14 +1178,26 @@ select coalesce(null, null);
 ----
 NULL
 
+# cast to float
+query RT
+select 
+  coalesce(1, 2.0),
+  arrow_typeof(coalesce(1, 2.0))
+;
+----
+1 Float64
+
+query RT
+select 
+  coalesce(1, arrow_cast(2.0, 'Float32')),
+  arrow_typeof(coalesce(1, arrow_cast(2.0, 'Float32')))
+;
+----
+1 Float32
+
 # test with empty args
 query error
 select coalesce();
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce()'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
-
 
 # test with different types
 query I
@@ -1271,14 +1283,12 @@ test
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
 
-# test coercion string
+# Dictionary and String are not coercible
 query error
 select coalesce(column1, 'none_set') from test1;
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Dictionary(Int32, Utf8), Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
+query error
+select coalesce(null, column1, 'none_set') from test1;
 
 # explicit cast to Utf8
 query T
@@ -1287,14 +1297,18 @@ select coalesce(arrow_cast(column1, 'Utf8'), 'none_set') from test1;
 foo
 none_set
 
-# test coercion Int
+statement ok
+drop table test1
+
+# Numeric and Dictionary are not coercible
 query error
 select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Int64, Dictionary(Int32, Int8))'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
+query error
+select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
+
+query error
+select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 
 # explicit cast to Int8, and it will implicitly cast to Int64
 query IT
@@ -1303,37 +1317,6 @@ select
   arrow_typeof(coalesce(arrow_cast(123, 'Int8'), 34));
 ----
 123 Int64
-
-# test with Int
-query error
-select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Dictionary(Int32, Int8), Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
-
-
-# test with null
-query error
-select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Null, Int64, Dictionary(Int32, Int8))'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
-
-
-# test with null
-query error
-select  coalesce(null, column1, 'none_set') from test1;
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Null, Dictionary(Int32, Utf8), Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
-
-
-statement ok
-drop table test1
-
 
 statement ok
 CREATE TABLE test(
@@ -1356,14 +1339,9 @@ SELECT COALESCE(c1, c2) FROM test
 1
 NULL
 
-# coalesce result with default value
+# int and string are not coercible
 query error
-SELECT COALESCE(c1, c2, '-1') FROM test
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Int32, Int32, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
-
+SELECT COALESCE(c1, c2, '-1') FROM test;
 
 statement ok
 drop table test
