@@ -101,7 +101,7 @@ pub enum TypeSignature {
     /// `make_array(i32, i64) -> make_array(i64, i64)`
     VariadicEqual,
     /// One or more arguments of an arbitrary but equal type or Null.
-    /// No coercion is attempted.
+    /// Non-comparison coercion is attempted to match the signatures.
     ///
     /// Functions like `coalesce` is `VariadicEqual`.
     // TODO: Temporary Signature, to differentiate existing VariadicEqual.
