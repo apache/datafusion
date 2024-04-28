@@ -1158,4 +1158,3 @@ drop table uuid_table
 
 statement ok
 drop table t
-
