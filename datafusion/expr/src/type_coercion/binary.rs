@@ -533,7 +533,10 @@ pub(crate) fn comparison_binary_numeric_coercion(
 }
 
 /// Decimal coercion rules.
-pub(crate) fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub(crate) fn decimal_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
