@@ -446,13 +446,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let data_type = self.convert_data_type(&field.field_type)?;
                         let field_name = match &field.field_name{
                             Some(ident) => ident.clone(),
-                            None => Ident::new(format!("col{idx}"))
+                            None => Ident::new(format!("c{idx}"))
                         };
                         
                         Ok(Arc::new(Field::new(
                             self.normalizer.normalize(field_name),
                             data_type,
-                            false, // TODO: confirm this 
+                            true, // TODO: confirm this 
                         )))
                     })
                     .collect::<Result<Vec<_>>>()?;

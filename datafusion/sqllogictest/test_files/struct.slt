@@ -31,10 +31,12 @@ CREATE TABLE values(
   (3, 3.3, 'c', NULL)
 ;
 
+
+# named and named less struct fields
 statement ok
-CREATE TABLE toai(
-    s1 struct<int>,
-    s2 struct<a int,b varchar>
+CREATE TABLE struct_values (
+    s1 struct<INT>,
+    s2 struct<a INT,b VARCHAR>
 ) AS VALUES
   (struct(1), struct(1, 'string1')),
   (struct(2), struct(2, 'string2')),
@@ -42,11 +44,18 @@ CREATE TABLE toai(
 ;
 
 query ??
-select * from toai;
----
-{col0: 1} {a: 1, b: string1}
-{col0: 2} {a: 2, b: string2}
-{col0: 3} {a: 3, b: string3}
+select * from struct_values;
+----
+{c0: 1} {a: 1, b: string1}
+{c0: 2} {a: 2, b: string2}
+{c0: 3} {a: 3, b: string3}
+
+query TT
+select arrow_typeof(s1), arrow_typeof(s2) from struct_values;
+----
+Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 
 # struct[i]
