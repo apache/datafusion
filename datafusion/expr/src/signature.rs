@@ -202,7 +202,7 @@ impl TypeSignature {
                 vec!["CoercibleT, .., CoercibleT".to_string()]
             }
             TypeSignature::VariadicEqualOrNull => {
-                vec!["T or Null, .., T or Null".to_string()]
+                vec!["CoercibleT or NULL, .., CoercibleT or NULL".to_string()]
             }
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {

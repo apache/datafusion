@@ -383,7 +383,7 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-            // coerced_from is mostly uni-directional, so we need to check both directions
+            // `coerced_from` is designed uni-directional for `can_coerced_from` so we need to check both directions
             if let Some(t) = coerced_from(data_type, candidate_t) {
                 candidate_type = Some(t);
             } else if let Some(t) = coerced_from(candidate_t, data_type) {

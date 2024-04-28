@@ -1184,7 +1184,7 @@ select coalesce();
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce()'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 # test with different types
@@ -1277,7 +1277,7 @@ select coalesce(column1, 'none_set') from test1;
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Dictionary(Int32, Utf8), Utf8)'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 # explicit cast to Utf8
@@ -1293,7 +1293,7 @@ select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Int64, Dictionary(Int32, Int8))'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 # explicit cast to Int8, and it will implicitly cast to Int64
@@ -1310,7 +1310,7 @@ select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Dictionary(Int32, Int8), Int64)'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 # test with null
@@ -1319,7 +1319,7 @@ select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Null, Int64, Dictionary(Int32, Int8))'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 # test with null
@@ -1328,7 +1328,7 @@ select  coalesce(null, column1, 'none_set') from test1;
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Null, Dictionary(Int32, Utf8), Utf8)'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 statement ok
@@ -1362,7 +1362,7 @@ SELECT COALESCE(c1, c2, '-1') FROM test
 ----
 DataFusion error: Error during planning: No function matches the given name and argument types 'coalesce(Int32, Int32, Utf8)'. You might need to add explicit type casts.
 	Candidate functions:
-	coalesce(T or Null, .., T or Null)
+	coalesce(CoercibleT or NULL, .., CoercibleT or NULL)
 
 
 statement ok

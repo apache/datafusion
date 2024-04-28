@@ -447,7 +447,6 @@ pub(crate) fn coerced_from<'a>(
             }
             _ => None,
         },
-
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {

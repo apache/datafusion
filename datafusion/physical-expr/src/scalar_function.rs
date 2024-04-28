@@ -129,7 +129,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        println!("self.return_type: {:?}", self.return_type);
         Ok(self.return_type.clone())
     }
 

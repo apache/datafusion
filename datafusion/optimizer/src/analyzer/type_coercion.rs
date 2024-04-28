@@ -559,7 +559,6 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()?;
 
     let new_types = data_types(&current_types, signature)?;
-    println!("new_types: {:?}", new_types);
 
     expressions
         .into_iter()
