@@ -22,7 +22,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::type_coercion::binary::type_resolution;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -59,11 +60,19 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types
-            .iter()
-            .find(|&t| t != &DataType::Null)
-            .unwrap_or(&DataType::Null)
-            .clone())
+        if let Some(common_type) = type_resolution(arg_types) {
+            println!("args: {:?}", arg_types);
+            println!("common_type: {:?}", common_type);
+            return Ok(common_type);
+        } else {
+            return internal_err!("Error should be thrown via signature validation");
+        }
+
+        // Ok(arg_types
+        //     .iter()
+        //     .find(|&t| t != &DataType::Null)
+        //     .unwrap_or(&DataType::Null)
+        //     .clone())
     }
 
     /// coalesce evaluates to the first value which is not NULL

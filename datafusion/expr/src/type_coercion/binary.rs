@@ -30,6 +30,8 @@ use arrow::datatypes::{
 
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
+use super::functions::coerced_from;
+
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
 ///
@@ -289,7 +291,134 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TypeCategory {
+    Array,
+    Boolean,
+    Numeric,
+    String,
+    DateTime,
+    Composite,
+    Unknown,
+}
+
+fn data_type_category(data_type: &DataType) -> TypeCategory {
+    if data_type.is_numeric() {
+        return TypeCategory::Numeric;
+    }
+
+    if matches!(data_type, DataType::Boolean) {
+        return TypeCategory::Boolean;
+    }
+
+    if matches!(
+        data_type,
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_)
+    ) {
+        return TypeCategory::Array;
+    }
+
+    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8) {
+        return TypeCategory::String;
+    }
+
+    if matches!(
+        data_type,
+        DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Interval(_)
+            | DataType::Duration(_)
+    ) {
+        return TypeCategory::DateTime;
+    }
+
+    if matches!(
+        data_type,
+        DataType::Dictionary(_, _) | DataType::Struct(_) | DataType::Union(_, _)
+    ) {
+        return TypeCategory::Composite;
+    }
+
+    return TypeCategory::Unknown;
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of constructs including
+/// CASE, ARRAY, VALUES, and the GREATEST and LEAST functions.
+/// See https://www.postgresql.org/docs/current/typeconv-union-case.html for more information.
+pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
+    if data_types.is_empty() {
+        return None;
+    }
+
+    // if all the data_types is the same return first one
+    if data_types.iter().all(|t| t == &data_types[0]) {
+        return Some(data_types[0].clone());
+    }
+
+    // if all the data_types are null, return string
+    if data_types.iter().all(|t| t == &DataType::Null) {
+        return Some(DataType::Utf8);
+    }
+
+    // Ignore Nulls, if any data_type category is not the same, return None
+    let data_types_category: Vec<TypeCategory> = data_types
+        .iter()
+        .filter(|&t| t != &DataType::Null)
+        .map(data_type_category)
+        .collect();
+    if data_types_category
+        .iter()
+        .any(|t| t != &data_types_category[0])
+    {
+        return None;
+    }
+
+    // Ignore Nulls
+    let mut candidate_type: Option<DataType> = None;
+    for data_type in data_types.iter() {
+        if data_type == &DataType::Null {
+            continue;
+        }
+        if let Some(ref candidate_t) = candidate_type {
+            println!("data_Type: {:?}", data_type);
+            println!("candidate_type: {:?}", candidate_t);
+            if let Some(t) = coerced_from(data_type, candidate_t) {
+                // if let Some(t) = type_resolution_coercion(data_type, &candidate_type) {
+                candidate_type = Some(t);
+            } else if coerced_from(candidate_t, data_type).is_some() {
+                // keep the candidate type
+            } else {
+                // Not coercible, return None
+                return None;
+            }
+        } else {
+            candidate_type = Some(data_type.clone());
+        }
+    }
+
+    println!("candidate_type: {:?}", candidate_type);
+
+    candidate_type
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of type resolution
+/// Unlike [comparison_coercion], usually the coerced type is more `wider`.
+// fn type_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+//     if lhs_type == rhs_type {
+//         // same type => all good
+//         return Some(lhs_type.clone());
+//     }
+
+//     // binary numeric is able to reuse
+//     comparison_binary_numeric_coercion(lhs_type, rhs_type)
+// }
+
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// Unlike [type_resolution_coercion], usually the coerced type is for comparison only.
+/// For example, compare with Dictionary and Dictionary, only value type is what we care about
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -375,20 +504,13 @@ pub(crate) fn comparison_binary_numeric_coercion(
         return Some(lhs_type.clone());
     }
 
+    if let Some(t) = decimal_coercion(lhs_type, rhs_type) {
+        return Some(t);
+    }
+
     // these are ordered from most informative to least informative so
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
-        // Prefer decimal data type over floating point for comparison operation
-        (Decimal128(_, _), Decimal128(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
-        }
-        (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
-        }
-        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
@@ -423,6 +545,25 @@ pub(crate) fn comparison_binary_numeric_coercion(
         (Int8, _) | (_, Int8) => Some(Int8),
         (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
+    }
+}
+
+pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
+        // Prefer decimal data type over floating point for comparison operation
+        (Decimal128(_, _), Decimal128(_, _)) => {
+            get_wider_decimal_type(lhs_type, rhs_type)
+        }
+        (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            get_wider_decimal_type(lhs_type, rhs_type)
+        }
+        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (_, _) => None,
     }
 }
 
