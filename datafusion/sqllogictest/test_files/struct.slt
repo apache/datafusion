@@ -31,6 +31,24 @@ CREATE TABLE values(
   (3, 3.3, 'c', NULL)
 ;
 
+statement ok
+CREATE TABLE toai(
+    s1 struct<int>,
+    s2 struct<a int,b varchar>
+) AS VALUES
+  (struct(1), struct(1, 'string1')),
+  (struct(2), struct(2, 'string2')),
+  (struct(3), struct(3, 'string3'))
+;
+
+query ??
+select * from toai;
+---
+{col0: 1} {a: 1, b: string1}
+{col0: 2} {a: 2, b: string2}
+{col0: 3} {a: 3, b: string3}
+
+
 # struct[i]
 query IRT
 select struct(1, 3.14, 'h')['c0'], struct(3, 2.55, 'b')['c1'], struct(2, 6.43, 'a')['c2'];
