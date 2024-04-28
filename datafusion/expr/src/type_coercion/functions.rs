@@ -184,6 +184,9 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::Equal(number) => {
+            vec![vec![current_types[0].clone(); *number]]
+        }
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),

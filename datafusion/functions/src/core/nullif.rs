@@ -59,11 +59,7 @@ impl Default for NullIfFunc {
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                SUPPORTED_NULLIF_TYPES.to_vec(),
-                Volatility::Immutable,
-            ),
+            signature: Signature::equal(2, Volatility::Immutable),
         }
     }
 }

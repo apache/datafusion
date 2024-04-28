@@ -56,11 +56,7 @@ impl Default for NVLFunc {
 impl NVLFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                SUPPORTED_NVL_TYPES.to_vec(),
-                Volatility::Immutable,
-            ),
+            signature: Signature::equal(2, Volatility::Immutable),
             aliases: vec![String::from("ifnull")],
         }
     }

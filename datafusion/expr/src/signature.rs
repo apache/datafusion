@@ -108,6 +108,8 @@ pub enum TypeSignature {
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
     /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
+    /// Exact number of arguments of for the first argument of a list of valid types.
+    Equal(usize),
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
     /// Fixed number of arguments of arbitrary types
@@ -183,6 +185,12 @@ impl TypeSignature {
             }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
+            }
+            TypeSignature::Equal(arg_count) => {
+                vec![std::iter::repeat("Type")
+                    .take(*arg_count)
+                    .collect::<Vec<&str>>()
+                    .join(", ")]
             }
             TypeSignature::Any(arg_count) => {
                 vec![std::iter::repeat("Any")
@@ -277,6 +285,13 @@ impl Signature {
     ) -> Self {
         Self {
             type_signature: TypeSignature::Uniform(arg_count, valid_types),
+            volatility,
+        }
+    }
+    ///
+    pub fn equal(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Equal(arg_count),
             volatility,
         }
     }
