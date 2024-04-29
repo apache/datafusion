@@ -1213,6 +1213,12 @@ select coalesce(arrow_cast(1, 'Int32'), arrow_cast(1, 'Int64'));
 ----
 1
 
+# test with nulls
+query ?T
+select coalesce(null, null, null), arrow_typeof(coalesce(null, null));
+----
+NULL Null
+
 # i32 and u32, cast to wider type i64
 query IT
 select 
