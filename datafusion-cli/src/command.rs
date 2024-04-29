@@ -58,9 +58,9 @@ impl Command {
         ctx: &mut SessionContext,
         print_options: &mut PrintOptions,
     ) -> Result<()> {
-        let now = Instant::now();
         match self {
             Self::Help => {
+                let now = Instant::now();
                 let command_batch = all_commands_info();
                 print_options.print_batches(command_batch.schema(), &[command_batch], now)
             }
