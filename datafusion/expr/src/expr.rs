@@ -1047,6 +1047,10 @@ impl Expr {
         match self {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
+            Expr::Cast(Cast { expr, data_type }) => {
+                let name = expr.name_for_alias()?;
+                Ok(format!("CAST({} AS {})", name, data_type))
+            },
             expr => expr.display_name(),
         }
     }
