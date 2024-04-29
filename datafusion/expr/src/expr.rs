@@ -913,7 +913,8 @@ impl Expr {
     /// Returns the name of this expression as it should appear in a schema.
     pub fn display_name(&self) -> Result<String> {
         match self {
-            Expr::TryCast(TryCast { expr, data_type }) | Expr::Cast(Cast { expr, data_type }) => {
+            Expr::TryCast(TryCast { expr, data_type })
+            | Expr::Cast(Cast { expr, data_type }) => {
                 let name = match **expr {
                     Expr::Column(_) => create_name(expr)?,
                     _ => format!("CAST({expr} AS {data_type:?})"),
