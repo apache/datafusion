@@ -65,7 +65,3 @@ the actual discussion occurs. The project mailing lists are:
   [archives](https://lists.apache.org/list.html?private@datafusion.apache.org)
 
 [mailing lists]: https://www.apache.org/foundation/mailinglists
-
-```
-
-```
