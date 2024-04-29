@@ -1977,9 +1977,7 @@ mod test {
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
-        // note that CAST intentionally has a name that is different from its `Display`
-        // representation. CAST does not change the name of expressions.
-        assert_eq!("Float32(1.23)", expr.display_name()?);
+        assert_eq!("CAST(Float32(1.23) AS Utf8)", expr.display_name()?);
         Ok(())
     }
 
