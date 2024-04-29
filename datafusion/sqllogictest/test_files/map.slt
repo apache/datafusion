@@ -44,6 +44,7 @@ DELETE 24
 query T
 SELECT strings['not_found'] FROM data LIMIT 1;
 ----
+NULL
 
 statement ok
 drop table data;
