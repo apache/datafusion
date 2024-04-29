@@ -30,9 +30,9 @@ The latest source release is [37.0.0][source-link] ([asc][asc-link],
 [asc-link]: https://downloads.apache.org/arrow/arrow-datafusion-37.0.0/apache-arrow-datafusion-37.0.0.tar.gz.asc
 [sha512-link]: https://downloads.apache.org/arrow/arrow-datafusion-37.0.0/apache-arrow-datafusion-37.0.0.tar.gz.sha512
 
-For older releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
+For previous releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
 
-For even older releases when DataFusion is a subproject of Apache Arrow, please check [Arrow's archive](https://archive.apache.org/dist/arrow/).
+For older releases (<= 37) when DataFusion was a subproject of Apache Arrow, please check [Arrow's archive](https://archive.apache.org/dist/arrow/).
 
 ## Notes
 
