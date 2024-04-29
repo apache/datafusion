@@ -439,7 +439,7 @@ fn type_resolution_coercion(
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// Unlike [coerced_from], usually the coerced type is for comparison only.
 /// For example, compare with Dictionary and Dictionary, only value type is what we care about
-/// 
+///
 /// [coerced_from]: super::functions::coerced_from
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
