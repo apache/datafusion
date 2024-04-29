@@ -79,7 +79,7 @@ fn get_common_requirement_of_aggregate_input(
     if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         let input = aggr_exec.input();
         let mut aggr_expr = try_get_updated_aggr_expr_from_child(aggr_exec);
-        let group_by = aggr_exec.group_by();
+        let group_by = aggr_exec.group_expr();
         let mode = aggr_exec.mode();
 
         let input_eq_properties = input.equivalence_properties();
