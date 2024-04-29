@@ -1306,17 +1306,43 @@ select
 ----
 2 Decimal256(22, 2)
 
-# coalesce static empty value
-query T
-SELECT COALESCE('', 'test')
+# coalesce string
+query TT
+select 
+  coalesce('', 'test'),
+  coalesce(null, 'test');
 ----
-(empty)
+(empty) test
 
-# coalesce static value with null
-query T
-SELECT COALESCE(NULL, 'test')
+# coalesce utf8 and large utf8
+query TT
+select 
+  coalesce('a', arrow_cast('b', 'LargeUtf8')),
+  arrow_typeof(coalesce('a', arrow_cast('b', 'LargeUtf8')))
+;
 ----
-test
+a LargeUtf8
+
+# coalesce array
+query ?T
+select 
+  coalesce(array[1, 2], array[3, 4]),
+  arrow_typeof(coalesce(array[1, 2], array[3, 4]));
+----
+[1, 2] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+query ?T
+select 
+  coalesce(null, array[3, 4]),
+  arrow_typeof(coalesce(array[1, 2], array[3, 4]));
+----
+[3, 4] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# TODO: after switch signature of array to the same with coalesce, this query should be fixed
+query error
+select 
+  coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]),
+  arrow_typeof(coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]));
 
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
@@ -1328,7 +1354,7 @@ select coalesce(column1, 'none_set') from test1;
 query error
 select coalesce(null, column1, 'none_set') from test1;
 
-# explicit cast to Utf8
+# explicitly cast to Utf8
 query T
 select coalesce(arrow_cast(column1, 'Utf8'), 'none_set') from test1;
 ----
@@ -1348,7 +1374,7 @@ select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
 query error
 select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 
-# explicit cast to Int8, and it will implicitly cast to Int64
+# explicitly cast to Int8, and it will implicitly cast to Int64
 query IT
 select 
   coalesce(arrow_cast(123, 'Int8'), 34),
@@ -1377,7 +1403,7 @@ SELECT COALESCE(c1, c2) FROM test
 1
 NULL
 
-# int and string are not coercible
+# numeric string is coerced to numeric in both Postgres and DuckDB
 query I
 SELECT COALESCE(c1, c2, '-1') FROM test;
 ----

@@ -320,7 +320,10 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
 
     // String literal is possible to cast to many other types like numeric or datetime,
     // therefore, it is categorized as a unknown type
-    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8 | DataType::Null) {
+    if matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
+    ) {
         return TypeCategory::Unknown;
     }
 
@@ -350,6 +353,7 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of constructs including
 /// CASE, ARRAY, VALUES, and the GREATEST and LEAST functions.
 /// See <https://www.postgresql.org/docs/current/typeconv-union-case.html> for more information.
+/// The actual rules follows the behavior of Postgres and DuckDB
 pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -371,15 +375,21 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
         .filter(|&t| t != &DataType::Null)
         .map(data_type_category)
         .collect();
-    
-    if data_types_category.iter().any(|t| t == &TypeCategory::NotSupported) {
+
+    if data_types_category
+        .iter()
+        .any(|t| t == &TypeCategory::NotSupported)
+    {
         return None;
     }
 
     // check if there is only one category excluding Unknown
-    let categories : HashSet<TypeCategory>= HashSet::from_iter(data_types_category
-        .iter()
-        .filter(|&c|c != &TypeCategory::Unknown).cloned());
+    let categories: HashSet<TypeCategory> = HashSet::from_iter(
+        data_types_category
+            .iter()
+            .filter(|&c| c != &TypeCategory::Unknown)
+            .cloned(),
+    );
     if categories.len() > 1 {
         return None;
     }
@@ -391,64 +401,46 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             continue;
         }
         if let Some(ref candidate_t) = candidate_type {
-
+            // Find candidate type that all the data types can be coerced to
+            // Follows the behavior of Postgres and DuckDB
+            // Coerced type may be different from the candidate and current data type
+            // For example,
+            //  i64 and decimal(7, 2) are expect to get coerced type decimal(22, 2)
+            //  numeric string ('1') and numeric (2) are expect to get coerced type numeric (1, 2)
             if let Some(t) = type_resolution_coercion(data_type, candidate_t) {
                 candidate_type = Some(t);
             } else {
                 return None;
-            } 
-
-            // // We need to find a new possible candidate type that candidate type is able to
-            // // coerced to, but NOT vice versa, so uni-directional coercion `coerced_from` is required
-            // if let Some(t) = coerced_from(data_type, candidate_t) {
-            //     candidate_type = Some(t);
-            // } else if let Some(t) = coerced_from(candidate_t, data_type) {
-            //     // The reason why we check another direction is that:
-            //     // 1. Ensure that current type is able to coerced to candidate type
-            //     // 2. Coerced type may be different from the candidate and current data type
-            //     // For example, I64 and Decimal(7, 2) are expect to get coerced type Decimal(22, 2)
-
-            //     candidate_type = Some(t);
-            // } else {
-            //     // Not coercible, return None
-            //     return None;
-            // }
+            }
         } else {
             candidate_type = Some(data_type.clone());
         }
     }
 
-    // println!("candidate_type: {:?}", candidate_type);
-
     candidate_type
 }
 
-fn type_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
+/// See [type_resolution] for more information.
+fn type_resolution_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     if lhs_type == rhs_type {
         return Some(lhs_type.clone());
     }
-    
+
     // numeric coercion is the same as comparison coercion, both find the narrowest type
     // that can accommodate both types
-    if let Some(t) = binary_numeric_coercion(lhs_type, rhs_type) {
-        return Some(t);
-    }
-
-    match (lhs_type, rhs_type) {
-        (data_type, Utf8 | LargeUtf8) |
-        (Utf8 | LargeUtf8, data_type) if data_type.is_numeric() => {
-            // let arrow_cast handle the actual casting
-            Some(data_type.clone())
-        }
-        // numeric types
-        _ => None,
-    }
+    binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| pure_string_coercion(lhs_type, rhs_type))
+        .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// Unlike [coerced_from], usually the coerced type is for comparison only.
 /// For example, compare with Dictionary and Dictionary, only value type is what we care about
+/// 
+/// [coerced_from]: super::functions::coerced_from
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -457,6 +449,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| pure_string_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
@@ -547,10 +540,10 @@ pub(crate) fn binary_numeric_coercion(
         // accommodates all values of both types. Note that some information
         // loss is inevitable when we have a signed type and a `UInt64`, in
         // which case we use `Int64`;i.e. the widest signed integral type.
-        
+
         // TODO: For i64 and u64, we can use decimal or float64
         // Postgres has no unsigned type :(
-        // DuckDB v.0.10.0 has double (double precision floating-point number (8 bytes)) 
+        // DuckDB v.0.10.0 has double (double precision floating-point number (8 bytes))
         // for largest signed (signed sixteen-byte integer) and unsigned integer (unsigned sixteen-byte integer)
         (Int64, _)
         | (_, Int64)
@@ -880,14 +873,33 @@ fn string_concat_internal_coercion(
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8, Utf8) => Some(Utf8),
-        (LargeUtf8, Utf8) => Some(LargeUtf8),
-        (Utf8, LargeUtf8) => Some(LargeUtf8),
-        (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
         // TODO: cast between array elements (#6558)
         (List(_), List(_)) => Some(lhs_type.clone()),
         (List(_), _) => Some(lhs_type.clone()),
         (_, List(_)) => Some(rhs_type.clone()),
+        _ => None,
+    }
+}
+
+fn pure_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Utf8, Utf8) => Some(Utf8),
+        (LargeUtf8, Utf8) => Some(LargeUtf8),
+        (Utf8, LargeUtf8) => Some(LargeUtf8),
+        (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
+        _ => None,
+    }
+}
+
+fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Utf8 | LargeUtf8, other_type) | (other_type, Utf8 | LargeUtf8)
+            if other_type.is_numeric() =>
+        {
+            Some(other_type.clone())
+        }
         _ => None,
     }
 }
@@ -1037,19 +1049,7 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 mod tests {
     use super::*;
 
-    use datafusion_common::{assert_contains, ScalarValue};
-
-    #[test]
-    fn test_string_numeric() {
-        let a = ScalarValue::Utf8(Some(String::from("2")));
-        let dt = a.data_type();
-        let can_cast = can_cast_types(&dt, &DataType::Int32);
-        println!("{:?}", can_cast);
-        let a = ScalarValue::Utf8(Some(String::from("apple")));
-        let dt = a.data_type();
-        let can_cast = can_cast_types(&dt, &DataType::Int32);
-        println!("{:?}", can_cast);
-    }
+    use datafusion_common::assert_contains;
 
     #[test]
     fn test_coercion_error() -> Result<()> {

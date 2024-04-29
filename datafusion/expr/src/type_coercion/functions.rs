@@ -63,7 +63,9 @@ pub fn data_types(
     }
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty() && matches!(signature.type_signature,TypeSignature::VariadicEqualOrNull) {
+    if !valid_types.is_empty()
+        && matches!(signature.type_signature, TypeSignature::VariadicEqualOrNull)
+    {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -195,9 +197,7 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::VariadicEqualOrNull => {
-            println!("current_types: {:?}", current_types);
             if let Some(common_type) = type_resolution(current_types) {
-                println!("common_Type: {:?}", common_type);
                 vec![vec![common_type; current_types.len()]]
             } else {
                 vec![]
@@ -293,9 +293,6 @@ fn maybe_data_types(
         return None;
     }
 
-    println!("current_types: {:?}", current_types);
-    println!("valid_types: {:?}", valid_types);
-
     let mut new_type = Vec::with_capacity(valid_types.len());
     for (i, valid_type) in valid_types.iter().enumerate() {
         let current_type = &current_types[i];
@@ -304,7 +301,7 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
-            // TODO: Replace with `can_cast_types` after failing cases are resolved 
+            // TODO: Replace with `can_cast_types` after failing cases are resolved
             // (they need new signature that returns exactly valid types instead of list of possible valid types).
             if let Some(coerced_type) = coerced_from(valid_type, current_type) {
                 new_type.push(coerced_type)
@@ -334,12 +331,10 @@ fn maybe_data_types_without_coercion(
 
         if current_type == valid_type {
             new_type.push(current_type.clone())
+        } else if can_cast_types(current_type, valid_type) {
+            new_type.push(valid_type.clone())
         } else {
-            if can_cast_types(current_type, valid_type) {
-                new_type.push(valid_type.clone())
-            } else {
-                return None;
-            }
+            return None;
         }
     }
     Some(new_type)
