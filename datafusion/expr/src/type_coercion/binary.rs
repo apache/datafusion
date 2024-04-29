@@ -350,11 +350,15 @@ fn data_type_category(data_type: &DataType) -> TypeCategory {
     TypeCategory::NotSupported
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of constructs including
-/// CASE, ARRAY, VALUES, and the GREATEST and LEAST functions.
+/// Coerce dissimilar data types to a single data type.
+/// UNION, INTERSECT, EXCEPT, CASE, ARRAY, VALUES, and the GREATEST and LEAST functions are
+/// examples that has the similar resolution rules.
 /// See <https://www.postgresql.org/docs/current/typeconv-union-case.html> for more information.
-/// The actual rules follows the behavior of Postgres and DuckDB
-pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
+/// The rules in the document provide a clue, but adhering strictly to them doesn't precisely
+/// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
+/// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
+/// decimal percision and scale when coercing decimal types.
+pub(super) fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
     }
@@ -407,7 +411,7 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
             // For example,
             //  i64 and decimal(7, 2) are expect to get coerced type decimal(22, 2)
             //  numeric string ('1') and numeric (2) are expect to get coerced type numeric (1, 2)
-            if let Some(t) = type_resolution_coercion(data_type, candidate_t) {
+            if let Some(t) = type_union_resolution_coercion(data_type, candidate_t) {
                 candidate_type = Some(t);
             } else {
                 return None;
@@ -420,8 +424,9 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
     candidate_type
 }
 
-/// See [type_resolution] for more information.
-fn type_resolution_coercion(
+/// Coerce `lhs_type` and `rhs_type` to a common type for [type_union_resolution]
+/// See [type_union_resolution] for more information.
+fn type_union_resolution_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

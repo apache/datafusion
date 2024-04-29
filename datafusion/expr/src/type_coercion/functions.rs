@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
-use crate::type_coercion::binary::type_resolution;
+use crate::type_coercion::binary::type_union_resolution;
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -197,7 +197,7 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::VariadicEqualOrNull => {
-            if let Some(common_type) = type_resolution(current_types) {
+            if let Some(common_type) = type_union_resolution(current_types) {
                 vec![vec![common_type; current_types.len()]]
             } else {
                 vec![]
