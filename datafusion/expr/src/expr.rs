@@ -1050,7 +1050,7 @@ impl Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 let name = expr.name_for_alias()?;
                 Ok(format!("CAST({} AS {})", name, data_type))
-            },
+            }
             expr => expr.display_name(),
         }
     }
