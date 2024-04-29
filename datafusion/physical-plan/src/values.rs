@@ -154,6 +154,10 @@ impl DisplayAs for ValuesExec {
 }
 
 impl ExecutionPlan for ValuesExec {
+    fn name(&self) -> &'static str {
+        "ValuesExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -210,7 +214,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field};
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
@@ -248,7 +252,7 @@ mod tests {
         let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/8763
+    // Test issue: https://github.com/apache/datafusion/issues/8763
     #[test]
     fn new_exec_with_non_nullable_schema() {
         let schema = Arc::new(Schema::new(vec![Field::new(

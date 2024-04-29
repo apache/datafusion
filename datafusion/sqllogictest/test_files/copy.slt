@@ -111,7 +111,7 @@ a
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
 
-# https://github.com/apache/arrow-datafusion/issues/9714
+# https://github.com/apache/datafusion/issues/9714
 ## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
 ## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
 #
@@ -138,7 +138,7 @@ create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
 #LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
 #
 # This triggers a panic (index out of bounds)
-# https://github.com/apache/arrow-datafusion/issues/9269
+# https://github.com/apache/datafusion/issues/9269
 #query
 #select * from validate_partitioned_escape_quote;
 
@@ -146,11 +146,11 @@ query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
@@ -160,11 +160,11 @@ query TT
 EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' STORED AS PARQUET
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
---TableScan: source_table projection=[col1, col2]
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
+02)--TableScan: source_table projection=[col1, col2]
 physical_plan
-FileSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Copy more files to directory via query
 query IT
@@ -283,10 +283,72 @@ OPTIONS (
 'format.statistics_enabled::col2' none,
 'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
-'format.bloom_filter_ndv' 100
+'format.bloom_filter_ndv' 100,
+'format.metadata::key' 'value'
 )
 ----
 2
+
+# valid vs invalid metadata
+
+# accepts map with a single entry
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key' 'value'
+)
+
+# accepts multiple entries (on different keys)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' '',
+    'format.metadata::key2' 'value',
+    'format.metadata::key3' 'value with spaces',
+    'format.metadata::key4' 'value with special chars :: :'
+)
+
+# accepts multiple entries with the same key (will overwrite)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' 'value',
+    'format.metadata::key1' 'value'
+)
+
+# errors if key is missing
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, missing key in metadata::<key>
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::' 'value'
+)
+
+# errors if key contains internal '::'
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, found too many '::' in "metadata::key::extra"
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key::extra' 'value'
+)
+
+# errors for invalid property (not stating `format.metadata`)
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ColumnOptions
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.wrong-metadata::key' 'value'
+)
+
 
 # validate multiple parquet file output with all options set
 statement ok
@@ -512,44 +574,6 @@ COPY source_table to 'test_files/scratch/copy/format_table2.csv'
 OPTIONS (
     unknown_option  false,
 );
-
-
-# Format Options Support with format in OPTIONS i.e. COPY { table_name | query } TO 'file_name' OPTIONS (format <format-name>, ...)
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format parquet);
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format parquet, compression 'zstd(10)');
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format json, compression gzip);
-----
-1
-
-query I
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (
-    format csv,
-    has_header false,
-    compression xz,
-    datetime_format '%FT%H:%M:%S.%9f',
-    delimiter ';',
-    null_value 'NULLVAL'
-);
-----
-1
-
-query error DataFusion error: Invalid or Unsupported Configuration: This feature is not implemented: Unknown FileType: NOTVALIDFORMAT
-COPY (select * from (values (1))) to 'test_files/scratch/copy/'
-OPTIONS (format notvalidformat, compression 'zstd(5)');
 
 
 # Error cases:

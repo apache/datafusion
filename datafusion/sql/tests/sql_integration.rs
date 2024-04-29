@@ -38,6 +38,7 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
+use datafusion_functions::{string, unicode};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -88,7 +89,7 @@ fn parse_decimals() {
 fn parse_ident_normalization() {
     let test_data = [
         (
-            "SELECT LENGTH('str')",
+            "SELECT CHARACTER_LENGTH('str')",
             "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
             false,
         ),
@@ -438,18 +439,6 @@ CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
     Projection: test_decimal.id, test_decimal.price
       TableScan: test_decimal
-    "#
-    .trim();
-    quick_test(sql, plan);
-}
-
-#[test]
-fn plan_copy_stored_as_priority() {
-    let sql = "COPY (select * from (values (1))) to 'output/' STORED AS CSV OPTIONS (format json)";
-    let plan = r#"
-CopyTo: format=csv output_url=output/ options: (format json)
-  Projection: column1
-    Values: (Int64(1))
     "#
     .trim();
     quick_test(sql, plan);
@@ -2626,7 +2615,7 @@ fn select_multibyte_column() {
 #[test]
 fn select_groupby_orderby() {
     // ensure that references are correctly resolved in the order by clause
-    // see https://github.com/apache/arrow-datafusion/issues/4854
+    // see https://github.com/apache/datafusion/issues/4854
     let sql = r#"SELECT
   avg(age) AS "value",
   date_trunc('month', birth_date) AS "birth_date"
@@ -2688,10 +2677,17 @@ fn logical_plan_with_dialect_and_options(
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider::default()
+        .with_udf(unicode::character_length().as_ref().clone())
+        .with_udf(string::concat().as_ref().clone())
         .with_udf(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
             DataType::Int32,
+        ))
+        .with_udf(make_udf(
+            "round",
+            vec![DataType::Float64, DataType::Int64],
+            DataType::Float32,
         ))
         .with_udf(make_udf(
             "arrow_cast",
@@ -2702,7 +2698,8 @@ fn logical_plan_with_dialect_and_options(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
-        ));
+        ))
+        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64));
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2990,16 +2987,6 @@ fn join_with_aliases() {
             \n    SubqueryAlias: folks\
             \n      TableScan: person";
     quick_test(sql, expected);
-}
-
-#[test]
-fn cte_use_same_name_multiple_times() {
-    let sql =
-        "with a as (select * from person), a as (select * from orders) select * from a;";
-    let expected =
-        "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
-    let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3373,7 +3360,7 @@ fn hive_aggregate_with_filter() -> Result<()> {
 
 #[test]
 fn order_by_unaliased_name() {
-    // https://github.com/apache/arrow-datafusion/issues/3160
+    // https://github.com/apache/datafusion/issues/3160
     // This query was failing with:
     // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
@@ -3605,7 +3592,7 @@ fn test_noneq_with_filter_join() {
 #[test]
 fn test_one_side_constant_full_join() {
     // TODO: this sql should be parsed as join after
-    // https://github.com/apache/arrow-datafusion/issues/2877 is resolved.
+    // https://github.com/apache/datafusion/issues/2877 is resolved.
     let sql = "SELECT id, order_id \
             FROM person \
             FULL OUTER JOIN orders \
@@ -4508,26 +4495,27 @@ fn test_field_not_found_window_function() {
 
 #[test]
 fn test_parse_escaped_string_literal_value() {
-    let sql = r"SELECT length('\r\n') AS len";
+    let sql = r"SELECT character_length('\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\r\n') AS len";
+    let sql = r"SELECT character_length(E'\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let sql =
+        r"SELECT character_length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
     let expected =
         "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\000') AS len";
+    let sql = r"SELECT character_length(E'\000') AS len";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 25\")"
     )
 }
 
@@ -4625,6 +4613,7 @@ fn roundtrip_statement() -> Result<()> {
             "select * from (select id, first_name from (select * from person))",
             "select id, count(*) as cnt from (select id from person) group by id",
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
+            "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
             r#"select "First Name" from person_quoted_cols"#,
             r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",

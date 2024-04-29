@@ -29,7 +29,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::string::common::*;
+use crate::utils::make_scalar_function;
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
@@ -61,8 +61,14 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct ChrFunc {
+pub struct ChrFunc {
     signature: Signature,
+}
+
+impl Default for ChrFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChrFunc {

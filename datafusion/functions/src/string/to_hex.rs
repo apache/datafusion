@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::make_scalar_function;
+use std::any::Any;
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
 };
+
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
+
+use crate::utils::make_scalar_function;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
@@ -57,9 +60,16 @@ where
 }
 
 #[derive(Debug)]
-pub(super) struct ToHexFunc {
+pub struct ToHexFunc {
     signature: Signature,
 }
+
+impl Default for ToHexFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToHexFunc {
     pub fn new() -> Self {
         use DataType::*;
@@ -104,10 +114,7 @@ impl ScalarUDFImpl for ToHexFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{
-        array::{Int32Array, StringArray},
-        datatypes::Int32Type,
-    };
+    use arrow::array::{Int32Array, StringArray};
 
     use datafusion_common::cast::as_string_array;
 

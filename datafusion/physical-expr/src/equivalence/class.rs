@@ -262,7 +262,7 @@ impl EquivalenceGroup {
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
-            .transform(&|expr| {
+            .transform(|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
                         return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
@@ -390,7 +390,7 @@ impl EquivalenceGroup {
         });
         // TODO: Convert the algorithm below to a version that uses `HashMap`.
         //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        // See issue: https://github.com/apache/arrow-datafusion/issues/8027
+        // See issue: https://github.com/apache/datafusion/issues/8027
         let mut new_classes = vec![];
         for (source, target) in mapping.iter() {
             if new_classes.is_empty() {
@@ -452,7 +452,7 @@ impl EquivalenceGroup {
                         // Rewrite rhs to point to the right side of the join:
                         let new_rhs = rhs
                             .clone()
-                            .transform(&|expr| {
+                            .transform(|expr| {
                                 if let Some(column) =
                                     expr.as_any().downcast_ref::<Column>()
                                 {
@@ -481,12 +481,10 @@ impl EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::equivalence::{EquivalenceClass, EquivalenceGroup};
-    use crate::expressions::{lit, Column, Literal};
+    use crate::expressions::{lit, Literal};
 
     use datafusion_common::{Result, ScalarValue};
 

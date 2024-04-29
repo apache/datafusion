@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections).data()
+        plan.transform_down(remove_unnecessary_projections).data()
     }
 
     fn name(&self) -> &str {
@@ -273,7 +273,7 @@ fn try_unifying_projections(
 
     // Collect the column references usage in the outer projection.
     projection.expr().iter().for_each(|(expr, _)| {
-        expr.apply(&mut |expr| {
+        expr.apply(|expr| {
             Ok({
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     *column_ref_map.entry(column.clone()).or_default() += 1;
@@ -287,7 +287,7 @@ fn try_unifying_projections(
     // Merging these projections is not beneficial, e.g
     // If an expression is not trivial and it is referred more than 1, unifies projections will be
     // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
         *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
     }) {
@@ -977,7 +977,7 @@ fn update_expr(
 
     let new_expr = expr
         .clone()
-        .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
+        .transform_up(|expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -1120,7 +1120,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             (*on)
                 .clone()
-                .transform(&|expr| {
+                .transform(|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs
@@ -1288,30 +1288,15 @@ fn new_join_children(
 mod tests {
     use super::*;
     use std::any::Any;
-    use std::sync::Arc;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
-    use crate::physical_optimizer::output_requirements::OutputRequirementExec;
-    use crate::physical_optimizer::projection_pushdown::{
-        join_table_borders, update_expr, ProjectionPushdown,
-    };
-    use crate::physical_optimizer::PhysicalOptimizerRule;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+    use crate::datasource::physical_plan::FileScanConfig;
+    use crate::physical_plan::get_plan_string;
     use crate::physical_plan::joins::StreamJoinPartitionMode;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::projection::ProjectionExec;
-    use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::{get_plan_string, ExecutionPlan};
 
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{JoinSide, JoinType, Result, ScalarValue, Statistics};
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use datafusion_common::{JoinType, ScalarValue, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::{
@@ -1319,19 +1304,11 @@ mod tests {
         Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
+        BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
     };
-    use datafusion_physical_expr::{
-        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
-        PhysicalSortRequirement, ScalarFunctionExpr,
-    };
-    use datafusion_physical_plan::joins::{
-        HashJoinExec, PartitionMode, SymmetricHashJoinExec,
-    };
-    use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-    use datafusion_physical_plan::union::UnionExec;
-
-    use itertools::Itertools;
+    use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_plan::joins::PartitionMode;
+    use datafusion_physical_plan::streaming::PartitionStream;
 
     /// Mocked UDF
     #[derive(Debug)]
@@ -1402,7 +1379,6 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
-                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1471,7 +1447,6 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
-                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1543,7 +1518,6 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
-                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1612,7 +1586,6 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
-                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),

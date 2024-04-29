@@ -16,8 +16,9 @@
 // under the License.
 
 use datafusion::error::Result;
-use datafusion::execution::config::SessionConfig;
-use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionContext};
+use datafusion::execution::context::{
+    FunctionFactory, RegisterFunction, SessionContext, SessionState,
+};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::ExprSimplifyResult;
@@ -91,7 +92,7 @@ impl FunctionFactory for CustomFunctionFactory {
     /// the function instance.
     async fn create(
         &self,
-        _state: &SessionConfig,
+        _state: &SessionState,
         statement: CreateFunction,
     ) -> Result<RegisterFunction> {
         let f: ScalarFunctionWrapper = statement.try_into()?;
@@ -163,7 +164,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 impl ScalarFunctionWrapper {
     // replaces placeholders such as $1 with actual arguments (args[0]
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
-        let result = expr.clone().transform(&|e| {
+        let result = expr.clone().transform(|e| {
             let r = match e {
                 Expr::Placeholder(placeholder) => {
                     let placeholder_position =

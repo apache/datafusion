@@ -385,6 +385,10 @@ impl DisplayAs for SymmetricHashJoinExec {
 }
 
 impl ExecutionPlan for SymmetricHashJoinExec {
+    fn name(&self) -> &'static str {
+        "SymmetricHashJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1331,7 +1335,7 @@ mod tests {
     };
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;

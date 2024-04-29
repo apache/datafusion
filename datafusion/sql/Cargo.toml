@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_sql"
 path = "src/lib.rs"
@@ -49,6 +52,7 @@ strum = { version = "0.26.1", features = ["derive"] }
 
 [dev-dependencies]
 ctor = { workspace = true }
+datafusion-functions = { workspace = true, default-features = true }
 env_logger = { workspace = true }
 paste = "^1.0"
 rstest = { workspace = true }

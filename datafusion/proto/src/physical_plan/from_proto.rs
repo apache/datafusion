@@ -18,16 +18,13 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
-use crate::common::proto_error;
-use crate::convert_required;
-use crate::logical_plan::{self, csv_writer_options_from_proto};
-use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::{self, copy_to_node};
-
 use arrow::compute::SortOptions;
+use chrono::{TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -36,7 +33,6 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
-use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
@@ -46,7 +42,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
-    functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
+    ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::config::{
     ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
@@ -57,13 +53,15 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
-
-use chrono::{TimeZone, Utc};
 use datafusion_expr::ScalarFunctionDefinition;
-use object_store::path::Path;
-use object_store::ObjectMeta;
 
-use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
+use crate::common::proto_error;
+use crate::convert_required;
+use crate::logical_plan::{self, csv_writer_options_from_proto};
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::{self, copy_to_node};
+
+use super::PhysicalExtensionCodec;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -76,9 +74,10 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// # Arguments
 ///
 /// * `proto` - Input proto with physical sort expression node
-/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///                    when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
     registry: &dyn FunctionRegistry,
@@ -102,9 +101,10 @@ pub fn parse_physical_sort_expr(
 /// # Arguments
 ///
 /// * `proto` - Input proto with vector of physical sort expression node
-/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///                    when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
     registry: &dyn FunctionRegistry,
@@ -123,25 +123,26 @@ pub fn parse_physical_sort_exprs(
 ///
 /// # Arguments
 ///
-/// * `proto` - Input proto with physical window exprression node.
+/// * `proto` - Input proto with physical window expression node.
 /// * `name` - Name of the window expression.
-/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///                    when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn WindowExpr>> {
-    let codec = DefaultPhysicalExtensionCodec {};
     let window_node_expr =
-        parse_physical_exprs(&proto.args, registry, input_schema, &codec)?;
+        parse_physical_exprs(&proto.args, registry, input_schema, codec)?;
 
     let partition_by =
-        parse_physical_exprs(&proto.partition_by, registry, input_schema, &codec)?;
+        parse_physical_exprs(&proto.partition_by, registry, input_schema, codec)?;
 
     let order_by =
-        parse_physical_sort_exprs(&proto.order_by, registry, input_schema, &codec)?;
+        parse_physical_sort_exprs(&proto.order_by, registry, input_schema, codec)?;
 
     let window_frame = proto
         .window_frame
@@ -187,9 +188,10 @@ where
 /// # Arguments
 ///
 /// * `proto` - Input proto with physical expression node
-/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///                    when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     registry: &dyn FunctionRegistry,
@@ -213,6 +215,7 @@ pub fn parse_physical_expr(
                 registry,
                 "left",
                 input_schema,
+                codec,
             )?,
             logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?,
             parse_required_physical_expr(
@@ -220,6 +223,7 @@ pub fn parse_physical_expr(
                 registry,
                 "right",
                 input_schema,
+                codec,
             )?,
         )),
         ExprType::AggregateExpr(_) => {
@@ -241,6 +245,7 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?))
         }
         ExprType::IsNotNullExpr(e) => {
@@ -249,6 +254,7 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?))
         }
         ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_expr(
@@ -256,6 +262,7 @@ pub fn parse_physical_expr(
             registry,
             "expr",
             input_schema,
+            codec,
         )?)),
         ExprType::Negative(e) => {
             Arc::new(NegativeExpr::new(parse_required_physical_expr(
@@ -263,6 +270,7 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?))
         }
         ExprType::InList(e) => in_list(
@@ -271,6 +279,7 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?,
             parse_physical_exprs(&e.list, registry, input_schema, codec)?,
             &e.negated,
@@ -290,12 +299,14 @@ pub fn parse_physical_expr(
                             registry,
                             "when_expr",
                             input_schema,
+                            codec,
                         )?,
                         parse_required_physical_expr(
                             e.then_expr.as_ref(),
                             registry,
                             "then_expr",
                             input_schema,
+                            codec,
                         )?,
                     ))
                 })
@@ -311,6 +322,7 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?,
             convert_required!(e.arrow_type)?,
             None,
@@ -321,35 +333,15 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?,
             convert_required!(e.arrow_type)?,
         )),
-        ExprType::ScalarFunction(e) => {
-            let scalar_function =
-                protobuf::ScalarFunction::try_from(e.fun).map_err(|_| {
-                    proto_error(
-                        format!("Received an unknown scalar function: {}", e.fun,),
-                    )
-                })?;
-
-            let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
-
-            // TODO Do not create new the ExecutionProps
-            let execution_props = ExecutionProps::new();
-
-            functions::create_physical_expr(
-                &(&scalar_function).into(),
-                &args,
-                input_schema,
-                &execution_props,
-            )?
-        }
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
                 None => registry.udf(e.name.as_str())?,
             };
-            let signature = udf.signature();
             let scalar_fun_def = ScalarFunctionDefinition::UDF(udf.clone());
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
@@ -360,7 +352,6 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
-                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -371,12 +362,14 @@ pub fn parse_physical_expr(
                 registry,
                 "expr",
                 input_schema,
+                codec,
             )?,
             parse_required_physical_expr(
                 like_expr.pattern.as_deref(),
                 registry,
                 "pattern",
                 input_schema,
+                codec,
             )?,
         )),
     };
@@ -389,9 +382,9 @@ fn parse_required_physical_expr(
     registry: &dyn FunctionRegistry,
     field: &str,
     input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let codec = DefaultPhysicalExtensionCodec {};
-    expr.map(|e| parse_physical_expr(e, registry, input_schema, &codec))
+    expr.map(|e| parse_physical_expr(e, registry, input_schema, codec))
         .transpose()?
         .ok_or_else(|| {
             DataFusionError::Internal(format!("Missing required field {field:?}"))
@@ -433,15 +426,15 @@ pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
         Some(hash_part) => {
-            let codec = DefaultPhysicalExtensionCodec {};
             let expr = parse_physical_exprs(
                 &hash_part.hash_expr,
                 registry,
                 input_schema,
-                &codec,
+                codec,
             )?;
 
             Ok(Some(Partitioning::Hash(
@@ -456,6 +449,7 @@ pub fn parse_protobuf_hash_partitioning(
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
     let projection = proto
@@ -489,7 +483,7 @@ pub fn parse_protobuf_file_scan_config(
         .collect::<Result<Vec<_>>>()?;
 
     // Remove partition columns from the schema after recreating table_partition_cols
-    // because the partition columns are not in the file. They are present to allow the
+    // because the partition columns are not in the file. They are present to allow
     // the partition column types to be reconstructed after serde.
     let file_schema = Arc::new(Schema::new(
         schema
@@ -502,12 +496,11 @@ pub fn parse_protobuf_file_scan_config(
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
-        let codec = DefaultPhysicalExtensionCodec {};
         let sort_expr = parse_physical_sort_exprs(
             &node_collection.physical_sort_expr_nodes,
             registry,
             &schema,
-            &codec,
+            codec,
         )?;
         output_ordering.push(sort_expr);
     }
@@ -974,6 +967,7 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
                 .unwrap()
                 .unwrap(),
             column_specific_options,
+            key_value_metadata: Default::default(),
         })
     }
 }

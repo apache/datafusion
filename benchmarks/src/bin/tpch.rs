@@ -47,7 +47,7 @@ enum TpchOpt {
 /// use `dbbench` instead.
 ///
 /// Note: this is kept to be backwards compatible with the benchmark names prior to
-/// <https://github.com/apache/arrow-datafusion/issues/6994>
+/// <https://github.com/apache/datafusion/issues/6994>
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();

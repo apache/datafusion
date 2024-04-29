@@ -34,18 +34,18 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::functions::{create_physical_fun, out_ordering};
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
+
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
+};
+
+use crate::functions::out_ordering;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
-
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{
-    expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionDefinition,
-};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -58,8 +58,6 @@ pub struct ScalarFunctionExpr {
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
-    // Whether this function can be invoked with zero arguments
-    supports_zero_argument: bool,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -70,7 +68,6 @@ impl Debug for ScalarFunctionExpr {
             .field("args", &self.args)
             .field("return_type", &self.return_type)
             .field("monotonicity", &self.monotonicity)
-            .field("supports_zero_argument", &self.supports_zero_argument)
             .finish()
     }
 }
@@ -83,7 +80,6 @@ impl ScalarFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
-        supports_zero_argument: bool,
     ) -> Self {
         Self {
             fun,
@@ -91,7 +87,6 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             monotonicity,
-            supports_zero_argument,
         }
     }
 
@@ -122,7 +117,7 @@ impl ScalarFunctionExpr {
 }
 
 impl fmt::Display for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
     }
 }
@@ -142,42 +137,21 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
-        // indicating the batch size (as a convention)
-        let inputs = match (
-            self.args.is_empty(),
-            self.name.parse::<BuiltinScalarFunction>(),
-        ) {
-            // MakeArray support zero argument but has the different behavior from the array with one null.
-            (true, Ok(scalar_fun))
-                if scalar_fun
-                    .signature()
-                    .type_signature
-                    .supports_zero_argument() =>
-            {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            // If the function supports zero argument, we pass in a null array indicating the batch size.
-            // This is for user-defined functions.
-            (true, Err(_))
-                if self.supports_zero_argument && self.name != "make_array" =>
-            {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            _ => self
-                .args
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
-        };
+        let inputs = self
+            .args
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
         match self.fun {
-            ScalarFunctionDefinition::BuiltIn(ref fun) => {
-                let fun = create_physical_fun(fun)?;
-                (fun)(&inputs)
+            ScalarFunctionDefinition::UDF(ref fun) => {
+                if self.args.is_empty() {
+                    fun.invoke_no_args(batch.num_rows())
+                } else {
+                    fun.invoke(&inputs)
+                }
             }
-            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
             ScalarFunctionDefinition::Name(_) => {
                 internal_err!(
                     "Name function must be resolved to one of the other variants prior to physical planning"
@@ -200,7 +174,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             children,
             self.return_type().clone(),
             self.monotonicity.clone(),
-            self.supports_zero_argument,
         )))
     }
 

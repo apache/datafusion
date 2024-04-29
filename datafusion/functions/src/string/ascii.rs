@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::make_scalar_function;
+use crate::utils::make_scalar_function;
 use arrow::array::Int32Array;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -44,9 +44,16 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct AsciiFunc {
+pub struct AsciiFunc {
     signature: Signature,
 }
+
+impl Default for AsciiFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsciiFunc {
     pub fn new() -> Self {
         use DataType::*;

@@ -17,6 +17,35 @@
 
 use std::sync::Arc;
 
+use arrow::{
+    array::AsArray,
+    buffer::Buffer,
+    datatypes::{
+        i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+        UnionFields, UnionMode,
+    },
+    ipc::{reader::read_record_batch, root_as_message},
+};
+
+use datafusion::execution::registry::FunctionRegistry;
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
+};
+use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{Alias, Placeholder};
+use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
+use datafusion_expr::{
+    expr::{self, InList, Sort, WindowFunction},
+    logical_plan::{PlanType, StringifiedPlan},
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
+    GroupingSet::GroupingSets,
+    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
+};
+
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -27,39 +56,6 @@ use crate::protobuf::{
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-};
-
-use arrow::{
-    array::AsArray,
-    buffer::Buffer,
-    datatypes::{
-        i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-        UnionFields, UnionMode,
-    },
-    ipc::{reader::read_record_batch, root_as_message},
-};
-use datafusion::execution::registry::FunctionRegistry;
-use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue,
-};
-use datafusion_expr::expr::Unnest;
-use datafusion_expr::expr::{Alias, Placeholder};
-use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
-use datafusion_expr::{
-    acosh, asinh, atan, atan2, atanh, cbrt, ceil, character_length, coalesce,
-    concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
-    expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, ln, log, log10, log2,
-    logical_plan::{PlanType, StringifiedPlan},
-    lpad, nanvl, pi, power, radians, random, reverse, right, round, rpad, signum, sin,
-    sinh, sqrt, strpos, substr, substr_index, substring, translate, trunc,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    GroupingSet::GroupingSets,
-    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
 };
 
 use super::LogicalExtensionCodec;
@@ -170,13 +166,23 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
     type Error = Error;
 
     fn try_from(df_schema: &protobuf::DfSchema) -> Result<Self, Self::Error> {
-        let fields = df_schema
-            .columns
+        let df_fields = df_schema.columns.clone();
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<Field>)> = df_fields
             .iter()
-            .map(|c| c.try_into())
-            .collect::<Result<Vec<DFField>, _>>()?;
+            .map(|df_field| {
+                let field: Field = df_field.field.as_ref().required("field")?;
+                Ok((
+                    df_field
+                        .qualifier
+                        .as_ref()
+                        .map(|q| q.relation.clone().into()),
+                    Arc::new(field),
+                ))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
         Ok(DFSchema::new_with_metadata(
-            fields,
+            qualifiers_and_fields,
             df_schema.metadata.clone(),
         )?)
     }
@@ -191,19 +197,6 @@ impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
     }
 }
 
-impl TryFrom<&protobuf::DfField> for DFField {
-    type Error = Error;
-
-    fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field: Field = df_field.field.as_ref().required("field")?;
-
-        Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(q.relation.clone(), field),
-            None => DFField::from(field),
-        })
-    }
-}
-
 impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     fn from(units: protobuf::WindowFrameUnits) -> Self {
         match units {
@@ -214,28 +207,28 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
-impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
+impl TryFrom<protobuf::TableReference> for TableReference {
     type Error = Error;
 
-    fn try_from(value: protobuf::OwnedTableReference) -> Result<Self, Self::Error> {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+    fn try_from(value: protobuf::TableReference) -> Result<Self, Self::Error> {
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = value
             .table_reference_enum
             .ok_or_else(|| Error::required("table_reference_enum"))?;
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::bare(table))
+                Ok(TableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::partial(schema, table)),
+            }) => Ok(TableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
+            }) => Ok(TableReference::full(catalog, schema, table)),
         }
     }
 }
@@ -414,63 +407,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
-    fn from(f: &protobuf::ScalarFunction) -> Self {
-        use protobuf::ScalarFunction;
-        match f {
-            ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Sqrt => Self::Sqrt,
-            ScalarFunction::Cbrt => Self::Cbrt,
-            ScalarFunction::Sin => Self::Sin,
-            ScalarFunction::Cos => Self::Cos,
-            ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Atan => Self::Atan,
-            ScalarFunction::Sinh => Self::Sinh,
-            ScalarFunction::Cosh => Self::Cosh,
-            ScalarFunction::Asinh => Self::Asinh,
-            ScalarFunction::Acosh => Self::Acosh,
-            ScalarFunction::Atanh => Self::Atanh,
-            ScalarFunction::Exp => Self::Exp,
-            ScalarFunction::Log => Self::Log,
-            ScalarFunction::Ln => Self::Ln,
-            ScalarFunction::Log10 => Self::Log10,
-            ScalarFunction::Degrees => Self::Degrees,
-            ScalarFunction::Radians => Self::Radians,
-            ScalarFunction::Factorial => Self::Factorial,
-            ScalarFunction::Gcd => Self::Gcd,
-            ScalarFunction::Lcm => Self::Lcm,
-            ScalarFunction::Floor => Self::Floor,
-            ScalarFunction::Ceil => Self::Ceil,
-            ScalarFunction::Round => Self::Round,
-            ScalarFunction::Trunc => Self::Trunc,
-            ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Log2 => Self::Log2,
-            ScalarFunction::Signum => Self::Signum,
-            ScalarFunction::CharacterLength => Self::CharacterLength,
-            ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
-            ScalarFunction::EndsWith => Self::EndsWith,
-            ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Left => Self::Left,
-            ScalarFunction::Lpad => Self::Lpad,
-            ScalarFunction::Random => Self::Random,
-            ScalarFunction::Reverse => Self::Reverse,
-            ScalarFunction::Right => Self::Right,
-            ScalarFunction::Rpad => Self::Rpad,
-            ScalarFunction::Strpos => Self::Strpos,
-            ScalarFunction::Substr => Self::Substr,
-            ScalarFunction::Translate => Self::Translate,
-            ScalarFunction::Coalesce => Self::Coalesce,
-            ScalarFunction::Pi => Self::Pi,
-            ScalarFunction::Power => Self::Power,
-            ScalarFunction::Atan2 => Self::Atan2,
-            ScalarFunction::Nanvl => Self::Nanvl,
-            ScalarFunction::Iszero => Self::Iszero,
-            ScalarFunction::SubstrIndex => Self::SubstrIndex,
-            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -916,7 +852,7 @@ pub fn parse_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
-    use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
+    use protobuf::{logical_expr_node::ExprType, window_expr_node};
 
     let expr_type = proto
         .expr_type
@@ -1120,7 +1056,7 @@ pub fn parse_expr(
             alias
                 .relation
                 .first()
-                .map(|r| OwnedTableReference::try_from(r.clone()))
+                .map(|r| TableReference::try_from(r.clone()))
                 .transpose()?,
             alias.alias.clone(),
         ))),
@@ -1305,8 +1241,11 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
-            Ok(Expr::Unnest(Unnest { exprs }))
+            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            if exprs.len() != 1 {
+                return Err(proto_error("Unnest must have exactly one expression"));
+            }
+            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
@@ -1325,150 +1264,6 @@ pub fn parse_expr(
                 Some(qualifier.clone())
             },
         }),
-        ExprType::ScalarFunction(expr) => {
-            let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
-                .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;
-            let args = &expr.args;
-
-            match scalar_function {
-                ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Asinh => {
-                    Ok(asinh(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Acosh => {
-                    Ok(acosh(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atanh => {
-                    Ok(atanh(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Degrees => {
-                    Ok(degrees(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Radians => {
-                    Ok(radians(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Log10 => {
-                    Ok(log10(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Floor => {
-                    Ok(floor(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Factorial => {
-                    Ok(factorial(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Signum => {
-                    Ok(signum(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::CharacterLength => {
-                    Ok(character_length(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::InitCap => {
-                    Ok(initcap(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Gcd => Ok(gcd(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Lcm => Ok(lcm(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Left => Ok(left(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Random => Ok(random()),
-                ScalarFunction::Reverse => {
-                    Ok(reverse(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Right => Ok(right(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Concat => {
-                    Ok(concat_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::ConcatWithSeparator => {
-                    Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::Lpad => Ok(lpad(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Rpad => Ok(rpad(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::EndsWith => Ok(ends_with(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Strpos => Ok(strpos(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Substr => {
-                    if args.len() > 2 {
-                        assert_eq!(args.len(), 3);
-                        Ok(substring(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                            parse_expr(&args[2], registry, codec)?,
-                        ))
-                    } else {
-                        Ok(substr(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                        ))
-                    }
-                }
-                ScalarFunction::Translate => Ok(translate(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::Coalesce => {
-                    Ok(coalesce(parse_exprs(args, registry, codec)?))
-                }
-                ScalarFunction::Pi => Ok(pi()),
-                ScalarFunction::Power => Ok(power(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Log => Ok(log(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Atan2 => Ok(atan2(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Nanvl => Ok(nanvl(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Iszero => {
-                    Ok(iszero(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::SubstrIndex => Ok(substr_index(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::FindInSet => Ok(find_in_set(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-            }
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,
@@ -1492,6 +1287,7 @@ pub fn parse_expr(
                 false,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry, codec)?,
+                None,
             )))
         }
 

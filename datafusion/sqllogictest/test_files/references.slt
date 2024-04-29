@@ -101,13 +101,13 @@ query TT
 EXPLAIN (SELECT "....", "...." AS c3 FROM test ORDER BY "....");
 ----
 logical_plan
-Sort: test..... ASC NULLS LAST
---Projection: test....., test..... AS c3
-----TableScan: test projection=[....]
+01)Sort: test..... ASC NULLS LAST
+02)--Projection: test....., test..... AS c3
+03)----TableScan: test projection=[....]
 physical_plan
-SortExec: expr=[....@0 ASC NULLS LAST]
---ProjectionExec: expr=[....@0 as ...., ....@0 as c3]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[....@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[....@0 as ...., ....@0 as c3]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Partial qualified name

@@ -157,30 +157,29 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
-        self.options.set(key, &value.to_string()).unwrap();
-        self
+    pub fn set(self, key: &str, value: ScalarValue) -> Self {
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a boolean configuration option
     pub fn set_bool(self, key: &str, value: bool) -> Self {
-        self.set(key, ScalarValue::Boolean(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `u64` configuration option
     pub fn set_u64(self, key: &str, value: u64) -> Self {
-        self.set(key, ScalarValue::UInt64(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `usize` configuration option
     pub fn set_usize(self, key: &str, value: usize) -> Self {
-        let value: u64 = value.try_into().expect("convert usize to u64");
-        self.set(key, ScalarValue::UInt64(Some(value)))
+        self.set_str(key, &value.to_string())
     }
 
     /// Set a generic `str` configuration option
-    pub fn set_str(self, key: &str, value: &str) -> Self {
-        self.set(key, ScalarValue::from(value))
+    pub fn set_str(mut self, key: &str, value: &str) -> Self {
+        self.options.set(key, value).unwrap();
+        self
     }
 
     /// Customize batch size
@@ -504,10 +503,51 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
+        self.set_extension(ext);
+        self
+    }
+
+    /// Set extension. Pretty much the same as [`with_extension`](Self::with_extension), but take
+    /// mutable reference instead of owning it. Useful if you want to add another extension after
+    /// the [`SessionConfig`] is created.
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion_execution::config::SessionConfig;
+    ///
+    /// // application-specific extension types
+    /// struct Ext1(u8);
+    /// struct Ext2(u8);
+    /// struct Ext3(u8);
+    ///
+    /// let ext1a = Arc::new(Ext1(10));
+    /// let ext1b = Arc::new(Ext1(11));
+    /// let ext2 = Arc::new(Ext2(2));
+    ///
+    /// let mut cfg = SessionConfig::default();
+    ///
+    /// // will only remember the last Ext1
+    /// cfg.set_extension(Arc::clone(&ext1a));
+    /// cfg.set_extension(Arc::clone(&ext1b));
+    /// cfg.set_extension(Arc::clone(&ext2));
+    ///
+    /// let ext1_received = cfg.get_extension::<Ext1>().unwrap();
+    /// assert!(!Arc::ptr_eq(&ext1_received, &ext1a));
+    /// assert!(Arc::ptr_eq(&ext1_received, &ext1b));
+    ///
+    /// let ext2_received = cfg.get_extension::<Ext2>().unwrap();
+    /// assert!(Arc::ptr_eq(&ext2_received, &ext2));
+    ///
+    /// assert!(cfg.get_extension::<Ext3>().is_none());
+    /// ```
+    pub fn set_extension<T>(&mut self, ext: Arc<T>)
+    where
+        T: Send + Sync + 'static,
+    {
         let ext = ext as Arc<dyn Any + Send + Sync + 'static>;
         let id = TypeId::of::<T>();
         self.extensions.insert(id, ext);
-        self
     }
 
     /// Get extension, if any for the specified type `T` exists.

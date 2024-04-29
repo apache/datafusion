@@ -21,7 +21,7 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
+    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
 use sqlparser::ast::{
@@ -167,16 +167,65 @@ impl Unparser<'_> {
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql(expr),
             Expr::WindowFunction(WindowFunction {
-                fun: _,
-                args: _,
-                partition_by: _,
+                fun,
+                args,
+                partition_by,
                 order_by: _,
-                window_frame: _,
+                window_frame,
                 null_treatment: _,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let func_name = fun.name();
+
+                let args = self.function_args_to_sql(args)?;
+
+                let units = match window_frame.units {
+                    datafusion_expr::window_frame::WindowFrameUnits::Rows => {
+                        ast::WindowFrameUnits::Rows
+                    }
+                    datafusion_expr::window_frame::WindowFrameUnits::Range => {
+                        ast::WindowFrameUnits::Range
+                    }
+                    datafusion_expr::window_frame::WindowFrameUnits::Groups => {
+                        ast::WindowFrameUnits::Groups
+                    }
+                };
+                let start_bound = self.convert_bound(&window_frame.start_bound);
+                let end_bound = self.convert_bound(&window_frame.end_bound);
+                let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
+                    window_name: None,
+                    partition_by: partition_by
+                        .iter()
+                        .map(|e| self.expr_to_sql(e))
+                        .collect::<Result<Vec<_>>>()?,
+                    order_by: vec![],
+                    window_frame: Some(ast::WindowFrame {
+                        units,
+                        start_bound,
+                        end_bound: Option::from(end_bound),
+                    }),
+                }));
+                Ok(ast::Expr::Function(Function {
+                    name: ast::ObjectName(vec![Ident {
+                        value: func_name.to_string(),
+                        quote_style: None,
+                    }]),
+                    args,
+                    filter: None,
+                    null_treatment: None,
+                    over,
+                    distinct: false,
+                    special: false,
+                    order_by: vec![],
+                }))
             }
-            Expr::Like(Like {
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive: _,
+            })
+            | Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
@@ -189,37 +238,20 @@ impl Unparser<'_> {
                 escape_char: *escape_char,
             }),
             Expr::AggregateFunction(agg) => {
-                let func_name = if let AggregateFunctionDefinition::BuiltIn(built_in) =
-                    &agg.func_def
-                {
-                    built_in.name()
-                } else {
-                    return not_impl_err!(
-                        "Only built in agg functions are supported, got {agg:?}"
-                    );
+                let func_name = agg.func_def.name();
+
+                let args = self.function_args_to_sql(&agg.args)?;
+                let filter = match &agg.filter {
+                    Some(filter) => Some(Box::new(self.expr_to_sql(filter)?)),
+                    None => None,
                 };
-
-                let args = agg
-                    .args
-                    .iter()
-                    .map(|e| {
-                        if matches!(e, Expr::Wildcard { qualifier: None }) {
-                            Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
-                        } else {
-                            self.expr_to_sql(e).map(|e| {
-                                FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
-                            })
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
                 Ok(ast::Expr::Function(Function {
                     name: ast::ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
                     args,
-                    filter: None,
+                    filter,
                     null_treatment: None,
                     over: None,
                     distinct: agg.distinct,
@@ -257,17 +289,43 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::Exists(Exists { subquery, negated }) => {
+                let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::Exists {
+                    subquery: sub_query,
+                    negated: *negated,
+                })
+            }
+            Expr::Sort(Sort {
+                expr,
+                asc: _,
+                nulls_first: _,
+            }) => self.expr_to_sql(expr),
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsTrue(expr) => {
                 Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
             }
+            Expr::IsNotTrue(expr) => {
+                Ok(ast::Expr::IsNotTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsFalse(expr) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotUnknown(expr) => {
+                Ok(ast::Expr::IsNotUnknown(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::Not(expr) => {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
@@ -276,7 +334,35 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            _ => not_impl_err!("Unsupported expression: {expr:?}"),
+            Expr::Negative(expr) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(AstExpr::UnaryOp {
+                    op: UnaryOperator::Minus,
+                    expr: Box::new(sql_parser_expr),
+                })
+            }
+            Expr::ScalarVariable(_, _) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::GetIndexedField(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::TryCast(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::Wildcard { qualifier: _ } => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::GroupingSet(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::Placeholder(_) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::OuterReferenceColumn(_, _) => {
+                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            }
+            Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
         }
     }
 
@@ -291,10 +377,44 @@ impl Unparser<'_> {
         Ok(ast::Expr::Identifier(self.new_ident(col.name.to_string())))
     }
 
+    fn convert_bound(
+        &self,
+        bound: &datafusion_expr::window_frame::WindowFrameBound,
+    ) -> ast::WindowFrameBound {
+        match bound {
+            datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
+                ast::WindowFrameBound::Preceding(
+                    self.scalar_to_sql(val).map(Box::new).ok(),
+                )
+            }
+            datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
+                ast::WindowFrameBound::Following(
+                    self.scalar_to_sql(val).map(Box::new).ok(),
+                )
+            }
+            datafusion_expr::window_frame::WindowFrameBound::CurrentRow => {
+                ast::WindowFrameBound::CurrentRow
+            }
+        }
+    }
+
+    fn function_args_to_sql(&self, args: &[Expr]) -> Result<Vec<ast::FunctionArg>> {
+        args.iter()
+            .map(|e| {
+                if matches!(e, Expr::Wildcard { qualifier: None }) {
+                    Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
+                } else {
+                    self.expr_to_sql(e)
+                        .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
+                }
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: Some(self.dialect.identifier_quote_style().unwrap_or('"')),
+            quote_style: self.dialect.identifier_quote_style(),
         }
     }
 
@@ -595,41 +715,86 @@ impl Unparser<'_> {
             }
             DataType::Date32 => Ok(ast::DataType::Date),
             DataType::Date64 => Ok(ast::DataType::Datetime(None)),
-            DataType::Time32(_) => todo!(),
-            DataType::Time64(_) => todo!(),
-            DataType::Duration(_) => todo!(),
-            DataType::Interval(_) => todo!(),
-            DataType::Binary => todo!(),
-            DataType::FixedSizeBinary(_) => todo!(),
-            DataType::LargeBinary => todo!(),
-            DataType::BinaryView => todo!(),
+            DataType::Time32(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Time64(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Duration(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Interval(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Binary => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::FixedSizeBinary(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeBinary => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::BinaryView => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
             DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
             DataType::LargeUtf8 => Ok(ast::DataType::Text),
-            DataType::Utf8View => todo!(),
-            DataType::List(_) => todo!(),
-            DataType::FixedSizeList(_, _) => todo!(),
-            DataType::LargeList(_) => todo!(),
-            DataType::ListView(_) => todo!(),
-            DataType::LargeListView(_) => todo!(),
-            DataType::Struct(_) => todo!(),
-            DataType::Union(_, _) => todo!(),
-            DataType::Dictionary(_, _) => todo!(),
-            DataType::Decimal128(_, _) => todo!(),
-            DataType::Decimal256(_, _) => todo!(),
-            DataType::Map(_, _) => todo!(),
-            DataType::RunEndEncoded(_, _) => todo!(),
+            DataType::Utf8View => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::List(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::FixedSizeList(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeList(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::ListView(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::LargeListView(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Struct(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Union(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Dictionary(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal128(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal256(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Map(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::RunEndEncoded(_, _) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
+    use std::{any::Any, sync::Arc, vec};
 
+    use arrow::datatypes::{Field, Schema};
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility,
+        case, col, exists,
+        expr::{AggregateFunction, AggregateFunctionDefinition},
+        lit, not, not_exists, table_scan, wildcard, ColumnarValue, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -675,6 +840,12 @@ mod tests {
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
+        let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
+            .filter(col("a").eq(lit(1)))?
+            .build()?;
+
         let tests: Vec<(Expr, &str)> = vec![
             ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
             (
@@ -729,6 +900,16 @@ mod tests {
                 r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
+                Expr::SimilarTo(Like {
+                    negated: false,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
                 r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
             ),
@@ -778,10 +959,61 @@ mod tests {
                 }),
                 "COUNT(DISTINCT *)",
             ),
+            (
+                Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::BuiltIn(
+                        datafusion_expr::AggregateFunction::Count,
+                    ),
+                    args: vec![Expr::Wildcard { qualifier: None }],
+                    distinct: false,
+                    filter: Some(Box::new(lit(true))),
+                    order_by: None,
+                    null_treatment: None,
+                }),
+                "COUNT(*) FILTER (WHERE true)",
+            ),
+            (
+                Expr::WindowFunction(WindowFunction {
+                    fun: WindowFunctionDefinition::BuiltInWindowFunction(
+                        datafusion_expr::BuiltInWindowFunction::RowNumber,
+                    ),
+                    args: vec![col("col")],
+                    partition_by: vec![],
+                    order_by: vec![],
+                    window_frame: WindowFrame::new(None),
+                    null_treatment: None,
+                }),
+                r#"ROW_NUMBER("col") OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
+            ),
+            (
+                Expr::WindowFunction(WindowFunction {
+                    fun: WindowFunctionDefinition::AggregateFunction(
+                        datafusion_expr::AggregateFunction::Count,
+                    ),
+                    args: vec![wildcard()],
+                    partition_by: vec![],
+                    order_by: vec![],
+                    window_frame: WindowFrame::new_bounds(
+                        datafusion_expr::WindowFrameUnits::Range,
+                        datafusion_expr::WindowFrameBound::Preceding(
+                            ScalarValue::UInt32(Some(6)),
+                        ),
+                        datafusion_expr::WindowFrameBound::Following(
+                            ScalarValue::UInt32(Some(2)),
+                        ),
+                    ),
+                    null_treatment: None,
+                }),
+                r#"COUNT(*) OVER (RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+            ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
                 r#"(("a" + "b") > 4) IS TRUE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_true(),
+                r#"(("a" + "b") > 4) IS NOT TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
@@ -791,11 +1023,25 @@ mod tests {
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
+                r#"(("a" + "b") > 4) IS NOT UNKNOWN"#,
+            ),
             (not(col("a")), r#"NOT "a""#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
                 r#"("a" BETWEEN 1 AND 7)"#,
             ),
+            (Expr::Negative(Box::new(col("a"))), r#"-"a""#),
+            (
+                exists(Arc::new(dummy_logical_plan.clone())),
+                r#"EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (
+                not_exists(Arc::new(dummy_logical_plan.clone())),
+                r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (col("a").sort(true, true), r#""a""#),
         ];
 
         for (expr, expected) in tests {
@@ -820,6 +1066,22 @@ mod tests {
         let actual = format!("{}", ast);
 
         let expected = r#"('a' > 4)"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_none() -> Result<()> {
+        let dialect = CustomDialect::new(None);
+        let unparser = Unparser::new(&dialect);
+
+        let expr = col("a").gt(lit(4));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+
+        let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
 
         Ok(())

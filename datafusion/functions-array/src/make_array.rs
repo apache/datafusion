@@ -48,6 +48,12 @@ pub struct MakeArray {
     aliases: Vec<String>,
 }
 
+impl Default for MakeArray {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MakeArray {
     pub fn new() -> Self {
         Self {
@@ -96,6 +102,10 @@ impl ScalarUDFImpl for MakeArray {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(args)
+    }
+
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        make_scalar_function(make_array_inner)(&[])
     }
 
     fn aliases(&self) -> &[String] {

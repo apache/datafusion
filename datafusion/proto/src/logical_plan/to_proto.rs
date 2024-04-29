@@ -21,6 +21,30 @@
 
 use std::sync::Arc;
 
+use arrow::{
+    array::ArrayRef,
+    datatypes::{
+        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+        TimeUnit, UnionMode,
+    },
+    ipc::writer::{DictionaryTracker, IpcDataGenerator},
+    record_batch::RecordBatch,
+};
+
+use datafusion_common::{
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
+};
+use datafusion_expr::expr::{
+    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, Sort, Unnest,
+};
+use datafusion_expr::{
+    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
+    BuiltInWindowFunction, Expr, JoinConstraint, JoinType, TryCast, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
+
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -35,30 +59,6 @@ use crate::protobuf::{
     UnionField, UnionValue,
 };
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{
-        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-        TimeUnit, UnionMode,
-    },
-    ipc::writer::{DictionaryTracker, IpcDataGenerator},
-    record_batch::RecordBatch,
-};
-use datafusion_common::{
-    Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
-    ScalarValue,
-};
-use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, Unnest,
-};
-use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
-};
-
 use super::LogicalExtensionCodec;
 
 #[derive(Debug)]
@@ -70,8 +70,6 @@ pub enum Error {
     InvalidScalarType(DataType),
 
     InvalidTimeUnit(TimeUnit),
-
-    UnsupportedScalarFunction(BuiltinScalarFunction),
 
     NotImplemented(String),
 }
@@ -93,9 +91,6 @@ impl std::fmt::Display for Error {
                     f,
                     "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {time_unit:?}"
                 )
-            }
-            Self::UnsupportedScalarFunction(function) => {
-                write!(f, "Unsupported scalar function {function:?}")
             }
             Self::NotImplemented(s) => {
                 write!(f, "Not implemented: {s}")
@@ -275,27 +270,20 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     }
 }
 
-impl TryFrom<&DFField> for protobuf::DfField {
-    type Error = Error;
-
-    fn try_from(f: &DFField) -> Result<Self, Self::Error> {
-        Ok(Self {
-            field: Some(f.field().as_ref().try_into()?),
-            qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
-                relation: r.to_string(),
-            }),
-        })
-    }
-}
-
 impl TryFrom<&DFSchema> for protobuf::DfSchema {
     type Error = Error;
 
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
-            .fields()
             .iter()
-            .map(|f| f.try_into())
+            .map(|(qualifier, field)| {
+                Ok(protobuf::DfField {
+                    field: Some(field.as_ref().try_into()?),
+                    qualifier: qualifier.map(|r| protobuf::ColumnRelation {
+                        relation: r.to_string(),
+                    }),
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
@@ -782,17 +770,6 @@ pub fn serialize_expr(
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
             let args = serialize_exprs(args, codec)?;
             match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let fun: protobuf::ScalarFunction = fun.try_into()?;
-                    protobuf::LogicalExprNode {
-                        expr_type: Some(ExprType::ScalarFunction(
-                            protobuf::ScalarFunctionNode {
-                                fun: fun.into(),
-                                args,
-                            },
-                        )),
-                    }
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
@@ -971,9 +948,9 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { exprs }) => {
+        Expr::Unnest(Unnest { expr }) => {
             let expr = protobuf::Unnest {
-                exprs: serialize_exprs(exprs, codec)?,
+                exprs: vec![serialize_expr(expr.as_ref(), codec)?],
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -1003,7 +980,7 @@ pub fn serialize_expr(
         | Expr::Exists { .. }
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
+            // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
         Expr::GetIndexedField(GetIndexedField { expr, field }) => {
@@ -1410,65 +1387,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     }
 }
 
-impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
-    type Error = Error;
-
-    fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
-        let scalar_function = match scalar {
-            BuiltinScalarFunction::Sqrt => Self::Sqrt,
-            BuiltinScalarFunction::Cbrt => Self::Cbrt,
-            BuiltinScalarFunction::Sin => Self::Sin,
-            BuiltinScalarFunction::Cos => Self::Cos,
-            BuiltinScalarFunction::Cot => Self::Cot,
-            BuiltinScalarFunction::Sinh => Self::Sinh,
-            BuiltinScalarFunction::Cosh => Self::Cosh,
-            BuiltinScalarFunction::Atan => Self::Atan,
-            BuiltinScalarFunction::Asinh => Self::Asinh,
-            BuiltinScalarFunction::Acosh => Self::Acosh,
-            BuiltinScalarFunction::Atanh => Self::Atanh,
-            BuiltinScalarFunction::Exp => Self::Exp,
-            BuiltinScalarFunction::Factorial => Self::Factorial,
-            BuiltinScalarFunction::Gcd => Self::Gcd,
-            BuiltinScalarFunction::Lcm => Self::Lcm,
-            BuiltinScalarFunction::Log => Self::Log,
-            BuiltinScalarFunction::Ln => Self::Ln,
-            BuiltinScalarFunction::Log10 => Self::Log10,
-            BuiltinScalarFunction::Degrees => Self::Degrees,
-            BuiltinScalarFunction::Radians => Self::Radians,
-            BuiltinScalarFunction::Floor => Self::Floor,
-            BuiltinScalarFunction::Ceil => Self::Ceil,
-            BuiltinScalarFunction::Round => Self::Round,
-            BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Log2 => Self::Log2,
-            BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
-            BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
-            BuiltinScalarFunction::EndsWith => Self::EndsWith,
-            BuiltinScalarFunction::InitCap => Self::InitCap,
-            BuiltinScalarFunction::Left => Self::Left,
-            BuiltinScalarFunction::Lpad => Self::Lpad,
-            BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Reverse => Self::Reverse,
-            BuiltinScalarFunction::Right => Self::Right,
-            BuiltinScalarFunction::Rpad => Self::Rpad,
-            BuiltinScalarFunction::Strpos => Self::Strpos,
-            BuiltinScalarFunction::Substr => Self::Substr,
-            BuiltinScalarFunction::Translate => Self::Translate,
-            BuiltinScalarFunction::Coalesce => Self::Coalesce,
-            BuiltinScalarFunction::Pi => Self::Pi,
-            BuiltinScalarFunction::Power => Self::Power,
-            BuiltinScalarFunction::Atan2 => Self::Atan2,
-            BuiltinScalarFunction::Nanvl => Self::Nanvl,
-            BuiltinScalarFunction::Iszero => Self::Iszero,
-            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
-            BuiltinScalarFunction::FindInSet => Self::FindInSet,
-        };
-
-        Ok(scalar_function)
-    }
-}
-
 impl From<&TimeUnit> for protobuf::TimeUnit {
     fn from(val: &TimeUnit) -> Self {
         match val {
@@ -1490,22 +1408,22 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
     }
 }
 
-impl From<OwnedTableReference> for protobuf::OwnedTableReference {
-    fn from(t: OwnedTableReference) -> Self {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+impl From<TableReference> for protobuf::TableReference {
+    fn from(t: TableReference) -> Self {
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
-            OwnedTableReference::Bare { table } => {
+            TableReference::Bare { table } => {
                 TableReferenceEnum::Bare(protobuf::BareTableReference {
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Partial { schema, table } => {
+            TableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
                     schema: schema.to_string(),
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Full {
+            TableReference::Full {
                 catalog,
                 schema,
                 table,
@@ -1516,7 +1434,7 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
             }),
         };
 
-        protobuf::OwnedTableReference {
+        protobuf::TableReference {
             table_reference_enum: Some(table_reference_enum),
         }
     }

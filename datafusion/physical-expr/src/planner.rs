@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    expressions::{self, binary, like, Column, Literal},
-    functions, udf, PhysicalExpr,
-};
+use std::sync::Arc;
+
 use arrow::datatypes::Schema;
+
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
@@ -31,8 +30,73 @@ use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
     Operator, ScalarFunctionDefinition, TryCast,
 };
-use std::sync::Arc;
 
+use crate::{
+    expressions::{self, binary, like, Column, Literal},
+    udf, PhysicalExpr,
+};
+
+/// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
+/// AS int)`.
+///
+/// [PhysicalExpr] are the physical counterpart to [Expr] used in logical
+/// planning, and can be evaluated directly on a [RecordBatch]. They are
+/// normally created from [Expr] by a [PhysicalPlanner] and can be created
+/// directly using [create_physical_expr].
+///
+/// A Physical expression knows its type, nullability and how to evaluate itself.
+///
+/// [PhysicalPlanner]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
+/// [RecordBatch]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
+///
+/// # Example: Create `PhysicalExpr` from `Expr`
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::DFSchema;
+/// # use datafusion_expr::{Expr, col, lit};
+/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_expr::execution_props::ExecutionProps;
+/// // For a logical expression `a = 1`, we can create a physical expression
+/// let expr = col("a").eq(lit(1));
+/// // To create a PhysicalExpr we need 1. a schema
+/// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+/// let df_schema = DFSchema::try_from(schema).unwrap();
+/// // 2. ExecutionProps
+/// let props = ExecutionProps::new();
+/// // We can now create a PhysicalExpr:
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+/// ```
+///
+/// # Example: Executing a PhysicalExpr to obtain [ColumnarValue]
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::array::{cast::AsArray, BooleanArray, Int32Array, RecordBatch};
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::{assert_batches_eq, DFSchema};
+/// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
+/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_expr::execution_props::ExecutionProps;
+/// # let expr = col("a").eq(lit(1));
+/// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+/// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();
+/// # let props = ExecutionProps::new();
+/// // Given a PhysicalExpr, for `a = 1` we can evaluate it against a RecordBatch like this:
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+/// // Input of [1,2,3]
+/// let input_batch = RecordBatch::try_from_iter(vec![
+///   ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as _)
+/// ]).unwrap();
+/// // The result is a ColumnarValue (either an Array or a Scalar)
+/// let result = physical_expr.evaluate(&input_batch).unwrap();
+/// // In this case, a BooleanArray with the result of the comparison
+/// let ColumnarValue::Array(arr) = result else {
+///  panic!("Expected an array")
+/// };
+/// assert_eq!(arr.as_boolean(), &BooleanArray::from(vec![true, false, false]));
+/// ```
+///
+/// [ColumnarValue]: datafusion_expr::ColumnarValue
+///
 /// Create a physical expression from a logical expression ([Expr]).
 ///
 /// # Arguments
@@ -222,39 +286,29 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
-            match field {
-                GetFieldAccess::NamedStructField { name: _ } => {
-                    unreachable!(
-                        "NamedStructField should be rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListIndex { key: _ } => {
-                    unreachable!("ListIndex should be rewritten in OperatorToFunction")
-                }
-                GetFieldAccess::ListRange {
-                    start: _,
-                    stop: _,
-                    stride: _,
-                } => {
-                    unreachable!("ListRange should be rewritten in OperatorToFunction")
-                }
-            };
-        }
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
+            GetFieldAccess::NamedStructField { name: _ } => {
+                internal_err!(
+                    "NamedStructField should be rewritten in OperatorToFunction"
+                )
+            }
+            GetFieldAccess::ListIndex { key: _ } => {
+                internal_err!("ListIndex should be rewritten in OperatorToFunction")
+            }
+            GetFieldAccess::ListRange {
+                start: _,
+                stop: _,
+                stride: _,
+            } => {
+                internal_err!("ListRange should be rewritten in OperatorToFunction")
+            }
+        },
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
             match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    functions::create_physical_expr(
-                        fun,
-                        &physical_args,
-                        input_schema,
-                        execution_props,
-                    )
-                }
                 ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
                     fun.clone().as_ref(),
                     &physical_args,
@@ -331,15 +385,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{col, left, Literal};
+    use arrow_schema::{DataType, Field};
+
+    use datafusion_expr::{col, lit};
+
+    use super::*;
 
     #[test]
     fn test_create_physical_expr_scalar_input_output() -> Result<()> {
-        let expr = col("letter").eq(left("APACHE".lit(), 1i64.lit()));
+        let expr = col("letter").eq(lit("A"));
 
         let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
         let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;

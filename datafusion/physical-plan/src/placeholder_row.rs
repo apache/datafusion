@@ -119,6 +119,10 @@ impl DisplayAs for PlaceholderRowExec {
 }
 
 impl ExecutionPlan for PlaceholderRowExec {
+    fn name(&self) -> &'static str {
+        "PlaceholderRowExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -136,7 +140,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(PlaceholderRowExec::new(self.schema.clone())))
+        Ok(self)
     }
 
     fn execute(
@@ -176,7 +180,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{common, test, with_new_children_if_necessary};
+    use crate::{test, with_new_children_if_necessary};
 
     #[test]
     fn with_new_children() -> Result<()> {

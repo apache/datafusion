@@ -17,8 +17,9 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
-use crate::{Accumulator, ColumnarValue, PartitionEvaluator};
-use arrow::datatypes::DataType;
+use crate::ColumnarValue;
+use crate::{Accumulator, Expr, PartitionEvaluator};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -37,10 +38,55 @@ pub type ScalarFunctionImplementation =
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
-/// Factory that returns an accumulator for the given aggregate, given
-/// its return datatype.
+/// [`AccumulatorArgs`] contains information about how an aggregate
+/// function was called, including the types of its arguments and any optional
+/// ordering expressions.
+pub struct AccumulatorArgs<'a> {
+    /// The return type of the aggregate function.
+    pub data_type: &'a DataType,
+    /// The schema of the input arguments
+    pub schema: &'a Schema,
+    /// Whether to ignore nulls.
+    ///
+    /// SQL allows the user to specify `IGNORE NULLS`, for example:
+    ///
+    /// ```sql
+    /// SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
+    /// ```
+    pub ignore_nulls: bool,
+
+    /// The expressions in the `ORDER BY` clause passed to this aggregator.
+    ///
+    /// SQL allows the user to specify the ordering of arguments to the
+    /// aggregate using an `ORDER BY`. For example:
+    ///
+    /// ```sql
+    /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
+    /// ```
+    ///
+    /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
+    pub sort_exprs: &'a [Expr],
+}
+
+impl<'a> AccumulatorArgs<'a> {
+    pub fn new(
+        data_type: &'a DataType,
+        schema: &'a Schema,
+        ignore_nulls: bool,
+        sort_exprs: &'a [Expr],
+    ) -> Self {
+        Self {
+            data_type,
+            schema,
+            ignore_nulls,
+            sort_exprs,
+        }
+    }
+}
+
+/// Factory that returns an accumulator for the given aggregate function.
 pub type AccumulatorFactoryFunction =
-    Arc<dyn Fn(&DataType) -> Result<Box<dyn Accumulator>> + Send + Sync>;
+    Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// Factory that creates a PartitionEvaluator for the given window
 /// function

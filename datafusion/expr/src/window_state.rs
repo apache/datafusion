@@ -667,14 +667,9 @@ fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<boo
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-    use std::sync::Arc;
-
     use super::*;
-    use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
-    use arrow::array::{ArrayRef, Float64Array};
-    use datafusion_common::{Result, ScalarValue};
+    use arrow::array::Float64Array;
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![

@@ -180,7 +180,6 @@ mod tests {
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::DataFusionError;
-    use datafusion_common::Result;
 
     use paste::paste;
 

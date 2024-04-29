@@ -187,10 +187,7 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn lazy_temp_dir_creation() -> Result<()> {

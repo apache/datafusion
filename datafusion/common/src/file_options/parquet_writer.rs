@@ -17,11 +17,17 @@
 
 //! Options related to how parquet files should be written
 
-use crate::{config::TableParquetOptions, DataFusionError, Result};
+use crate::{
+    config::{ParquetOptions, TableParquetOptions},
+    DataFusionError, Result,
+};
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
-    file::properties::{EnabledStatistics, WriterProperties, WriterVersion},
+    file::{
+        metadata::KeyValue,
+        properties::{EnabledStatistics, WriterProperties, WriterVersion},
+    },
     schema::types::ColumnPath,
 };
 
@@ -47,53 +53,87 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
     type Error = DataFusionError;
 
     fn try_from(parquet_options: &TableParquetOptions) -> Result<Self> {
-        let parquet_session_options = &parquet_options.global;
-        let mut builder = WriterProperties::builder()
-            .set_data_page_size_limit(parquet_session_options.data_pagesize_limit)
-            .set_write_batch_size(parquet_session_options.write_batch_size)
-            .set_writer_version(parse_version_string(
-                &parquet_session_options.writer_version,
-            )?)
-            .set_dictionary_page_size_limit(
-                parquet_session_options.dictionary_page_size_limit,
-            )
-            .set_max_row_group_size(parquet_session_options.max_row_group_size)
-            .set_created_by(parquet_session_options.created_by.clone())
-            .set_column_index_truncate_length(
-                parquet_session_options.column_index_truncate_length,
-            )
-            .set_data_page_row_count_limit(
-                parquet_session_options.data_page_row_count_limit,
-            )
-            .set_bloom_filter_enabled(parquet_session_options.bloom_filter_enabled);
+        let ParquetOptions {
+            data_pagesize_limit,
+            write_batch_size,
+            writer_version,
+            dictionary_page_size_limit,
+            max_row_group_size,
+            created_by,
+            column_index_truncate_length,
+            data_page_row_count_limit,
+            bloom_filter_enabled,
+            encoding,
+            dictionary_enabled,
+            compression,
+            statistics_enabled,
+            max_statistics_size,
+            bloom_filter_fpp,
+            bloom_filter_ndv,
+            //  below is not part of ParquetWriterOptions
+            enable_page_index: _,
+            pruning: _,
+            skip_metadata: _,
+            metadata_size_hint: _,
+            pushdown_filters: _,
+            reorder_filters: _,
+            allow_single_file_parallelism: _,
+            maximum_parallel_row_group_writers: _,
+            maximum_buffered_record_batches_per_stream: _,
+        } = &parquet_options.global;
 
-        if let Some(encoding) = &parquet_session_options.encoding {
+        let key_value_metadata = if !parquet_options.key_value_metadata.is_empty() {
+            Some(
+                parquet_options
+                    .key_value_metadata
+                    .clone()
+                    .drain()
+                    .map(|(key, value)| KeyValue { key, value })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
+        let mut builder = WriterProperties::builder()
+            .set_data_page_size_limit(*data_pagesize_limit)
+            .set_write_batch_size(*write_batch_size)
+            .set_writer_version(parse_version_string(writer_version.as_str())?)
+            .set_dictionary_page_size_limit(*dictionary_page_size_limit)
+            .set_max_row_group_size(*max_row_group_size)
+            .set_created_by(created_by.clone())
+            .set_column_index_truncate_length(*column_index_truncate_length)
+            .set_data_page_row_count_limit(*data_page_row_count_limit)
+            .set_bloom_filter_enabled(*bloom_filter_enabled)
+            .set_key_value_metadata(key_value_metadata);
+
+        if let Some(encoding) = &encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
         }
 
-        if let Some(enabled) = parquet_session_options.dictionary_enabled {
-            builder = builder.set_dictionary_enabled(enabled);
+        if let Some(enabled) = dictionary_enabled {
+            builder = builder.set_dictionary_enabled(*enabled);
         }
 
-        if let Some(compression) = &parquet_session_options.compression {
+        if let Some(compression) = &compression {
             builder = builder.set_compression(parse_compression_string(compression)?);
         }
 
-        if let Some(statistics) = &parquet_session_options.statistics_enabled {
+        if let Some(statistics) = &statistics_enabled {
             builder =
                 builder.set_statistics_enabled(parse_statistics_string(statistics)?);
         }
 
-        if let Some(size) = parquet_session_options.max_statistics_size {
-            builder = builder.set_max_statistics_size(size);
+        if let Some(size) = max_statistics_size {
+            builder = builder.set_max_statistics_size(*size);
         }
 
-        if let Some(fpp) = parquet_session_options.bloom_filter_fpp {
-            builder = builder.set_bloom_filter_fpp(fpp);
+        if let Some(fpp) = bloom_filter_fpp {
+            builder = builder.set_bloom_filter_fpp(*fpp);
         }
 
-        if let Some(ndv) = parquet_session_options.bloom_filter_ndv {
-            builder = builder.set_bloom_filter_ndv(ndv);
+        if let Some(ndv) = bloom_filter_ndv {
+            builder = builder.set_bloom_filter_ndv(*ndv);
         }
 
         for (column, options) in &parquet_options.column_specific_options {
@@ -141,6 +181,8 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
                     builder.set_column_max_statistics_size(path, max_statistics_size);
             }
         }
+
+        // ParquetWriterOptions will have defaults for the remaining fields (e.g. sorting_columns)
         Ok(ParquetWriterOptions {
             writer_options: builder.build(),
         })

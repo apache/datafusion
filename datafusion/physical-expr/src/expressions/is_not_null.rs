@@ -119,10 +119,8 @@ mod tests {
     use arrow::{
         array::{BooleanArray, StringArray},
         datatypes::*,
-        record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_boolean_array;
-    use std::sync::Arc;
 
     #[test]
     fn is_not_null_op() -> Result<()> {

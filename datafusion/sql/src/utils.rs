@@ -24,7 +24,7 @@ use arrow_schema::{
 };
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    exec_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -34,11 +34,14 @@ use sqlparser::ast::Ident;
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone()
-        .transform_up(&|nested_expr| {
+        .transform_up(|nested_expr| {
             match nested_expr {
                 Expr::Column(col) => {
-                    let field = plan.schema().field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(field.qualified_column())))
+                    let (qualifier, field) =
+                        plan.schema().qualified_field_from_column(&col)?;
+                    Ok(Transformed::yes(Expr::Column(Column::from((
+                        qualifier, field,
+                    )))))
                 }
                 _ => {
                     // keep recursing
@@ -69,7 +72,7 @@ pub(crate) fn rebase_expr(
     plan: &LogicalPlan,
 ) -> Result<Expr> {
     expr.clone()
-        .transform_down(&|nested_expr| {
+        .transform_down(|nested_expr| {
             if base_exprs.contains(&nested_expr) {
                 Ok(Transformed::yes(expr_as_column_expr(&nested_expr, plan)?))
             } else {
@@ -153,7 +156,7 @@ pub(crate) fn resolve_positions_to_exprs(
 ) -> Option<Expr> {
     match expr {
         // sql_expr_to_logical_expr maps number to i64
-        // https://github.com/apache/arrow-datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
+        // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
         Expr::Literal(ScalarValue::Int64(Some(position)))
             if position > &0_i64 && position <= &(select_exprs.len() as i64) =>
         {
@@ -175,7 +178,7 @@ pub(crate) fn resolve_aliases_to_exprs(
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     expr.clone()
-        .transform_up(&|nested_expr| match nested_expr {
+        .transform_up(|nested_expr| match nested_expr {
             Expr::Column(c) if c.relation.is_none() => {
                 if let Some(aliased_expr) = aliases.get(&c.name) {
                     Ok(Transformed::yes(aliased_expr.clone()))

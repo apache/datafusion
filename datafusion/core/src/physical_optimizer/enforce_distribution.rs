@@ -197,12 +197,12 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new_default(plan);
             let adjusted = plan_requirements
-                .transform_down(&adjust_input_keys_ordering)
+                .transform_down(adjust_input_keys_ordering)
                 .data()?;
             adjusted.plan
         } else {
             // Run a bottom-up process
-            plan.transform_up(&|plan| {
+            plan.transform_up(|plan| {
                 Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
             })
             .data()?
@@ -211,7 +211,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context = distribution_context
-            .transform_up(&|distribution_context| {
+            .transform_up(|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })
             .data()?;
@@ -875,7 +875,8 @@ fn add_hash_on_top(
     n_target: usize,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
-    if n_target == 1 {
+    // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
+    if n_target == 1 && input.plan.output_partitioning().partition_count() == 1 {
         return Ok(input);
     }
 
@@ -1289,31 +1290,21 @@ pub(crate) mod tests {
     use crate::physical_optimizer::test_utils::{
         check_integrity, coalesce_partitions_exec, repartition_exec,
     };
-    use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::{
-        utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
-    };
+    use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
-        expressions, expressions::binary, expressions::lit, expressions::Column,
-        LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+        expressions, expressions::binary, expressions::lit, LexOrdering,
+        PhysicalSortExpr, PhysicalSortRequirement,
     };
     use datafusion_physical_plan::PlanProperties;
 
@@ -1327,11 +1318,6 @@ pub(crate) mod tests {
     }
 
     impl SortRequiredExec {
-        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-            let expr = input.output_ordering().unwrap_or(&[]).to_vec();
-            Self::new_with_requirement(input, expr)
-        }
-
         fn new_with_requirement(
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
@@ -1369,6 +1355,10 @@ pub(crate) mod tests {
     }
 
     impl ExecutionPlan for SortRequiredExec {
+        fn name(&self) -> &'static str {
+            "SortRequiredExec"
+        }
+
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -1387,10 +1377,11 @@ pub(crate) mod tests {
 
         // model that it requires the output ordering of its input
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-            vec![self
-                .properties()
-                .output_ordering()
-                .map(PhysicalSortRequirement::from_sort_exprs)]
+            if self.expr.is_empty() {
+                vec![None]
+            } else {
+                vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
+            }
         }
 
         fn with_new_children(
@@ -1673,10 +1664,6 @@ pub(crate) mod tests {
         Arc::new(UnionExec::new(input))
     }
 
-    fn sort_required_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(SortRequiredExec::new(input))
-    }
-
     fn sort_required_exec_with_req(
         input: Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
@@ -1771,14 +1758,14 @@ pub(crate) mod tests {
                     let plan_requirements =
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
-                        .transform_down(&adjust_input_keys_ordering)
+                        .transform_down(adjust_input_keys_ordering)
                         .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
                 } else {
                     // Run reorder_join_keys_to_inputs rule
-                    $PLAN.clone().transform_up(&|plan| {
+                    $PLAN.clone().transform_up(|plan| {
                         Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
                     })
                     .data()?
@@ -1786,7 +1773,7 @@ pub(crate) mod tests {
 
                 // Then run ensure_distribution rule
                 DistributionContext::new_default(adjusted)
-                    .transform_up(&|distribution_context| {
+                    .transform_up(|distribution_context| {
                         ensure_distribution(distribution_context, &config)
                     })
                     .data()
@@ -3032,7 +3019,7 @@ pub(crate) mod tests {
 
     #[test]
     fn merge_does_not_need_sort() -> Result<()> {
-        // see https://github.com/apache/arrow-datafusion/issues/4331
+        // see https://github.com/apache/datafusion/issues/4331
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
             expr: col("a", &schema).unwrap(),
@@ -3202,8 +3189,10 @@ pub(crate) mod tests {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let plan =
-            sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
+        let plan = sort_required_exec_with_req(
+            filter_exec(sort_exec(sort_key.clone(), parquet_exec(), false)),
+            sort_key,
+        );
 
         let expected = &[
             "SortRequiredExec: [c@2 ASC]",
@@ -3363,18 +3352,20 @@ pub(crate) mod tests {
         //    Parquet(sorted)
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("d", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let plan =
-            sort_required_exec(filter_exec(parquet_exec_with_sort(vec![sort_key])));
+        let plan = sort_required_exec_with_req(
+            filter_exec(parquet_exec_with_sort(vec![sort_key.clone()])),
+            sort_key,
+        );
 
         // during repartitioning ordering is preserved
         let expected = &[
-            "SortRequiredExec: [c@2 ASC]",
+            "SortRequiredExec: [d@3 ASC]",
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
         ];
 
         assert_optimized!(expected, plan.clone(), true, true);
@@ -3399,7 +3390,10 @@ pub(crate) mod tests {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let input1 = sort_required_exec(parquet_exec_with_sort(vec![sort_key]));
+        let input1 = sort_required_exec_with_req(
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+            sort_key,
+        );
         let input2 = filter_exec(parquet_exec());
         let plan = union_exec(vec![input1, input2]);
 
@@ -3477,10 +3471,13 @@ pub(crate) mod tests {
             ("c".to_string(), "c".to_string()),
         ];
         // sorted input
-        let plan = sort_required_exec(projection_exec_with_alias(
-            parquet_exec_multiple_sorted(vec![sort_key]),
-            alias,
-        ));
+        let plan = sort_required_exec_with_req(
+            projection_exec_with_alias(
+                parquet_exec_multiple_sorted(vec![sort_key.clone()]),
+                alias,
+            ),
+            sort_key,
+        );
 
         let expected = &[
             "SortRequiredExec: [c@2 ASC]",
@@ -3635,12 +3632,12 @@ pub(crate) mod tests {
             options: SortOptions::default(),
         }];
 
-        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key]));
-        let plan = sort_required_exec(plan);
+        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
+        let plan = sort_required_exec_with_req(plan, sort_key);
 
         // The groups must have only contiguous ranges of rows from the same file
         // if any group has rows from multiple files, the data is no longer sorted destroyed
-        // https://github.com/apache/arrow-datafusion/issues/8451
+        // https://github.com/apache/datafusion/issues/8451
         let expected = [
             "SortRequiredExec: [a@0 ASC]",
             "FilterExec: c@2 = 0",
@@ -4021,9 +4018,14 @@ pub(crate) mod tests {
         }];
         //  SortRequired
         //    Parquet(sorted)
-        let plan_parquet =
-            sort_required_exec(parquet_exec_with_sort(vec![sort_key.clone()]));
-        let plan_csv = sort_required_exec(csv_exec_with_sort(vec![sort_key]));
+        let plan_parquet = sort_required_exec_with_req(
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+            sort_key.clone(),
+        );
+        let plan_csv = sort_required_exec_with_req(
+            csv_exec_with_sort(vec![sort_key.clone()]),
+            sort_key,
+        );
 
         // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
         let expected_parquet = &[
@@ -4146,7 +4148,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn preserve_ordering_through_repartition() -> Result<()> {
+    fn remove_unnecessary_spm_after_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
             expr: col("c", &schema).unwrap(),
@@ -4155,11 +4157,36 @@ pub(crate) mod tests {
         let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
         let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
+        // Original plan expects its output to be ordered by c@2 ASC.
+        // This is still satisfied since, after filter that column is constant.
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
+            "CoalescePartitionsExec",
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        // last flag sets config.optimizer.PREFER_EXISTING_SORT
+        assert_optimized!(expected, physical_plan.clone(), true, true);
+        assert_optimized!(expected, physical_plan, false, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserve_ordering_through_repartition() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("d", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [d@3 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC]",
         ];
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);

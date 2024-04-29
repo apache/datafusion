@@ -46,7 +46,6 @@ use arrow::array::*;
 use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
@@ -262,6 +261,10 @@ impl DisplayAs for SortMergeJoinExec {
 }
 
 impl ExecutionPlan for SortMergeJoinExec {
+    fn name(&self) -> &'static str {
+        "SortMergeJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

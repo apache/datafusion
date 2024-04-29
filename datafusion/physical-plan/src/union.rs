@@ -183,6 +183,10 @@ impl DisplayAs for UnionExec {
 }
 
 impl ExecutionPlan for UnionExec {
+    fn name(&self) -> &'static str {
+        "UnionExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -370,6 +374,10 @@ impl DisplayAs for InterleaveExec {
 }
 
 impl ExecutionPlan for InterleaveExec {
+    fn name(&self) -> &'static str {
+        "InterleaveExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -591,7 +599,6 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::test;
 
-    use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;

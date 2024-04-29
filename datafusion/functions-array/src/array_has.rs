@@ -54,9 +54,15 @@ make_udf_function!(ArrayHasAny,
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayHas {
+pub struct ArrayHas {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHas {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHas {
@@ -121,9 +127,15 @@ impl ScalarUDFImpl for ArrayHas {
 }
 
 #[derive(Debug)]
-pub(super) struct ArrayHasAll {
+pub struct ArrayHasAll {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHasAll {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHasAll {
@@ -178,9 +190,15 @@ impl ScalarUDFImpl for ArrayHasAll {
 }
 
 #[derive(Debug)]
-pub(super) struct ArrayHasAny {
+pub struct ArrayHasAny {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayHasAny {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayHasAny {

@@ -107,7 +107,7 @@ message LogicalExprNodeCollection {
 
 message ListingTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 14;
+  TableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -126,7 +126,7 @@ message ListingTableScanNode {
 
 message ViewTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -136,7 +136,7 @@ message ViewTableScanNode {
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;
@@ -201,7 +201,7 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  OwnedTableReference name = 12;
+  TableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -238,14 +238,14 @@ message CreateCatalogNode {
 }
 
 message DropViewNode {
-  OwnedTableReference name = 1;
+  TableReference name = 1;
   bool if_exists = 2;
   DfSchema schema = 3;
 }
 
 message CreateViewNode {
   reserved 1; // was string name
-  OwnedTableReference name = 5;
+  TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -357,7 +357,7 @@ message SelectionExecNode {
 message SubqueryAliasNode {
   reserved 2; // Was string alias
   LogicalPlanNode input = 1;
-  OwnedTableReference alias = 3;
+  TableReference alias = 3;
 }
 
 // logical expressions
@@ -389,7 +389,7 @@ message LogicalExprNode {
     NegativeNode negative = 13;
     InListNode in_list = 14;
     Wildcard wildcard = 15;
-    ScalarFunctionNode scalar_function = 16;
+    // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
     // window expressions
@@ -513,7 +513,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
-  repeated OwnedTableReference relation = 3;
+  repeated TableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -536,153 +536,6 @@ message InListNode {
   LogicalExprNode expr = 1;
   repeated LogicalExprNode list = 2;
   bool negated = 3;
-}
-
-enum ScalarFunction {
-  //  0 was Abs before
-  //  The first enum value must be zero for open enums
-  unknown = 0;
-  //  1 was Acos
-  //  2 was Asin
-  Atan = 3;
-  // 4 was Ascii
-  Ceil = 5;
-  Cos = 6;
-  // 7 was Digest
-  Exp = 8;
-  Floor = 9;
-  Ln = 10;
-  Log = 11;
-  Log10 = 12;
-  Log2 = 13;
-  Round = 14;
-  Signum = 15;
-  Sin = 16;
-  Sqrt = 17;
-  // Tan = 18;
-  Trunc = 19;
-  // 20 was Array
-  // RegexpMatch = 21;
-  // 22 was BitLength
-  // 23 was Btrim
-  CharacterLength = 24;
-  // 25 was Chr
-  Concat = 26;
-  ConcatWithSeparator = 27;
-  // 28 was DatePart
-  // 29 was DateTrunc
-  InitCap = 30;
-  Left = 31;
-  Lpad = 32;
-  // 33 was Lower
-  // 34 was Ltrim
-  // 35 was MD5
-  //  36 was NullIf
-  // 37 was OctetLength 
-  Random = 38;
-  // 39 was RegexpReplace
-  // 40 was Repeat
-  // 41 was Replace
-  Reverse = 42;
-  Right = 43;
-  Rpad = 44;
-  // 45 was Rtrim
-  // 46 was SHA224
-  // 47 was SHA256
-  // 48 was SHA384
-  // 49 was SHA512
-  // 50 was SplitPart
-  // StartsWith = 51;
-  Strpos = 52;
-  Substr = 53;
-  // ToHex = 54;
-  // 55 was ToTimestamp
-  // 56 was ToTimestampMillis
-  // 57 was ToTimestampMicros
-  // 58 was ToTimestampSeconds
-  // 59 was Now
-  Translate = 60;
-  // Trim = 61;
-  // Upper = 62;
-  Coalesce = 63;
-  Power = 64;
-  // 65 was StructFun
-  // 66 was FromUnixtime
-  Atan2 = 67;
-  // 68 was DateBin
-  // 69 was ArrowTypeof
-  // 70 was CurrentDate
-  // 71 was CurrentTime
-  // 72 was Uuid
-  Cbrt = 73;
-  Acosh = 74;
-  Asinh = 75;
-  Atanh = 76;
-  Sinh = 77;
-  Cosh = 78;
-  // Tanh = 79;
-  Pi = 80;
-  Degrees = 81;
-  Radians = 82;
-  Factorial = 83;
-  Lcm = 84;
-  Gcd = 85;
-  // 86 was ArrayAppend
-  // 87 was ArrayConcat
-  // 88 was ArrayDims
-  // 89 was ArrayRepeat
-  // 90 was ArrayLength
-  // 91 was ArrayNdims
-  // 92 was ArrayPosition
-  // 93 was ArrayPositions
-  // 94 was ArrayPrepend
-  // 95 was ArrayRemove
-  // 96 was ArrayReplace
-  // 97 was ArrayToString
-  // 98 was Cardinality
-  // 99 was ArrayElement
-  // 100 was ArraySlice
-  Cot = 103;
-  // 104 was ArrayHas
-  // 105 was ArrayHasAny
-  // 106 was ArrayHasAll
-  // 107 was ArrayRemoveN
-  // 108 was ArrayReplaceN
-  // 109 was ArrayRemoveAll
-  // 110 was ArrayReplaceAll
-  Nanvl = 111;
-  // 112 was Flatten
-  // 113 was IsNan
-  Iszero = 114;
-  // 115 was ArrayEmpty
-  // 116 was ArrayPopBack
-  // 117 was StringToArray
-  // 118 was ToTimestampNanos
-  // 119 was ArrayIntersect
-  // 120 was ArrayUnion
-  // 121 was OverLay
-  // 122 is Range
-  // 123 is ArrayExcept
-  // 124 was ArrayPopFront
-  // 125 was Levenshtein
-  SubstrIndex = 126;
-  FindInSet = 127;
-  // 128 was ArraySort
-  // 129 was ArrayDistinct
-  // 130 was ArrayResize
-  EndsWith = 131;
-  // 132 was InStr
-  // 133 was MakeDate
-  // 134 was ArrayReverse
-  // 135 is RegexpLike
-  // 136 was ToChar
-  // 137 was ToDate
-  // 138 was ToUnixtime
-}
-
-message ScalarFunctionNode {
-  ScalarFunction fun = 1;
-  repeated LogicalExprNode args = 2;
 }
 
 enum AggregateFunction {
@@ -1169,7 +1022,7 @@ message FullTableReference {
   string table = 3;
 }
 
-message OwnedTableReference {
+message TableReference {
   oneof table_reference_enum {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;
@@ -1458,13 +1311,13 @@ message PhysicalExprNode {
     PhysicalSortExprNode sort = 10;
     PhysicalNegativeNode negative = 11;
     PhysicalInListNode in_list = 12;
-    PhysicalScalarFunctionNode scalar_function = 13;
+    //  was PhysicalScalarFunctionNode scalar_function = 13;
     PhysicalTryCastNode try_cast = 14;
-
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
 
     PhysicalScalarUdfNode scalar_udf = 16;
+    // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
   }
@@ -1557,13 +1410,6 @@ message PhysicalCaseNode {
   PhysicalExprNode expr = 1;
   repeated PhysicalWhenThen when_then_expr = 2;
   PhysicalExprNode else_expr = 3;
-}
-
-message PhysicalScalarFunctionNode {
-  string name = 1;
-  ScalarFunction fun = 2;
-  repeated PhysicalExprNode args = 3;
-  ArrowType return_type = 4;
 }
 
 message PhysicalTryCastNode {
