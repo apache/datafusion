@@ -104,6 +104,10 @@ impl ScalarUDFImpl for MakeArray {
         make_scalar_function(make_array_inner)(args)
     }
 
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        make_scalar_function(make_array_inner)(&[])
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

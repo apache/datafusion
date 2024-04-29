@@ -33,6 +33,12 @@ pub struct LPadFunc {
     signature: Signature,
 }
 
+impl Default for LPadFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LPadFunc {
     pub fn new() -> Self {
         use DataType::*;

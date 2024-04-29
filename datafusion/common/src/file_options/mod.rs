@@ -124,6 +124,10 @@ mod tests {
             123
         );
 
+        // properties which remain as default on WriterProperties
+        assert_eq!(properties.key_value_metadata(), None);
+        assert_eq!(properties.sorting_columns(), None);
+
         Ok(())
     }
 

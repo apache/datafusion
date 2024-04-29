@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{not_impl_err, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -180,6 +180,13 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    /// Invoke the function without `args` but number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        self.inner.invoke_no_args(number_rows)
+    }
+
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
     pub fn fun(&self) -> ScalarFunctionImplementation {
@@ -322,10 +329,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// The function will be invoked passed with the slice of [`ColumnarValue`]
     /// (either scalar or array).
     ///
-    /// # Zero Argument Functions
-    /// If the function has zero parameters (e.g. `now()`) it will be passed a
-    /// single element slice which is a a null array to indicate the batch's row
-    /// count (so the function can know the resulting array size).
+    /// If the function does not take any arguments, please use [invoke_no_args]
+    /// instead and return [not_impl_err] for this function.
+    ///
     ///
     /// # Performance
     ///
@@ -335,7 +341,18 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    ///
+    /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+
+    /// Invoke the function without `args`, instead the number of rows are provided,
+    /// returning the appropriate result.
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke_no_args but called",
+            self.name()
+        )
+    }
 
     /// Returns any aliases (alternate names) for this function.
     ///

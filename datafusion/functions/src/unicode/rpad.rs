@@ -33,6 +33,12 @@ pub struct RPadFunc {
     signature: Signature,
 }
 
+impl Default for RPadFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RPadFunc {
     pub fn new() -> Self {
         use DataType::*;

@@ -1323,6 +1323,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "hashbrown 0.14.3",
+ "indexmap 2.2.6",
  "itertools",
  "log",
  "regex-syntax",

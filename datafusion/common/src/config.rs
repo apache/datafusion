@@ -1364,12 +1364,31 @@ impl TableOptions {
 
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
+///
+/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
+/// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {
     /// Global Parquet options that propagates to all columns.
     pub global: ParquetOptions,
     /// Column specific options. Default usage is parquet.XX::column.
     pub column_specific_options: HashMap<String, ColumnOptions>,
+    /// Additional file-level metadata to include. Inserted into the key_value_metadata
+    /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
+    ///
+    /// Multiple entries are permitted
+    /// ```sql
+    /// OPTIONS (
+    ///    'format.metadata::key1' '',
+    ///    'format.metadata::key2' 'value',
+    ///    'format.metadata::key3' 'value has spaces',
+    ///    'format.metadata::key4' 'value has special chars :: :',
+    ///    'format.metadata::key_dupe' 'original will be overwritten',
+    ///    'format.metadata::key_dupe' 'final'
+    /// )
+    /// ```
+    pub key_value_metadata: HashMap<String, Option<String>>,
 }
 
 impl ConfigField for TableParquetOptions {
@@ -1380,8 +1399,24 @@ impl ConfigField for TableParquetOptions {
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        // Determine the key if it's a global or column-specific setting
-        if key.contains("::") {
+        // Determine if the key is a global, metadata, or column-specific setting
+        if key.starts_with("metadata::") {
+            let k =
+                match key.split("::").collect::<Vec<_>>()[..] {
+                    [_meta] | [_meta, ""] => return Err(DataFusionError::Configuration(
+                        "Invalid metadata key provided, missing key in metadata::<key>"
+                            .to_string(),
+                    )),
+                    [_meta, k] => k.into(),
+                    _ => {
+                        return Err(DataFusionError::Configuration(format!(
+                        "Invalid metadata key provided, found too many '::' in \"{key}\""
+                    )))
+                    }
+                };
+            self.key_value_metadata.insert(k, Some(value.into()));
+            Ok(())
+        } else if key.contains("::") {
             self.column_specific_options.set(key, value)
         } else {
             self.global.set(key, value)
@@ -1772,5 +1807,39 @@ mod tests {
         assert!(entries
             .iter()
             .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options_config_metadata_entry() {
+        let mut table_config = TableOptions::new();
+        table_config.set_file_format(FileType::PARQUET);
+        table_config.set("format.metadata::key1", "").unwrap();
+        table_config.set("format.metadata::key2", "value2").unwrap();
+        table_config
+            .set("format.metadata::key3", "value with spaces ")
+            .unwrap();
+        table_config
+            .set("format.metadata::key4", "value with special chars :: :")
+            .unwrap();
+
+        let parsed_metadata = table_config.parquet.key_value_metadata.clone();
+        assert_eq!(parsed_metadata.get("should not exist1"), None);
+        assert_eq!(parsed_metadata.get("key1"), Some(&Some("".into())));
+        assert_eq!(parsed_metadata.get("key2"), Some(&Some("value2".into())));
+        assert_eq!(
+            parsed_metadata.get("key3"),
+            Some(&Some("value with spaces ".into()))
+        );
+        assert_eq!(
+            parsed_metadata.get("key4"),
+            Some(&Some("value with special chars :: :".into()))
+        );
+
+        // duplicate keys are overwritten
+        table_config.set("format.metadata::key_dupe", "A").unwrap();
+        table_config.set("format.metadata::key_dupe", "B").unwrap();
+        let parsed_metadata = table_config.parquet.key_value_metadata;
+        assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
 }

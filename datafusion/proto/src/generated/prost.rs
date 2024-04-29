@@ -616,6 +616,7 @@ pub mod logical_expr_node {
         InList(::prost::alloc::boxed::Box<super::InListNode>),
         #[prost(message, tag = "15")]
         Wildcard(super::Wildcard),
+        /// was  ScalarFunctionNode scalar_function = 16;
         #[prost(message, tag = "17")]
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
         /// window expressions
@@ -2087,11 +2088,13 @@ pub mod physical_expr_node {
         Negative(::prost::alloc::boxed::Box<super::PhysicalNegativeNode>),
         #[prost(message, tag = "12")]
         InList(::prost::alloc::boxed::Box<super::PhysicalInListNode>),
+        ///   was PhysicalScalarFunctionNode scalar_function = 13;
         #[prost(message, tag = "14")]
         TryCast(::prost::alloc::boxed::Box<super::PhysicalTryCastNode>),
         /// window expressions
         #[prost(message, tag = "15")]
         WindowExpr(super::PhysicalWindowExprNode),
+        /// was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
         #[prost(message, tag = "18")]
