@@ -143,16 +143,21 @@ impl GroupingGroupsAccumulator {
         grouping_exprs: &[Arc<dyn PhysicalExpr>],
         group_by_exprs: &[(Arc<dyn PhysicalExpr>, String)],
     ) -> Result<Self> {
+        // The PhysicalExprs of grouping_exprs must be Column PhysicalExpr. Because if
+        // the group by PhysicalExpr in SQL is non-Column PhysicalExpr, then there is
+        // a ProjectionExec before AggregateExec to convert the non-column PhysicalExpr
+        // to Column PhysicalExpr.
         macro_rules! downcast_column {
             ($EXPR:expr) => {{
                 if let Some(column) = $EXPR.as_any().downcast_ref::<Column>() {
                     column
                 } else {
-                    return Err(DataFusionError::Execution(
-                        "Grouping only supports grouping set which only contains Column Expr".to_string(),
-                    ));
+                    return Err(DataFusionError::Internal(format!(
+                        "Grouping doesn't support expr: {}",
+                        $EXPR
+                    )));
                 }
-            }}
+            }};
         }
 
         // collect column indices of group_by_exprs, only Column Expr
@@ -192,9 +197,10 @@ fn find_grouping_column_index(
             return Ok(i);
         }
     }
-    Err(DataFusionError::Execution(
-        "Not found grouping column in group by columns".to_string(),
-    ))
+    Err(DataFusionError::Execution(format!(
+        "Not found grouping column index {} in group by column indices {:?}",
+        grouping_column_index, group_by_column_indices
+    )))
 }
 
 fn compute_mask(indices: &[usize], grouping_set: &[bool]) -> i32 {
@@ -217,8 +223,9 @@ impl GroupsAccumulator for GroupingGroupsAccumulator {
         grouping_set: &[bool],
     ) -> Result<()> {
         self.masks.resize(total_num_groups, 0);
+        let mask = compute_mask(&self.indices, grouping_set);
         accumulate_indices(group_indices, None, opt_filter, |group_index| {
-            self.masks[group_index] = compute_mask(&self.indices, grouping_set);
+            self.masks[group_index] = mask;
         });
         Ok(())
     }
