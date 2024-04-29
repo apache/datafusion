@@ -1725,6 +1725,7 @@ pub(crate) mod tests {
     /// * `TARGET_PARTITIONS` (optional) - number of partitions to repartition to
     /// * `REPARTITION_FILE_SCANS` (optional) - if true, will repartition file scans
     /// * `REPARTITION_FILE_MIN_SIZE` (optional) - minimum file size to repartition
+    /// * `PREFER_EXISTING_UNION` (optional) - if true, will not attempt to convert Union to Interleave
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
             assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, false, 10, false, 1024, false);
