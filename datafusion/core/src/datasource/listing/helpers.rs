@@ -37,7 +37,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, Column, DFSchema, DataFusionError};
+use datafusion_common::{Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -99,9 +99,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                                 Ok(TreeNodeRecursion::Stop)
                             }
                         }
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }

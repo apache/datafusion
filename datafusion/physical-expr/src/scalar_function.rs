@@ -37,7 +37,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
 };
@@ -151,11 +151,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 } else {
                     fun.invoke(&inputs)
                 }
-            }
-            ScalarFunctionDefinition::Name(_) => {
-                internal_err!(
-                    "Name function must be resolved to one of the other variants prior to physical planning"
-                )
             }
         }
     }

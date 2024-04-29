@@ -404,9 +404,6 @@ impl Between {
 pub enum ScalarFunctionDefinition {
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
-    /// A scalar function constructed with name. This variant can not be executed directly
-    /// and instead must be resolved to one of the other variants prior to physical planning.
-    Name(Arc<str>),
 }
 
 /// ScalarFunction expression invokes a built-in scalar function
@@ -430,7 +427,6 @@ impl ScalarFunctionDefinition {
     pub fn name(&self) -> &str {
         match self {
             ScalarFunctionDefinition::UDF(udf) => udf.name(),
-            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
 
@@ -440,11 +436,6 @@ impl ScalarFunctionDefinition {
         match self {
             ScalarFunctionDefinition::UDF(udf) => {
                 Ok(udf.signature().volatility == crate::Volatility::Volatile)
-            }
-            ScalarFunctionDefinition::Name(func) => {
-                internal_err!(
-                    "Cannot determine volatility of unresolved function: {func}"
-                )
             }
         }
     }
@@ -2100,11 +2091,6 @@ mod test {
             ),
         }));
         assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
-
-        // Unresolved function
-        ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
-            .is_volatile()
-            .expect_err("Shouldn't determine volatility of unresolved function");
     }
 
     use super::*;

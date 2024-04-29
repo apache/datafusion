@@ -4548,7 +4548,7 @@ mod tests {
         // thus the size of the enum appears to as well
 
         // The value may also change depending on rust version
-        assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
+        assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }
 
     #[test]
