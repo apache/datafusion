@@ -259,11 +259,11 @@ pub struct IPCWriter {
     /// inner writer
     pub writer: FileWriter<File>,
     /// batches written
-    pub num_batches: u64,
+    pub num_batches: usize,
     /// rows written
-    pub num_rows: u64,
+    pub num_rows: usize,
     /// bytes written
-    pub num_bytes: u64,
+    pub num_bytes: usize,
 }
 
 impl IPCWriter {
@@ -306,9 +306,9 @@ impl IPCWriter {
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.writer.write(batch)?;
         self.num_batches += 1;
-        self.num_rows += batch.num_rows() as u64;
+        self.num_rows += batch.num_rows();
         let num_bytes: usize = batch.get_array_memory_size();
-        self.num_bytes += num_bytes as u64;
+        self.num_bytes += num_bytes;
         Ok(())
     }
 
