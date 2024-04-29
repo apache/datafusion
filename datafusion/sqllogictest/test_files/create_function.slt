@@ -1,0 +1,60 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+## SQL tests for CREATE / DROP FUNCTION
+##
+## Note that DataFusion provides a pluggable system for creating functions
+## but has no built in support for doing so.
+
+# Use PostgresSQL dialect (until we upgrade to sqlparser 0.44, where CREATE FUNCTION)
+# is supported in the Generic dialect (the default)
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# Create function will fail unless a user supplied function factory is supplied
+statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
+
+# multi-part identifiers are not supported
+statement error DataFusion error: This feature is not implemented: Qualified functions are not supported
+CREATE FUNCTION foo.bar (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
+
+statement error DataFusion error: This feature is not implemented: Qualified functions are not supported
+DROP FUNCTION foo.bar;
+
+# Show it is possible to drop existing (UDF) functions
+query I
+select abs(-1);
+----
+1
+
+# drop the function
+statement ok
+DROP FUNCTION abs;
+
+# now the query errors
+query error Invalid function 'abs'.
+select abs(-1);
+
+# Can't drop the function again
+statement error DataFusion error: Execution error: Function does not exist
+DROP FUNCTION abs;
+
+# But DROP IF EXISTS does not error
+statement ok
+DROP FUNCTION IF EXISTS abs;

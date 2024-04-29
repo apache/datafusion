@@ -30,11 +30,11 @@ use arrow::{
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::{Accumulator, ColumnarValue};
-use std::{any::Any, iter, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
@@ -284,7 +284,8 @@ impl ApproxPercentileAccumulator {
     }
 
     pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
-        self.digest = TDigest::merge_digests(digests);
+        let digests = digests.iter().chain(std::iter::once(&self.digest));
+        self.digest = TDigest::merge_digests(digests)
     }
 
     pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
@@ -391,7 +392,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.digest.count() == 0.0 {
-            return exec_err!("aggregate function needs at least one non-null element");
+            return ScalarValue::try_from(self.return_type.clone());
         }
         let q = self.digest.estimate_quantile(self.percentile);
 
@@ -425,7 +426,6 @@ impl Accumulator for ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()
                     .map(|state| TDigest::from_scalar_state(&state))
             })
-            .chain(iter::once(Ok(self.digest.clone())))
             .collect::<Result<Vec<_>>>()?;
 
         self.merge_digests(&states);
@@ -438,5 +438,36 @@ impl Accumulator for ApproxPercentileAccumulator {
             - std::mem::size_of_val(&self.digest)
             + self.return_type.size()
             - std::mem::size_of_val(&self.return_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
+    use crate::aggregate::tdigest::TDigest;
+    use arrow_schema::DataType;
+
+    #[test]
+    fn test_combine_approx_percentile_accumulator() {
+        let mut digests: Vec<TDigest> = Vec::new();
+
+        // one TDigest with 50_000 values from 1 to 1_000
+        for _ in 1..=50 {
+            let t = TDigest::new(100);
+            let values: Vec<_> = (1..=1_000).map(f64::from).collect();
+            let t = t.merge_unsorted_f64(values);
+            digests.push(t)
+        }
+
+        let t1 = TDigest::merge_digests(&digests);
+        let t2 = TDigest::merge_digests(&digests);
+
+        let mut accumulator =
+            ApproxPercentileAccumulator::new_with_max_size(0.5, DataType::Float64, 100);
+
+        accumulator.merge_digests(&[t1]);
+        assert_eq!(accumulator.digest.count(), 50_000.0);
+        accumulator.merge_digests(&[t2]);
+        assert_eq!(accumulator.digest.count(), 100_000.0);
     }
 }

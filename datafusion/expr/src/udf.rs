@@ -17,13 +17,13 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::ExprSchemable;
+use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{not_impl_err, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -48,8 +48,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -156,9 +156,21 @@ impl ScalarUDF {
         &self,
         args: &[Expr],
         schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
-        self.inner.return_type_from_exprs(args, schema)
+        self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    /// Do the function rewrite
+    ///
+    /// See [`ScalarUDFImpl::simplify`] for more details.
+    pub fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        self.inner.simplify(args, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -166,6 +178,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::invoke`] for more details.
     pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         self.inner.invoke(args)
+    }
+
+    /// Invoke the function without `args` but number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        self.inner.invoke_no_args(number_rows)
     }
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
@@ -180,6 +199,11 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::monotonicity`] for more details.
     pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         self.inner.monotonicity()
+    }
+
+    /// Get the circuits of inner implementation
+    pub fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
     }
 }
 
@@ -201,7 +225,7 @@ where
 /// [`ScalarUDF`] for other available options.
 ///
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -293,14 +317,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_type_from_exprs(
         &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        self.return_type(&arg_types)
+        self.return_type(arg_types)
     }
 
     /// Invoke the function on `args`, returning the appropriate result
@@ -308,18 +329,30 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// The function will be invoked passed with the slice of [`ColumnarValue`]
     /// (either scalar or array).
     ///
-    /// # Zero Argument Functions
-    /// If the function has zero parameters (e.g. `now()`) it will be passed a
-    /// single element slice which is a a null array to indicate the batch's row
-    /// count (so the function can know the resulting array size).
+    /// If the function does not take any arguments, please use [invoke_no_args]
+    /// instead and return [not_impl_err] for this function.
+    ///
     ///
     /// # Performance
     ///
     /// For the best performance, the implementations of `invoke` should handle
     /// the common case when one or more of their arguments are constant values
-    /// (aka  [`ColumnarValue::Scalar`]). Calling [`ColumnarValue::into_array`]
-    /// and treating all arguments as arrays will work, but will be slower.
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    /// (aka  [`ColumnarValue::Scalar`]).
+    ///
+    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
+    /// to arrays, which will likely be simpler code, but be slower.
+    ///
+    /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+
+    /// Invoke the function without `args`, instead the number of rows are provided,
+    /// returning the appropriate result.
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke_no_args but called",
+            self.name()
+        )
+    }
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -337,6 +370,40 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function specifies monotonicity behaviors for User defined scalar functions.
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         Ok(None)
+    }
+
+    /// Optionally apply per-UDF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// # Arguments
+    /// * 'args': The arguments of the function
+    /// * 'schema': The schema of the function
+    ///
+    /// # Returns
+    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
+    /// if the function cannot be simplified, the arguments *MUST* be returned
+    /// unmodified
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        Ok(ExprSimplifyResult::Original(args))
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    fn short_circuits(&self) -> bool {
+        false
     }
 }
 
@@ -386,7 +453,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 }
 
 /// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8578>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
 /// for more details)
 struct ScalarUdfLegacyWrapper {
     /// The name of the function

@@ -18,17 +18,17 @@
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFField, DFSchema, DFSchemaRef,
+    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, BuiltinScalarFunction,
-    Case, Expr, LogicalPlan, Operator,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, Expr, LogicalPlan,
+    Operator, ScalarUDF,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, ScalarUDF, Subquery, WindowFrameBound, WindowFrameUnits,
+    Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -75,7 +75,6 @@ use crate::variation_const::{
 };
 
 enum ScalarFunctionType {
-    Builtin(BuiltinScalarFunction),
     Op(Operator),
     Expr(BuiltinExprBuilder),
     Udf(Arc<ScalarUDF>),
@@ -125,10 +124,6 @@ fn scalar_function_type_from_str(
 
     if let Ok(op) = name_to_op(name) {
         return Ok(ScalarFunctionType::Op(op));
-    }
-
-    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
-        return Ok(ScalarFunctionType::Builtin(fun));
     }
 
     if let Some(builder) = BuiltinExprBuilder::try_from_name(name) {
@@ -460,16 +455,16 @@ pub async fn from_substrait_rel(
                         return plan_err!("No table name found in NamedTable");
                     }
                     1 => TableReference::Bare {
-                        table: (&nt.names[0]).into(),
+                        table: nt.names[0].clone().into(),
                     },
                     2 => TableReference::Partial {
-                        schema: (&nt.names[0]).into(),
-                        table: (&nt.names[1]).into(),
+                        schema: nt.names[0].clone().into(),
+                        table: nt.names[1].clone().into(),
                     },
                     _ => TableReference::Full {
-                        catalog: (&nt.names[0]).into(),
-                        schema: (&nt.names[1]).into(),
-                        table: (&nt.names[2]).into(),
+                        catalog: nt.names[0].clone().into(),
+                        schema: nt.names[1].clone().into(),
+                        table: nt.names[2].clone().into(),
                     },
                 };
                 let t = ctx.table(table_reference).await?;
@@ -484,9 +479,14 @@ pub async fn from_substrait_rel(
                                 .collect();
                             match &t {
                                 LogicalPlan::TableScan(scan) => {
-                                    let fields: Vec<DFField> = column_indices
+                                    let fields = column_indices
                                         .iter()
-                                        .map(|i| scan.projected_schema.field(*i).clone())
+                                        .map(|i| {
+                                            scan.projected_schema.qualified_field(*i)
+                                        })
+                                        .map(|(qualifier, field)| {
+                                            (qualifier.cloned(), Arc::new(field.clone()))
+                                        })
                                         .collect();
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
@@ -749,12 +749,12 @@ pub async fn from_substrait_agg_func(
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by),
+            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new(fun, args, distinct, filter, order_by),
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
     } else {
         not_impl_err!(
@@ -904,18 +904,6 @@ pub async fn from_substrait_rex(
                     Ok(Arc::new(Expr::ScalarFunction(
                         expr::ScalarFunction::new_udf(fun, args),
                     )))
-                }
-                ScalarFunctionType::Builtin(fun) => {
-                    let args = decode_arguments(
-                        ctx,
-                        input_schema,
-                        extensions,
-                        f.arguments.as_slice(),
-                    )
-                    .await?;
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        fun, args,
-                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {
@@ -1389,13 +1377,9 @@ fn from_substrait_field_reference(
                 Some(_) => not_impl_err!(
                     "Direct reference StructField with child is not supported"
                 ),
-                None => {
-                    let column = input_schema.field(x.field as usize).qualified_column();
-                    Ok(Expr::Column(Column {
-                        relation: column.relation,
-                        name: column.name,
-                    }))
-                }
+                None => Ok(Expr::Column(Column::from(
+                    input_schema.qualified_field(x.field as usize),
+                ))),
             },
             _ => not_impl_err!(
                 "Direct reference with types other than StructField is not supported"

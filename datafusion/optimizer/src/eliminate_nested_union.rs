@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace nested unions to single union.
+//! [`EliminateNestedUnion`]: flattens nested `Union` to a single `Union`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
@@ -114,7 +114,7 @@ mod tests {
         ])
     }
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateNestedUnion::new()), plan, expected)
     }
 
@@ -131,7 +131,7 @@ mod tests {
         Union\
         \n  TableScan: table\
         \n  TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         \n  Union\
         \n    TableScan: table\
         \n    TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
         \n  TableScan: table\
         \n  TableScan: table\
         \n  TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod tests {
         \n      TableScan: table\
         \n  TableScan: table\
         \n  TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -210,7 +210,7 @@ mod tests {
         \n    TableScan: table\
         \n    TableScan: table\
         \n    TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         \n    TableScan: table\
         \n    TableScan: table\
         \n    TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     // We don't need to use project_with_column_index in logical optimizer,
@@ -261,7 +261,7 @@ mod tests {
         \n    TableScan: table\
         \n  Projection: table.id AS id, table.key, table.value\
         \n    TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
         \n      TableScan: table\
         \n    Projection: table.id AS id, table.key, table.value\
         \n      TableScan: table";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         \n    TableScan: table_1\
         \n  Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
         \n    TableScan: table_1";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -384,6 +384,6 @@ mod tests {
         \n      TableScan: table_1\
         \n    Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
         \n      TableScan: table_1";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }

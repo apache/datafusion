@@ -105,19 +105,42 @@ macro_rules! get_statistic {
                         let s = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
                             .ok();
+                        if s.is_none() {
+                            log::debug!(
+                                "Utf8 statistics is a non-UTF8 value, ignoring it."
+                            );
+                        }
                         Some(ScalarValue::Utf8(s))
                     }
                 }
             }
-            // type not supported yet
+            // type not fully supported yet
             ParquetStatistics::FixedLenByteArray(s) => {
                 match $target_arrow_type {
-                    // just support the decimal data type
+                    // just support specific logical data types, there are others each
+                    // with their own ordering
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
                             *precision,
                             *scale,
+                        ))
+                    }
+                    Some(DataType::FixedSizeBinary(size)) => {
+                        let value = s.$bytes_func().to_vec();
+                        let value = if value.len().try_into() == Ok(*size) {
+                            Some(value)
+                        } else {
+                            log::debug!(
+                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                size,
+                                value.len(),
+                            );
+                            None
+                        };
+                        Some(ScalarValue::FixedSizeBinary(
+                            *size,
+                            value,
                         ))
                     }
                     _ => None,
@@ -337,7 +360,7 @@ mod test {
     #[should_panic(
         expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
     )]
-    // Due to https://github.com/apache/arrow-datafusion/issues/8295
+    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
             input: timestamp_array([
@@ -447,7 +470,7 @@ mod test {
                 (None, None),
             ]),
         };
-        // Due to https://github.com/apache/arrow-datafusion/issues/8334,
+        // Due to https://github.com/apache/datafusion/issues/8334,
         // statistics for struct arrays are not supported
         test.expected_min =
             new_null_array(test.input.data_type(), test.expected_min.len());
@@ -460,7 +483,7 @@ mod test {
     #[should_panic(
         expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
     )]
-    // Due to https://github.com/apache/arrow-datafusion/issues/8295
+    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![

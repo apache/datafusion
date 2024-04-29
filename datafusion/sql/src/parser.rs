@@ -17,21 +17,20 @@
 
 //! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
 
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::str::FromStr;
+
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{OrderByExpr, Query, Value};
-use sqlparser::tokenizer::Word;
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
-        TableConstraint,
+        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
+        Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, TokenWithLocation, Tokenizer},
+    tokenizer::{Token, TokenWithLocation, Tokenizer, Word},
 };
-use std::collections::VecDeque;
-use std::fmt;
-use std::{collections::HashMap, str::FromStr};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -88,11 +87,11 @@ impl fmt::Display for ExplainStatement {
 ///
 /// ```sql
 /// COPY lineitem  TO 'lineitem'
-///  (format parquet,
+/// STORED AS PARQUET (
 ///   partitions 16,
 ///   row_group_limit_rows 100000,
 ///   row_group_limit_bytes 200000
-///  )
+/// )
 ///
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
 /// ```
@@ -102,6 +101,12 @@ pub struct CopyToStatement {
     pub source: CopyToSource,
     /// The URL to where the data is heading
     pub target: String,
+    /// Partition keys
+    pub partitioned_by: Vec<String>,
+    /// Indicates whether there is a header row (e.g. CSV)
+    pub has_header: bool,
+    /// File type (Parquet, NDJSON, CSV etc.)
+    pub stored_as: Option<String>,
     /// Target specific options
     pub options: Vec<(String, Value)>,
 }
@@ -111,15 +116,27 @@ impl fmt::Display for CopyToStatement {
         let Self {
             source,
             target,
+            partitioned_by,
+            stored_as,
             options,
+            ..
         } = self;
 
         write!(f, "COPY {source} TO {target}")?;
+        if let Some(file_type) = stored_as {
+            write!(f, " STORED AS {}", file_type)?;
+        }
+        if !partitioned_by.is_empty() {
+            write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;
+        }
+
+        if self.has_header {
+            write!(f, " WITH HEADER ROW")?;
+        }
 
         if !options.is_empty() {
             let opts: Vec<_> = options.iter().map(|(k, v)| format!("{k} {v}")).collect();
-            // print them in sorted order
-            write!(f, " ({})", opts.join(", "))?;
+            write!(f, " OPTIONS ({})", opts.join(", "))?;
         }
 
         Ok(())
@@ -158,7 +175,7 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 /// [ WITH HEADER ROW ]
 /// [ DELIMITER <char> ]
 /// [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
-/// [ PARTITIONED BY (<column list>) ]
+/// [ PARTITIONED BY (<column_definition list> | <column list>) ]
 /// [ WITH ORDER (<ordered column list>)
 /// [ OPTIONS (<key_value_list>) ]
 /// LOCATION <literal>
@@ -243,6 +260,15 @@ impl fmt::Display for Statement {
     }
 }
 
+fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
+    if field.is_some() {
+        return Err(ParserError::ParserError(format!(
+            "{name} specified more than once",
+        )));
+    }
+    Ok(())
+}
+
 /// Datafusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
@@ -252,7 +278,7 @@ impl fmt::Display for Statement {
 /// `CREATE EXTERNAL TABLE` have special syntax in DataFusion. See
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
-    parser: Parser<'a>,
+    pub parser: Parser<'a>,
 }
 
 impl<'a> DFParser<'a> {
@@ -370,21 +396,79 @@ impl<'a> DFParser<'a> {
             CopyToSource::Relation(table_name)
         };
 
-        self.parser.expect_keyword(Keyword::TO)?;
+        #[derive(Default)]
+        struct Builder {
+            stored_as: Option<String>,
+            target: Option<String>,
+            partitioned_by: Option<Vec<String>>,
+            has_header: Option<bool>,
+            options: Option<Vec<(String, Value)>>,
+        }
 
-        let target = self.parser.parse_literal_string()?;
+        let mut builder = Builder::default();
 
-        // check for options in parens
-        let options = if self.parser.peek_token().token == Token::LParen {
-            self.parse_value_options()?
-        } else {
-            vec![]
+        loop {
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::TO,
+                Keyword::PARTITIONED,
+                Keyword::OPTIONS,
+                Keyword::WITH,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(&builder.stored_as, "STORED AS")?;
+                        builder.stored_as = Some(self.parse_file_format()?);
+                    }
+                    Keyword::TO => {
+                        ensure_not_set(&builder.target, "TO")?;
+                        builder.target = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::WITH => {
+                        self.parser.expect_keyword(Keyword::HEADER)?;
+                        self.parser.expect_keyword(Keyword::ROW)?;
+                        ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                        builder.has_header = Some(true);
+                    }
+                    Keyword::PARTITIONED => {
+                        self.parser.expect_keyword(Keyword::BY)?;
+                        ensure_not_set(&builder.partitioned_by, "PARTITIONED BY")?;
+                        builder.partitioned_by = Some(self.parse_partitions()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        builder.options = Some(self.parse_value_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                let token = self.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token {token}"
+                    )));
+                }
+            }
+        }
+
+        let Some(target) = builder.target else {
+            return Err(ParserError::ParserError(
+                "Missing TO clause in COPY statement".into(),
+            ));
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
             source,
             target,
-            options,
+            partitioned_by: builder.partitioned_by.unwrap_or(vec![]),
+            has_header: builder.has_header.unwrap_or(false),
+            stored_as: builder.stored_as,
+            options: builder.options.unwrap_or(vec![]),
         }))
     }
 
@@ -609,7 +693,7 @@ impl<'a> DFParser<'a> {
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name(true)?;
-        let (columns, constraints) = self.parse_columns()?;
+        let (mut columns, constraints) = self.parse_columns()?;
 
         #[derive(Default)]
         struct Builder {
@@ -623,15 +707,6 @@ impl<'a> DFParser<'a> {
             options: Option<HashMap<String, String>>,
         }
         let mut builder = Builder::default();
-
-        fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
-            if field.is_some() {
-                return Err(ParserError::ParserError(format!(
-                    "{name} specified more than once",
-                )));
-            }
-            Ok(())
-        }
 
         loop {
             if let Some(keyword) = self.parser.parse_one_of_keywords(&[
@@ -679,7 +754,30 @@ impl<'a> DFParser<'a> {
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
                         ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                        // Expects either list of column names (col_name [, col_name]*)
+                        // or list of column definitions (col_name datatype [, col_name datatype]* )
+                        // use the token after the name to decide which parsing rule to use
+                        // Note that mixing both names and definitions is not allowed
+                        let peeked = self.parser.peek_nth_token(2);
+                        if peeked == Token::Comma || peeked == Token::RParen {
+                            // list of column names
+                            builder.table_partition_cols = Some(self.parse_partitions()?)
+                        } else {
+                            // list of column defs
+                            let (cols, cons) = self.parse_columns()?;
+                            builder.table_partition_cols = Some(
+                                cols.iter().map(|col| col.name.to_string()).collect(),
+                            );
+
+                            columns.extend(cols);
+
+                            if !cons.is_empty() {
+                                return Err(ParserError::ParserError(
+                                    "Constraints on Partition Columns are not supported"
+                                        .to_string(),
+                                ));
+                            }
+                        }
                     }
                     Keyword::OPTIONS => {
                         ensure_not_set(&builder.options, "OPTIONS")?;
@@ -1092,9 +1190,37 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // Error cases: partition column does not support type
+        // positive case: column definiton allowed in 'partition by' clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(None)),
+                make_column_def("p1", DataType::Int(None)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec!["p1".to_string()],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // negative case: mixed column defs and column names in `PARTITIONED BY` clause
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected a data type name, found: )");
+
+        // negative case: mixed column defs and column names in `PARTITIONED BY` clause
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
         expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
 
         // positive case: additional options (one entry) can be specified
@@ -1321,10 +1447,13 @@ mod tests {
     #[test]
     fn copy_to_table_to_table() -> Result<(), ParserError> {
         // positive case
-        let sql = "COPY foo TO bar";
+        let sql = "COPY foo TO bar STORED AS CSV";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
+            partitioned_by: vec![],
+            has_header: false,
+            stored_as: Some("CSV".to_owned()),
             options: vec![],
         });
 
@@ -1335,10 +1464,22 @@ mod tests {
     #[test]
     fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
         let cases = vec![
-            ("EXPLAIN COPY foo TO bar", false, false),
-            ("EXPLAIN ANALYZE COPY foo TO bar", true, false),
-            ("EXPLAIN VERBOSE COPY foo TO bar", false, true),
-            ("EXPLAIN ANALYZE VERBOSE COPY foo TO bar", true, true),
+            ("EXPLAIN COPY foo TO bar STORED AS PARQUET", false, false),
+            (
+                "EXPLAIN ANALYZE COPY foo TO bar STORED AS PARQUET",
+                true,
+                false,
+            ),
+            (
+                "EXPLAIN VERBOSE COPY foo TO bar STORED AS PARQUET",
+                false,
+                true,
+            ),
+            (
+                "EXPLAIN ANALYZE VERBOSE COPY foo TO bar STORED AS PARQUET",
+                true,
+                true,
+            ),
         ];
         for (sql, analyze, verbose) in cases {
             println!("sql: {sql}, analyze: {analyze}, verbose: {verbose}");
@@ -1346,6 +1487,9 @@ mod tests {
             let expected_copy = Statement::CopyTo(CopyToStatement {
                 source: object_name("foo"),
                 target: "bar".to_string(),
+                partitioned_by: vec![],
+                has_header: false,
+                stored_as: Some("PARQUET".to_owned()),
                 options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
@@ -1375,10 +1519,13 @@ mod tests {
             panic!("Expected query, got {statement:?}");
         };
 
-        let sql = "COPY (SELECT 1) TO bar";
+        let sql = "COPY (SELECT 1) TO bar STORED AS CSV WITH HEADER ROW";
         let expected = Statement::CopyTo(CopyToStatement {
             source: CopyToSource::Query(query),
             target: "bar".to_string(),
+            partitioned_by: vec![],
+            has_header: true,
+            stored_as: Some("CSV".to_owned()),
             options: vec![],
         });
         assert_eq!(verified_stmt(sql), expected);
@@ -1387,10 +1534,31 @@ mod tests {
 
     #[test]
     fn copy_to_options() -> Result<(), ParserError> {
-        let sql = "COPY foo TO bar (row_group_size 55)";
+        let sql = "COPY foo TO bar STORED AS CSV OPTIONS (row_group_size 55)";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
+            partitioned_by: vec![],
+            has_header: false,
+            stored_as: Some("CSV".to_owned()),
+            options: vec![(
+                "row_group_size".to_string(),
+                Value::Number("55".to_string(), false),
+            )],
+        });
+        assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_to_partitioned_by() -> Result<(), ParserError> {
+        let sql = "COPY foo TO bar STORED AS CSV PARTITIONED BY (a) OPTIONS (row_group_size 55)";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            partitioned_by: vec!["a".to_string()],
+            has_header: false,
+            stored_as: Some("CSV".to_owned()),
             options: vec![(
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
@@ -1404,24 +1572,24 @@ mod tests {
     fn copy_to_multi_options() -> Result<(), ParserError> {
         // order of options is preserved
         let sql =
-            "COPY foo TO bar (format parquet, row_group_size 55, compression snappy)";
+            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy)";
 
         let expected_options = vec![
             (
-                "format".to_string(),
-                Value::UnQuotedString("parquet".to_string()),
-            ),
-            (
-                "row_group_size".to_string(),
+                "format.row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
             ),
             (
-                "compression".to_string(),
+                "format.compression".to_string(),
                 Value::UnQuotedString("snappy".to_string()),
             ),
         ];
 
-        let options = if let Statement::CopyTo(copy_to) = verified_stmt(sql) {
+        let mut statements = DFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        let only_statement = statements.pop_front().unwrap();
+
+        let options = if let Statement::CopyTo(copy_to) = only_statement {
             copy_to.options
         } else {
             panic!("Expected copy");
@@ -1460,7 +1628,10 @@ mod tests {
         }
 
         let only_statement = statements.pop_front().unwrap();
-        assert_eq!(canonical, only_statement.to_string());
+        assert_eq!(
+            canonical.to_uppercase(),
+            only_statement.to_string().to_uppercase()
+        );
         only_statement
     }
 

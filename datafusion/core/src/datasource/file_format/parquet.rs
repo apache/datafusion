@@ -17,36 +17,50 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use arrow_array::RecordBatch;
-use async_trait::async_trait;
-use datafusion_common::stats::Precision;
-use datafusion_physical_plan::metrics::MetricsSet;
-use parquet::arrow::arrow_writer::{
-    compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn,
-};
-use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::JoinSet;
 
+use super::write::demux::start_demuxer_task;
+use super::write::{create_writer, SharedBuffer};
+use super::{FileFormat, FileScanConfig};
+use crate::arrow::array::{
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+};
+use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
+};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
-use arrow::datatypes::SchemaRef;
-use arrow::datatypes::{Fields, Schema};
-use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use crate::error::Result;
+use crate::execution::context::SessionState;
+use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
+use crate::physical_plan::{
+    Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    Statistics,
+};
+
+use datafusion_common::config::TableParquetOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, FileType,
+};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use object_store::buffered::BufWriter;
+use parquet::arrow::arrow_writer::{
+    compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
+    ArrowLeafColumn,
+};
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
@@ -54,30 +68,16 @@ use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::writer::SerializedFileWriter;
+use parquet::format::FileMetaData;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::task::JoinSet;
 
-use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite, SharedBuffer};
-use super::{FileFormat, FileScanConfig};
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-};
-use crate::arrow::datatypes::DataType;
-use crate::config::ConfigOptions;
-
-use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
-};
-use crate::error::Result;
-use crate::execution::context::SessionState;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
-use crate::physical_plan::{
-    Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
-    Statistics,
-};
-
-/// Size of the buffer for [`AsyncArrowWriter`].
-const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
+use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
+use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore};
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -88,20 +88,9 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// The Apache Parquet `FileFormat` implementation
-///
-/// Note it is recommended these are instead configured on the [`ConfigOptions`]
-/// associated with the [`SessionState`] instead of overridden on a format-basis
-///
-/// TODO: Deprecate and remove overrides
-/// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
-    /// Override the global setting for `enable_pruning`
-    enable_pruning: Option<bool>,
-    /// Override the global setting for `metadata_size_hint`
-    metadata_size_hint: Option<usize>,
-    /// Override the global setting for `skip_metadata`
-    skip_metadata: Option<bool>,
+    options: TableParquetOptions,
 }
 
 impl ParquetFormat {
@@ -112,15 +101,14 @@ impl ParquetFormat {
 
     /// Activate statistics based row group level pruning
     /// - If `None`, defaults to value on `config_options`
-    pub fn with_enable_pruning(mut self, enable: Option<bool>) -> Self {
-        self.enable_pruning = enable;
+    pub fn with_enable_pruning(mut self, enable: bool) -> Self {
+        self.options.global.pruning = enable;
         self
     }
 
     /// Return `true` if pruning is enabled
-    pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_pruning
-            .unwrap_or(config_options.execution.parquet.pruning)
+    pub fn enable_pruning(&self) -> bool {
+        self.options.global.pruning
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -130,14 +118,13 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
-        self.metadata_size_hint = size_hint;
+        self.options.global.metadata_size_hint = size_hint;
         self
     }
 
     /// Return the metadata size hint if set
-    pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
-        let hint = config_options.execution.parquet.metadata_size_hint;
-        self.metadata_size_hint.or(hint)
+    pub fn metadata_size_hint(&self) -> Option<usize> {
+        self.options.global.metadata_size_hint
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -145,16 +132,26 @@ impl ParquetFormat {
     /// metadata.
     ///
     /// - If `None`, defaults to value on `config_options`
-    pub fn with_skip_metadata(mut self, skip_metadata: Option<bool>) -> Self {
-        self.skip_metadata = skip_metadata;
+    pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
+        self.options.global.skip_metadata = skip_metadata;
         self
     }
 
     /// Returns `true` if schema metadata will be cleared prior to
     /// schema merging.
-    pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
-        self.skip_metadata
-            .unwrap_or(config_options.execution.parquet.skip_metadata)
+    pub fn skip_metadata(&self) -> bool {
+        self.options.global.skip_metadata
+    }
+
+    /// Set Parquet options for the ParquetFormat
+    pub fn with_options(mut self, options: TableParquetOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Parquet options
+    pub fn options(&self) -> &TableParquetOptions {
+        &self.options
     }
 }
 
@@ -202,7 +199,7 @@ impl FileFormat for ParquetFormat {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
-                    self.metadata_size_hint,
+                    self.metadata_size_hint(),
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -215,7 +212,7 @@ impl FileFormat for ParquetFormat {
         // object stores (like local file systems) the order returned from list
         // is not deterministic. Thus, to ensure deterministic schema inference
         // sort the files first.
-        // https://github.com/apache/arrow-datafusion/pull/6629
+        // https://github.com/apache/datafusion/pull/6629
         schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
         let schemas = schemas
@@ -223,7 +220,7 @@ impl FileFormat for ParquetFormat {
             .map(|(_, schema)| schema)
             .collect::<Vec<_>>();
 
-        let schema = if self.skip_metadata(state.config_options()) {
+        let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
@@ -243,7 +240,7 @@ impl FileFormat for ParquetFormat {
             store.as_ref(),
             table_schema,
             object,
-            self.metadata_size_hint,
+            self.metadata_size_hint(),
         )
         .await?;
         Ok(stats)
@@ -251,22 +248,20 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
+        _state: &SessionState,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = self
-            .enable_pruning(state.config_options())
-            .then(|| filters.cloned())
-            .flatten();
+        let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
-            self.metadata_size_hint(state.config_options()),
+            self.metadata_size_hint(),
+            self.options.clone(),
         )))
     }
 
@@ -282,9 +277,9 @@ impl FileFormat for ParquetFormat {
         }
 
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(ParquetSink::new(conf));
+        let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,
@@ -541,6 +536,11 @@ async fn fetch_statistics(
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
+    ///
+    parquet_options: TableParquetOptions,
+    /// File metadata from successfully produced parquet files. The Mutex is only used
+    /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
+    written: Arc<parking_lot::Mutex<HashMap<Path, FileMetaData>>>,
 }
 
 impl Debug for ParquetSink {
@@ -563,14 +563,25 @@ impl DisplayAs for ParquetSink {
 
 impl ParquetSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    pub fn new(config: FileSinkConfig, parquet_options: TableParquetOptions) -> Self {
+        Self {
+            config,
+            parquet_options,
+            written: Default::default(),
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
     pub fn config(&self) -> &FileSinkConfig {
         &self.config
     }
+
+    /// Retrieve the file metadata for the written files, keyed to the path
+    /// which may be partitioned (in the case of hive style partitioning).
+    pub fn written(&self) -> HashMap<Path, FileMetaData> {
+        self.written.lock().clone()
+    }
+
     /// Converts table schema to writer schema, which may differ in the case
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
@@ -603,20 +614,19 @@ impl ParquetSink {
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
         parquet_props: WriterProperties,
-    ) -> Result<
-        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
-    > {
-        let (_, multipart_writer) = object_store
-            .put_multipart(location)
-            .await
-            .map_err(DataFusionError::ObjectStore)?;
+    ) -> Result<AsyncArrowWriter<BufWriter>> {
+        let buf_writer = BufWriter::new(object_store, location.clone());
         let writer = AsyncArrowWriter::try_new(
-            multipart_writer,
+            buf_writer,
             self.get_writer_schema(),
-            PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
         Ok(writer)
+    }
+
+    /// Parquet options
+    pub fn parquet_options(&self) -> &TableParquetOptions {
+        &self.parquet_options
     }
 }
 
@@ -635,18 +645,15 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let parquet_props = self
-            .config
-            .file_type_writer_options
-            .try_into_parquet()?
-            .writer_options();
+        let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
 
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
-        let parquet_opts = &context.session_config().options().execution.parquet;
-        let allow_single_file_parallelism = parquet_opts.allow_single_file_parallelism;
+        let parquet_opts = &self.parquet_options;
+        let allow_single_file_parallelism =
+            parquet_opts.global.allow_single_file_parallelism;
 
         let part_col = if !self.config.table_partition_cols.is_empty() {
             Some(self.config.table_partition_cols.clone())
@@ -655,8 +662,11 @@ impl DataSink for ParquetSink {
         };
 
         let parallel_options = ParallelParquetWriterOptions {
-            max_parallel_row_groups: parquet_opts.maximum_parallel_row_group_writers,
+            max_parallel_row_groups: parquet_opts
+                .global
+                .maximum_parallel_row_group_writers,
             max_buffered_record_batches_per_stream: parquet_opts
+                .global
                 .maximum_buffered_record_batches_per_stream,
         };
 
@@ -668,25 +678,28 @@ impl DataSink for ParquetSink {
             "parquet".into(),
         );
 
-        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
-            JoinSet::new();
+        let mut file_write_tasks: JoinSet<
+            std::result::Result<(Path, FileMetaData), DataFusionError>,
+        > = JoinSet::new();
+
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             if !allow_single_file_parallelism {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
                         object_store.clone(),
-                        parquet_props.clone(),
+                        parquet_props.writer_options().clone(),
                     )
                     .await?;
                 file_write_tasks.spawn(async move {
-                    let mut row_count = 0;
                     while let Some(batch) = rx.recv().await {
-                        row_count += batch.num_rows();
                         writer.write(&batch).await?;
                     }
-                    writer.close().await?;
-                    Ok(row_count)
+                    let file_metadata = writer
+                        .close()
+                        .await
+                        .map_err(DataFusionError::ParquetError)?;
+                    Ok((path, file_metadata))
                 });
             } else {
                 let writer = create_writer(
@@ -701,14 +714,15 @@ impl DataSink for ParquetSink {
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
                 file_write_tasks.spawn(async move {
-                    output_single_parquet_file_parallelized(
+                    let file_metadata = output_single_parquet_file_parallelized(
                         writer,
                         rx,
                         schema,
-                        &props,
+                        props.writer_options(),
                         parallel_options_clone,
                     )
-                    .await
+                    .await?;
+                    Ok((path, file_metadata))
                 });
             }
         }
@@ -717,7 +731,13 @@ impl DataSink for ParquetSink {
         while let Some(result) = file_write_tasks.join_next().await {
             match result {
                 Ok(r) => {
-                    row_count += r?;
+                    let (path, file_metadata) = r?;
+                    row_count += file_metadata.num_rows;
+                    let mut written_files = self.written.lock();
+                    written_files
+                        .try_insert(path.clone(), file_metadata)
+                        .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
+                    drop(written_files);
                 }
                 Err(e) => {
                     if e.is_panic() {
@@ -856,42 +876,47 @@ fn spawn_parquet_parallel_serialization_task(
             )?;
         let mut current_rg_rows = 0;
 
-        while let Some(rb) = data.recv().await {
-            if current_rg_rows + rb.num_rows() < max_row_group_rows {
-                send_arrays_to_col_writers(&col_array_channels, &rb, schema.clone())
-                    .await?;
-                current_rg_rows += rb.num_rows();
-            } else {
-                let rows_left = max_row_group_rows - current_rg_rows;
-                let a = rb.slice(0, rows_left);
-                send_arrays_to_col_writers(&col_array_channels, &a, schema.clone())
-                    .await?;
+        while let Some(mut rb) = data.recv().await {
+            // This loop allows the "else" block to repeatedly split the RecordBatch to handle the case
+            // when max_row_group_rows < execution.batch_size as an alternative to a recursive async
+            // function.
+            loop {
+                if current_rg_rows + rb.num_rows() < max_row_group_rows {
+                    send_arrays_to_col_writers(&col_array_channels, &rb, schema.clone())
+                        .await?;
+                    current_rg_rows += rb.num_rows();
+                    break;
+                } else {
+                    let rows_left = max_row_group_rows - current_rg_rows;
+                    let a = rb.slice(0, rows_left);
+                    send_arrays_to_col_writers(&col_array_channels, &a, schema.clone())
+                        .await?;
 
-                // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
-                // on a separate task, so that we can immediately start on the next RG before waiting
-                // for the current one to finish.
-                drop(col_array_channels);
-                let finalize_rg_task = spawn_rg_join_and_finalize_task(
-                    column_writer_handles,
-                    max_row_group_rows,
-                );
+                    // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
+                    // on a separate task, so that we can immediately start on the next RG before waiting
+                    // for the current one to finish.
+                    drop(col_array_channels);
+                    let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                        column_writer_handles,
+                        max_row_group_rows,
+                    );
 
-                serialize_tx.send(finalize_rg_task).await.map_err(|_| {
-                    DataFusionError::Internal(
-                        "Unable to send closed RG to concat task!".into(),
-                    )
-                })?;
+                    serialize_tx.send(finalize_rg_task).await.map_err(|_| {
+                        DataFusionError::Internal(
+                            "Unable to send closed RG to concat task!".into(),
+                        )
+                    })?;
 
-                let b = rb.slice(rows_left, rb.num_rows() - rows_left);
-                (column_writer_handles, col_array_channels) =
-                    spawn_column_parallel_row_group_writer(
-                        schema.clone(),
-                        writer_props.clone(),
-                        max_buffer_rb,
-                    )?;
-                send_arrays_to_col_writers(&col_array_channels, &b, schema.clone())
-                    .await?;
-                current_rg_rows = b.num_rows();
+                    current_rg_rows = 0;
+                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
+
+                    (column_writer_handles, col_array_channels) =
+                        spawn_column_parallel_row_group_writer(
+                            schema.clone(),
+                            writer_props.clone(),
+                            max_buffer_rb,
+                        )?;
+                }
             }
         }
 
@@ -918,8 +943,8 @@ async fn concatenate_parallel_row_groups(
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
-) -> Result<usize> {
+    mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
+) -> Result<FileMetaData> {
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
     let schema_desc = arrow_to_parquet_schema(schema.as_ref())?;
@@ -929,13 +954,10 @@ async fn concatenate_parallel_row_groups(
         writer_props,
     )?;
 
-    let mut row_count = 0;
-
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
         let mut rg_out = parquet_writer.next_row_group()?;
-        let (serialized_columns, cnt) = result?;
-        row_count += cnt;
+        let (serialized_columns, _cnt) = result?;
         for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
             let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
@@ -949,13 +971,13 @@ async fn concatenate_parallel_row_groups(
         rg_out.close()?;
     }
 
-    let inner_writer = parquet_writer.into_inner()?;
-    let final_buff = inner_writer.buffer.try_lock().unwrap();
+    let file_metadata = parquet_writer.close()?;
+    let final_buff = merged_buff.buffer.try_lock().unwrap();
 
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
 
-    Ok(row_count)
+    Ok(file_metadata)
 }
 
 /// Parallelizes the serialization of a single parquet file, by first serializing N
@@ -963,12 +985,12 @@ async fn concatenate_parallel_row_groups(
 /// task then stitches these independent RowGroups together and streams this large
 /// single parquet file to an ObjectStore in multiple parts.
 async fn output_single_parquet_file_parallelized(
-    object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
     output_schema: Arc<Schema>,
     parquet_props: &WriterProperties,
     parallel_options: ParallelParquetWriterOptions,
-) -> Result<usize> {
+) -> Result<FileMetaData> {
     let max_rowgroups = parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
     let (serialize_tx, serialize_rx) =
@@ -982,7 +1004,7 @@ async fn output_single_parquet_file_parallelized(
         arc_props.clone(),
         parallel_options,
     );
-    let row_count = concatenate_parallel_row_groups(
+    let file_metadata = concatenate_parallel_row_groups(
         serialize_rx,
         output_schema.clone(),
         arc_props.clone(),
@@ -991,16 +1013,15 @@ async fn output_single_parquet_file_parallelized(
     .await?;
 
     launch_serialization_task.join_unwind().await?;
-    Ok(row_count)
+    Ok(file_metadata)
 }
 
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::record_batch::RecordBatch;
+
     use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
     /// How many rows per page should be written
@@ -1016,7 +1037,7 @@ pub(crate) mod test_util {
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
         // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
-        // https://github.com/apache/arrow-datafusion/pull/6629
+        // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
                 .map(|_| NamedTempFile::new().expect("creating temp file"))
@@ -1077,6 +1098,7 @@ pub(crate) mod test_util {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
+    use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
     use crate::physical_plan::collect;
     use std::fmt::{Display, Formatter};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1087,28 +1109,29 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::record_batch::RecordBatch;
+    use arrow_schema::Field;
     use async_trait::async_trait;
     use bytes::Bytes;
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_nanosecond_array,
     };
+    use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use futures::stream::BoxStream;
-    use futures::StreamExt;
     use log::error;
     use object_store::local::LocalFileSystem;
-    use object_store::path::Path;
     use object_store::{
         GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
-    use tokio::io::AsyncWrite;
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {
@@ -1788,5 +1811,207 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let format = ParquetFormat::default();
         scan_format(state, &format, &testdata, file_name, projection, limit).await
+    }
+
+    fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let local = Arc::new(
+            LocalFileSystem::new_with_prefix(&tmp_dir)
+                .expect("should create object store"),
+        );
+
+        let mut session = SessionConfig::default();
+        let mut parquet_opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            ..Default::default()
+        };
+        parquet_opts.allow_single_file_parallelism = true;
+        session.options_mut().execution.parquet = parquet_opts;
+
+        let runtime = RuntimeEnv::default();
+        runtime
+            .object_store_registry
+            .register_store(store_url, local);
+
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session)
+                .with_runtime(Arc::new(runtime)),
+        )
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write() -> Result<()> {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            object_store_url: object_store_url.clone(),
+            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            table_paths: vec![ListingTableUrl::parse("file:///")?],
+            output_schema: schema.clone(),
+            table_partition_cols: vec![],
+            overwrite: true,
+        };
+        let parquet_sink = Arc::new(ParquetSink::new(
+            file_sink_config,
+            TableParquetOptions {
+                key_value_metadata: std::collections::HashMap::from([
+                    ("my-data".to_string(), Some("stuff".to_string())),
+                    ("my-data-bool-key".to_string(), None),
+                ]),
+                ..Default::default()
+            },
+        ));
+
+        // create data
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+
+        // write stream
+        parquet_sink
+            .write_all(
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    futures::stream::iter(vec![Ok(batch)]),
+                )),
+                &build_ctx(object_store_url.as_ref()),
+            )
+            .await
+            .unwrap();
+
+        // assert written
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected a single parquet files to be written, instead found {}",
+            written.len()
+        );
+
+        // check the file metadata
+        let (
+            path,
+            FileMetaData {
+                num_rows,
+                schema,
+                key_value_metadata,
+                ..
+            },
+        ) = written.take(1).next().unwrap();
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(path_parts.len(), 1, "should not have path prefix");
+
+        assert_eq!(num_rows, 2, "file metdata to have 2 rows");
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "a"),
+            "output file metadata should contain col a"
+        );
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "b"),
+            "output file metadata should contain col b"
+        );
+
+        let mut key_value_metadata = key_value_metadata.unwrap();
+        key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
+        let expected_metadata = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        assert_eq!(key_value_metadata, expected_metadata);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_partitions() -> Result<()> {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        // set file config to include partitioning on field_a
+        let file_sink_config = FileSinkConfig {
+            object_store_url: object_store_url.clone(),
+            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            table_paths: vec![ListingTableUrl::parse("file:///")?],
+            output_schema: schema.clone(),
+            table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
+            overwrite: true,
+        };
+        let parquet_sink = Arc::new(ParquetSink::new(
+            file_sink_config,
+            TableParquetOptions::default(),
+        ));
+
+        // create data with 2 partitions
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+
+        // write stream
+        parquet_sink
+            .write_all(
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    futures::stream::iter(vec![Ok(batch)]),
+                )),
+                &build_ctx(object_store_url.as_ref()),
+            )
+            .await
+            .unwrap();
+
+        // assert written
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            2,
+            "expected two parquet files to be written, instead found {}",
+            written.len()
+        );
+
+        // check the file metadata includes partitions
+        let mut expected_partitions = std::collections::HashSet::from(["a=foo", "a=bar"]);
+        for (
+            path,
+            FileMetaData {
+                num_rows, schema, ..
+            },
+        ) in written.take(2)
+        {
+            let path_parts = path.parts().collect::<Vec<_>>();
+            assert_eq!(path_parts.len(), 2, "should have path prefix");
+
+            let prefix = path_parts[0].as_ref();
+            assert!(
+                expected_partitions.contains(prefix),
+                "expected path prefix to match partition, instead found {:?}",
+                prefix
+            );
+            expected_partitions.remove(prefix);
+
+            assert_eq!(num_rows, 1, "file metdata to have 1 row");
+            assert!(
+                !schema.iter().any(|col_schema| col_schema.name == "a"),
+                "output file metadata will not contain partitioned col a"
+            );
+            assert!(
+                schema.iter().any(|col_schema| col_schema.name == "b"),
+                "output file metadata should contain col b"
+            );
+        }
+
+        Ok(())
     }
 }

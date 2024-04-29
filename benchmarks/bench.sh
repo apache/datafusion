@@ -82,6 +82,7 @@ clickbench_extended:    ClickBench "inspired" queries against a single parquet (
 DATA_DIR        directory to store datasets
 CARGO_COMMAND   command that runs the benchmark binary
 DATAFUSION_DIR  directory to use (default $DATAFUSION_DIR)
+RESULTS_NAME    folder where the benchmark files are stored
 "
     exit 1
 }
@@ -166,18 +167,19 @@ main() {
             esac
             ;;
         run)
-            # Parse positional paraleters
+            # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
             BRANCH_NAME=$(cd ${DATAFUSION_DIR} && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
-            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$BRANCH_NAME"}
+            RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
+            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
 
             echo "***************************"
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
-            echo "BRACH_NAME: ${BRANCH_NAME}"
+            echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
@@ -211,6 +213,12 @@ main() {
                 tpch_mem10)
                     run_tpch_mem "10"
                     ;;
+                tpch_smj)
+                    run_tpch_smj "1"
+                    ;;    
+                tpch_smj10)
+                    run_tpch_smj "10"
+                    ;;                      
                 parquet)
                     run_parquet
                     ;;
@@ -312,10 +320,25 @@ run_tpch() {
     fi
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
 
-    RESULTS_FILE="${RESULTS_DIR}/tpch.json"
+    RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --format parquet -o ${RESULTS_FILE}
+}
+
+# Runs the tpch benchmark with sort merge join
+run_tpch_smj() {
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+
+    RESULTS_FILE="${RESULTS_DIR}/tpch_smj_sf${SCALE_FACTOR}.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpch SMJ benchmark..."
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join false --format parquet -o ${RESULTS_FILE}
 }
 
 # Runs the tpch in memory
@@ -327,7 +350,7 @@ run_tpch_mem() {
     fi
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
 
-    RESULTS_FILE="${RESULTS_DIR}/tpch_mem.json"
+    RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory

@@ -30,7 +30,7 @@ use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
 // Contributor's guide for adding new aggregate functions
-// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
+// https://datafusion.apache.org/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// Count
@@ -218,19 +218,6 @@ impl FromStr for AggregateFunction {
     }
 }
 
-/// Returns the datatype of the aggregate function.
-/// This is used to get the returned data type for aggregate expr.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `AggregateFunction::return_type` instead"
-)]
-pub fn return_type(
-    fun: &AggregateFunction,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    fun.return_type(input_expr_types)
-}
-
 impl AggregateFunction {
     /// Returns the datatype of the aggregate function given its argument types
     ///
@@ -326,15 +313,6 @@ pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
         &fun.signature(),
     )?;
     avg_sum_type(&coerced_data_types[0])
-}
-
-/// the signatures supported by the function `fun`.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `AggregateFunction::signature` instead"
-)]
-pub fn signature(fun: &AggregateFunction) -> Signature {
-    fun.signature()
 }
 
 impl AggregateFunction {
@@ -444,7 +422,7 @@ mod tests {
     // For each variant in AggregateFuncion, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
-    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    // function suggestion. See https://github.com/apache/datafusion/issues/8082
     fn test_display_and_from_str() {
         for func_original in AggregateFunction::iter() {
             let func_name = func_original.to_string();

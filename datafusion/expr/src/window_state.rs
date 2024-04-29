@@ -19,10 +19,12 @@
 
 use std::{collections::VecDeque, ops::Range, sync::Arc};
 
+use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
 use arrow::{
     array::ArrayRef,
-    compute::{concat, SortOptions},
-    datatypes::DataType,
+    compute::{concat, concat_batches, SortOptions},
+    datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
@@ -30,8 +32,6 @@ use datafusion_common::{
     utils::{compare_rows, get_row_at_idx, search_in_slice},
     DataFusionError, Result, ScalarValue,
 };
-
-use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 /// Holds the state of evaluating a window function
 #[derive(Debug)]
@@ -246,12 +246,40 @@ impl WindowFrameContext {
 /// State for each unique partition determined according to PARTITION BY column(s)
 #[derive(Debug)]
 pub struct PartitionBatchState {
-    /// The record_batch belonging to current partition
+    /// The record batch belonging to current partition
     pub record_batch: RecordBatch,
+    /// The record batch that contains the most recent row at the input.
+    /// Please note that this batch doesn't necessarily have the same partitioning
+    /// with `record_batch`. Keeping track of this batch enables us to prune
+    /// `record_batch` when cardinality of the partition is sparse.
+    pub most_recent_row: Option<RecordBatch>,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
     /// Number of rows emitted for each partition
     pub n_out_row: usize,
+}
+
+impl PartitionBatchState {
+    pub fn new(schema: SchemaRef) -> Self {
+        Self {
+            record_batch: RecordBatch::new_empty(schema),
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
+    pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.record_batch =
+            concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
+        Ok(())
+    }
+
+    pub fn set_most_recent_row(&mut self, batch: RecordBatch) {
+        // It is enough for the batch to contain only a single row (the rest
+        // are not necessary).
+        self.most_recent_row = Some(batch);
+    }
 }
 
 /// This structure encapsulates all the state information we require as we scan
@@ -640,11 +668,8 @@ fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-    use arrow::array::{ArrayRef, Float64Array};
-    use datafusion_common::{Result, ScalarValue};
-    use std::ops::Range;
-    use std::sync::Arc;
+
+    use arrow::array::Float64Array;
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![

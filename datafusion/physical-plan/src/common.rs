@@ -323,10 +323,30 @@ impl IPCWriter {
     }
 }
 
-/// Returns the total number of bytes of memory occupied physically by this batch.
-#[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
-pub fn batch_byte_size(batch: &RecordBatch) -> usize {
-    batch.get_array_memory_size()
+/// Checks if the given projection is valid for the given schema.
+pub fn can_project(
+    schema: &arrow_schema::SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<()> {
+    match projection {
+        Some(columns) => {
+            if columns
+                .iter()
+                .max()
+                .map_or(false, |&i| i >= schema.fields().len())
+            {
+                Err(arrow_schema::ArrowError::SchemaError(format!(
+                    "project index {} out of bounds, max field {}",
+                    columns.iter().max().unwrap(),
+                    schema.fields().len()
+                ))
+                .into())
+            } else {
+                Ok(())
+            }
+        }
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -341,11 +361,10 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array, UInt64Array},
-        datatypes::{DataType, Field, Schema},
-        record_batch::RecordBatch,
+        datatypes::{DataType, Field},
     };
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::expressions::col;
 
     #[test]
     fn get_meet_of_orderings_helper_common_prefix_test() -> Result<()> {

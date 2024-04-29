@@ -731,12 +731,15 @@ btrim(str[, trim_str])
   Can be a constant, column, or function, and any combination of string operators.
 - **trim_str**: String expression to trim from the beginning and end of the input string.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  _Default is whitespace characters_.
+  _Default is whitespace characters._
 
 **Related functions**:
 [ltrim](#ltrim),
-[rtrim](#rtrim),
-[trim](#trim)
+[rtrim](#rtrim)
+
+#### Aliases
+
+- trim
 
 ### `char_length`
 
@@ -919,26 +922,25 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Removes leading spaces from a string.
+Trims the specified trim string from the beginning of a string.
+If no trim string is provided, all whitespace is removed from the start
+of the input string.
 
 ```
-ltrim(str)
+ltrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[rtrim](#rtrim),
-[trim](#trim)
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+[rtrim](#rtrim)
 
 ### `octet_length`
 
@@ -1040,21 +1042,25 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Removes trailing spaces from a string.
+Trims the specified trim string from the end of a string.
+If no trim string is provided, all whitespace is removed from the end
+of the input string.
 
 ```
-rtrim(str)
+rtrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[ltrim](#ltrim),
-[trim](#trim)
+[ltrim](#ltrim)
 
 ### `split_part`
 
@@ -1154,21 +1160,7 @@ to_hex(int)
 
 ### `trim`
 
-Removes leading and trailing spaces from a string.
-
-```
-trim(str)
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-**Related functions**:
-[btrim](#btrim),
-[ltrim](#ltrim),
-[rtrim](#rtrim)
+_Alias of [btrim](#btrim)._
 
 ### `upper`
 
@@ -1350,7 +1342,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_match`
 
@@ -1391,7 +1383,7 @@ SELECT regexp_match('aBc', '(b|d)', 'i');
 +---------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_replace`
 
@@ -1435,7 +1427,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `position`
 
@@ -1624,34 +1616,19 @@ _Alias of [date_part](#date_part)._
 ### `extract`
 
 Returns a sub-field from a time value as an integer.
-Similar to `date_part`, but with different arguments.
 
 ```
 extract(field FROM source)
 ```
 
-#### Arguments
+Equivalent to calling `date_part('field', source)`. For example, these are equivalent:
 
-- **field**: Part or field of the date to return.
-  The following date fields are supported:
+```sql
+extract(day FROM '2024-04-13'::date)
+date_part('day', '2024-04-13'::date)
+```
 
-  - year
-  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
-  - month
-  - week _(week of the year)_
-  - day _(day of the month)_
-  - hour
-  - minute
-  - second
-  - millisecond
-  - microsecond
-  - nanosecond
-  - dow _(day of the week)_
-  - doy _(day of the year)_
-  - epoch _(seconds since Unix epoch)_
-
-- **source**: Source time expression to operate on.
-  Can be a constant, column, or function.
+See [date_part](#date_part).
 
 ### `make_date`
 
@@ -1673,13 +1650,13 @@ make_date(year, month, day)
 #### Example
 
 ```
-❯ select make_date(2023, 1, 31);
+> select make_date(2023, 1, 31);
 +-------------------------------------------+
 | make_date(Int64(2023),Int64(1),Int64(31)) |
 +-------------------------------------------+
 | 2023-01-31                                |
 +-------------------------------------------+
-❯ select make_date('2023', '01', '31');
+> select make_date('2023', '01', '31');
 +-----------------------------------------------+
 | make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
 +-----------------------------------------------+
@@ -1687,7 +1664,7 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
 
 ### `to_char`
 
@@ -1709,7 +1686,7 @@ to_char(expression, format)
 #### Example
 
 ```
-❯ ❯ select to_char('2023-03-01'::date, '%d-%m-%Y');
+> > select to_char('2023-03-01'::date, '%d-%m-%Y');
 +----------------------------------------------+
 | to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
 +----------------------------------------------+
@@ -1719,7 +1696,7 @@ to_char(expression, format)
 
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_char.rs
+[here]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs
 
 #### Aliases
 
@@ -1754,13 +1731,13 @@ to_timestamp(expression[, ..., format_n])
 #### Example
 
 ```
-❯ select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
+> select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
 +-----------------------------------------------------------+
 | to_timestamp(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
 +-----------------------------------------------------------+
 | 2023-01-31T14:26:56.123456789                             |
 +-----------------------------------------------------------+
-❯ select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+> select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 +--------------------------------------------------------------------------------------------------------+
 | to_timestamp(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------+
@@ -1768,7 +1745,7 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_millis`
 
@@ -1793,13 +1770,13 @@ to_timestamp_millis(expression[, ..., format_n])
 #### Example
 
 ```
-❯ select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
+> select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
 +------------------------------------------------------------------+
 | to_timestamp_millis(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
 +------------------------------------------------------------------+
 | 2023-01-31T14:26:56.123                                          |
 +------------------------------------------------------------------+
-❯ select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+> select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 +---------------------------------------------------------------------------------------------------------------+
 | to_timestamp_millis(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +---------------------------------------------------------------------------------------------------------------+
@@ -1807,7 +1784,7 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_micros`
 
@@ -1832,13 +1809,13 @@ to_timestamp_micros(expression[, ..., format_n])
 #### Example
 
 ```
-❯ select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
+> select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
 +------------------------------------------------------------------+
 | to_timestamp_micros(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
 +------------------------------------------------------------------+
 | 2023-01-31T14:26:56.123456                                       |
 +------------------------------------------------------------------+
-❯ select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+> select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 +---------------------------------------------------------------------------------------------------------------+
 | to_timestamp_micros(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +---------------------------------------------------------------------------------------------------------------+
@@ -1846,7 +1823,7 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_nanos`
 
@@ -1871,13 +1848,13 @@ to_timestamp_nanos(expression[, ..., format_n])
 #### Example
 
 ```
-❯ select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
+> select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
 +-----------------------------------------------------------------+
 | to_timestamp_nanos(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
 +-----------------------------------------------------------------+
 | 2023-01-31T14:26:56.123456789                                   |
 +-----------------------------------------------------------------+
-❯ select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+> select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 +--------------------------------------------------------------------------------------------------------------+
 | to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------------+
@@ -1885,7 +1862,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_seconds`
 
@@ -1910,13 +1887,13 @@ to_timestamp_seconds(expression[, ..., format_n])
 #### Example
 
 ```
-❯ select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
+> select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
 +-------------------------------------------------------------------+
 | to_timestamp_seconds(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
 +-------------------------------------------------------------------+
 | 2023-01-31T14:26:56                                               |
 +-------------------------------------------------------------------+
-❯ select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+> select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
 +----------------------------------------------------------------------------------------------------------------+
 | to_timestamp_seconds(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +----------------------------------------------------------------------------------------------------------------+
@@ -1924,7 +1901,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `from_unixtime`
 
@@ -1949,9 +1926,17 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distinct](#array_distinct)
+- [array_has](#array_has)
+- [array_has_all](#array_has_all)
+- [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_empty](#array_empty)
+- [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_fill](#array_fill)
 - [array_indexof](#array_indexof)
+- [array_intersect](#array_intersect)
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
@@ -1963,6 +1948,7 @@ from_unixtime(expression)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_repeat](#array_repeat)
+- [array_resize](#array_resize)
 - [array_remove](#array_remove)
 - [array_remove_n](#array_remove_n)
 - [array_remove_all](#array_remove_all)
@@ -1972,6 +1958,7 @@ from_unixtime(expression)
 - [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
+- [array_union](#array_union)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -1981,12 +1968,15 @@ from_unixtime(expression)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_distinct](#list_distinct)
 - [list_element](#list_element)
+- [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
+- [list_intersect](#list_intersect)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
@@ -1998,6 +1988,7 @@ from_unixtime(expression)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_repeat](#list_repeat)
+- [list_resize](#list_resize)
 - [list_remove](#list_remove)
 - [list_remove_n](#list_remove_n)
 - [list_remove_all](#list_remove_all)
@@ -2006,6 +1997,7 @@ from_unixtime(expression)
 - [list_replace_all](#list_replace_all)
 - [list_slice](#list_slice)
 - [list_to_string](#list_to_string)
+- [list_union](#list_union)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [string_to_array](#string_to_array)
@@ -2030,7 +2022,7 @@ array_append(array, element)
 #### Example
 
 ```
-❯ select array_append([1, 2, 3], 4);
+> select array_append([1, 2, 3], 4);
 +--------------------------------------+
 | array_append(List([1,2,3]),Int64(4)) |
 +--------------------------------------+
@@ -2062,7 +2054,7 @@ array_sort(array, desc, nulls_first)
 #### Example
 
 ```
-❯ select array_sort([3, 1, 2]);
+> select array_sort([3, 1, 2]);
 +-----------------------------+
 | array_sort(List([3,1,2]))   |
 +-----------------------------+
@@ -2073,6 +2065,36 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_resize`
+
+Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+
+```
+array_resize(array, size, value)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **size**: New size of given array.
+- **value**: Defines new elements' value or empty if value is not set.
+
+#### Example
+
+```
+> select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```
+
+#### Aliases
+
+- list_resize
 
 ### `array_cat`
 
@@ -2095,7 +2117,7 @@ array_concat(array[, ..., array_n])
 #### Example
 
 ```
-❯ select array_concat([1, 2], [3, 4], [5, 6]);
+> select array_concat([1, 2], [3, 4], [5, 6]);
 +---------------------------------------------------+
 | array_concat(List([1,2]),List([3,4]),List([5,6])) |
 +---------------------------------------------------+
@@ -2186,7 +2208,7 @@ array_dims(array)
 #### Example
 
 ```
-❯ select array_dims([[1, 2, 3], [4, 5, 6]]);
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
 +---------------------------------+
 | array_dims(List([1,2,3,4,5,6])) |
 +---------------------------------+
@@ -2197,6 +2219,34 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distinct`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_distinct
 
 ### `array_element`
 
@@ -2215,7 +2265,7 @@ array_element(array, index)
 #### Example
 
 ```
-❯ select array_element([1, 2, 3, 4], 3);
+> select array_element([1, 2, 3, 4], 3);
 +-----------------------------------------+
 | array_element(List([1,2,3,4]),Int64(3)) |
 +-----------------------------------------+
@@ -2271,6 +2321,44 @@ flatten(array)
 
 _Alias of [array_position](#array_position)._
 
+### `array_intersect`
+
+Returns an array of elements in the intersection of array1 and array2.
+
+```
+array_intersect(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
++----------------------------------------------------+
+| [3, 4]                                             |
++----------------------------------------------------+
+> select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
++----------------------------------------------------+
+| []                                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_intersect
+
 ### `array_join`
 
 _Alias of [array_to_string](#array_to_string)._
@@ -2292,7 +2380,7 @@ array_length(array, dimension)
 #### Example
 
 ```
-❯ select array_length([1, 2, 3, 4, 5]);
+> select array_length([1, 2, 3, 4, 5]);
 +---------------------------------+
 | array_length(List([1,2,3,4,5])) |
 +---------------------------------+
@@ -2320,7 +2408,7 @@ array_ndims(array, element)
 #### Example
 
 ```
-❯ select array_ndims([[1, 2, 3], [4, 5, 6]]);
+> select array_ndims([[1, 2, 3], [4, 5, 6]]);
 +----------------------------------+
 | array_ndims(List([1,2,3,4,5,6])) |
 +----------------------------------+
@@ -2349,7 +2437,7 @@ array_prepend(element, array)
 #### Example
 
 ```
-❯ select array_prepend(1, [2, 3, 4]);
+> select array_prepend(1, [2, 3, 4]);
 +---------------------------------------+
 | array_prepend(Int64(1),List([2,3,4])) |
 +---------------------------------------+
@@ -2379,7 +2467,7 @@ array_pop_front(array)
 #### Example
 
 ```
-❯ select array_pop_front([1, 2, 3]);
+> select array_pop_front([1, 2, 3]);
 +-------------------------------+
 | array_pop_front(List([1,2,3])) |
 +-------------------------------+
@@ -2407,7 +2495,7 @@ array_pop_back(array)
 #### Example
 
 ```
-❯ select array_pop_back([1, 2, 3]);
+> select array_pop_back([1, 2, 3]);
 +-------------------------------+
 | array_pop_back(List([1,2,3])) |
 +-------------------------------+
@@ -2438,7 +2526,7 @@ array_position(array, element, index)
 #### Example
 
 ```
-❯ select array_position([1, 2, 2, 3, 1, 4], 2);
+> select array_position([1, 2, 2, 3, 1, 4], 2);
 +----------------------------------------------+
 | array_position(List([1,2,2,3,1,4]),Int64(2)) |
 +----------------------------------------------+
@@ -2469,7 +2557,7 @@ array_positions(array, element)
 #### Example
 
 ```
-❯ select array_positions([1, 2, 2, 3, 1, 4], 2);
+> select array_positions([1, 2, 2, 3, 1, 4], 2);
 +-----------------------------------------------+
 | array_positions(List([1,2,2,3,1,4]),Int64(2)) |
 +-----------------------------------------------+
@@ -2506,7 +2594,7 @@ array_repeat(element, count)
 #### Example
 
 ```
-❯ select array_repeat(1, 3);
+> select array_repeat(1, 3);
 +---------------------------------+
 | array_repeat(Int64(1),Int64(3)) |
 +---------------------------------+
@@ -2515,7 +2603,7 @@ array_repeat(element, count)
 ```
 
 ```
-❯ select array_repeat([1, 2], 2);
+> select array_repeat([1, 2], 2);
 +------------------------------------+
 | array_repeat(List([1,2]),Int64(2)) |
 +------------------------------------+
@@ -2544,7 +2632,7 @@ array_remove(array, element)
 #### Example
 
 ```
-❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
+> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
 +----------------------------------------------+
 | array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
 +----------------------------------------------+
@@ -2574,7 +2662,7 @@ array_remove_n(array, element, max)
 #### Example
 
 ```
-❯ select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
+> select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
 +---------------------------------------------------------+
 | array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
 +---------------------------------------------------------+
@@ -2603,7 +2691,7 @@ array_remove_all(array, element)
 #### Example
 
 ```
-❯ select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
+> select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
 +--------------------------------------------------+
 | array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
 +--------------------------------------------------+
@@ -2633,7 +2721,7 @@ array_replace(array, from, to)
 #### Example
 
 ```
-❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
 +--------------------------------------------------------+
 | array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
 +--------------------------------------------------------+
@@ -2664,7 +2752,7 @@ array_replace_n(array, from, to, max)
 #### Example
 
 ```
-❯ select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
 +-------------------------------------------------------------------+
 | array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
 +-------------------------------------------------------------------+
@@ -2694,7 +2782,7 @@ array_replace_all(array, from, to)
 #### Example
 
 ```
-❯ select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
 +------------------------------------------------------------+
 | array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
 +------------------------------------------------------------+
@@ -2722,7 +2810,7 @@ array_reverse(array)
 #### Example
 
 ```
-❯ select array_reverse([1, 2, 3, 4]);
+> select array_reverse([1, 2, 3, 4]);
 +------------------------------------------------------------+
 | array_reverse(List([1, 2, 3, 4]))                          |
 +------------------------------------------------------------+
@@ -2755,7 +2843,7 @@ array_slice(array, begin, end)
 #### Example
 
 ```
-❯ select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
+> select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
 +--------------------------------------------------------+
 | array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
 +--------------------------------------------------------+
@@ -2784,7 +2872,7 @@ array_to_string(array, delimiter)
 #### Example
 
 ```
-❯ select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
+> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
 +----------------------------------------------------+
 | array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
 +----------------------------------------------------+
@@ -2816,13 +2904,13 @@ array_union(array1, array2)
 #### Example
 
 ```
-❯ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+> select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
 +----------------------------------------------------+
 | array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
 +----------------------------------------------------+
 | [1, 2, 3, 4, 5, 6]                                 |
 +----------------------------------------------------+
-❯ select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+> select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
 +----------------------------------------------------+
 | array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
 +----------------------------------------------------+
@@ -2854,13 +2942,13 @@ array_except(array1, array2)
 #### Example
 
 ```
-❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
+> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
 +----------------------------------------------------+
 | array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
 +----------------------------------------------------+
 | [1, 2]                                 |
 +----------------------------------------------------+
-❯ select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
+> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
 +----------------------------------------------------+
 | array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
 +----------------------------------------------------+
@@ -2890,7 +2978,7 @@ cardinality(array)
 #### Example
 
 ```
-❯ select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
+> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
 +--------------------------------------+
 | cardinality(List([1,2,3,4,5,6,7,8])) |
 +--------------------------------------+
@@ -2914,13 +3002,18 @@ empty(array)
 #### Example
 
 ```
-❯ select empty([1]);
+> select empty([1]);
 +------------------+
 | empty(List([1])) |
 +------------------+
 | 0                |
 +------------------+
 ```
+
+#### Aliases
+
+- array_empty,
+- list_empty
 
 ### `generate_series`
 
@@ -2939,7 +3032,7 @@ generate_series(start, stop, step)
 #### Example
 
 ```
-❯ select generate_series(1,3);
+> select generate_series(1,3);
 +------------------------------------+
 | generate_series(Int64(1),Int64(3)) |
 +------------------------------------+
@@ -2950,10 +3043,6 @@ generate_series(start, stop, step)
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
-
-### `list_sort`
-
-_Alias of [array_sort](#array_sort)._
 
 ### `list_cat`
 
@@ -2967,9 +3056,21 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distinct`
+
+_Alias of [array_dims](#array_distinct)._
+
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
+
+### `list_except`
+
+_Alias of [array_element](#array_except)._
 
 ### `list_extract`
 
@@ -2990,6 +3091,10 @@ _Alias of [array_has_any](#array_has_any)._
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
+
+### `list_intersect`
+
+_Alias of [array_position](#array_intersect)._
 
 ### `list_join`
 
@@ -3035,6 +3140,10 @@ _Alias of [array_prepend](#array_prepend)._
 
 _Alias of [array_repeat](#array_repeat)._
 
+### `list_resize`
+
+_Alias of [array_resize](#array_resize)._
+
 ### `list_remove`
 
 _Alias of [array_remove](#array_remove)._
@@ -3067,9 +3176,17 @@ _Alias of [array_reverse](#array_reverse)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_union`
+
+_Alias of [array_union](#array_union)._
 
 ### `make_array`
 
@@ -3078,6 +3195,10 @@ Returns an Arrow array using the specified input expressions.
 ```
 make_array(expression1[, ..., expression_n])
 ```
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
 
 #### Arguments
 
@@ -3088,7 +3209,7 @@ make_array(expression1[, ..., expression_n])
 #### Example
 
 ```
-❯ select make_array(1, 2, 3, 4, 5);
+> select make_array(1, 2, 3, 4, 5);
 +----------------------------------------------------------+
 | make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
 +----------------------------------------------------------+
@@ -3107,6 +3228,7 @@ _Alias of [make_array](#make_array)._
 ### `string_to_array`
 
 Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+`SELECT string_to_array('abc##def', '##')` or `SELECT string_to_array('abc def', ' ', 'def')`
 
 ```
 starts_with(str, delimiter[, null_str])
@@ -3190,11 +3312,12 @@ are not allowed
 ## Struct Functions
 
 - [struct](#struct)
+- [named_struct](#named_struct)
 
 ### `struct`
 
-Returns an Arrow struct using the specified input expressions.
-Fields in the returned struct use the `cN` naming convention.
+Returns an Arrow struct using the specified input expressions optionally named.
+Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
 
 ```
@@ -3202,7 +3325,7 @@ struct(expression1[, ..., expression_n])
 ```
 
 For example, this query converts two columns `a` and `b` to a single column with
-a struct type of fields `c0` and `c1`:
+a struct type of fields `field_a` and `c1`:
 
 ```
 select * from t;
@@ -3213,18 +3336,65 @@ select * from t;
 | 3 | 4 |
 +---+---+
 
-select struct(a, b) from t;
+-- use default names `c0`, `c1`
+> select struct(a, b) from t;
 +-----------------+
 | struct(t.a,t.b) |
 +-----------------+
 | {c0: 1, c1: 2}  |
 | {c0: 3, c1: 4}  |
 +-----------------+
+
+-- name the first field `field_a`
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
 ```
 
 #### Arguments
 
 - **expression_n**: Expression to include in the output struct.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed .
+
+### `named_struct`
+
+Returns an Arrow struct using the specified name and input expressions pairs.
+
+```
+named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
+```
+
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `field_b`:
+
+```
+select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+select named_struct('field_a', a, 'field_b', b) from t;
++-------------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("field_b"),t.b) |
++-------------------------------------------------------+
+| {field_a: 1, field_b: 2}                              |
+| {field_a: 3, field_b: 4}                              |
++-------------------------------------------------------+
+```
+
+#### Arguments
+
+- **expression_n_name**: Name of the column field.
+  Must be a constant string.
+- **expression_n_input**: Expression to include in the output struct.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
 
@@ -3350,7 +3520,7 @@ arrow_cast(expression, datatype)
 #### Example
 
 ```
-❯ select arrow_cast(-5, 'Int8') as a,
+> select arrow_cast(-5, 'Int8') as a,
   arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
   arrow_cast('bar', 'LargeUtf8') as c,
   arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
@@ -3380,7 +3550,7 @@ arrow_typeof(expression)
 #### Example
 
 ```
-❯ select arrow_typeof('foo'), arrow_typeof(1);
+> select arrow_typeof('foo'), arrow_typeof(1);
 +---------------------------+------------------------+
 | arrow_typeof(Utf8("foo")) | arrow_typeof(Int64(1)) |
 +---------------------------+------------------------+

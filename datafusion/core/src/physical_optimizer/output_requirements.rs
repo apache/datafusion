@@ -133,6 +133,10 @@ impl DisplayAs for OutputRequirementExec {
 }
 
 impl ExecutionPlan for OutputRequirementExec {
+    fn name(&self) -> &'static str {
+        "OutputRequirementExec"
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -194,7 +198,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan
-                .transform_up(&|plan| {
+                .transform_up(|plan| {
                     if let Some(sort_req) =
                         plan.as_any().downcast_ref::<OutputRequirementExec>()
                     {
@@ -216,7 +220,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
     }
 }
 
-/// This functions adds ancillary `OutputRequirementExec` to the the physical plan, so that
+/// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;

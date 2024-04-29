@@ -72,7 +72,7 @@ macro_rules! make_udf_function {
         /// Return a [`ScalarUDF`] for [`$UDF`]
         ///
         /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
-        fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+        pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME
                 .get_or_init(|| {
                     std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
@@ -144,5 +144,255 @@ macro_rules! downcast_arg {
                 std::any::type_name::<$ARRAY_TYPE>()
             ))
         })?
+    }};
+}
+
+/// Macro to create a unary math UDF.
+///
+/// A unary math function takes an argument of type Float32 or Float64,
+/// applies a unary floating function to the argument, and returns a value of the same type.
+///
+/// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
+/// $GNAME: a singleton instance of the UDF
+/// $NAME: the name of the function
+/// $UNARY_FUNC: the unary function to apply to the argument
+/// $MONOTONIC_FUNC: the monotonicity of the function
+macro_rules! make_math_unary_udf {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $MONOTONICITY:expr) => {
+        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+
+        mod $NAME {
+            use arrow::array::{ArrayRef, Float32Array, Float64Array};
+            use arrow::datatypes::DataType;
+            use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::{
+                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
+            };
+            use std::any::Any;
+            use std::sync::Arc;
+
+            #[derive(Debug)]
+            pub struct $UDF {
+                signature: Signature,
+            }
+
+            impl $UDF {
+                pub fn new() -> Self {
+                    use DataType::*;
+                    Self {
+                        signature: Signature::uniform(
+                            1,
+                            vec![Float64, Float32],
+                            Volatility::Immutable,
+                        ),
+                    }
+                }
+            }
+
+            impl ScalarUDFImpl for $UDF {
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+                fn name(&self) -> &str {
+                    stringify!($NAME)
+                }
+
+                fn signature(&self) -> &Signature {
+                    &self.signature
+                }
+
+                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                    let arg_type = &arg_types[0];
+
+                    match arg_type {
+                        DataType::Float32 => Ok(DataType::Float32),
+                        // For other types (possible values float64/null/int), use Float64
+                        _ => Ok(DataType::Float64),
+                    }
+                }
+
+                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+                    Ok($MONOTONICITY)
+                }
+
+                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                    let args = ColumnarValue::values_to_arrays(args)?;
+
+                    let arr: ArrayRef = match args[0].data_type() {
+                        DataType::Float64 => {
+                            Arc::new(make_function_scalar_inputs_return_type!(
+                                &args[0],
+                                self.name(),
+                                Float64Array,
+                                Float64Array,
+                                { f64::$UNARY_FUNC }
+                            ))
+                        }
+                        DataType::Float32 => {
+                            Arc::new(make_function_scalar_inputs_return_type!(
+                                &args[0],
+                                self.name(),
+                                Float32Array,
+                                Float32Array,
+                                { f32::$UNARY_FUNC }
+                            ))
+                        }
+                        other => {
+                            return exec_err!(
+                                "Unsupported data type {other:?} for function {}",
+                                self.name()
+                            )
+                        }
+                    };
+                    Ok(ColumnarValue::Array(arr))
+                }
+            }
+        }
+    };
+}
+
+/// Macro to create a binary math UDF.
+///
+/// A binary math function takes two arguments of types Float32 or Float64,
+/// applies a binary floating function to the argument, and returns a value of the same type.
+///
+/// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
+/// $GNAME: a singleton instance of the UDF
+/// $NAME: the name of the function
+/// $BINARY_FUNC: the binary function to apply to the argument
+/// $MONOTONIC_FUNC: the monotonicity of the function
+macro_rules! make_math_binary_udf {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $MONOTONICITY:expr) => {
+        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+
+        mod $NAME {
+            use arrow::array::{ArrayRef, Float32Array, Float64Array};
+            use arrow::datatypes::DataType;
+            use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::TypeSignature::*;
+            use datafusion_expr::{
+                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
+            };
+            use std::any::Any;
+            use std::sync::Arc;
+
+            #[derive(Debug)]
+            pub struct $UDF {
+                signature: Signature,
+            }
+
+            impl $UDF {
+                pub fn new() -> Self {
+                    use DataType::*;
+                    Self {
+                        signature: Signature::one_of(
+                            vec![
+                                Exact(vec![Float32, Float32]),
+                                Exact(vec![Float64, Float64]),
+                            ],
+                            Volatility::Immutable,
+                        ),
+                    }
+                }
+            }
+
+            impl ScalarUDFImpl for $UDF {
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+                fn name(&self) -> &str {
+                    stringify!($NAME)
+                }
+
+                fn signature(&self) -> &Signature {
+                    &self.signature
+                }
+
+                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                    let arg_type = &arg_types[0];
+
+                    match arg_type {
+                        DataType::Float32 => Ok(DataType::Float32),
+                        // For other types (possible values float64/null/int), use Float64
+                        _ => Ok(DataType::Float64),
+                    }
+                }
+
+                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+                    Ok($MONOTONICITY)
+                }
+
+                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                    let args = ColumnarValue::values_to_arrays(args)?;
+
+                    let arr: ArrayRef = match args[0].data_type() {
+                        DataType::Float64 => Arc::new(make_function_inputs2!(
+                            &args[0],
+                            &args[1],
+                            "y",
+                            "x",
+                            Float64Array,
+                            { f64::$BINARY_FUNC }
+                        )),
+
+                        DataType::Float32 => Arc::new(make_function_inputs2!(
+                            &args[0],
+                            &args[1],
+                            "y",
+                            "x",
+                            Float32Array,
+                            { f32::$BINARY_FUNC }
+                        )),
+                        other => {
+                            return exec_err!(
+                                "Unsupported data type {other:?} for function {}",
+                                self.name()
+                            )
+                        }
+                    };
+                    Ok(ColumnarValue::Array(arr))
+                }
+            }
+        }
+    };
+}
+
+macro_rules! make_function_scalar_inputs {
+    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
+
+        arg.iter()
+            .map(|a| match a {
+                Some(a) => Some($FUNC(a)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
+    }};
+}
+
+macro_rules! make_function_inputs2 {
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
+    }};
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE1>()
     }};
 }

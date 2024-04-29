@@ -17,97 +17,108 @@
 
 extern crate criterion;
 
+use std::sync::Arc;
+
+use arrow::array::builder::StringBuilder;
+use arrow::array::ArrayRef;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use datafusion_expr::lit;
-use datafusion_functions::expr_fn::to_timestamp;
+use datafusion_expr::ColumnarValue;
+use datafusion_functions::datetime::to_timestamp;
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_timestamp_no_formats", |b| {
-        let inputs = vec![
-            lit("1997-01-31T09:26:56.123Z"),
-            lit("1997-01-31T09:26:56.123-05:00"),
-            lit("1997-01-31 09:26:56.123-05:00"),
-            lit("2023-01-01 04:05:06.789 -08"),
-            lit("1997-01-31T09:26:56.123"),
-            lit("1997-01-31 09:26:56.123"),
-            lit("1997-01-31 09:26:56"),
-            lit("1997-01-31 13:26:56"),
-            lit("1997-01-31 13:26:56+04:00"),
-            lit("1997-01-31"),
-        ];
+        let mut inputs = StringBuilder::new();
+        inputs.append_value("1997-01-31T09:26:56.123Z");
+        inputs.append_value("1997-01-31T09:26:56.123-05:00");
+        inputs.append_value("1997-01-31 09:26:56.123-05:00");
+        inputs.append_value("2023-01-01 04:05:06.789 -08");
+        inputs.append_value("1997-01-31T09:26:56.123");
+        inputs.append_value("1997-01-31 09:26:56.123");
+        inputs.append_value("1997-01-31 09:26:56");
+        inputs.append_value("1997-01-31 13:26:56");
+        inputs.append_value("1997-01-31 13:26:56+04:00");
+        inputs.append_value("1997-01-31");
+
+        let string_array = ColumnarValue::Array(Arc::new(inputs.finish()) as ArrayRef);
+
         b.iter(|| {
-            for i in inputs.iter() {
-                black_box(to_timestamp(vec![i.clone()]));
-            }
-        });
+            black_box(
+                to_timestamp()
+                    .invoke(&[string_array.clone()])
+                    .expect("to_timestamp should work on valid values"),
+            )
+        })
     });
 
     c.bench_function("to_timestamp_with_formats", |b| {
-        let mut inputs = vec![];
-        let mut format1 = vec![];
-        let mut format2 = vec![];
-        let mut format3 = vec![];
+        let mut inputs = StringBuilder::new();
+        let mut format1_builder = StringBuilder::with_capacity(2, 10);
+        let mut format2_builder = StringBuilder::with_capacity(2, 10);
+        let mut format3_builder = StringBuilder::with_capacity(2, 10);
 
-        inputs.push(lit("1997-01-31T09:26:56.123Z"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%dT%H:%M:%S%.f%Z"));
+        inputs.append_value("1997-01-31T09:26:56.123Z");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%Z");
 
-        inputs.push(lit("1997-01-31T09:26:56.123-05:00"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%dT%H:%M:%S%.f%z"));
+        inputs.append_value("1997-01-31T09:26:56.123-05:00");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f%z");
 
-        inputs.push(lit("1997-01-31 09:26:56.123-05:00"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H:%M:%S%.f%Z"));
+        inputs.append_value("1997-01-31 09:26:56.123-05:00");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f%Z");
 
-        inputs.push(lit("2023-01-01 04:05:06.789 -08"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H:%M:%S%.f %#z"));
+        inputs.append_value("2023-01-01 04:05:06.789 -08");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f %#z");
 
-        inputs.push(lit("1997-01-31T09:26:56.123"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%dT%H:%M:%S%.f"));
+        inputs.append_value("1997-01-31T09:26:56.123");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%dT%H:%M:%S%.f");
 
-        inputs.push(lit("1997-01-31 09:26:56.123"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H:%M:%S%.f"));
+        inputs.append_value("1997-01-31 09:26:56.123");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H:%M:%S%.f");
 
-        inputs.push(lit("1997-01-31 09:26:56"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H:%M:%S"));
+        inputs.append_value("1997-01-31 09:26:56");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H:%M:%S");
 
-        inputs.push(lit("1997-01-31 092656"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H%M%S"));
+        inputs.append_value("1997-01-31 092656");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H%M%S");
 
-        inputs.push(lit("1997-01-31 092656+04:00"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d %H%M%S%:z"));
+        inputs.append_value("1997-01-31 092656+04:00");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d %H%M%S%:z");
 
-        inputs.push(lit("Sun Jul  8 00:34:60 2001"));
-        format1.push(lit("%+"));
-        format2.push(lit("%c"));
-        format3.push(lit("%Y-%m-%d 00:00:00"));
+        inputs.append_value("Sun Jul  8 00:34:60 2001");
+        format1_builder.append_value("%+");
+        format2_builder.append_value("%c");
+        format3_builder.append_value("%Y-%m-%d 00:00:00");
 
+        let args = [
+            ColumnarValue::Array(Arc::new(inputs.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format1_builder.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format2_builder.finish()) as ArrayRef),
+            ColumnarValue::Array(Arc::new(format3_builder.finish()) as ArrayRef),
+        ];
         b.iter(|| {
-            inputs.iter().enumerate().for_each(|(idx, i)| {
-                black_box(to_timestamp(vec![
-                    i.clone(),
-                    format1.get(idx).unwrap().clone(),
-                    format2.get(idx).unwrap().clone(),
-                    format3.get(idx).unwrap().clone(),
-                ]));
-            })
+            black_box(
+                to_timestamp()
+                    .invoke(&args.clone())
+                    .expect("to_timestamp should work on valid values"),
+            )
         })
     });
 }

@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_physical_plan"
 path = "src/lib.rs"
@@ -39,6 +42,7 @@ ahash = { version = "0.8", default-features = false, features = [
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
+arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -46,7 +50,9 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
+datafusion-physical-expr-common = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
@@ -58,7 +64,6 @@ parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 rstest = { workspace = true }

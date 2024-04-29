@@ -568,7 +568,7 @@ async fn roundtrip_union_all() -> Result<()> {
 async fn simple_intersect() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -582,7 +582,7 @@ async fn simple_intersect() -> Result<()> {
 async fn simple_intersect_table_reuse() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\

@@ -73,7 +73,7 @@ macro_rules! status {
 ///
 /// JDBC connection string: "jdbc:arrow-flight-sql://127.0.0.1:50051/"
 ///
-/// Based heavily on Ballista's implementation: https://github.com/apache/arrow-ballista/blob/main/ballista/scheduler/src/flight_sql.rs
+/// Based heavily on Ballista's implementation: https://github.com/apache/datafusion-ballista/blob/main/ballista/scheduler/src/flight_sql.rs
 /// and the example in arrow-rs: https://github.com/apache/arrow-rs/blob/master/arrow-flight/examples/flight_sql_server.rs
 ///
 #[tokio::main]
@@ -307,6 +307,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
             location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
         };
         let endpoints = vec![endpoint];
 
@@ -329,6 +331,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             total_records: -1_i64,
             total_bytes: -1_i64,
             ordered: false,
+            app_metadata: Default::default(),
         };
         let resp = Response::new(info);
         Ok(resp)

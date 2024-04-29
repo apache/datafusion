@@ -1,5 +1,6 @@
 /*
 
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -89,17 +90,13 @@ message ProjectionColumns {
 }
 
 message CsvFormat {
-  bool has_header = 1;
-  string delimiter = 2;
-  string quote = 3;
-  oneof optional_escape {
-    string escape = 4;
-  }
+  CsvOptions options = 5;
 }
 
 message ParquetFormat {
   // Used to be bool enable_pruning = 1;
   reserved 1;
+  TableParquetOptions options = 2;
 }
 
 message AvroFormat {}
@@ -110,7 +107,7 @@ message LogicalExprNodeCollection {
 
 message ListingTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 14;
+  TableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -129,7 +126,7 @@ message ListingTableScanNode {
 
 message ViewTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -139,7 +136,7 @@ message ViewTableScanNode {
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
   reserved 1; // was string table_name
-  OwnedTableReference table_name = 6;
+  TableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;
@@ -204,7 +201,7 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  OwnedTableReference name = 12;
+  TableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -241,14 +238,14 @@ message CreateCatalogNode {
 }
 
 message DropViewNode {
-  OwnedTableReference name = 1;
+  TableReference name = 1;
   bool if_exists = 2;
   DfSchema schema = 3;
 }
 
 message CreateViewNode {
   reserved 1; // was string name
-  OwnedTableReference name = 5;
+  TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -323,22 +320,18 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    oneof CopyOptions {
-        SQLOptions sql_options = 4;
-        FileTypeWriterOptions writer_options = 5;
+    oneof format_options {
+      CsvOptions csv = 8;
+      JsonOptions json = 9;
+      TableParquetOptions parquet = 10;
+      AvroOptions avro = 11;
+      ArrowOptions arrow = 12;
     }
-    string file_type = 6;
     repeated string partition_by = 7;
 }
 
-message SQLOptions {
-  repeated SQLOption option = 1;
-}
-
-message SQLOption {
-    string key = 1;
-    string value = 2;
-}
+message AvroOptions {}
+message ArrowOptions {}
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
@@ -364,7 +357,7 @@ message SelectionExecNode {
 message SubqueryAliasNode {
   reserved 2; // Was string alias
   LogicalPlanNode input = 1;
-  OwnedTableReference alias = 3;
+  TableReference alias = 3;
 }
 
 // logical expressions
@@ -396,7 +389,7 @@ message LogicalExprNode {
     NegativeNode negative = 13;
     InListNode in_list = 14;
     Wildcard wildcard = 15;
-    ScalarFunctionNode scalar_function = 16;
+    // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
     // window expressions
@@ -520,7 +513,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
-  repeated OwnedTableReference relation = 3;
+  repeated TableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -543,152 +536,6 @@ message InListNode {
   LogicalExprNode expr = 1;
   repeated LogicalExprNode list = 2;
   bool negated = 3;
-}
-
-enum ScalarFunction {
-  //  0 was Abs before
-  //  The first enum value must be zero for open enums
-  unknown = 0;
-  //  1 was Acos
-  //  2 was Asin
-  Atan = 3;
-  Ascii = 4;
-  Ceil = 5;
-  Cos = 6;
-  Digest = 7;
-  Exp = 8;
-  Floor = 9;
-  Ln = 10;
-  Log = 11;
-  Log10 = 12;
-  Log2 = 13;
-  Round = 14;
-  Signum = 15;
-  Sin = 16;
-  Sqrt = 17;
-  Tan = 18;
-  Trunc = 19;
-  Array = 20;
-  // RegexpMatch = 21;
-  BitLength = 22;
-  Btrim = 23;
-  CharacterLength = 24;
-  Chr = 25;
-  Concat = 26;
-  ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
-  InitCap = 30;
-  Left = 31;
-  Lpad = 32;
-  Lower = 33;
-  Ltrim = 34;
-  MD5 = 35;
-  //  36 was NullIf
-  OctetLength = 37;
-  Random = 38;
-  RegexpReplace = 39;
-  Repeat = 40;
-  Replace = 41;
-  Reverse = 42;
-  Right = 43;
-  Rpad = 44;
-  Rtrim = 45;
-  SHA224 = 46;
-  SHA256 = 47;
-  SHA384 = 48;
-  SHA512 = 49;
-  SplitPart = 50;
-  StartsWith = 51;
-  Strpos = 52;
-  Substr = 53;
-  ToHex = 54;
-  // 55 was ToTimestamp
-  // 56 was ToTimestampMillis
-  // 57 was ToTimestampMicros
-  // 58 was ToTimestampSeconds
-  Now = 59;
-  Translate = 60;
-  Trim = 61;
-  Upper = 62;
-  Coalesce = 63;
-  Power = 64;
-  StructFun = 65;
-  FromUnixtime = 66;
-  Atan2 = 67;
-  DateBin = 68;
-  ArrowTypeof = 69;
-  CurrentDate = 70;
-  CurrentTime = 71;
-  Uuid = 72;
-  Cbrt = 73;
-  Acosh = 74;
-  Asinh = 75;
-  Atanh = 76;
-  Sinh = 77;
-  Cosh = 78;
-  Tanh = 79;
-  Pi = 80;
-  Degrees = 81;
-  Radians = 82;
-  Factorial = 83;
-  Lcm = 84;
-  Gcd = 85;
-  ArrayAppend = 86;
-  ArrayConcat = 87;
-  // 88 was ArrayDims
-  ArrayRepeat = 89;
-  ArrayLength = 90;
-  // 91 was ArrayNdims
-  ArrayPosition = 92;
-  ArrayPositions = 93;
-  ArrayPrepend = 94;
-  ArrayRemove = 95;
-  ArrayReplace = 96;
-  // 97 was ArrayToString
-  // 98 was Cardinality
-  ArrayElement = 99;
-  ArraySlice = 100;
-  Cot = 103;
-  ArrayHas = 104;
-  ArrayHasAny = 105;
-  ArrayHasAll = 106;
-  ArrayRemoveN = 107;
-  ArrayReplaceN = 108;
-  ArrayRemoveAll = 109;
-  ArrayReplaceAll = 110;
-  Nanvl = 111;
-  Flatten = 112;
-  // 113 was IsNan
-  Iszero = 114;
-  ArrayEmpty = 115;
-  ArrayPopBack = 116;
-  StringToArray = 117;
-  // 118 was ToTimestampNanos
-  ArrayIntersect = 119;
-  ArrayUnion = 120;
-  OverLay = 121;
-  /// 122 is Range
-  ArrayExcept = 123;
-  ArrayPopFront = 124;
-  Levenshtein = 125;
-  SubstrIndex = 126;
-  FindInSet = 127;
-  ArraySort = 128;
-  ArrayDistinct = 129;
-  ArrayResize = 130;
-  EndsWith = 131;
-  /// 132 was InStr
-  MakeDate = 133;
-  ArrayReverse = 134;
-  /// 135 is RegexpLike
-  ToChar = 136;
-  /// 137 was ToDate
-}
-
-message ScalarFunctionNode {
-  ScalarFunction fun = 1;
-  repeated LogicalExprNode args = 2;
 }
 
 enum AggregateFunction {
@@ -994,6 +841,20 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
+message UnionField {
+  int32 field_id = 1;
+  Field field = 2;
+}
+
+message UnionValue {
+  // Note that a null union value must have one or more fields, so we
+  // encode a null UnionValue as one with value_id == 128
+  int32 value_id = 1;
+  ScalarValue value = 2;
+  repeated UnionField fields = 3;
+  UnionMode mode = 4;
+}
+
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1048,6 +909,7 @@ message ScalarValue{
     ScalarTime64Value time64_value = 30;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
+    UnionValue union_value = 42;
   }
 }
 
@@ -1160,7 +1022,7 @@ message FullTableReference {
   string table = 3;
 }
 
-message OwnedTableReference {
+message TableReference {
   oneof table_reference_enum {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;
@@ -1217,22 +1079,11 @@ message PartitionColumn {
   ArrowType arrow_type = 2;
 }
 
-message FileTypeWriterOptions {
-  oneof FileType {
-    JsonWriterOptions json_options = 1;
-    ParquetWriterOptions parquet_options = 2;
-    CsvWriterOptions csv_options = 3;
-    ArrowWriterOptions arrow_options = 4;
-  }
-}
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
 }
 
-message ParquetWriterOptions {
-    WriterProperties writer_properties = 1;
-}
 
 message CsvWriterOptions {
   // Compression type
@@ -1253,16 +1104,26 @@ message CsvWriterOptions {
   string null_value = 8;
 }
 
-message ArrowWriterOptions {}
+// Options controlling CSV format
+message CsvOptions {
+  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes delimiter = 2; // Delimiter character as a byte
+  bytes quote = 3; // Quote character as a byte
+  bytes escape = 4; // Optional escape character as a byte
+  CompressionTypeVariant compression = 5; // Compression type
+  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  string date_format = 7; // Optional date format
+  string datetime_format = 8; // Optional datetime format
+  string timestamp_format = 9; // Optional timestamp format
+  string timestamp_tz_format = 10; // Optional timestamp with timezone format
+  string time_format = 11; // Optional time format
+  string null_value = 12; // Optional representation of null value
+}
 
-message WriterProperties {
-  uint64 data_page_size_limit = 1;
-  uint64 dictionary_page_size_limit = 2;
-  uint64 data_page_row_count_limit = 3;
-  uint64 write_batch_size = 4;
-  uint64 max_row_group_size = 5;
-  string writer_version = 6;
-  string created_by = 7;
+// Options controlling CSV format
+message JsonOptions {
+  CompressionTypeVariant compression = 1; // Compression type
+  uint64 schema_infer_max_rec = 2; // Max records for schema inference
 }
 
 message FileSinkConfig {
@@ -1274,11 +1135,11 @@ message FileSinkConfig {
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
-  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
   FileSinkConfig config = 1;
+  JsonWriterOptions writer_options = 2;
 }
 
 message JsonSinkExecNode {
@@ -1290,6 +1151,7 @@ message JsonSinkExecNode {
 
 message CsvSink {
   FileSinkConfig config = 1;
+  CsvWriterOptions writer_options = 2;
 }
 
 message CsvSinkExecNode {
@@ -1299,8 +1161,115 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message TableParquetOptions {
+  ParquetOptions global = 1;
+  repeated ColumnSpecificOptions column_specific_options = 2;
+}
+
+message ColumnSpecificOptions {
+  string column_name = 1;
+  ColumnOptions options = 2;
+}
+
+message ColumnOptions {
+  oneof bloom_filter_enabled_opt {
+    bool bloom_filter_enabled = 1;
+  }
+
+  oneof encoding_opt {
+    string encoding = 2;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 3;
+  }
+
+  oneof compression_opt {
+    string compression = 4;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 5;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 6;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 7;
+  }
+
+  oneof max_statistics_size_opt {
+    uint32 max_statistics_size = 8;
+  }
+}
+
+message ParquetOptions {
+  // Regular fields
+  bool enable_page_index = 1; // default = true
+  bool pruning = 2; // default = true
+  bool skip_metadata = 3; // default = true
+  bool pushdown_filters = 5; // default = false
+  bool reorder_filters = 6; // default = false
+  uint64 data_pagesize_limit = 7; // default = 1024 * 1024
+  uint64 write_batch_size = 8; // default = 1024
+  string writer_version = 9; // default = "1.0"
+  bool bloom_filter_enabled = 20; // default = false
+  bool allow_single_file_parallelism = 23; // default = true
+  uint64 maximum_parallel_row_group_writers = 24; // default = 1
+  uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+
+  oneof metadata_size_hint_opt {
+    uint64 metadata_size_hint = 4;
+  }
+
+  oneof compression_opt {
+    string compression = 10;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 11;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 13;
+  }
+
+  oneof max_statistics_size_opt {
+    uint64 max_statistics_size = 14;
+  }
+
+  oneof column_index_truncate_length_opt {
+    uint64 column_index_truncate_length = 17;
+  }
+
+  oneof encoding_opt {
+    string encoding = 19;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 21;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 22;
+  }
+
+  uint64 dictionary_page_size_limit = 12;
+
+  uint64 data_page_row_count_limit = 18;
+
+  uint64 max_row_group_size = 15;
+
+  string created_by = 16;
+}
+
+
+
 message ParquetSink {
   FileSinkConfig config = 1;
+  TableParquetOptions parquet_options = 2;
 }
 
 message ParquetSinkExecNode {
@@ -1342,23 +1311,22 @@ message PhysicalExprNode {
     PhysicalSortExprNode sort = 10;
     PhysicalNegativeNode negative = 11;
     PhysicalInListNode in_list = 12;
-    PhysicalScalarFunctionNode scalar_function = 13;
+    //  was PhysicalScalarFunctionNode scalar_function = 13;
     PhysicalTryCastNode try_cast = 14;
-
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
 
     PhysicalScalarUdfNode scalar_udf = 16;
+    // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
-
-    PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
 }
 
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
   ArrowType return_type = 4;
 }
 
@@ -1442,13 +1410,6 @@ message PhysicalCaseNode {
   PhysicalExprNode expr = 1;
   repeated PhysicalWhenThen when_then_expr = 2;
   PhysicalExprNode else_expr = 3;
-}
-
-message PhysicalScalarFunctionNode {
-  string name = 1;
-  ScalarFunction fun = 2;
-  repeated PhysicalExprNode args = 3;
-  ArrowType return_type = 4;
 }
 
 message PhysicalTryCastNode {
@@ -1535,6 +1496,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {
@@ -1766,27 +1728,4 @@ message ColumnStats {
   Precision max_value = 2;
   Precision null_count = 3;
   Precision distinct_count = 4;
-}
-
-message NamedStructFieldExpr {
-  ScalarValue name = 1;
-}
-
-message ListIndexExpr {
-  PhysicalExprNode key = 1;
-}
-
-message ListRangeExpr {
-  PhysicalExprNode start = 1;
-  PhysicalExprNode stop = 2;
-  PhysicalExprNode stride = 3;
-}
-
-message PhysicalGetIndexedFieldExprNode {
-  PhysicalExprNode arg = 1;
-  oneof field {
-    NamedStructFieldExpr named_struct_field_expr = 2;
-    ListIndexExpr list_index_expr = 3;
-    ListRangeExpr list_range_expr = 4;
-  }
 }

@@ -44,6 +44,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
+use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
@@ -159,6 +160,10 @@ impl DisplayAs for CsvExec {
 }
 
 impl ExecutionPlan for CsvExec {
+    fn name(&self) -> &'static str {
+        "CsvExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -471,7 +476,7 @@ pub async fn plan_to_csv(
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buf_writer = BufWriter::new(storeref, file.clone());
             let mut buffer = Vec::with_capacity(1024);
             //only write headers on first iteration
             let mut write_headers = true;
@@ -481,15 +486,12 @@ pub async fn plan_to_csv(
                     .build(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
+                buf_writer.write_all(&buffer).await?;
                 buffer.clear();
                 //prevent writing headers more than once
                 write_headers = false;
             }
-            multipart_writer
-                .shutdown()
-                .await
-                .map_err(DataFusionError::from)
+            buf_writer.shutdown().await.map_err(DataFusionError::from)
         });
     }
 
@@ -524,7 +526,6 @@ mod tests {
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::FileType;
 
-    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -767,7 +768,7 @@ mod tests {
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
-        // errors due to https://github.com/apache/arrow-datafusion/issues/4918
+        // errors due to https://github.com/apache/datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
         let err = it.next().await.unwrap().unwrap_err().strip_backtrace();
         assert_eq!(

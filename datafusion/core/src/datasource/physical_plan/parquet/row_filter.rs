@@ -401,9 +401,9 @@ mod test {
     use super::*;
     use arrow::datatypes::Field;
     use datafusion_common::ToDFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_expr::execution_props::ExecutionProps;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;

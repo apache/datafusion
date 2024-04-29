@@ -19,10 +19,15 @@
 
 pub mod regexplike;
 pub mod regexpmatch;
-
+pub mod regexpreplace;
 // create UDFs
 make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
+make_udf_function!(
+    regexpreplace::RegexpReplaceFunc,
+    REGEXP_REPLACE,
+    regexp_replace
+);
 export_functions!((
     regexp_match,
     input_arg1 input_arg2,
@@ -31,4 +36,4 @@ export_functions!((
     regexp_like,
     input_arg1 input_arg2,
     "Returns true if a has at least one match in a string,false otherwise."
-));
+),(regexp_replace, arg1 arg2 arg3 arg4, "Replaces substrings in a string that match"));

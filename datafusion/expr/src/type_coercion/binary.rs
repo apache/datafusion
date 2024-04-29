@@ -361,7 +361,7 @@ fn string_temporal_coercion(
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one both are numeric
-fn comparison_binary_numeric_coercion(
+pub(crate) fn comparison_binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
@@ -858,10 +858,8 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Operator;
 
-    use arrow::datatypes::DataType;
-    use datafusion_common::{assert_contains, Result};
+    use datafusion_common::assert_contains;
 
     #[test]
     fn test_coercion_error() -> Result<()> {

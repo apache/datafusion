@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::record_batch::RecordBatch;
@@ -41,16 +42,12 @@ use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
+use arrow::datatypes::{DataType, Field};
+use arrow_schema::{Schema, SchemaRef};
+use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions,
-    ParamValues, SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -66,10 +63,6 @@ pub struct DataFrameWriteOptions {
     /// Controls if all partitions should be coalesced into a single output file
     /// Generally will have slower performance when set to true.
     single_file_output: bool,
-    /// Sets compression by DataFusion applied after file serialization.
-    /// Allows compression of CSV and JSON.
-    /// Not supported for parquet.
-    compression: CompressionTypeVariant,
     /// Sets which columns should be used for hive-style partitioned writes by name.
     /// Can be set to empty vec![] for non-partitioned writes.
     partition_by: Vec<String>,
@@ -81,7 +74,6 @@ impl DataFrameWriteOptions {
         DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
-            compression: CompressionTypeVariant::UNCOMPRESSED,
             partition_by: vec![],
         }
     }
@@ -94,12 +86,6 @@ impl DataFrameWriteOptions {
     /// Set the single_file_output value to true or false
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
         self.single_file_output = single_file_output;
-        self
-    }
-
-    /// Sets the compression type applied to the output file(s)
-    pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
-        self.compression = compression;
         self
     }
 
@@ -170,7 +156,8 @@ impl Default for DataFrameWriteOptions {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DataFrame {
-    session_state: SessionState,
+    // Box the (large) SessionState to reduce the size of DataFrame on the stack
+    session_state: Box<SessionState>,
     plan: LogicalPlan,
 }
 
@@ -182,7 +169,7 @@ impl DataFrame {
     /// `DataFrame` from an existing datasource.
     pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
-            session_state,
+            session_state: Box::new(session_state),
             plan,
         }
     }
@@ -209,11 +196,15 @@ impl DataFrame {
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
-            .map(|name| self.plan.schema().field_with_unqualified_name(name))
+            .map(|name| {
+                self.plan
+                    .schema()
+                    .qualified_field_with_unqualified_name(name)
+            })
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
+            .into_iter()
+            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
             .collect();
         self.select(expr)
     }
@@ -244,10 +235,33 @@ impl DataFrame {
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Expand each list element of a column to multiple rows.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        self.unnest_columns(&[column])
+    }
+
+    /// Expand each list element of a column to multiple rows, with
+    /// behavior controlled by [`UnnestOptions`].
+    ///
+    /// Please see the documentation on [`UnnestOptions`] for more
+    /// details about the meaning of unnest.
+    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
+    pub fn unnest_column_with_options(
+        self,
+        column: &str,
+        options: UnnestOptions,
+    ) -> Result<DataFrame> {
+        self.unnest_columns_with_options(&[column], options)
+    }
+
+    /// Expand multiple list columns into a set of rows.
     ///
     /// See also:
     ///
@@ -262,28 +276,32 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_column("a")?;
+    /// let df = df.unnest_columns(&["a", "b"])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_column_with_options(column, UnnestOptions::new())
+    pub fn unnest_columns(self, columns: &[&str]) -> Result<DataFrame> {
+        self.unnest_columns_with_options(columns, UnnestOptions::new())
     }
 
-    /// Expand each list element of a column to multiple rows, with
+    /// Expand multiple list columns into a set of rows, with
     /// behavior controlled by [`UnnestOptions`].
     ///
     /// Please see the documentation on [`UnnestOptions`] for more
     /// details about the meaning of unnest.
-    pub fn unnest_column_with_options(
+    pub fn unnest_columns_with_options(
         self,
-        column: &str,
+        columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
+        let columns = columns.iter().map(|c| Column::from(*c)).collect();
         let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_column_with_options(column, options)?
+            .unnest_columns_with_options(columns, options)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a DataFrame with only rows for which `predicate` evaluates to
@@ -308,7 +326,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` that aggregates the rows of the current
@@ -339,7 +360,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new DataFrame that adds the result of evaluating one or more
@@ -348,7 +372,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .window(window_exprs)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Returns a new `DataFrame` with a limited number of rows.
@@ -373,7 +400,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .limit(skip, fetch)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.
@@ -397,7 +427,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .union(dataframe.plan)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the distinct union of two [`DataFrame`]s.
@@ -419,12 +452,13 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::from(self.plan)
-                .union_distinct(dataframe.plan)?
-                .build()?,
-        ))
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_distinct(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` with all duplicated rows removed.
@@ -442,10 +476,11 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn distinct(self) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
-        ))
+        let plan = LogicalPlanBuilder::from(self.plan).distinct()?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a new `DataFrame` that has statistics for a DataFrame.
@@ -613,15 +648,18 @@ impl DataFrame {
             describe_record_batch.schema(),
             vec![vec![describe_record_batch]],
         )?;
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::scan(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        ))
+
+        let plan = LogicalPlanBuilder::scan(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Sort the DataFrame by the specified sorting expressions.
@@ -647,7 +685,10 @@ impl DataFrame {
     /// ```
     pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Join this `DataFrame` with another `DataFrame` using explicitly specified
@@ -701,7 +742,10 @@ impl DataFrame {
                 filter,
             )?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Join this `DataFrame` with another `DataFrame` using the specified
@@ -751,7 +795,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .join_on(right.plan, join_type, expr)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Repartition a DataFrame based on a logical partitioning scheme.
@@ -772,7 +819,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .repartition(partitioning_scheme)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return the total number of rows in this `DataFrame`.
@@ -877,7 +927,7 @@ impl DataFrame {
 
     /// Return a new [`TaskContext`] which would be used to execute this DataFrame
     pub fn task_ctx(&self) -> TaskContext {
-        TaskContext::from(&self.session_state)
+        TaskContext::from(self.session_state.as_ref())
     }
 
     /// Executes this DataFrame and returns a stream over a single partition
@@ -983,7 +1033,7 @@ impl DataFrame {
 
     /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
     pub fn into_parts(self) -> (SessionState, LogicalPlan) {
-        (self.session_state, self.plan)
+        (*self.session_state, self.plan)
     }
 
     /// Return the [`LogicalPlan`] represented by this DataFrame without running
@@ -1015,16 +1065,6 @@ impl DataFrame {
         Arc::new(DataFrameTableProvider { plan: self.plan })
     }
 
-    /// Return the optimized logical plan represented by this DataFrame.
-    ///
-    /// Note: This method should not be used outside testing, as it loses the snapshot
-    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
-    /// operations may take place against a different state
-    #[deprecated(since = "23.0.0", note = "Use DataFrame::into_optimized_plan")]
-    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
-        self.into_optimized_plan()
-    }
-
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
@@ -1047,7 +1087,10 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Return a `FunctionRegistry` used to plan udf's calls
@@ -1066,7 +1109,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn registry(&self) -> &dyn FunctionRegistry {
-        &self.session_state
+        self.session_state.as_ref()
     }
 
     /// Calculate the intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -1086,10 +1129,11 @@ impl DataFrame {
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
-        ))
+        let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Calculate the exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -1109,11 +1153,11 @@ impl DataFrame {
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-
-        Ok(DataFrame::new(
-            self.session_state,
-            LogicalPlanBuilder::except(left_plan, right_plan, true)?,
-        ))
+        let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Execute this `DataFrame` and write the results to `table_name`.
@@ -1138,7 +1182,13 @@ impl DataFrame {
             write_options.overwrite,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Execute the `DataFrame` and write the results to CSV file(s).
@@ -1168,31 +1218,31 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
-        writer_properties: Option<WriterBuilder>,
+        writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let props = match writer_properties {
-            Some(props) => props,
-            None => WriterBuilder::new(),
-        };
-
-        let file_type_writer_options =
-            FileTypeWriterOptions::CSV(CsvWriterOptions::new(props, options.compression));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+        let props = writer_options
+            .unwrap_or_else(|| self.session_state.default_table_options().csv);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::CSV,
+            FormatOptions::CSV(props),
+            HashMap::new(),
             options.partition_by,
-            copy_options,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Execute the `DataFrame` and write the results to JSON file(s).
@@ -1212,6 +1262,7 @@ impl DataFrame {
     ///   .write_json(
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
+    ///     None
     /// ).await?;
     /// # fs::remove_file("output.json")?;
     /// # Ok(())
@@ -1221,24 +1272,32 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
+        writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
             ));
         }
-        let file_type_writer_options =
-            FileTypeWriterOptions::JSON(JsonWriterOptions::new(options.compression));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+
+        let props = writer_options
+            .unwrap_or_else(|| self.session_state.default_table_options().json);
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::JSON,
+            FormatOptions::JSON(props),
+            Default::default(),
             options.partition_by,
-            copy_options,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 
     /// Add an additional column to the DataFrame.
@@ -1267,14 +1326,13 @@ impl DataFrame {
         let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
-            .fields()
             .iter()
-            .map(|f| {
-                if f.name() == name {
+            .map(|(qualifier, field)| {
+                if field.name() == name {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(f.qualified_column())
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect();
@@ -1285,7 +1343,10 @@ impl DataFrame {
 
         let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
 
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Rename one column by applying a new projection. This is a no-op if the column to be
@@ -1325,31 +1386,35 @@ impl DataFrame {
             Column::from_qualified_name_ignore_case(old_name)
         };
 
-        let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
-            Ok(field) => field,
-            // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
-                return Ok(self)
-            }
-            Err(err) => return Err(err),
-        };
+        let (qualifier_rename, field_rename) =
+            match self.plan.schema().qualified_field_from_column(&old_column) {
+                Ok(qualifier_and_field) => qualifier_and_field,
+                // no-op if field not found
+                Err(DataFusionError::SchemaError(
+                    SchemaError::FieldNotFound { .. },
+                    _,
+                )) => return Ok(self),
+                Err(err) => return Err(err),
+            };
         let projection = self
             .plan
             .schema()
-            .fields()
             .iter()
-            .map(|f| {
-                if f == field_to_rename {
-                    col(f.qualified_column()).alias(new_name)
+            .map(|(qualifier, field)| {
+                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
+                    col(Column::from((qualifier, field))).alias(new_name)
                 } else {
-                    col(f.qualified_column())
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect::<Vec<_>>();
         let project_plan = LogicalPlanBuilder::from(self.plan)
             .project(projection)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, project_plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan: project_plan,
+        })
     }
 
     /// Replace all parameters in logical plan with the specified
@@ -1411,7 +1476,10 @@ impl DataFrame {
     /// ```
     pub fn with_param_values(self, query_values: impl Into<ParamValues>) -> Result<Self> {
         let plan = self.plan.with_param_values(query_values)?;
-        Ok(Self::new(self.session_state, plan))
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
     }
 
     /// Cache DataFrame as a memory table.
@@ -1428,7 +1496,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state(self.session_state.clone());
+        let context = SessionContext::new_with_state((*self.session_state).clone());
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
@@ -1453,12 +1521,12 @@ impl TableProvider for DataFrameTableProvider {
         Some(&self.plan)
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         // A filter is added on the DataFrame when given
-        Ok(TableProviderFilterPushDown::Exact)
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
     fn schema(&self) -> SchemaRef {
@@ -1502,19 +1570,17 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::assert_batches_sorted_eq;
     use crate::execution::context::SessionConfig;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
-    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use arrow::array::{self, Int32Array};
-    use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        cast, count_distinct, create_udf, expr, lit, sum, BuiltInWindowFunction,
+        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
@@ -2355,7 +2421,7 @@ mod tests {
         Ok(())
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Test issue: https://github.com/apache/datafusion/issues/7790
     // The join operation outputs two identical column names, but they belong to different relations.
     #[tokio::test]
     async fn with_column_join_same_columns() -> Result<()> {
@@ -2435,7 +2501,7 @@ mod tests {
     }
 
     // Table 't1' self join
-    // Supplementary test of issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // Supplementary test of issue: https://github.com/apache/datafusion/issues/7790
     #[tokio::test]
     async fn with_column_self_join() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1"])?;

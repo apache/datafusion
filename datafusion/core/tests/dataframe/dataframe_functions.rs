@@ -25,18 +25,14 @@ use arrow_array::ListArray;
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
-use datafusion::dataframe::DataFrame;
-
 use datafusion::error::Result;
 
 use datafusion::prelude::*;
 
-use datafusion::execution::context::SessionContext;
-
 use datafusion::assert_batches_eq;
 use datafusion_common::DFSchema;
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{approx_median, cast, ExprSchemable};
+use datafusion_expr::ExprSchemable;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -367,7 +363,7 @@ async fn test_fn_lpad_with_string() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_ltrim() -> Result<()> {
-    let expr = ltrim(lit("      a b c             "));
+    let expr = ltrim(vec![lit("      a b c             ")]);
 
     let expected = [
         "+-----------------------------------------+",
@@ -384,7 +380,7 @@ async fn test_fn_ltrim() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_ltrim_with_columns() -> Result<()> {
-    let expr = ltrim(col("a"));
+    let expr = ltrim(vec![col("a")]);
 
     let expected = [
         "+---------------+",
@@ -468,7 +464,7 @@ async fn test_fn_regexp_match() -> Result<()> {
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_replace() -> Result<()> {
-    let expr = regexp_replace(vec![col("a"), lit("[a-z]"), lit("x"), lit("g")]);
+    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), lit("g"));
 
     let expected = [
         "+----------------------------------------------------------+",

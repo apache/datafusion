@@ -25,14 +25,12 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
-
-use chrono::{DateTime, NaiveDateTime, Utc};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -60,7 +58,7 @@ fn case_when() -> Result<()> {
 
 #[test]
 fn subquery_filter_with_cast() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    // regression test for https://github.com/apache/datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
       SELECT AVG(col_int32) FROM test \
@@ -104,7 +102,7 @@ fn unsigned_target_type() -> Result<()> {
 
 #[test]
 fn distribute_by() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3234
+    // regression test for https://github.com/apache/datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
     let expected = "Repartition: DistributeBy(col_utf8)\
@@ -115,7 +113,7 @@ fn distribute_by() -> Result<()> {
 
 #[test]
 fn semi_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -132,7 +130,7 @@ fn semi_join_with_join_filter() -> Result<()> {
 
 #[test]
 fn anti_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE NOT EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -209,64 +207,6 @@ fn between_date64_plus_interval() -> Result<()> {
 }
 
 #[test]
-fn concat_literals() -> Result<()> {
-    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn concat_ws_literals() -> Result<()> {
-    let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
-        AS col
-        FROM test";
-    let plan = test_sql(sql)?;
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn timestamp_nano_ts_none_predicates() -> Result<()> {
-    let sql = "SELECT col_int32
-        FROM test
-        WHERE col_ts_nano_none < (now() - interval '1 hour')";
-    let plan = test_sql(sql)?;
-    // a scan should have the now()... predicate folded to a single
-    // constant and compared to the column without a cast so it can be
-    // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\
-         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn timestamp_nano_ts_utc_predicates() {
-    let sql = "SELECT col_int32
-        FROM test
-        WHERE col_ts_nano_utc < (now() - interval '1 hour')";
-    let plan = test_sql(sql).unwrap();
-    // a scan should have the now()... predicate folded to a single
-    // constant and compared to the column without a cast so it can be
-    // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    assert_eq!(expected, format!("{plan:?}"));
-}
-
-#[test]
 fn propagate_empty_relation() {
     let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
     let plan = test_sql(sql).unwrap();
@@ -315,14 +255,14 @@ fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, COUNT(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
 
 #[test]
-// issue: https://github.com/apache/arrow-datafusion/issues/5334
+// issue: https://github.com/apache/datafusion/issues/5334
 fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();
@@ -340,24 +280,19 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
-
-    // create a logical query plan
     let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
-    // hard code the return value of now()
-    let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
-    let now_time = DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc);
-    let config = OptimizerContext::new()
-        .with_skip_failing_rules(false)
-        .with_query_execution_start_time(now_time);
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
     let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
-    optimizer.optimize(&plan, &config, |_, _| {})
+    optimizer.optimize(plan, &config, observe)
 }
+
+fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 #[derive(Default)]
 struct MyContextProvider {
@@ -417,6 +352,18 @@ impl ContextProvider for MyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 

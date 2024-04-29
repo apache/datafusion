@@ -20,7 +20,6 @@
 //!
 //! [`Int64Array`]: arrow::array::Int64Array
 //! [`Float64Array`]: arrow::array::Float64Array
-use std::cmp::Eq;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -30,6 +29,7 @@ use ahash::RandomState;
 use arrow::array::ArrayRef;
 use arrow_array::types::ArrowPrimitiveType;
 use arrow_array::PrimitiveArray;
+use arrow_schema::DataType;
 
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
@@ -45,6 +45,7 @@ where
     T::Native: Eq + Hash,
 {
     values: HashSet<T::Native, RandomState>,
+    data_type: DataType,
 }
 
 impl<T> PrimitiveDistinctCountAccumulator<T>
@@ -52,9 +53,10 @@ where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
 {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(data_type: &DataType) -> Self {
         Self {
             values: HashSet::default(),
+            data_type: data_type.clone(),
         }
     }
 }
@@ -65,9 +67,10 @@ where
     T::Native: Eq + Hash,
 {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
-        let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
-            self.values.iter().cloned(),
-        )) as ArrayRef;
+        let arr = Arc::new(
+            PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
+                .with_data_type(self.data_type.clone()),
+        );
         let list = Arc::new(array_into_list_array(arr));
         Ok(vec![ScalarValue::List(list)])
     }

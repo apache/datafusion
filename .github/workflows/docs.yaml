@@ -1,0 +1,64 @@
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .asf.yaml
+      - .github/workflows/docs.yaml
+      - docs/**
+
+name: Deploy DataFusion site
+
+jobs:
+  build-docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout docs sources
+        uses: actions/checkout@v4
+
+      - name: Checkout asf-site branch
+        uses: actions/checkout@v4
+        with:
+          ref: asf-site
+          path: asf-site
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          set -x
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r docs/requirements.txt
+
+      - name: Build docs
+        run: |
+          set -x
+          source venv/bin/activate
+          cd docs
+          ./build.sh
+
+      - name: Copy & push the generated HTML
+        run: |
+          set -x
+          cd asf-site/
+          rsync \
+            -a \
+            --delete \
+            --exclude '/.git/' \
+            ../docs/build/html/ \
+            ./
+          cp ../.asf.yaml .
+          touch .nojekyll
+          git status --porcelain
+          if [ "$(git status --porcelain)" != "" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add --all
+            git commit -m 'Publish built docs triggered by ${{ github.sha }}'
+            git push || git push --force
+          fi

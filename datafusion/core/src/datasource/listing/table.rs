@@ -51,8 +51,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, Constraints, FileType, FileTypeWriterOptions,
-    SchemaExt, ToDFSchema,
+    internal_err, plan_err, project_schema, Constraints, FileType, SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -62,6 +61,8 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
+use itertools::Itertools;
+use object_store::ObjectStore;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -118,7 +119,7 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+    fn infer_file_type(path: &str) -> Result<(FileType, String)> {
         let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
@@ -139,20 +140,7 @@ impl ListingTableConfig {
             .get_ext_with_compression(file_compression_type.to_owned())
             .map_err(|_| DataFusionError::Internal(err_msg))?;
 
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::ARROW => Arc::new(ArrowFormat),
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::CSV => Arc::new(
-                CsvFormat::default().with_file_compression_type(file_compression_type),
-            ),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-        };
-
-        Ok((file_format, ext))
+        Ok((file_type, ext))
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -173,10 +161,27 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) =
-            ListingTableConfig::infer_format(file.location.as_ref())?;
+        let (file_type, file_extension) =
+            ListingTableConfig::infer_file_type(file.location.as_ref())?;
 
-        let listing_options = ListingOptions::new(format)
+        let mut table_options = state.default_table_options();
+        table_options.set_file_format(file_type.clone());
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => {
+                Arc::new(CsvFormat::default().with_options(table_options.csv))
+            }
+            #[cfg(feature = "parquet")]
+            FileType::PARQUET => {
+                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+            }
+            FileType::AVRO => Arc::new(AvroFormat),
+            FileType::JSON => {
+                Arc::new(JsonFormat::default().with_options(table_options.json))
+            }
+            FileType::ARROW => Arc::new(ArrowFormat),
+        };
+
+        let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions());
 
@@ -239,16 +244,13 @@ pub struct ListingOptions {
     /// the future be automatically determined, for example using
     /// parquet metadata.
     ///
-    /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    /// See <https://github.com/apache/datafusion/issues/4177>
     /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
     ///       where each ordering consists of an individual lexicographic
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// This setting holds file format specific options which should be used
-    /// when inserting into this table.
-    pub file_type_write_options: Option<FileTypeWriterOptions>,
 }
 
 impl ListingOptions {
@@ -266,7 +268,6 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
-            file_type_write_options: None,
         }
     }
 
@@ -417,15 +418,6 @@ impl ListingOptions {
         self
     }
 
-    /// Configure file format specific writing options.
-    pub fn with_write_options(
-        mut self,
-        file_type_write_options: FileTypeWriterOptions,
-    ) -> Self {
-        self.file_type_write_options = Some(file_type_write_options);
-        self
-    }
-
     /// Infer the schema of the files at the given path on the provided object store.
     /// The inferred schema does not include the partitioning columns.
     ///
@@ -447,10 +439,116 @@ impl ListingOptions {
 
         self.format.infer_schema(state, &store, &files).await
     }
+
+    /// Infers the partition columns stored in `LOCATION` and compares
+    /// them with the columns provided in `PARTITIONED BY` to help prevent
+    /// accidental corrupts of partitioned tables.
+    ///
+    /// Allows specifying partial partitions.
+    pub async fn validate_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<()> {
+        if self.table_partition_cols.is_empty() {
+            return Ok(());
+        }
+
+        if !table_path.is_collection() {
+            return plan_err!(
+                "Can't create a partitioned table backed by a single file, \
+                perhaps the URL is missing a trailing slash?"
+            );
+        }
+
+        let inferred = self.infer_partitions(state, table_path).await?;
+
+        // no partitioned files found on disk
+        if inferred.is_empty() {
+            return Ok(());
+        }
+
+        let table_partition_names = self
+            .table_partition_cols
+            .iter()
+            .map(|(col_name, _)| col_name.clone())
+            .collect_vec();
+
+        if inferred.len() < table_partition_names.len() {
+            return plan_err!(
+                "Inferred partitions to be {:?}, but got {:?}",
+                inferred,
+                table_partition_names
+            );
+        }
+
+        // match prefix to allow creating tables with partial partitions
+        for (idx, col) in table_partition_names.iter().enumerate() {
+            if &inferred[idx] != col {
+                return plan_err!(
+                    "Inferred partitions to be {:?}, but got {:?}",
+                    inferred,
+                    table_partition_names
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Infer the partitioning at the given path on the provided object store.
+    /// For performance reasons, it doesn't read all the files on disk
+    /// and therefore may fail to detect invalid partitioning.
+    async fn infer_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<Vec<String>> {
+        let store = state.runtime_env().object_store(table_path)?;
+
+        // only use 10 files for inference
+        // This can fail to detect inconsistent partition keys
+        // A DFS traversal approach of the store can help here
+        let files: Vec<_> = table_path
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
+            .take(10)
+            .try_collect()
+            .await?;
+
+        let stripped_path_parts = files.iter().map(|file| {
+            table_path
+                .strip_prefix(&file.location)
+                .unwrap()
+                .collect_vec()
+        });
+
+        let partition_keys = stripped_path_parts
+            .map(|path_parts| {
+                path_parts
+                    .into_iter()
+                    .rev()
+                    .skip(1) // get parents only; skip the file itself
+                    .rev()
+                    .map(|s| s.split('=').take(1).collect())
+                    .collect_vec()
+            })
+            .collect_vec();
+
+        match partition_keys.into_iter().all_equal_value() {
+            Ok(v) => Ok(v),
+            Err(None) => Ok(vec![]),
+            Err(Some(diff)) => {
+                let mut sorted_diff = [diff.0, diff.1];
+                sorted_diff.sort();
+                plan_err!("Found mixed partition values on disk {:?}", sorted_diff)
+            }
+        }
+    }
 }
 
 /// Reads data from one or more files via an
-/// [`ObjectStore`](object_store::ObjectStore). For example, from
+/// [`ObjectStore`]. For example, from
 /// local files or objects from AWS S3. Implements [`TableProvider`],
 /// a DataFusion data source.
 ///
@@ -694,26 +792,32 @@ impl TableProvider for ListingTable {
             .await
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(
-            &self
-                .options
-                .table_partition_cols
-                .iter()
-                .map(|x| x.0.clone())
-                .collect::<Vec<_>>(),
-            filter,
-        ) {
-            // if filter can be handled by partiton pruning, it is exact
-            Ok(TableProviderFilterPushDown::Exact)
-        } else {
-            // otherwise, we still might be able to handle the filter with file
-            // level mechanisms such as Parquet row group pruning.
-            Ok(TableProviderFilterPushDown::Inexact)
-        }
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        let support: Vec<_> = filters
+            .iter()
+            .map(|filter| {
+                if expr_applicable_for_cols(
+                    &self
+                        .options
+                        .table_partition_cols
+                        .iter()
+                        .map(|x| x.0.clone())
+                        .collect::<Vec<_>>(),
+                    filter,
+                ) {
+                    // if filter can be handled by partition pruning, it is exact
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    // otherwise, we still might be able to handle the filter with file
+                    // level mechanisms such as Parquet row group pruning.
+                    TableProviderFilterPushDown::Inexact
+                }
+            })
+            .collect();
+        Ok(support)
     }
 
     fn get_table_definition(&self) -> Option<&str> {
@@ -759,15 +863,6 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-        let file_format = self.options().format.as_ref();
-
-        let file_type_writer_options = match &self.options().file_type_write_options {
-            Some(opt) => opt.clone(),
-            None => FileTypeWriterOptions::build_default(
-                &file_format.file_type(),
-                state.config_options(),
-            )?,
-        };
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
@@ -777,7 +872,6 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
-            file_type_writer_options,
         };
 
         let unsorted: Vec<Vec<Expr>> = vec![];
@@ -844,38 +938,14 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let mut statistics_result = Statistics::new_unknown(&self.file_schema);
                 if self.options.collect_stat {
-                    let statistics_cache = self.collected_statistics.clone();
-                    match statistics_cache.get_with_extra(
-                        &part_file.object_meta.location,
-                        &part_file.object_meta,
-                    ) {
-                        Some(statistics) => {
-                            statistics_result = statistics.as_ref().clone()
-                        }
-                        None => {
-                            let statistics = self
-                                .options
-                                .format
-                                .infer_stats(
-                                    ctx,
-                                    &store,
-                                    self.file_schema.clone(),
-                                    &part_file.object_meta,
-                                )
-                                .await?;
-                            statistics_cache.put_with_extra(
-                                &part_file.object_meta.location,
-                                statistics.clone().into(),
-                                &part_file.object_meta,
-                            );
-                            statistics_result = statistics;
-                        }
-                    }
+                    let statistics =
+                        self.do_collect_statistics(ctx, &store, &part_file).await?;
+                    Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+                } else {
+                    Ok((part_file, Statistics::new_unknown(&self.file_schema)))
+                        as Result<(PartitionedFile, Statistics)>
                 }
-                Ok((part_file, statistics_result))
-                    as Result<(PartitionedFile, Statistics)>
             })
             .boxed()
             .buffered(ctx.config_options().execution.meta_fetch_concurrency);
@@ -893,27 +963,59 @@ impl ListingTable {
             statistics,
         ))
     }
+
+    /// Collects statistics for a given partitioned file.
+    ///
+    /// This method first checks if the statistics for the given file are already cached.
+    /// If they are, it returns the cached statistics.
+    /// If they are not, it infers the statistics from the file and stores them in the cache.
+    async fn do_collect_statistics<'a>(
+        &'a self,
+        ctx: &SessionState,
+        store: &Arc<dyn ObjectStore>,
+        part_file: &PartitionedFile,
+    ) -> Result<Statistics> {
+        let statistics_cache = self.collected_statistics.clone();
+        return match statistics_cache
+            .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
+        {
+            Some(statistics) => Ok(statistics.as_ref().clone()),
+            None => {
+                let statistics = self
+                    .options
+                    .format
+                    .infer_stats(
+                        ctx,
+                        store,
+                        self.file_schema.clone(),
+                        &part_file.object_meta,
+                    )
+                    .await?;
+                statistics_cache.put_with_extra(
+                    &part_file.object_meta.location,
+                    statistics.clone().into(),
+                    &part_file.object_meta,
+                );
+                Ok(statistics)
+            }
+        };
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use super::*;
     #[cfg(feature = "parquet")]
-    use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
-        datasource::file_format::avro::AvroFormat,
-        logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
 
-    use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;

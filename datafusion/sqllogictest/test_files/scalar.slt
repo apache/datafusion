@@ -533,7 +533,7 @@ select ln(null);
 NULL
 
 # ln scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select ln(0);
 ----
@@ -582,7 +582,7 @@ select log(2, 2.0/3) a, log(10, 2.0/3) b;
 -0.584962500721 -0.176091259056
 
 # log scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
 select log(0) a, log(1, 64) b;
 ----
@@ -627,7 +627,7 @@ select log10(2.0/3);
 -0.176091259056
 
 # log10 scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select log10(0);
 ----
@@ -663,7 +663,7 @@ select log2(2.0/3);
 -0.584962500721
 
 # log2 scalar ops with zero edgecases
-# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+# please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
 select log2(0);
 ----
@@ -1276,7 +1276,7 @@ FROM t1
 999
 999
 
-# issue: https://github.com/apache/arrow-datafusion/issues/7004
+# issue: https://github.com/apache/datafusion/issues/7004
 query B
 select case c1
     when 'foo' then TRUE
@@ -1325,7 +1325,7 @@ NULL
 NULL
 4
 
-# issue: https://github.com/apache/arrow-datafusion/issues/6376
+# issue: https://github.com/apache/datafusion/issues/6376
 query I
 select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
 ----
@@ -1779,6 +1779,46 @@ SELECT COALESCE(NULL, 'test')
 ----
 test
 
+
+statement ok
+create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
+
+# test coercion string
+query ?
+select  coalesce(column1, 'none_set') from test1;
+----
+foo
+none_set
+
+# test coercion Int
+query I
+select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+# test with Int
+query I
+select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'),34);
+----
+123
+
+# test with null
+query I
+select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+# test with null
+query T
+select  coalesce(null, column1, 'none_set') from test1;
+----
+foo
+none_set
+
+statement ok
+drop table test1
+
+
 statement ok
 CREATE TABLE test(
   c1 INT,
@@ -1837,6 +1877,51 @@ SELECT COALESCE(c1 * c2, 0) FROM test
 0
 0
 0
+
+statement ok
+drop table test
+
+# coalesce date32
+
+statement ok
+CREATE TABLE test(
+  d1_date DATE,
+  d2_date DATE,
+  d3_date DATE
+) as VALUES
+  ('2022-12-12','2022-12-12','2022-12-12'),
+  (NULL,'2022-12-11','2022-12-12'),
+  ('2022-12-12','2022-12-10','2022-12-12'),
+  ('2022-12-12',NULL,'2022-12-12'),
+  ('2022-12-12','2022-12-8','2022-12-12'),
+  ('2022-12-12','2022-12-7',NULL),
+  ('2022-12-12',NULL,'2022-12-12'),
+  (NULL,'2022-12-5','2022-12-12')
+;
+
+query D
+SELECT COALESCE(d1_date, d2_date, d3_date) FROM test
+----
+2022-12-12
+2022-12-11
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-05
+
+query T
+SELECT arrow_typeof(COALESCE(d1_date, d2_date, d3_date)) FROM test
+----
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
 
 statement ok
 drop table test
@@ -1946,11 +2031,11 @@ query TT
 EXPLAIN SELECT letter, letter = LEFT('APACHE', 1) FROM simple_string;
 ----
 logical_plan
-Projection: simple_string.letter, simple_string.letter = Utf8("A") AS simple_string.letter = left(Utf8("APACHE"),Int64(1))
---TableScan: simple_string projection=[letter]
+01)Projection: simple_string.letter, simple_string.letter = Utf8("A") AS simple_string.letter = left(Utf8("APACHE"),Int64(1))
+02)--TableScan: simple_string projection=[letter]
 physical_plan
-ProjectionExec: expr=[letter@0 as letter, letter@0 = A as simple_string.letter = left(Utf8("APACHE"),Int64(1))]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[letter@0 as letter, letter@0 = A as simple_string.letter = left(Utf8("APACHE"),Int64(1))]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query TB
 SELECT letter, letter = LEFT('APACHE', 1) FROM simple_string;
@@ -1965,11 +2050,11 @@ query TT
 EXPLAIN SELECT letter, letter = LEFT(letter2, 1) FROM simple_string;
 ----
 logical_plan
-Projection: simple_string.letter, simple_string.letter = left(simple_string.letter2, Int64(1))
---TableScan: simple_string projection=[letter, letter2]
+01)Projection: simple_string.letter, simple_string.letter = left(simple_string.letter2, Int64(1))
+02)--TableScan: simple_string projection=[letter, letter2]
 physical_plan
-ProjectionExec: expr=[letter@0 as letter, letter@0 = left(letter2@1, 1) as simple_string.letter = left(simple_string.letter2,Int64(1))]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[letter@0 as letter, letter@0 = left(letter2@1, 1) as simple_string.letter = left(simple_string.letter2,Int64(1))]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query TB
 SELECT letter, letter = LEFT(letter2, 1) FROM simple_string;
@@ -2042,5 +2127,78 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
+query error DataFusion error: Execution error: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)
+
+
+query I
+select strpos('abc', 'c');
+----
+3
+
+query I
+select strpos('abc', 'd');
+----
+0
+
+
+query I
+select strpos('abc', '');
+----
+1
+
+query I
+select strpos('helloworld', 'world');
+----
+6
+
+query I
+select strpos('helloworld', arrow_cast(null, 'Utf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'hello');
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+6
+
+query I
+select strpos(arrow_cast(null, 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast(null, 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos('josé', 'é');
+----
+4
+
+query I
+select strpos('joséésoj', 'so');
+----
+6
+
+
+query I
+select strpos('joséésoj', 'abc');
+----
+0
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'abc');
+----
+NULL
+
+query I
+select strpos('joséésoj', arrow_cast(null, 'Utf8'));
+----
+NULL

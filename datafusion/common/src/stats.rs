@@ -221,7 +221,7 @@ pub struct Statistics {
     /// Total bytes of the table rows.
     pub total_byte_size: Precision<usize>,
     /// Statistics on a column level. It contains a [`ColumnStatistics`] for
-    /// each field in the schema of the the table to which the [`Statistics`] refer.
+    /// each field in the schema of the table to which the [`Statistics`] refer.
     pub column_statistics: Vec<ColumnStatistics>,
 }
 

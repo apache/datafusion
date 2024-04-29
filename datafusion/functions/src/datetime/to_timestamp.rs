@@ -30,28 +30,34 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use crate::datetime::common::*;
 
 #[derive(Debug)]
-pub(super) struct ToTimestampFunc {
+pub struct ToTimestampFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampSecondsFunc {
+pub struct ToTimestampSecondsFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampMillisFunc {
+pub struct ToTimestampMillisFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampMicrosFunc {
+pub struct ToTimestampMicrosFunc {
     signature: Signature,
 }
 
 #[derive(Debug)]
-pub(super) struct ToTimestampNanosFunc {
+pub struct ToTimestampNanosFunc {
     signature: Signature,
+}
+
+impl Default for ToTimestampFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToTimestampFunc {
@@ -59,6 +65,12 @@ impl ToTimestampFunc {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for ToTimestampSecondsFunc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -70,6 +82,12 @@ impl ToTimestampSecondsFunc {
     }
 }
 
+impl Default for ToTimestampMillisFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToTimestampMillisFunc {
     pub fn new() -> Self {
         Self {
@@ -78,11 +96,23 @@ impl ToTimestampMillisFunc {
     }
 }
 
+impl Default for ToTimestampMicrosFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToTimestampMicrosFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for ToTimestampNanosFunc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -127,9 +157,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -179,9 +207,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_seconds") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -228,9 +254,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_millis") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -277,9 +301,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_micros") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -326,9 +348,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_nanos") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -379,19 +399,17 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
-    use arrow_array::types::Int64Type;
-    use arrow_array::{
+    use arrow::array::types::Int64Type;
+    use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     };
+    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::datatypes::TimeUnit;
     use chrono::Utc;
 
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
-
-    use crate::datetime::common::string_to_datetime_formatted;
 
     use super::*;
 

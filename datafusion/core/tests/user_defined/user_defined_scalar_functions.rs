@@ -16,23 +16,24 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, RecordBatch, UInt8Array};
-use arrow_schema::DataType::Float64;
+use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
-use datafusion_common::cast::as_float64_array;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
-    plan_err, ExprSchema, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
+    cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
 };
+use datafusion_common::{exec_err, internal_err, DataFusionError};
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
-    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, ExprSchemable, LogicalPlanBuilder,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::{thread_rng, Rng};
 use std::any::Any;
-use std::iter;
 use std::sync::Arc;
 
 /// test that casting happens on udfs.
@@ -162,6 +163,48 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
+struct Simple0ArgsScalarUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+}
+
+impl std::fmt::Debug for Simple0ArgsScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl ScalarUDFImpl for Simple0ArgsScalarUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
+    }
+
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
+    }
+}
+
 #[tokio::test]
 async fn scalar_udf_zero_params() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
@@ -173,20 +216,14 @@ async fn scalar_udf_zero_params() -> Result<()> {
     let ctx = SessionContext::new();
 
     ctx.register_batch("t", batch)?;
-    // create function just returns 100 regardless of inp
-    let myfunc = Arc::new(|_args: &[ColumnarValue]| {
-        Ok(ColumnarValue::Array(
-            Arc::new((0..1).map(|_| 100).collect::<Int32Array>()) as ArrayRef,
-        ))
-    });
 
-    ctx.register_udf(create_udf(
-        "get_100",
-        vec![],
-        Arc::new(DataType::Int32),
-        Volatility::Immutable,
-        myfunc,
-    ));
+    let get_100_udf = Simple0ArgsScalarUDF {
+        name: "get_100".to_string(),
+        signature: Signature::exact(vec![], Volatility::Immutable),
+        return_type: DataType::Int32,
+    };
+
+    ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
     let expected = [
@@ -398,118 +435,112 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 #[derive(Debug)]
-pub struct RandomUDF {
+struct CastToI64UDF {
     signature: Signature,
 }
 
-impl RandomUDF {
-    pub fn new() -> Self {
+impl CastToI64UDF {
+    fn new() -> Self {
         Self {
-            signature: Signature::any(0, Volatility::Volatile),
+            signature: Signature::any(1, Volatility::Immutable),
         }
     }
 }
 
-impl ScalarUDFImpl for RandomUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
+impl ScalarUDFImpl for CastToI64UDF {
+    fn as_any(&self) -> &dyn Any {
         self
     }
-
     fn name(&self) -> &str {
-        "random_udf"
+        "cast_to_i64"
     }
-
     fn signature(&self) -> &Signature {
         &self.signature
     }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let len: usize = match &args[0] {
-            // This udf is always invoked with zero argument so its argument
-            // is a null array indicating the batch size.
-            ColumnarValue::Array(array) if array.data_type().is_null() => array.len(),
-            _ => {
-                return Err(datafusion::error::DataFusionError::Internal(
-                    "Invalid argument type".to_string(),
-                ))
-            }
+    // Demonstrate simplifying a UDF
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        // DataFusion should have ensured the function is called with just a
+        // single argument
+        assert_eq!(args.len(), 1);
+        let arg = args.pop().unwrap();
+
+        // Note that Expr::cast_to requires an ExprSchema but simplify gets a
+        // SimplifyInfo so we have to replicate some of the casting logic here.
+
+        let source_type = info.get_data_type(&arg)?;
+        let new_expr = if source_type == DataType::Int64 {
+            // the argument's data type is already the correct type
+            arg
+        } else {
+            // need to use an actual cast to get the correct type
+            Expr::Cast(datafusion_expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Int64,
+            })
         };
-        let mut rng = thread_rng();
-        let values = iter::repeat_with(|| rng.gen_range(0.1..1.0)).take(len);
-        let array = Float64Array::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+        // return the newly written argument to DataFusion
+        Ok(ExprSimplifyResult::Simplified(new_expr))
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
 
-/// Ensure that a user defined function with zero argument will be invoked
-/// with a null array indicating the batch size.
 #[tokio::test]
-async fn test_user_defined_functions_zero_argument() -> Result<()> {
+async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "index",
-        DataType::UInt8,
-        false,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, false)]));
 
     let batch = RecordBatch::try_new(
         schema,
-        vec![Arc::new(UInt8Array::from_iter_values([1, 2, 3]))],
+        vec![Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]))],
     )?;
 
-    ctx.register_batch("data_table", batch)?;
+    ctx.register_batch("t", batch)?;
 
-    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
-    ctx.register_udf(random_normal_udf);
+    let cast_to_i64_udf = ScalarUDF::from(CastToI64UDF::new());
+    ctx.register_udf(cast_to_i64_udf);
 
-    let result = plan_and_collect(
-        &ctx,
-        "SELECT random_udf() AS random_udf, random() AS native_random FROM data_table",
-    )
-    .await?;
+    let result = plan_and_collect(&ctx, "SELECT cast_to_i64(x) FROM t").await?;
 
-    assert_eq!(result.len(), 1);
-    let batch = &result[0];
-    let random_udf = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .unwrap();
-    let native_random = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .unwrap();
-
-    assert_eq!(random_udf.len(), native_random.len());
-
-    let mut previous = -1.0;
-    for i in 0..random_udf.len() {
-        assert!(random_udf.value(i) >= 0.0 && random_udf.value(i) < 1.0);
-        assert!(random_udf.value(i) != previous);
-        previous = random_udf.value(i);
-    }
+    assert_batches_eq!(
+        &[
+            "+------------------+",
+            "| cast_to_i64(t.x) |",
+            "+------------------+",
+            "| 1                |",
+            "| 2                |",
+            "| 3                |",
+            "+------------------+"
+        ],
+        &result
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn deregister_udf() -> Result<()> {
-    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
+    let cast2i64 = ScalarUDF::from(CastToI64UDF::new());
     let ctx = SessionContext::new();
 
-    ctx.register_udf(random_normal_udf.clone());
+    ctx.register_udf(cast2i64.clone());
 
-    assert!(ctx.udfs().contains("random_udf"));
+    assert!(ctx.udfs().contains("cast_to_i64"));
 
-    ctx.deregister_udf("random_udf");
+    ctx.deregister_udf("cast_to_i64");
 
-    assert!(!ctx.udfs().contains("random_udf"));
+    assert!(!ctx.udfs().contains("cast_to_i64"));
 
     Ok(())
 }
@@ -551,6 +582,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self,
         arg_exprs: &[Expr],
         schema: &dyn ExprSchema,
+        _arg_data_types: &[DataType],
     ) -> Result<DataType> {
         if arg_exprs.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
@@ -631,6 +663,230 @@ async fn verify_udf_return_type() -> Result<()> {
         "+-------+-------+",
     ];
     assert_batches_sorted_eq!(&expected, &df.collect().await?);
+
+    Ok(())
+}
+
+// create_scalar_function_from_sql_statement helper
+// structures and methods.
+
+#[derive(Debug, Default)]
+struct CustomFunctionFactory {}
+
+#[async_trait::async_trait]
+impl FunctionFactory for CustomFunctionFactory {
+    async fn create(
+        &self,
+        _state: &SessionState,
+        statement: CreateFunction,
+    ) -> Result<RegisterFunction> {
+        let f: ScalarFunctionWrapper = statement.try_into()?;
+
+        Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+    }
+}
+// a wrapper type to be used to register
+// custom function to datafusion context
+//
+// it also defines custom [ScalarUDFImpl::simplify()]
+// to replace ScalarUDF expression with one instance contains.
+#[derive(Debug)]
+struct ScalarFunctionWrapper {
+    name: String,
+    expr: Expr,
+    signature: Signature,
+    return_type: arrow_schema::DataType,
+}
+
+impl ScalarUDFImpl for ScalarFunctionWrapper {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[arrow_schema::DataType],
+    ) -> Result<arrow_schema::DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(
+        &self,
+        _args: &[datafusion_expr::ColumnarValue],
+    ) -> Result<datafusion_expr::ColumnarValue> {
+        internal_err!("This function should not get invoked!")
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let replacement = Self::replacement(&self.expr, &args)?;
+
+        Ok(ExprSimplifyResult::Simplified(replacement))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn monotonicity(&self) -> Result<Option<datafusion_expr::FuncMonotonicity>> {
+        Ok(None)
+    }
+}
+
+impl ScalarFunctionWrapper {
+    // replaces placeholders with actual arguments
+    fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
+        let result = expr.clone().transform(|e| {
+            let r = match e {
+                Expr::Placeholder(placeholder) => {
+                    let placeholder_position =
+                        Self::parse_placeholder_identifier(&placeholder.id)?;
+                    if placeholder_position < args.len() {
+                        Transformed::yes(args[placeholder_position].clone())
+                    } else {
+                        exec_err!(
+                            "Function argument {} not provided, argument missing!",
+                            placeholder.id
+                        )?
+                    }
+                }
+                _ => Transformed::no(e),
+            };
+
+            Ok(r)
+        })?;
+
+        Ok(result.data)
+    }
+    // Finds placeholder identifier.
+    // placeholders are in `$X` format where X >= 1
+    fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
+        if let Some(value) = placeholder.strip_prefix('$') {
+            Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Placeholder `{}` parsing error: {}!",
+                    placeholder, e
+                ))
+            })?)
+        } else {
+            exec_err!("Placeholder should start with `$`!")
+        }
+    }
+}
+
+impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
+    type Error = DataFusionError;
+
+    fn try_from(definition: CreateFunction) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            name: definition.name,
+            expr: definition
+                .params
+                .return_
+                .expect("Expression has to be defined!"),
+            return_type: definition
+                .return_type
+                .expect("Return type has to be defined!"),
+            signature: Signature::exact(
+                definition
+                    .args
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|a| a.data_type)
+                    .collect(),
+                definition
+                    .params
+                    .behavior
+                    .unwrap_or(datafusion_expr::Volatility::Volatile),
+            ),
+        })
+    }
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let runtime_config = RuntimeConfig::new();
+    let runtime_environment = RuntimeEnv::new(runtime_config)?;
+
+    let session_config = SessionConfig::new();
+    let state =
+        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
+            .with_function_factory(function_factory.clone());
+
+    let ctx = SessionContext::new_with_state(state);
+    let options = SQLOptions::new().with_allow_ddl(false);
+
+    let sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+
+    // try to `create function` when sql options have allow ddl disabled
+    assert!(ctx.sql_with_options(sql, options).await.is_err());
+
+    // Create the `better_add` function dynamically via CREATE FUNCTION statement
+    assert!(ctx.sql(sql).await.is_ok());
+    // try to `drop function` when sql options have allow ddl disabled
+    assert!(ctx
+        .sql_with_options("drop function better_add", options)
+        .await
+        .is_err());
+
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
+
+    // statement drops  function
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+    // no function, it panics
+    assert!(ctx.sql("drop function better_add").await.is_err());
+    // no function, it dies not care
+    assert!(ctx.sql("drop function if exists better_add").await.is_ok());
+    // query should fail as there is no function
+    assert!(ctx.sql("select better_add(2.0, 2.0)").await.is_err());
+
+    // tests expression parsing
+    // if expression is not correct
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
+
+    // tests bad function definition
+    let bad_definition_sql = r#"
+    CREATE FUNCTION bad_definition_fun(DOUBLE, DOUBLE)
+        RET BAD_TYPE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_definition_sql).await.is_err());
 
     Ok(())
 }

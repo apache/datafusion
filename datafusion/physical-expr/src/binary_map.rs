@@ -280,7 +280,7 @@ where
     /// # Returns
     ///
     /// The payload value for the entry, either the existing value or
-    /// the the newly inserted value
+    /// the newly inserted value
     ///
     /// # Safety:
     ///
@@ -605,7 +605,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::ArrayRef;
     use arrow_array::{BinaryArray, LargeBinaryArray, StringArray};
     use hashbrown::HashMap;
 

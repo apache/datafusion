@@ -29,7 +29,7 @@ use super::{
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    Column, DisplayFormatType, ExecutionPlan,
+    DisplayFormatType, ExecutionPlan,
 };
 
 use arrow::compute::filter_record_batch;
@@ -159,6 +159,27 @@ impl FilterExec {
         })
     }
 
+    fn extend_constants(
+        input: &Arc<dyn ExecutionPlan>,
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut res_constants = Vec::new();
+        let input_eqs = input.equivalence_properties();
+
+        let conjunctions = split_conjunction(predicate);
+        for conjunction in conjunctions {
+            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
+                if binary.op() == &Operator::Eq {
+                    if input_eqs.is_expr_constant(binary.left()) {
+                        res_constants.push(binary.right().clone())
+                    } else if input_eqs.is_expr_constant(binary.right()) {
+                        res_constants.push(binary.left().clone())
+                    }
+                }
+            }
+        }
+        res_constants
+    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -171,9 +192,7 @@ impl FilterExec {
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(predicate);
         for (lhs, rhs) in equal_pairs {
-            let lhs_expr = Arc::new(lhs.clone()) as _;
-            let rhs_expr = Arc::new(rhs.clone()) as _;
-            eq_properties.add_equal_conditions(&lhs_expr, &rhs_expr)
+            eq_properties.add_equal_conditions(lhs, rhs)
         }
         // Add the columns that have only one viable value (singleton) after
         // filtering to constants.
@@ -181,8 +200,12 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _);
+        // this is for statistics
         eq_properties = eq_properties.add_constants(constants);
-
+        // this is for logical constant (for example: a = '1', then a could be marked as a constant)
+        // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
+        eq_properties =
+            eq_properties.add_constants(Self::extend_constants(input, predicate));
         Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
@@ -206,6 +229,10 @@ impl DisplayAs for FilterExec {
 }
 
 impl ExecutionPlan for FilterExec {
+    fn name(&self) -> &'static str {
+        "FilterExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -376,49 +403,46 @@ impl RecordBatchStream for FilterExecStream {
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
 fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
-    let mut eq_predicate_columns = Vec::<(&Column, &Column)>::new();
-    let mut ne_predicate_columns = Vec::<(&Column, &Column)>::new();
+    let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
+    let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
         if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
-            if let (Some(left_column), Some(right_column)) = (
-                binary.left().as_any().downcast_ref::<Column>(),
-                binary.right().as_any().downcast_ref::<Column>(),
-            ) {
-                match binary.op() {
-                    Operator::Eq => {
-                        eq_predicate_columns.push((left_column, right_column))
-                    }
-                    Operator::NotEq => {
-                        ne_predicate_columns.push((left_column, right_column))
-                    }
-                    _ => {}
+            match binary.op() {
+                Operator::Eq => {
+                    eq_predicate_columns.push((binary.left(), binary.right()))
                 }
+                Operator::NotEq => {
+                    ne_predicate_columns.push((binary.left(), binary.right()))
+                }
+                _ => {}
             }
         }
     });
 
     (eq_predicate_columns, ne_predicate_columns)
 }
+
+/// Pair of `Arc<dyn PhysicalExpr>`s
+pub type PhysicalExprPairRef<'a> = (&'a Arc<dyn PhysicalExpr>, &'a Arc<dyn PhysicalExpr>);
+
 /// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
 pub type EqualAndNonEqual<'a> =
-    (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
+    (Vec<PhysicalExprPairRef<'a>>, Vec<PhysicalExprPairRef<'a>>);
 
 #[cfg(test)]
 mod tests {
-    use std::iter::Iterator;
-    use std::sync::Arc;
 
     use super::*;
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-    use crate::ExecutionPlan;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{ColumnStatistics, ScalarValue};
-    use datafusion_expr::Operator;
+    use crate::empty::EmptyExec;
+    use arrow::datatypes::{Field, Schema};
+    use arrow_schema::{UnionFields, UnionMode};
+    use datafusion_common::ScalarValue;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
@@ -451,14 +475,16 @@ mod tests {
         )?;
 
         let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        assert_eq!(2, equal_pairs.len());
+        assert!(equal_pairs[0].0.eq(&col("c2", &schema)?));
+        assert!(equal_pairs[0].1.eq(&lit(4u32)));
 
-        assert_eq!(1, equal_pairs.len());
-        assert_eq!(equal_pairs[0].0.name(), "c2");
-        assert_eq!(equal_pairs[0].1.name(), "c9");
+        assert!(equal_pairs[1].0.eq(&col("c2", &schema)?));
+        assert!(equal_pairs[1].1.eq(&col("c9", &schema)?));
 
         assert_eq!(1, ne_pairs.len());
-        assert_eq!(ne_pairs[0].0.name(), "c1");
-        assert_eq!(ne_pairs[0].1.name(), "c13");
+        assert!(ne_pairs[0].0.eq(&col("c1", &schema)?));
+        assert!(ne_pairs[0].1.eq(&col("c13", &schema)?));
 
         Ok(())
     }
@@ -1063,6 +1089,39 @@ mod tests {
         let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
+
+    #[test]
+    fn test_equivalence_properties_union_type() -> Result<()> {
+        let union_type = DataType::Union(
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("f1", DataType::Int32, true),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", union_type, true),
+        ]));
+
+        let exec = FilterExec::try_new(
+            binary(
+                binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
+                Operator::And,
+                binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
+                &schema,
+            )?,
+            Arc::new(EmptyExec::new(schema.clone())),
+        )?;
+
+        exec.statistics().unwrap();
+
         Ok(())
     }
 }

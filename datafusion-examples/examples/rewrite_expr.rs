@@ -59,7 +59,7 @@ pub fn main() -> Result<()> {
 
     // then run the optimizer with our custom rule
     let optimizer = Optimizer::with_rules(vec![Arc::new(MyOptimizerRule {})]);
-    let optimized_plan = optimizer.optimize(&analyzed_plan, &config, observe)?;
+    let optimized_plan = optimizer.optimize(analyzed_plan, &config, observe)?;
     println!(
         "Optimized Logical Plan:\n\n{}\n",
         optimized_plan.display_indent()
@@ -91,7 +91,7 @@ impl AnalyzerRule for MyAnalyzerRule {
 
 impl MyAnalyzerRule {
     fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
-        plan.transform(&|plan| {
+        plan.transform(|plan| {
             Ok(match plan {
                 LogicalPlan::Filter(filter) => {
                     let predicate = Self::analyze_expr(filter.predicate.clone())?;
@@ -107,7 +107,7 @@ impl MyAnalyzerRule {
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
-        expr.transform(&|expr| {
+        expr.transform(|expr| {
             // closure is invoked for all sub expressions
             Ok(match expr {
                 Expr::Literal(ScalarValue::Int64(i)) => {
@@ -163,7 +163,7 @@ impl OptimizerRule for MyOptimizerRule {
 
 /// use rewrite_expr to modify the expression tree.
 fn my_rewrite(expr: Expr) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         // closure is invoked for all sub expressions
         Ok(match expr {
             Expr::Between(Between {
@@ -225,6 +225,18 @@ impl ContextProvider for MyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 

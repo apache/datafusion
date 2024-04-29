@@ -60,7 +60,7 @@ helps avoid wasted effort by determining early if the feature is a good fit for
 DataFusion before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
-[good-first-issue]: https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+[good-first-issue]: https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
 # Developer's guide
 
@@ -105,6 +105,11 @@ A "major" PR means there is a substantial change in design or a change in the AP
 4. Smaller non-controversial feature additions
 
 The good thing about open code and open development is that any issues in one change can almost always be fixed with a follow on PR.
+
+## Stale PRs
+
+Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
+Commenting on the PR will remove the `stale` label.
 
 ## Getting Started
 
@@ -157,7 +162,7 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
-Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/arrow-datafusion/issues/5347).
+Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/datafusion/issues/5347).
 
 Testing setup:
 
@@ -191,7 +196,7 @@ Tests for code in an individual module are defined in the same source file with 
 
 ### sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/sqllogictest) which are run like any other Rust test using `cargo test --test sqllogictests`.
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest) which are run like any other Rust test using `cargo test --test sqllogictests`.
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 
@@ -199,7 +204,7 @@ Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusio
 
 ### Rust Integration Tests
 
-There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests) directory.
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
 
 You can run these tests individually using `cargo` as normal command such as
 
@@ -219,7 +224,7 @@ Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-
 cargo bench --bench BENCHMARK_NAME
 ```
 
-A full list of benchmarks can be found [here](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/benches).
+A full list of benchmarks can be found [here](https://github.com/apache/datafusion/tree/main/datafusion/core/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
@@ -237,9 +242,28 @@ If the environment variable `PARQUET_FILE` is set, the benchmark will run querie
 
 The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
 
+### Comparing Baselines
+
+By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it's useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.
+
+```
+ git checkout main
+ cargo bench --bench sql_planner -- --save-baseline main
+ git checkout YOUR_BRANCH
+ cargo bench --bench sql_planner --  --baseline main
+```
+
+Note: For MacOS it may be required to run `cargo bench` with `sudo`
+
+```
+sudo cargo bench ...
+```
+
+More information on [Baselines](https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines)
+
 ### Upstream Benchmark Suites
 
-Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/arrow-datafusion/tree/main/benchmarks).
+Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/datafusion/tree/main/benchmarks).
 
 These are valuable for comparative evaluation against alternative Arrow implementations and query engines.
 
@@ -249,22 +273,27 @@ These are valuable for comparative evaluation against alternative Arrow implemen
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
-- Add the actual implementation of the function:
-  - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
-  - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
-  - create a new module [here](../../../datafusion/physical-expr/src) for other functions
-- In [physical-expr/src](../../../datafusion/physical-expr/src/functions.rs), add:
-  - a new variant to `BuiltinScalarFunction`
-  - a new entry to `FromStr` with the name of the function as called by SQL
-  - a new line in `return_type` with the expected return type of the function, given an incoming type
-  - a new line in `signature` with the signature of the function (number and types of its arguments)
-  - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
-  - tests to the function.
+- Add the actual implementation of the function to a new module file within:
+  - [here](../../../datafusion/functions-array/src) for array functions
+  - [here](../../../datafusion/functions/src/crypto) for crypto functions
+  - [here](../../../datafusion/functions/src/datetime) for datetime functions
+  - [here](../../../datafusion/functions/src/encoding) for encoding functions
+  - [here](../../../datafusion/functions/src/math) for math functions
+  - [here](../../../datafusion/functions/src/regex) for regex functions
+  - [here](../../../datafusion/functions/src/string) for string functions
+  - [here](../../../datafusion/functions/src/unicode) for unicode functions
+  - create a new module [here](../../../datafusion/functions/src) for other functions.
+- New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
+  users to enable or disable the new module as desired.
+- The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
+  - See the [advanced_udf.rs](../../../datafusion-examples/examples/advanced_udf.rs) example for an example implementation
+  - Add tests for the new function
+- To connect the implementation of the function add to the mod.rs file:
+  - a `mod xyz;` where xyz is the new module file
+  - a call to `make_udf_function!(..);`
+  - an item in `export_functions!(..);`
 - In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
-- In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
-  - a new entry of the `unary_scalar_expr!` macro for the new function.
 - Add SQL reference documentation [here](../../../docs/source/user-guide/sql/scalar_functions.md)
 
 ### How to add a new aggregate function
@@ -274,7 +303,7 @@ Below is a checklist of what you need to do to add a new aggregate function to D
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
   - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
   - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
+  - [here](../../../datafusion/functions/src/datetime/mod.rs) for datetime functions
   - create a new module [here](../../../datafusion/physical-expr/src) for other functions
 - In [datafusion/expr/src](../../../datafusion/expr/src/aggregate_function.rs), add:
   - a new variant to `AggregateFunction`
@@ -319,8 +348,8 @@ new specifications as you see fit.
 
 Here is the list current active specifications:
 
-- [Output field name semantic](https://arrow.apache.org/datafusion/contributor-guide/specification/output-field-name-semantic.html)
-- [Invariants](https://arrow.apache.org/datafusion/contributor-guide/specification/invariants.html)
+- [Output field name semantic](https://datafusion.apache.org/contributor-guide/specification/output-field-name-semantic.html)
+- [Invariants](https://datafusion.apache.org/contributor-guide/specification/invariants.html)
 
 All specifications are stored in the `docs/source/specification` folder.
 

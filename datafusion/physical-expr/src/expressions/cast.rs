@@ -195,10 +195,7 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type)
-        || (expr_type == DataType::Float64
-            && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
-    {
+    } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
@@ -230,8 +227,6 @@ mod tests {
         },
         datatypes::*,
     };
-
-    use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -707,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: https://github.com/apache/arrow-datafusion/issues/5396
+    #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
     fn test_cast_decimal() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
         let a = Int64Array::from(vec![100]);

@@ -49,7 +49,7 @@ use super::ParquetFileMetrics;
 /// did not filter out that row group.
 ///
 /// Note: This method currently ignores ColumnOrder
-/// <https://github.com/apache/arrow-datafusion/issues/8335>
+/// <https://github.com/apache/datafusion/issues/8335>
 pub(crate) fn prune_row_groups_by_statistics(
     arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
@@ -63,7 +63,7 @@ pub(crate) fn prune_row_groups_by_statistics(
         if let Some(range) = &range {
             // figure out where the first dictionary page (or first data page are)
             // note don't use the location of metadata
-            // <https://github.com/apache/arrow-datafusion/issues/5995>
+            // <https://github.com/apache/datafusion/issues/5995>
             let col = metadata.column(0);
             let offset = col
                 .dictionary_page_offset()
@@ -94,6 +94,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                     metrics.predicate_evaluation_errors.add(1);
                 }
             }
+            metrics.row_groups_matched_statistics.add(1);
         }
 
         filtered.push(idx)
@@ -166,6 +167,9 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
         if prune_group {
             metrics.row_groups_pruned_bloom_filter.add(1);
         } else {
+            if !stats.column_sbbf.is_empty() {
+                metrics.row_groups_matched_bloom_filter.add(1);
+            }
             filtered.push(*idx);
         }
     }
@@ -195,6 +199,10 @@ impl PruningStatistics for BloomFilterStatistics {
         None
     }
 
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
     /// Use bloom filters to determine if we are sure this column can not
     /// possibly contain `values`
     ///
@@ -217,13 +225,15 @@ impl PruningStatistics for BloomFilterStatistics {
             .map(|value| {
                 match value {
                     ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
+                    ScalarValue::Binary(Some(v)) => sbbf.check(v),
+                    ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
                     ScalarValue::Boolean(Some(v)) => sbbf.check(v),
                     ScalarValue::Float64(Some(v)) => sbbf.check(v),
                     ScalarValue::Float32(Some(v)) => sbbf.check(v),
                     ScalarValue::Int64(Some(v)) => sbbf.check(v),
                     ScalarValue::Int32(Some(v)) => sbbf.check(v),
-                    ScalarValue::Int16(Some(v)) => sbbf.check(v),
-                    ScalarValue::Int8(Some(v)) => sbbf.check(v),
+                    ScalarValue::UInt64(Some(v)) => sbbf.check(v),
+                    ScalarValue::UInt32(Some(v)) => sbbf.check(v),
                     ScalarValue::Decimal128(Some(v), p, s) => match parquet_type {
                         Type::INT32 => {
                             //https://github.com/apache/parquet-format/blob/eb4b31c1d64a01088d02a2f9aefc6c17c54cc6fc/Encodings.md?plain=1#L35-L42
@@ -328,6 +338,12 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         scalar.to_array().ok()
     }
 
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let (c, _) = self.column(&column.name)?;
+        let scalar = ScalarValue::UInt64(Some(c.num_values() as u64));
+        scalar.to_array().ok()
+    }
+
     fn contained(
         &self,
         _column: &Column,
@@ -343,19 +359,17 @@ mod tests {
     use crate::datasource::physical_plan::parquet::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use arrow::datatypes::DataType::Decimal128;
-    use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Result, ToDFSchema};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{cast, col, lit, Expr};
-    use datafusion_physical_expr::execution_props::ExecutionProps;
     use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
     use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::{
-        basic::Type as PhysicalType,
-        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
+        basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
     };
     use std::ops::Rem;
@@ -1008,15 +1022,17 @@ mod tests {
         column_statistics: Vec<ParquetStatistics>,
     ) -> RowGroupMetaData {
         let mut columns = vec![];
+        let number_row = 1000;
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
                 .set_statistics(s.clone())
+                .set_num_values(number_row)
                 .build()
                 .unwrap();
             columns.push(column);
         }
         RowGroupMetaData::builder(schema_descr.clone())
-            .set_num_rows(1000)
+            .set_num_rows(number_row)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
             .build()
@@ -1194,7 +1210,7 @@ mod tests {
         /// Return a test for data_index_bloom_encoding_stats.parquet
         /// Note the values in the `String` column are:
         /// ```sql
-        /// ❯ select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+        /// > select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
         /// +-----------+
         /// | String    |
         /// +-----------+

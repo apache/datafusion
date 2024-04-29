@@ -19,6 +19,32 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::sync::Arc;
+
+use arrow::{
+    array::ArrayRef,
+    datatypes::{
+        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+        TimeUnit, UnionMode,
+    },
+    ipc::writer::{DictionaryTracker, IpcDataGenerator},
+    record_batch::RecordBatch,
+};
+
+use datafusion_common::{
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
+};
+use datafusion_expr::expr::{
+    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, Sort, Unnest,
+};
+use datafusion_expr::{
+    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
+    BuiltInWindowFunction, Expr, JoinConstraint, JoinType, TryCast, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
+
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -30,30 +56,7 @@ use crate::protobuf::{
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-};
-
-use arrow::{
-    array::ArrayRef,
-    datatypes::{
-        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-        TimeUnit, UnionMode,
-    },
-    ipc::writer::{DictionaryTracker, IpcDataGenerator},
-    record_batch::RecordBatch,
-};
-use datafusion_common::{
-    Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
-    ScalarValue,
-};
-use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, Unnest,
-};
-use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    UnionField, UnionValue,
 };
 
 use super::LogicalExtensionCodec;
@@ -67,8 +70,6 @@ pub enum Error {
     InvalidScalarType(DataType),
 
     InvalidTimeUnit(TimeUnit),
-
-    UnsupportedScalarFunction(BuiltinScalarFunction),
 
     NotImplemented(String),
 }
@@ -90,9 +91,6 @@ impl std::fmt::Display for Error {
                     f,
                     "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {time_unit:?}"
                 )
-            }
-            Self::UnsupportedScalarFunction(function) => {
-                write!(f, "Unsupported scalar function {function:?}")
             }
             Self::NotImplemented(s) => {
                 write!(f, "Not implemented: {s}")
@@ -185,10 +183,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
-                sub_field_types: struct_fields
-                    .iter()
-                    .map(|field| field.as_ref().try_into())
-                    .collect::<Result<Vec<_>, Error>>()?,
+                sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
             DataType::Union(fields, union_mode) => {
                 let union_mode = match union_mode {
@@ -196,10 +191,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: fields
-                        .iter()
-                        .map(|(_, field)| field.as_ref().try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
+                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -230,6 +222,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
             }
+            DataType::Utf8View | DataType::BinaryView | DataType::ListView(_) | DataType::LargeListView(_) => {
+                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
+            }
         };
 
         Ok(res)
@@ -258,11 +253,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
         })
     }
@@ -273,25 +264,8 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
 
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
-        })
-    }
-}
-
-impl TryFrom<&DFField> for protobuf::DfField {
-    type Error = Error;
-
-    fn try_from(f: &DFField) -> Result<Self, Self::Error> {
-        Ok(Self {
-            field: Some(f.field().as_ref().try_into()?),
-            qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
-                relation: r.to_string(),
-            }),
         })
     }
 }
@@ -301,9 +275,15 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
 
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
-            .fields()
             .iter()
-            .map(|f| f.try_into())
+            .map(|(qualifier, field)| {
+                Ok(protobuf::DfField {
+                    field: Some(field.as_ref().try_into()?),
+                    qualifier: qualifier.map(|r| protobuf::ColumnRelation {
+                        relation: r.to_string(),
+                    }),
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
@@ -482,6 +462,19 @@ impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
     }
 }
 
+pub fn serialize_exprs<'a, I>(
+    exprs: I,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<protobuf::LogicalExprNode>, Error>
+where
+    I: IntoIterator<Item = &'a Expr>,
+{
+    exprs
+        .into_iter()
+        .map(|expr| serialize_expr(expr, codec))
+        .collect::<Result<Vec<_>, Error>>()
+}
+
 pub fn serialize_expr(
     expr: &Expr,
     codec: &dyn LogicalExtensionCodec,
@@ -539,11 +532,7 @@ pub fn serialize_expr(
                 // We need to reverse exprs since operands are expected to be
                 // linearized from left innermost to right outermost (but while
                 // traversing the chain we do the exact opposite).
-                operands: exprs
-                    .into_iter()
-                    .rev()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                operands: serialize_exprs(exprs.into_iter().rev(), codec)?,
                 op: format!("{op:?}"),
             };
             protobuf::LogicalExprNode {
@@ -635,14 +624,8 @@ pub fn serialize_expr(
             } else {
                 None
             };
-            let partition_by = partition_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
-            let order_by = order_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let partition_by = serialize_exprs(partition_by, codec)?;
+            let order_by = serialize_exprs(order_by, codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
@@ -663,6 +646,7 @@ pub fn serialize_expr(
             ref distinct,
             ref filter,
             ref order_by,
+            null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(fun) => {
                 let aggr_function = match fun {
@@ -739,20 +723,14 @@ pub fn serialize_expr(
 
                 let aggregate_expr = protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
-                    expr: args
-                        .iter()
-                        .map(|v| serialize_expr(v, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    expr: serialize_exprs(args, codec)?,
                     distinct: *distinct,
                     filter: match filter {
                         Some(e) => Some(Box::new(serialize_expr(e, codec)?)),
                         None => None,
                     },
                     order_by: match order_by {
-                        Some(e) => e
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, _>>()?,
+                        Some(e) => serialize_exprs(e, codec)?,
                         None => vec![],
                     },
                 };
@@ -764,19 +742,13 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name().to_string(),
-                        args: args
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, Error>>()?,
+                        args: serialize_exprs(args, codec)?,
                         filter: match filter {
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,
                         },
                         order_by: match order_by {
-                            Some(e) => e
-                                .iter()
-                                .map(|expr| serialize_expr(expr, codec))
-                                .collect::<Result<Vec<_>, _>>()?,
+                            Some(e) => serialize_exprs(e, codec)?,
                             None => vec![],
                         },
                     },
@@ -796,22 +768,8 @@ pub fn serialize_expr(
             ))
         }
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let args = args
-                .iter()
-                .map(|expr| serialize_expr(expr, codec))
-                .collect::<Result<Vec<_>, Error>>()?;
+            let args = serialize_exprs(args, codec)?;
             match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let fun: protobuf::ScalarFunction = fun.try_into()?;
-                    protobuf::LogicalExprNode {
-                        expr_type: Some(ExprType::ScalarFunction(
-                            protobuf::ScalarFunctionNode {
-                                fun: fun.into(),
-                                args,
-                            },
-                        )),
-                    }
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
@@ -990,12 +948,9 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { exprs }) => {
+        Expr::Unnest(Unnest { expr }) => {
             let expr = protobuf::Unnest {
-                exprs: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                exprs: vec![serialize_expr(expr.as_ref(), codec)?],
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -1008,10 +963,7 @@ pub fn serialize_expr(
         }) => {
             let expr = Box::new(protobuf::InListNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                list: list
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                list: serialize_exprs(list, codec)?,
                 negated: *negated,
             });
             protobuf::LogicalExprNode {
@@ -1028,7 +980,7 @@ pub fn serialize_expr(
         | Expr::Exists { .. }
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
-            // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
+            // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
         Expr::GetIndexedField(GetIndexedField { expr, field }) => {
@@ -1072,18 +1024,12 @@ pub fn serialize_expr(
 
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::Rollup(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Rollup(RollupNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
@@ -1093,10 +1039,7 @@ pub fn serialize_expr(
                         .iter()
                         .map(|expr_list| {
                             Ok(LogicalExprList {
-                                expr: expr_list
-                                    .iter()
-                                    .map(|expr| serialize_expr(expr, codec))
-                                    .collect::<Result<Vec<_>, Error>>()?,
+                                expr: serialize_exprs(expr_list, codec)?,
                             })
                         })
                         .collect::<Result<Vec<_>, Error>>()?,
@@ -1401,6 +1344,34 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 };
                 Ok(protobuf::ScalarValue { value: Some(value) })
             }
+
+            ScalarValue::Union(val, df_fields, mode) => {
+                let mut fields = Vec::<UnionField>::with_capacity(df_fields.len());
+                for (id, field) in df_fields.iter() {
+                    let field_id = id as i32;
+                    let field = Some(field.as_ref().try_into()?);
+                    let field = UnionField { field_id, field };
+                    fields.push(field);
+                }
+                let mode = match mode {
+                    UnionMode::Sparse => 0,
+                    UnionMode::Dense => 1,
+                };
+                let value = match val {
+                    None => None,
+                    Some((_id, v)) => Some(Box::new(v.as_ref().try_into()?)),
+                };
+                let val = UnionValue {
+                    value_id: val.as_ref().map(|(id, _v)| *id as i32).unwrap_or(0),
+                    value,
+                    fields,
+                    mode,
+                };
+                let val = Value::UnionValue(Box::new(val));
+                let val = protobuf::ScalarValue { value: Some(val) };
+                Ok(val)
+            }
+
             ScalarValue::Dictionary(index_type, val) => {
                 let value: protobuf::ScalarValue = val.as_ref().try_into()?;
                 Ok(protobuf::ScalarValue {
@@ -1413,134 +1384,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
         }
-    }
-}
-
-impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
-    type Error = Error;
-
-    fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
-        let scalar_function = match scalar {
-            BuiltinScalarFunction::Sqrt => Self::Sqrt,
-            BuiltinScalarFunction::Cbrt => Self::Cbrt,
-            BuiltinScalarFunction::Sin => Self::Sin,
-            BuiltinScalarFunction::Cos => Self::Cos,
-            BuiltinScalarFunction::Tan => Self::Tan,
-            BuiltinScalarFunction::Cot => Self::Cot,
-            BuiltinScalarFunction::Sinh => Self::Sinh,
-            BuiltinScalarFunction::Cosh => Self::Cosh,
-            BuiltinScalarFunction::Tanh => Self::Tanh,
-            BuiltinScalarFunction::Atan => Self::Atan,
-            BuiltinScalarFunction::Asinh => Self::Asinh,
-            BuiltinScalarFunction::Acosh => Self::Acosh,
-            BuiltinScalarFunction::Atanh => Self::Atanh,
-            BuiltinScalarFunction::Exp => Self::Exp,
-            BuiltinScalarFunction::Factorial => Self::Factorial,
-            BuiltinScalarFunction::Gcd => Self::Gcd,
-            BuiltinScalarFunction::Lcm => Self::Lcm,
-            BuiltinScalarFunction::Log => Self::Log,
-            BuiltinScalarFunction::Ln => Self::Ln,
-            BuiltinScalarFunction::Log10 => Self::Log10,
-            BuiltinScalarFunction::Degrees => Self::Degrees,
-            BuiltinScalarFunction::Radians => Self::Radians,
-            BuiltinScalarFunction::Floor => Self::Floor,
-            BuiltinScalarFunction::Ceil => Self::Ceil,
-            BuiltinScalarFunction::Round => Self::Round,
-            BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::OctetLength => Self::OctetLength,
-            BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Lower => Self::Lower,
-            BuiltinScalarFunction::Upper => Self::Upper,
-            BuiltinScalarFunction::Trim => Self::Trim,
-            BuiltinScalarFunction::Ltrim => Self::Ltrim,
-            BuiltinScalarFunction::Rtrim => Self::Rtrim,
-            BuiltinScalarFunction::ToChar => Self::ToChar,
-            BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
-            BuiltinScalarFunction::ArraySort => Self::ArraySort,
-            BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
-            BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
-            BuiltinScalarFunction::ArrayExcept => Self::ArrayExcept,
-            BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
-            BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
-            BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
-            BuiltinScalarFunction::ArrayDistinct => Self::ArrayDistinct,
-            BuiltinScalarFunction::ArrayElement => Self::ArrayElement,
-            BuiltinScalarFunction::Flatten => Self::Flatten,
-            BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
-            BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
-            BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
-            BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
-            BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
-            BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
-            BuiltinScalarFunction::ArrayRepeat => Self::ArrayRepeat,
-            BuiltinScalarFunction::ArrayResize => Self::ArrayResize,
-            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
-            BuiltinScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
-            BuiltinScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
-            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
-            BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
-            BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
-            BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
-            BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
-            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
-            BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
-            BuiltinScalarFunction::MakeArray => Self::Array,
-            BuiltinScalarFunction::DatePart => Self::DatePart,
-            BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
-            BuiltinScalarFunction::DateBin => Self::DateBin,
-            BuiltinScalarFunction::MD5 => Self::Md5,
-            BuiltinScalarFunction::SHA224 => Self::Sha224,
-            BuiltinScalarFunction::SHA256 => Self::Sha256,
-            BuiltinScalarFunction::SHA384 => Self::Sha384,
-            BuiltinScalarFunction::SHA512 => Self::Sha512,
-            BuiltinScalarFunction::Digest => Self::Digest,
-            BuiltinScalarFunction::Log2 => Self::Log2,
-            BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::Ascii => Self::Ascii,
-            BuiltinScalarFunction::BitLength => Self::BitLength,
-            BuiltinScalarFunction::Btrim => Self::Btrim,
-            BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
-            BuiltinScalarFunction::Chr => Self::Chr,
-            BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
-            BuiltinScalarFunction::EndsWith => Self::EndsWith,
-            BuiltinScalarFunction::InitCap => Self::InitCap,
-            BuiltinScalarFunction::Left => Self::Left,
-            BuiltinScalarFunction::Lpad => Self::Lpad,
-            BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Uuid => Self::Uuid,
-            BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
-            BuiltinScalarFunction::Repeat => Self::Repeat,
-            BuiltinScalarFunction::Replace => Self::Replace,
-            BuiltinScalarFunction::Reverse => Self::Reverse,
-            BuiltinScalarFunction::Right => Self::Right,
-            BuiltinScalarFunction::Rpad => Self::Rpad,
-            BuiltinScalarFunction::SplitPart => Self::SplitPart,
-            BuiltinScalarFunction::StringToArray => Self::StringToArray,
-            BuiltinScalarFunction::StartsWith => Self::StartsWith,
-            BuiltinScalarFunction::Strpos => Self::Strpos,
-            BuiltinScalarFunction::Substr => Self::Substr,
-            BuiltinScalarFunction::ToHex => Self::ToHex,
-            BuiltinScalarFunction::Now => Self::Now,
-            BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
-            BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
-            BuiltinScalarFunction::MakeDate => Self::MakeDate,
-            BuiltinScalarFunction::Translate => Self::Translate,
-            BuiltinScalarFunction::Coalesce => Self::Coalesce,
-            BuiltinScalarFunction::Pi => Self::Pi,
-            BuiltinScalarFunction::Power => Self::Power,
-            BuiltinScalarFunction::Struct => Self::StructFun,
-            BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
-            BuiltinScalarFunction::Atan2 => Self::Atan2,
-            BuiltinScalarFunction::Nanvl => Self::Nanvl,
-            BuiltinScalarFunction::Iszero => Self::Iszero,
-            BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
-            BuiltinScalarFunction::OverLay => Self::OverLay,
-            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
-            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
-            BuiltinScalarFunction::FindInSet => Self::FindInSet,
-        };
-
-        Ok(scalar_function)
     }
 }
 
@@ -1565,22 +1408,22 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
     }
 }
 
-impl From<OwnedTableReference> for protobuf::OwnedTableReference {
-    fn from(t: OwnedTableReference) -> Self {
-        use protobuf::owned_table_reference::TableReferenceEnum;
+impl From<TableReference> for protobuf::TableReference {
+    fn from(t: TableReference) -> Self {
+        use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
-            OwnedTableReference::Bare { table } => {
+            TableReference::Bare { table } => {
                 TableReferenceEnum::Bare(protobuf::BareTableReference {
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Partial { schema, table } => {
+            TableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
                     schema: schema.to_string(),
                     table: table.to_string(),
                 })
             }
-            OwnedTableReference::Full {
+            TableReference::Full {
                 catalog,
                 schema,
                 table,
@@ -1591,7 +1434,7 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
             }),
         };
 
-        protobuf::OwnedTableReference {
+        protobuf::TableReference {
             table_reference_enum: Some(table_reference_enum),
         }
     }
@@ -1715,4 +1558,17 @@ fn encode_scalar_nested_value(
         }),
         _ => unreachable!(),
     }
+}
+
+/// Converts a vector of `Arc<arrow::Field>`s to `protobuf::Field`s
+fn convert_arc_fields_to_proto_fields<'a, I>(
+    fields: I,
+) -> Result<Vec<protobuf::Field>, Error>
+where
+    I: IntoIterator<Item = &'a Arc<Field>>,
+{
+    fields
+        .into_iter()
+        .map(|field| field.as_ref().try_into())
+        .collect::<Result<Vec<_>, Error>>()
 }

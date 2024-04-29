@@ -19,39 +19,39 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
 
-Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
+Even [`more code examples`](https://github.com/apache/datafusion/tree/main/datafusion-examples) attached to the project.
 
-## Add DataFusion as a dependency
+## Add published DataFusion dependency
 
 Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "31"
+datafusion = "latest_version"
 tokio = "1.0"
 ```
 
-## Add DataFusion latest codebase as a dependency
+## Add latest non published DataFusion dependency
 
-Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
-according to the [DataFusion release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
+DataFusion changes are published to `crates.io` according to [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
+In case if it is required to test out DataFusion changes which are merged but yet to be published, Cargo supports adding dependency directly to Github branch
 
 ```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main"}
+datafusion = { git = "https://github.com/apache/datafusion", branch = "main"}
 ```
 
 Also it works on the package level
 
 ```toml
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", package = "datafusion-common"}
+datafusion-common = { git = "https://github.com/apache/datafusion", branch = "main", package = "datafusion-common"}
 ```
 
 And with features
 
 ```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
+datafusion = { git = "https://github.com/apache/datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
 ```
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
@@ -240,17 +240,11 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-Finally, in order to build with the `simd` optimization `cargo nightly` is required.
-
-```shell
-rustup toolchain install nightly
-```
-
 Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
 ```shell
-RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
+RUSTFLAGS='-C target-cpu=native' cargo run --release
 ```
 
 ## Enable backtraces
@@ -267,7 +261,7 @@ Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#e
 ```bash
 RUST_BACKTRACE=1 ./target/debug/datafusion-cli
 DataFusion CLI v31.0.0
-❯ select row_numer() over (partition by a order by a) from (select 1 a);
+> select row_numer() over (partition by a order by a) from (select 1 a);
 Error during planning: Invalid function 'row_numer'.
 Did you mean 'ROW_NUMBER'?
 
@@ -280,9 +274,33 @@ backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
    3: std::backtrace::Backtrace::capture
              at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
    4: datafusion_common::error::DataFusionError::get_back_trace
-             at /arrow-datafusion/datafusion/common/src/error.rs:436:30
+             at /datafusion/datafusion/common/src/error.rs:436:30
    5: datafusion_sql::expr::function::<impl datafusion_sql::planner::SqlToRel<S>>::sql_function_to_expr
    ............
+```
+
+The backtraces are useful when debugging code. If there is a test in `datafusion/core/src/physical_planner.rs`
+
+```
+#[tokio::test]
+async fn test_get_backtrace_for_failed_code() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "
+    select row_numer() over (partition by a order by a) from (select 1 a);
+    ";
+
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    Ok(())
+}
+```
+
+To obtain a backtrace:
+
+```bash
+cargo build --features=backtrace
+RUST_BACKTRACE=1 cargo test --features=backtrace --package datafusion --lib -- physical_planner::tests::test_get_backtrace_for_failed_code --exact --nocapture
 ```
 
 Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored

@@ -30,19 +30,19 @@ use crate::{
     Operator, TryCast,
 };
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
+    ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
-pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::UInt8(Some(1));
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
@@ -264,7 +264,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
 /// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    inspect_expr_pre(expr, |expr| {
+    expr.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
@@ -307,8 +307,9 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
-        Ok(())
+        Ok(TreeNodeRecursion::Continue)
     })
+    .map(|_| ())
 }
 
 /// Find excluded columns in the schema, if any
@@ -342,12 +343,9 @@ fn get_excluded_columns(
     let mut result = vec![];
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let field = if let Some(qualifier) = qualifier {
-            schema.field_with_qualified_name(qualifier, col_name)?
-        } else {
-            schema.field_with_unqualified_name(col_name)?
-        };
-        result.push(field.qualified_column())
+        let (qualifier, field) =
+            schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
+        result.push(Column::from((qualifier, field)));
     }
     Ok(result)
 }
@@ -358,19 +356,14 @@ fn get_exprs_except_skipped(
     columns_to_skip: HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>()
+        schema.iter().map(Expr::from).collect::<Vec<Expr>>()
     } else {
         schema
-            .fields()
+            .columns()
             .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
+            .filter_map(|c| {
+                if !columns_to_skip.contains(c) {
+                    Some(Expr::Column(c.clone()))
                 } else {
                     None
                 }
@@ -433,13 +426,14 @@ pub fn expand_qualified_wildcard(
     let projected_func_dependencies = schema
         .functional_dependencies()
         .project_functional_dependencies(&qualified_indices, qualified_indices.len());
-    let qualified_fields = get_at_indices(schema.fields(), &qualified_indices)?;
-    if qualified_fields.is_empty() {
+    let fields_with_qualified = get_at_indices(schema.fields(), &qualified_indices)?;
+    if fields_with_qualified.is_empty() {
         return plan_err!("Invalid qualifier {qualifier}");
     }
-    let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
-            // We can use the functional dependencies as is, since it only stores indices:
+
+    let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
+    let qualified_dfschema =
+        DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
@@ -459,7 +453,10 @@ pub fn expand_qualified_wildcard(
     // Add each excluded `Column` to columns_to_skip
     let mut columns_to_skip = HashSet::new();
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(&qualified_schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(
+        &qualified_dfschema,
+        columns_to_skip,
+    ))
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
@@ -659,7 +656,7 @@ where
     F: Fn(&Expr) -> bool,
 {
     let mut exprs = vec![];
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if test_fn(expr) {
             if !(exprs.contains(expr)) {
                 exprs.push(expr.clone())
@@ -681,7 +678,7 @@ where
     F: FnMut(&Expr) -> Result<(), E>,
 {
     let mut err = Ok(());
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if let Err(e) = f(expr) {
             // save the error for later (it may not be a DataFusionError
             err = Err(e);
@@ -737,7 +734,10 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
-fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
+fn exprlist_to_fields_aggregate(
+    exprs: &[Expr],
+    agg: &Aggregate,
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -753,17 +753,16 @@ fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<D
 }
 
 /// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields<'a>(
-    expr: impl IntoIterator<Item = &'a Expr>,
+pub fn exprlist_to_fields(
+    exprs: &[Expr],
     plan: &LogicalPlan,
-) -> Result<Vec<DFField>> {
-    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, agg)),
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs, agg)),
         _ => None,
     };
     if let Some(fields) = fields {
@@ -809,11 +808,15 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         )),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
-            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
-                Ok(field) => Expr::Column(field.qualified_column()),
-                // expression not provided as input, do not convert to a column reference
-                Err(_) => e,
-            },
+            Ok(name) => {
+                match input_schema.qualified_field_with_unqualified_name(&name) {
+                    Ok((qualifier, field)) => {
+                        Expr::Column(Column::from((qualifier, field)))
+                    }
+                    // expression not provided as input, do not convert to a column reference
+                    Err(_) => e,
+                }
+            }
             Err(_) => e,
         },
     }
@@ -831,11 +834,11 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(|expr| {
         if let Expr::Column(c) = expr {
             exprs.push(c.clone())
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
@@ -846,8 +849,8 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
-            let field = plan.schema().field_from_column(col)?;
-            Ok(Expr::Column(field.qualified_column()))
+            let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
+            Ok(Expr::from(Column::from((qualifier, field))))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
@@ -860,7 +863,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
     let mut indexes = vec![];
-    inspect_expr_pre(e, |expr| {
+    e.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
                 if let Ok(idx) = schema.index_of_column(qc) {
@@ -872,7 +875,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
             }
             _ => {}
         }
-        Ok(()) as Result<()>
+        Ok(TreeNodeRecursion::Continue)
     })
     .unwrap();
     indexes
@@ -925,7 +928,7 @@ pub fn check_all_columns_from_schema(
     schema: DFSchemaRef,
 ) -> Result<bool> {
     for col in columns.iter() {
-        let exist = schema.is_column_from_schema(col)?;
+        let exist = schema.is_column_from_schema(col);
         if !exist {
             return Ok(false);
         }
@@ -1231,6 +1234,11 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
             },
         )
     }
+}
+
+/// Build state name. State is the intermidiate state of the aggregate function.
+pub fn format_state_name(name: &str, state_name: &str) -> String {
+    format!("{name}[{state_name}]")
 }
 
 #[cfg(test)]

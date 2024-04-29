@@ -453,7 +453,6 @@ pub fn new_heap(limit: usize, desc: bool, vt: DataType) -> Result<Box<dyn ArrowH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::Result;
 
     #[test]
     fn should_append() -> Result<()> {

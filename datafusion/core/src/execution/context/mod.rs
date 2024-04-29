@@ -17,108 +17,90 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::fmt::Debug;
+use std::ops::ControlFlow;
+use std::sync::{Arc, Weak};
+
+use super::options::ReadOptions;
+use crate::{
+    catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
+    catalog::listing_schema::ListingSchemaProvider,
+    catalog::schema::{MemorySchemaProvider, SchemaProvider},
+    catalog::{
+        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
+        MemoryCatalogProviderList,
+    },
+    config::ConfigOptions,
+    dataframe::DataFrame,
+    datasource::{
+        cte_worktable::CteWorkTable,
+        function::{TableFunction, TableFunctionImpl},
+        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+        object_store::ObjectStoreUrl,
+        provider::{DefaultTableFactory, TableProviderFactory},
+    },
+    datasource::{provider_as_source, MemTable, TableProvider, ViewTable},
+    error::{DataFusionError, Result},
+    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    logical_expr::AggregateUDF,
+    logical_expr::{
+        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
+        DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
+        TableSource, TableType, ToStringifiedPlan, UNNAMED_TABLE,
+    },
+    optimizer::analyzer::{Analyzer, AnalyzerRule},
+    optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
+    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
+    physical_plan::{udf::ScalarUDF, ExecutionPlan},
+    physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
+    variable::{VarProvider, VarType},
+};
+
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
+use crate::{functions, functions_aggregate};
+
+use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
+use datafusion_common::{
+    alias::AliasGenerator,
+    config::{ConfigExtension, TableOptions},
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    tree_node::{TreeNodeRecursion, TreeNodeVisitor},
+    SchemaReference, TableReference,
+};
+use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::{
+    logical_plan::{DdlStatement, Statement},
+    var_provider::is_system_variables,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement, DFParser},
+    planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
+    ResolvedTableReference,
+};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use parking_lot::RwLock;
+use sqlparser::dialect::dialect_from_str;
+use url::Url;
+use uuid::Uuid;
+
+pub use datafusion_execution::config::SessionConfig;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
+
 mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
-
-use crate::{
-    catalog::{CatalogProviderList, MemoryCatalogProviderList},
-    datasource::{
-        cte_worktable::CteWorkTable,
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable},
-        provider::TableProviderFactory,
-    },
-    datasource::{MemTable, ViewTable},
-    logical_expr::{PlanType, ToStringifiedPlan},
-    optimizer::optimizer::Optimizer,
-    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-};
-use arrow_schema::Schema;
-use datafusion_common::{
-    alias::AliasGenerator,
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
-};
-use datafusion_execution::registry::SerializerRegistry;
-use datafusion_expr::{
-    logical_plan::{DdlStatement, Statement},
-    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
-};
-pub use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::var_provider::is_system_variables;
-use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
-use std::string::String;
-use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-};
-use std::{ops::ControlFlow, sync::Weak};
-
-use arrow::datatypes::{DataType, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
-use crate::catalog::{
-    schema::{MemorySchemaProvider, SchemaProvider},
-    {CatalogProvider, MemoryCatalogProvider},
-};
-use crate::dataframe::DataFrame;
-use crate::datasource::{
-    listing::{ListingTableConfig, ListingTableUrl},
-    provider_as_source, TableProvider,
-};
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropCatalogSchema, DropTable, DropView, Explain, LogicalPlan,
-    LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
-};
-use crate::optimizer::OptimizerRule;
-use datafusion_sql::{
-    parser::{CopyToSource, CopyToStatement},
-    planner::ParserOptions,
-    ResolvedTableReference, TableReference,
-};
-use sqlparser::dialect::dialect_from_str;
-
-use crate::config::ConfigOptions;
-use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_planner::DefaultPhysicalPlanner;
-use crate::physical_planner::PhysicalPlanner;
-use crate::variable::{VarProvider, VarType};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, SchemaReference};
-use datafusion_sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
-use url::Url;
-
-use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::listing_schema::ListingSchemaProvider;
-use crate::datasource::object_store::ObjectStoreUrl;
-use datafusion_optimizer::{
-    analyzer::{Analyzer, AnalyzerRule},
-    OptimizerConfig,
-};
-use datafusion_sql::planner::object_name_to_table_reference;
-use uuid::Uuid;
-
-// backwards compatibility
-use crate::datasource::provider::DefaultTableFactory;
-use crate::execution::options::ArrowReadOptions;
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-
-use super::options::ReadOptions;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -348,6 +330,15 @@ impl SessionContext {
         self.session_start_time
     }
 
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        self,
+        function_factory: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.state.write().set_function_factory(function_factory);
+        self
+    }
+
     /// Registers the [`RecordBatch`] as the specified table name
     pub fn register_batch(
         &self,
@@ -395,6 +386,11 @@ impl SessionContext {
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
         self.state.read().config.clone()
+    }
+
+    /// Return a copied version of table options for this Session
+    pub fn copied_table_options(&self) -> TableOptions {
+        self.state.read().default_table_options()
     }
 
     /// Creates a [`DataFrame`] from SQL query text.
@@ -474,22 +470,37 @@ impl SessionContext {
     /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Ddl(ddl) => match ddl {
-                DdlStatement::CreateExternalTable(cmd) => {
-                    self.create_external_table(&cmd).await
+            LogicalPlan::Ddl(ddl) => {
+                // Box::pin avoids allocating the stack space within this function's frame
+                // for every one of these individual async functions, decreasing the risk of
+                // stack overflows.
+                match ddl {
+                    DdlStatement::CreateExternalTable(cmd) => {
+                        Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    }
+                    DdlStatement::CreateMemoryTable(cmd) => {
+                        Box::pin(self.create_memory_table(cmd))
+                    }
+                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateCatalogSchema(cmd) => {
+                        Box::pin(self.create_catalog_schema(cmd))
+                    }
+                    DdlStatement::CreateCatalog(cmd) => {
+                        Box::pin(self.create_catalog(cmd))
+                    }
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropCatalogSchema(cmd) => {
+                        Box::pin(self.drop_schema(cmd))
+                    }
+                    DdlStatement::CreateFunction(cmd) => {
+                        Box::pin(self.create_function(cmd))
+                    }
+                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
                 }
-                DdlStatement::CreateMemoryTable(cmd) => {
-                    self.create_memory_table(cmd).await
-                }
-                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
-                DdlStatement::CreateCatalogSchema(cmd) => {
-                    self.create_catalog_schema(cmd).await
-                }
-                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
-                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
-                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
-                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
-            },
+                .await
+            }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
@@ -509,7 +520,7 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
-        let exist = self.table_exist(&cmd.name)?;
+        let exist = self.table_exist(cmd.name.clone())?;
         if exist {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
@@ -521,7 +532,7 @@ impl SessionContext {
 
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
-        self.register_table(&cmd.name, table_provider)?;
+        self.register_table(cmd.name.clone(), table_provider)?;
         self.return_empty_dataframe()
     }
 
@@ -537,11 +548,11 @@ impl SessionContext {
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
-        let table = self.table(&name).await;
+        let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
-                self.deregister_table(&name)?;
+                self.deregister_table(name.clone())?;
                 let schema = Arc::new(input.schema().as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -553,7 +564,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(&name, table)?;
+                self.register_table(name.clone(), table)?;
                 self.return_empty_dataframe()
             }
             (true, true, Ok(_)) => {
@@ -572,7 +583,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -587,20 +598,20 @@ impl SessionContext {
             definition,
         } = cmd;
 
-        let view = self.table(&name).await;
+        let view = self.table(name.clone()).await;
 
         match (or_replace, view) {
             (true, Ok(_)) => {
-                self.deregister_table(&name)?;
+                self.deregister_table(name.clone())?;
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                self.register_table(&name, table)?;
+                self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -676,7 +687,9 @@ impl SessionContext {
         let DropTable {
             name, if_exists, ..
         } = cmd;
-        let result = self.find_and_deregister(&name, TableType::Base).await;
+        let result = self
+            .find_and_deregister(name.clone(), TableType::Base)
+            .await;
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
@@ -688,7 +701,9 @@ impl SessionContext {
         let DropView {
             name, if_exists, ..
         } = cmd;
-        let result = self.find_and_deregister(&name, TableType::View).await;
+        let result = self
+            .find_and_deregister(name.clone(), TableType::View)
+            .await;
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
@@ -727,10 +742,7 @@ impl SessionContext {
         }
     }
 
-    fn schema_doesnt_exist_err(
-        &self,
-        schemaref: SchemaReference<'_>,
-    ) -> Result<DataFrame> {
+    fn schema_doesnt_exist_err(&self, schemaref: SchemaReference) -> Result<DataFrame> {
         exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
@@ -768,7 +780,7 @@ impl SessionContext {
 
     async fn find_and_deregister<'a>(
         &self,
-        table_ref: impl Into<TableReference<'a>>,
+        table_ref: impl Into<TableReference>,
         table_type: TableType,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
@@ -792,6 +804,55 @@ impl SessionContext {
         }
 
         Ok(false)
+    }
+
+    async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
+        let function = {
+            let state = self.state.read().clone();
+            let function_factory = &state.function_factory;
+
+            match function_factory {
+                Some(f) => f.create(&state, stmt).await?,
+                _ => Err(DataFusionError::Configuration(
+                    "Function factory has not been configured".into(),
+                ))?,
+            }
+        };
+
+        match function {
+            RegisterFunction::Scalar(f) => {
+                self.state.write().register_udf(f)?;
+            }
+            RegisterFunction::Aggregate(f) => {
+                self.state.write().register_udaf(f)?;
+            }
+            RegisterFunction::Window(f) => {
+                self.state.write().register_udwf(f)?;
+            }
+            RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
+        };
+
+        self.return_empty_dataframe()
+    }
+
+    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
+        // we don't know function type at this point
+        // decision has been made to drop all functions
+        let mut dropped = false;
+        dropped |= self.state.write().deregister_udf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
+
+        // DROP FUNCTION IF EXISTS drops the specified function only if that
+        // function exists and in this way, it avoids error. While the DROP FUNCTION
+        // statement also performs the same function, it throws an
+        // error if the function does not exist.
+
+        if !stmt.if_exists && !dropped {
+            exec_err!("Function does not exist")
+        } else {
+            self.return_empty_dataframe()
+        }
     }
 
     /// Registers a variable provider within this context.
@@ -875,7 +936,8 @@ impl SessionContext {
     ) -> Result<DataFrame> {
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
-        let listing_options = options.to_listing_options(&session_config);
+        let listing_options =
+            options.to_listing_options(&session_config, self.copied_table_options());
 
         let option_extension = listing_options.file_extension.clone();
 
@@ -1012,7 +1074,8 @@ impl SessionContext {
         table_path: &str,
         options: ArrowReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -1058,12 +1121,12 @@ impl SessionContext {
     ///
     /// Returns the [`TableProvider`] previously registered for this
     /// reference, if any
-    pub fn register_table<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
+    pub fn register_table(
+        &self,
+        table_ref: impl Into<TableReference>,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let table_ref = table_ref.into();
+        let table_ref: TableReference = table_ref.into();
         let table = table_ref.table().to_owned();
         self.state
             .read()
@@ -1074,9 +1137,9 @@ impl SessionContext {
     /// Deregisters the given table.
     ///
     /// Returns the registered provider, if any
-    pub fn deregister_table<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
+    pub fn deregister_table(
+        &self,
+        table_ref: impl Into<TableReference>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
@@ -1087,17 +1150,15 @@ impl SessionContext {
     }
 
     /// Return `true` if the specified table exists in the schema provider.
-    pub fn table_exist<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
-    ) -> Result<bool> {
-        let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
+    pub fn table_exist(&self, table_ref: impl Into<TableReference>) -> Result<bool> {
+        let table_ref: TableReference = table_ref.into();
+        let table = table_ref.table();
+        let table_ref = table_ref.clone();
         Ok(self
             .state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(&table))
+            .table_exist(table))
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -1109,12 +1170,12 @@ impl SessionContext {
     /// [`register_table`]: SessionContext::register_table
     pub async fn table<'a>(
         &self,
-        table_ref: impl Into<TableReference<'a>>,
+        table_ref: impl Into<TableReference>,
     ) -> Result<DataFrame> {
-        let table_ref = table_ref.into();
-        let provider = self.table_provider(table_ref.to_owned_reference()).await?;
+        let table_ref: TableReference = table_ref.into();
+        let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
-            table_ref.to_owned_reference(),
+            table_ref,
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -1125,7 +1186,7 @@ impl SessionContext {
     /// Return a [`TableProvider`] for the specified table.
     pub async fn table_provider<'a>(
         &self,
-        table_ref: impl Into<TableReference<'a>>,
+        table_ref: impl Into<TableReference>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_string();
@@ -1134,49 +1195,6 @@ impl SessionContext {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => plan_err!("No table named '{table}'"),
         }
-    }
-
-    /// Returns the set of available tables in the default catalog and
-    /// schema.
-    ///
-    /// Use [`table`] to get a specific table.
-    ///
-    /// [`table`]: SessionContext::table
-    #[deprecated(
-        since = "23.0.0",
-        note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
-    )]
-    pub fn tables(&self) -> Result<HashSet<String>> {
-        Ok(self
-            .state
-            .read()
-            // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "".into() })?
-            .table_names()
-            .iter()
-            .cloned()
-            .collect())
-    }
-
-    /// Optimizes the logical plan by applying optimizer rules.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
-    )]
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.read().optimize(plan)
-    }
-
-    /// Creates a physical plan from a logical plan.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
-    )]
-    pub async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.state().create_physical_plan(logical_plan).await
     }
 
     /// Get a new TaskContext to run in this session
@@ -1200,6 +1218,16 @@ impl SessionContext {
     /// Register [`CatalogProviderList`] in [`SessionState`]
     pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
+    }
+
+    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// referenced from SQL statements executed against this context.
+    pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
+        self.state
+            .write()
+            .table_option_namespace
+            .extensions
+            .insert(extension)
     }
 }
 
@@ -1231,6 +1259,13 @@ impl FunctionRegistry for SessionContext {
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         self.state.write().register_udwf(udwf)
     }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.state.write().register_function_rewrite(rewrite)
+    }
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
@@ -1261,7 +1296,30 @@ impl QueryPlanner for DefaultQueryPlanner {
             .await
     }
 }
+/// A pluggable interface to handle `CREATE FUNCTION` statements
+/// and interact with [SessionState] to registers new udf, udaf or udwf.
 
+#[async_trait]
+pub trait FunctionFactory: Sync + Send {
+    /// Handles creation of user defined function specified in [CreateFunction] statement
+    async fn create(
+        &self,
+        state: &SessionState,
+        statement: CreateFunction,
+    ) -> Result<RegisterFunction>;
+}
+
+/// Type of function to create
+pub enum RegisterFunction {
+    /// Scalar user defined function
+    Scalar(Arc<ScalarUDF>),
+    /// Aggregate user defined function
+    Aggregate(Arc<AggregateUDF>),
+    /// Window user defined function
+    Window(Arc<WindowUDF>),
+    /// Table user defined function
+    Table(String, Arc<dyn TableFunctionImpl>),
+}
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
 ///
@@ -1294,6 +1352,8 @@ pub struct SessionState {
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
+    /// Table options
+    table_option_namespace: TableOptions,
     /// Execution properties
     execution_props: ExecutionProps,
     /// TableProviderFactories for different file formats.
@@ -1306,6 +1366,12 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+
+    /// [FunctionFactory] to support pluggable user defined function handler.
+    ///
+    /// It will be invoked on `CREATE FUNCTION` statements.
+    /// thus, changing dialect o PostgreSql is required
+    function_factory: Option<Arc<dyn FunctionFactory>>,
 }
 
 impl Debug for SessionState {
@@ -1388,20 +1454,27 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
+            table_option_namespace: TableOptions::default_from_session_config(
+                config.options(),
+            ),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
+            function_factory: None,
         };
 
         // register built in functions
-        datafusion_functions::register_all(&mut new_self)
+        functions::register_all(&mut new_self)
             .expect("can not register built in functions");
 
         // register crate of array expressions (if enabled)
         #[cfg(feature = "array_expressions")]
-        datafusion_functions_array::register_all(&mut new_self)
+        functions_array::register_all(&mut new_self)
             .expect("can not register array expressions");
+
+        functions_aggregate::register_all(&mut new_self)
+            .expect("can not register aggregate functions");
 
         new_self
     }
@@ -1464,22 +1537,23 @@ impl SessionState {
             .expect("Failed to register default schema");
     }
 
-    fn resolve_table_ref<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
-    ) -> ResolvedTableReference<'a> {
+    fn resolve_table_ref(
+        &self,
+        table_ref: impl Into<TableReference>,
+    ) -> ResolvedTableReference {
         let catalog = &self.config_options().catalog;
         table_ref
             .into()
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    pub(crate) fn schema_for_ref<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
+    pub(crate) fn schema_for_ref(
+        &self,
+        table_ref: impl Into<TableReference>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config.information_schema() && resolved_ref.schema == INFORMATION_SCHEMA {
+        if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
+        {
             return Ok(Arc::new(InformationSchemaProvider::new(
                 self.catalog_list.clone(),
             )));
@@ -1505,7 +1579,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the default query planner
+    /// override default query planner with `query_planner`
     pub fn with_query_planner(
         mut self,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -1514,7 +1588,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the analyzer rules
+    /// Override the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
@@ -1523,7 +1597,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the optimizer rules
+    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
     pub fn with_optimizer_rules(
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
@@ -1532,7 +1606,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the physical optimizer rules
+    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -1541,7 +1615,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`AnalyzerRule`]
+    /// Add `analyzer_rule` to the end of the list of
+    /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
@@ -1550,7 +1625,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`OptimizerRule`]
+    /// Add `optimizer_rule` to the end of the list of
+    /// [`OptimizerRule`]s used to rewrite queries.
     pub fn add_optimizer_rule(
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
@@ -1559,13 +1635,37 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`PhysicalOptimizerRule`]
+    /// Add `physical_optimizer_rule` to the end of the list of
+    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
         mut self,
-        optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
-        self.physical_optimizers.rules.push(optimizer_rule);
+        self.physical_optimizers.rules.push(physical_optimizer_rule);
         self
+    }
+
+    /// Adds a new [`ConfigExtension`] to TableOptions
+    pub fn add_table_options_extension<T: ConfigExtension>(
+        mut self,
+        extension: T,
+    ) -> Self {
+        self.table_option_namespace.extensions.insert(extension);
+        self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        mut self,
+        function_factory: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.function_factory = Some(function_factory);
+        self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
+        self.function_factory = Some(function_factory);
     }
 
     /// Replace the extension [`SerializerRegistry`]
@@ -1621,7 +1721,7 @@ impl SessionState {
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
-    ) -> Result<Vec<OwnedTableReference>> {
+    ) -> Result<Vec<TableReference>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
@@ -1670,11 +1770,7 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::CopyTo(CopyToStatement {
-                    source,
-                    target: _,
-                    options: _,
-                }) => match source {
+                DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                     CopyToSource::Relation(table_name) => {
                         visitor.insert(table_name);
                     }
@@ -1725,11 +1821,10 @@ impl SessionState {
         let parse_float_as_decimal =
             self.config.options().sql_parser.parse_float_as_decimal;
         for reference in references {
-            let table = reference.table();
-            let resolved = self.resolve_table_ref(&reference);
+            let resolved = &self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
-                if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(table).await? {
+                if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
+                    if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -1801,7 +1896,7 @@ impl SessionState {
 
             // optimize the child plan, capturing the output of each optimizer
             let optimized_plan = self.optimizer.optimize(
-                &analyzed_plan,
+                analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1831,7 +1926,7 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -1872,6 +1967,11 @@ impl SessionState {
         &self.config
     }
 
+    /// Return the mutable [`SessionConfig`].
+    pub fn config_mut(&mut self) -> &mut SessionConfig {
+        &mut self.config
+    }
+
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers.rules
@@ -1880,6 +1980,12 @@ impl SessionState {
     /// return the configuration options
     pub fn config_options(&self) -> &ConfigOptions {
         self.config.options()
+    }
+
+    /// return the TableOptions options with its extensions
+    pub fn default_table_options(&self) -> TableOptions {
+        self.table_option_namespace
+            .combine_with_session_config(self.config_options())
     }
 
     /// Get a new TaskContext to run in this session
@@ -1993,6 +2099,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn options(&self) -> &ConfigOptions {
         self.state.config_options()
     }
+
+    fn udfs_names(&self) -> Vec<String> {
+        self.state.scalar_functions().keys().cloned().collect()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        self.state.aggregate_functions().keys().cloned().collect()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        self.state.window_functions().keys().cloned().collect()
+    }
 }
 
 impl FunctionRegistry for SessionState {
@@ -2035,10 +2153,16 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
+        udaf.aliases().iter().for_each(|alias| {
+            self.aggregate_functions.insert(alias.clone(), udaf.clone());
+        });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
 
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        udwf.aliases().iter().for_each(|alias| {
+            self.window_functions.insert(alias.clone(), udwf.clone());
+        });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
 
@@ -2053,11 +2177,31 @@ impl FunctionRegistry for SessionState {
     }
 
     fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.aggregate_functions.remove(name))
+        let udaf = self.aggregate_functions.remove(name);
+        if let Some(udaf) = &udaf {
+            for alias in udaf.aliases() {
+                self.aggregate_functions.remove(alias);
+            }
+        }
+        Ok(udaf)
     }
 
     fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
-        Ok(self.window_functions.remove(name))
+        let udwf = self.window_functions.remove(name);
+        if let Some(udwf) = &udwf {
+            for alias in udwf.aliases() {
+                self.window_functions.remove(alias);
+            }
+        }
+        Ok(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
     }
 }
 
@@ -2174,7 +2318,7 @@ impl SQLOptions {
     /// Return an error if the [`LogicalPlan`] has any nodes that are
     /// incompatible with this [`SQLOptions`].
     pub fn verify_plan(&self, plan: &LogicalPlan) -> Result<()> {
-        plan.visit(&mut BadPlanVisitor::new(self))?;
+        plan.visit_with_subqueries(&mut BadPlanVisitor::new(self))?;
         Ok(())
     }
 }
@@ -2212,21 +2356,19 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::options::CsvReadOptions;
-    use super::*;
+    use std::env;
+    use std::path::PathBuf;
+
+    use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
-    use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use crate::variable::VarType;
-    use async_trait::async_trait;
+
     use datafusion_common_runtime::SpawnedTask;
-    use datafusion_expr::Expr;
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Weak;
+
+    use async_trait::async_trait;
     use tempfile::TempDir;
 
     #[tokio::test]

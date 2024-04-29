@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
+use std::sync::Arc;
+
+use crate::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -24,7 +28,7 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
-use super::binary::comparison_coercion;
+use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
 /// Performs type coercion for function arguments.
 ///
@@ -48,6 +52,7 @@ pub fn data_types(
             );
         }
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -183,6 +188,10 @@ fn get_valid_types(
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
                 |acc, x| {
+                    // The coerced types found by `comparison_coercion` are not guaranteed to be
+                    // coercible for the arguments. `comparison_coercion` returns more loose
+                    // types that can be coerced to both `acc` and `x` for comparison purpose.
+                    // See `maybe_data_types` for the actual coercion.
                     let coerced_type = comparison_coercion(&acc, x);
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
@@ -272,9 +281,9 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
-            // attempt to coerce
-            if let Some(valid_type) = coerced_from(valid_type, current_type) {
-                new_type.push(valid_type)
+            // attempt to coerce.
+            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
+                new_type.push(coerced_type)
             } else {
                 // not possible
                 return None;
@@ -303,17 +312,30 @@ fn coerced_from<'a>(
     type_from: &'a DataType,
 ) -> Option<DataType> {
     use self::DataType::*;
-
-    match type_into {
+    // match Dictionary first
+    match (type_into, type_from) {
+        // coerced dictionary first
+        (_, Dictionary(_, value_type))
+            if coerced_from(type_into, value_type).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (Dictionary(_, value_type), _)
+            if coerced_from(value_type, type_from).is_some() =>
+        {
+            Some(type_into.clone())
+        }
         // coerced into type_into
-        Int8 if matches!(type_from, Null | Int8) => Some(type_into.clone()),
-        Int16 if matches!(type_from, Null | Int8 | Int16 | UInt8) => {
+        (Int8, _) if matches!(type_from, Null | Int8) => Some(type_into.clone()),
+        (Int16, _) if matches!(type_from, Null | Int8 | Int16 | UInt8) => {
             Some(type_into.clone())
         }
-        Int32 if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) => {
+        (Int32, _)
+            if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) =>
+        {
             Some(type_into.clone())
         }
-        Int64
+        (Int64, _)
             if matches!(
                 type_from,
                 Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
@@ -321,15 +343,17 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        UInt8 if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
-        UInt16 if matches!(type_from, Null | UInt8 | UInt16) => Some(type_into.clone()),
-        UInt32 if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
+        (UInt8, _) if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
+        (UInt16, _) if matches!(type_from, Null | UInt8 | UInt16) => {
             Some(type_into.clone())
         }
-        UInt64 if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
+        (UInt32, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
             Some(type_into.clone())
         }
-        Float32
+        (UInt64, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some(type_into.clone())
+        }
+        (Float32, _)
             if matches!(
                 type_from,
                 Null | Int8
@@ -345,7 +369,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        Float64
+        (Float64, _)
             if matches!(
                 type_from,
                 Null | Int8
@@ -363,7 +387,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        Timestamp(TimeUnit::Nanosecond, None)
+        (Timestamp(TimeUnit::Nanosecond, None), _)
             if matches!(
                 type_from,
                 Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
@@ -371,23 +395,42 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        Interval(_) if matches!(type_from, Utf8 | LargeUtf8) => Some(type_into.clone()),
+        (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
+            Some(type_into.clone())
+        }
         // Any type can be coerced into strings
-        Utf8 | LargeUtf8 => Some(type_into.clone()),
-        Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
+        (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        List(_) if matches!(type_from, FixedSizeList(_, _)) => Some(type_into.clone()),
+        (List(_), _) if matches!(type_from, FixedSizeList(_, _)) => {
+            Some(type_into.clone())
+        }
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
-        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.
-        List(_) | LargeList(_)
+        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
+        (List(_) | LargeList(_), _)
             if datafusion_common::utils::base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
         }
+        // should be able to coerce wildcard fixed size list to non wildcard fixed size list
+        (FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD), _) => match type_from {
+            FixedSizeList(f_from, size_from) => {
+                match coerced_from(f_into.data_type(), f_from.data_type()) {
+                    Some(data_type) if &data_type != f_into.data_type() => {
+                        let new_field =
+                            Arc::new(f_into.as_ref().clone().with_data_type(data_type));
+                        Some(FixedSizeList(new_field, *size_from))
+                    }
+                    Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
 
-        Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
+        (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
                     Some(Timestamp(unit.clone(), Some(from_tz.clone())))
@@ -399,7 +442,7 @@ fn coerced_from<'a>(
                 _ => None,
             }
         }
-        Timestamp(_, Some(_))
+        (Timestamp(_, Some(_)), _)
             if matches!(
                 type_from,
                 Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
@@ -407,16 +450,29 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-
-        // cannot coerce
-        _ => None,
+        // More coerce rules.
+        // Note that not all rules in `comparison_coercion` can be reused here.
+        // For example, all numeric types can be coerced into Utf8 for comparison,
+        // but not for function arguments.
+        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
+            |coerced_type| {
+                if *type_into == coerced_type {
+                    Some(coerced_type)
+                } else {
+                    None
+                }
+            },
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use crate::Volatility;
+
     use super::*;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::Field;
 
     #[test]
     fn test_maybe_data_types() {
@@ -491,5 +547,102 @@ mod tests {
         assert_eq!(valid_types[0], args);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_fixed_list_wildcard_coerce() -> Result<()> {
+        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let current_types = vec![
+            DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
+        ];
+
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(
+                inner.clone(),
+                FIXED_SIZE_LIST_WILDCARD,
+            )],
+            Volatility::Stable,
+        );
+
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
+        // make sure it can't coerce to a different size
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 3)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature);
+        assert!(coerced_data_types.is_err());
+
+        // make sure it works with the same type.
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 2)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
+        let type_into = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    FIXED_SIZE_LIST_WILDCARD,
+                ),
+                false,
+            )),
+            FIXED_SIZE_LIST_WILDCARD,
+        );
+
+        let type_from = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    4,
+                ),
+                false,
+            )),
+            3,
+        );
+
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(DataType::FixedSizeList(
+                Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        4,
+                    ),
+                    false,
+                )),
+                3,
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coerced_from_dictionary() {
+        let type_into =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
     }
 }
