@@ -459,7 +459,7 @@ fn reorder_aggregate_keys(
 ) -> Result<PlanWithKeyRequirements> {
     let parent_required = &agg_node.data;
     let output_columns = agg_exec
-        .group_by()
+        .group_expr()
         .expr()
         .iter()
         .enumerate()
@@ -472,7 +472,7 @@ fn reorder_aggregate_keys(
         .collect::<Vec<_>>();
 
     if parent_required.len() == output_exprs.len()
-        && agg_exec.group_by().null_expr().is_empty()
+        && agg_exec.group_expr().null_expr().is_empty()
         && !physical_exprs_equal(&output_exprs, parent_required)
     {
         if let Some(positions) = expected_expr_positions(&output_exprs, parent_required) {
@@ -480,7 +480,7 @@ fn reorder_aggregate_keys(
                 agg_exec.input().as_any().downcast_ref::<AggregateExec>()
             {
                 if matches!(agg_exec.mode(), &AggregateMode::Partial) {
-                    let group_exprs = agg_exec.group_by().expr();
+                    let group_exprs = agg_exec.group_expr().expr();
                     let new_group_exprs = positions
                         .into_iter()
                         .map(|idx| group_exprs[idx].clone())
