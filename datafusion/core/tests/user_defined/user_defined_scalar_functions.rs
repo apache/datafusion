@@ -26,7 +26,7 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
     cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{exec_err, internal_err, DataFusionError};
+use datafusion_common::{assert_contains, exec_err, internal_err, DataFusionError};
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -203,6 +203,44 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
+}
+
+#[tokio::test]
+async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", batch)?;
+
+    // udf that always return 1 row
+    let buggy_udf = Arc::new(|_: &[ColumnarValue]| {
+        Ok(ColumnarValue::Array(Arc::new(Int32Array::from(vec![0]))))
+    });
+
+    ctx.register_udf(create_udf(
+        "buggy_func",
+        vec![DataType::Int32],
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        buggy_udf,
+    ));
+    assert_contains!(
+        ctx.sql("select buggy_func(a) from t")
+            .await?
+            .show()
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
+        "UDF returned a different number of rows than expected"
+    );
+    Ok(())
 }
 
 #[tokio::test]
