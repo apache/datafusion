@@ -239,11 +239,9 @@ fn rewrite_predicate(predicate: Predicate) -> Predicate {
                 rewritten_args.push(rewrite_predicate(arg));
             }
             rewritten_args = flatten_or_predicates(rewritten_args);
-            delete_duplicate_predicates(&rewritten_args)
+            delete_duplicate_predicates(rewritten_args)
         }
-        Predicate::Other { expr } => Predicate::Other {
-            expr: Box::new(*expr),
-        },
+        Predicate::Other { expr } => Predicate::Other { expr },
     }
 }
 
@@ -254,8 +252,7 @@ fn flatten_and_predicates(
     for predicate in and_predicates {
         match predicate {
             Predicate::And { args } => {
-                flattened_predicates
-                    .extend_from_slice(flatten_and_predicates(args).as_slice());
+                flattened_predicates.append(&mut flatten_and_predicates(args));
             }
             _ => {
                 flattened_predicates.push(predicate);
@@ -272,8 +269,7 @@ fn flatten_or_predicates(
     for predicate in or_predicates {
         match predicate {
             Predicate::Or { args } => {
-                flattened_predicates
-                    .extend_from_slice(flatten_or_predicates(args).as_slice());
+                flattened_predicates.append(&mut flatten_or_predicates(args));
             }
             _ => {
                 flattened_predicates.push(predicate);
@@ -283,7 +279,7 @@ fn flatten_or_predicates(
     flattened_predicates
 }
 
-fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
+fn delete_duplicate_predicates(or_predicates: Vec<Predicate>) -> Predicate {
     let mut shortest_exprs: Vec<Predicate> = vec![];
     let mut shortest_exprs_len = 0;
     // choose the shortest AND predicate
@@ -320,23 +316,22 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
     }
     if exist_exprs.is_empty() {
         return Predicate::Or {
-            args: or_predicates.to_vec(),
+            args: or_predicates,
         };
     }
 
     // Rebuild the OR predicate.
     // (A AND B) OR A will be optimized to A.
     let mut new_or_predicates = vec![];
-    for or_predicate in or_predicates.iter() {
+    for or_predicate in or_predicates.into_iter() {
         match or_predicate {
-            Predicate::And { args } => {
-                let mut new_args = (*args).clone();
-                new_args.retain(|expr| !exist_exprs.contains(expr));
-                if !new_args.is_empty() {
-                    if new_args.len() == 1 {
-                        new_or_predicates.push(new_args[0].clone());
+            Predicate::And { mut args } => {
+                args.retain(|expr| !exist_exprs.contains(expr));
+                if !args.is_empty() {
+                    if args.len() == 1 {
+                        new_or_predicates.push(args.remove(0));
                     } else {
-                        new_or_predicates.push(Predicate::And { args: new_args });
+                        new_or_predicates.push(Predicate::And { args });
                     }
                 } else {
                     new_or_predicates.clear();
@@ -344,7 +339,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
                 }
             }
             _ => {
-                if exist_exprs.contains(or_predicate) {
+                if exist_exprs.contains(&or_predicate) {
                     new_or_predicates.clear();
                     break;
                 }
@@ -353,7 +348,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
     }
     if !new_or_predicates.is_empty() {
         if new_or_predicates.len() == 1 {
-            exist_exprs.push(new_or_predicates[0].clone());
+            exist_exprs.push(new_or_predicates.remove(0));
         } else {
             exist_exprs.push(Predicate::Or {
                 args: flatten_or_predicates(new_or_predicates),
@@ -362,7 +357,7 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
     }
 
     if exist_exprs.len() == 1 {
-        exist_exprs[0].clone()
+        exist_exprs.remove(0)
     } else {
         Predicate::And {
             args: flatten_and_predicates(exist_exprs),
