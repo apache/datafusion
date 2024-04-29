@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
-use crate::type_coercion::binary::{decimal_coercion, type_resolution};
+use crate::type_coercion::binary::type_resolution;
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -360,7 +360,7 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 /// Expect uni-directional coercion, for example, i32 is coerced to i64, but i64 is not coerced to i32.
 ///
 /// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
-pub(crate) fn coerced_from<'a>(
+fn coerced_from<'a>(
     type_into: &'a DataType,
     type_from: &'a DataType,
 ) -> Option<DataType> {
@@ -378,14 +378,6 @@ pub(crate) fn coerced_from<'a>(
             if coerced_from(value_type, type_from).is_some() =>
         {
             Some(type_into.clone())
-        }
-        (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
-            decimal_coercion(type_into, type_from)
-        }
-        (Decimal128(_, _) | Decimal256(_, _), _)
-            if matches!(type_from, Int8 | Int16 | Int32 | Int64) =>
-        {
-            decimal_coercion(type_into, type_from)
         }
         // coerced into type_into
         (Int8, _) if matches!(type_from, Null | Int8) => Some(type_into.clone()),
@@ -406,15 +398,12 @@ pub(crate) fn coerced_from<'a>(
             Some(type_into.clone())
         }
         (UInt8, _) if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
-        (UInt8, _) if matches!(type_from, Null | Int8) => Some(Int16),
         (UInt16, _) if matches!(type_from, Null | UInt8 | UInt16) => {
             Some(type_into.clone())
         }
-        (UInt16, _) if matches!(type_from, Null | Int8 | Int16) => Some(Int32),
         (UInt32, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
             Some(type_into.clone())
         }
-        (UInt32, _) if matches!(type_from, Null | Int8 | Int16 | Int32) => Some(Int64),
         (UInt64, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
             Some(type_into.clone())
         }

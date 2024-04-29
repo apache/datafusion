@@ -872,6 +872,11 @@ fn string_concat_internal_coercion(
 /// to string type.
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
+    if let Some(t) = pure_string_coercion(lhs_type, rhs_type) {
+        return Some(t);
+    }
+
     match (lhs_type, rhs_type) {
         // TODO: cast between array elements (#6558)
         (List(_), List(_)) => Some(lhs_type.clone()),
