@@ -5631,7 +5631,7 @@ select range(NULL)
 ----
 NULL
 
-## should throw error
+## should return NULL
 query ?
 select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
 ----
