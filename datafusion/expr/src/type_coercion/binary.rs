@@ -880,6 +880,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         return Some(t);
     }
 
+    // TODO: Move out to a separate function or remove it. Review the need for this.
     match (lhs_type, rhs_type) {
         // TODO: cast between array elements (#6558)
         (List(_), List(_)) => Some(lhs_type.clone()),
