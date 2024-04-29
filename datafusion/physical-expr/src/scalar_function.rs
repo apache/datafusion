@@ -212,14 +212,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // Add `self.fun` when hash is available
     }
 
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        _input_schema: &Schema,
-    ) -> SortProperties {
+    fn get_ordering(&self, children: &[ExprProperties]) -> SortProperties {
         self.monotonicity
             .as_ref()
-            .map(|monotonicity| out_ordering(monotonicity, children))
+            .map(|monotonicity| {
+                out_ordering(
+                    monotonicity,
+                    children.iter().map(|ep| ep.sort_properties).collect(),
+                )
+            })
             .unwrap_or(SortProperties::Unordered)
     }
 }

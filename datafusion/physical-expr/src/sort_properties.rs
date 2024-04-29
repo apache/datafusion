@@ -146,3 +146,8 @@ impl Neg for SortProperties {
 /// orderings of the children expressions (`children`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
 pub type ExprOrdering = ExprContext<SortProperties>;
+
+pub struct ExprProperties {
+    pub sort_properties: SortProperties,
+    pub range: Interval,
+}

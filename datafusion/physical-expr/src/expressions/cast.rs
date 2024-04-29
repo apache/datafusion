@@ -164,21 +164,16 @@ impl PhysicalExpr for CastExpr {
         self.cast_options.hash(&mut s);
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child only if source and
-    /// target types of the cast are in the same dataype family.
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        input_schema: &Schema,
-    ) -> SortProperties {
-        if let Ok(source_datatype) = self.expr.data_type(input_schema) {
-            if self.cast_type.is_numeric() && source_datatype.is_numeric()
-                || self.cast_type.is_temporal() && source_datatype.is_temporal()
-            {
-                return children[0];
-            }
+    /// A [`CastExpr`] preserves the ordering of its child.
+    fn get_ordering(&self, children: &[ExprProperties]) -> SortProperties {
+        let source_datatype = children[0].range.data_type;
+        if self.cast_type.is_numeric() && source_datatype.is_numeric()
+            || self.cast_type.is_temporal() && source_datatype.is_temporal()
+        {
+            children[0]
+        } else {
+            SortProperties::Unordered
         }
-        SortProperties::Unordered
     }
 }
 

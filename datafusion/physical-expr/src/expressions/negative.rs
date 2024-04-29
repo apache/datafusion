@@ -134,12 +134,8 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        _input_schema: &Schema,
-    ) -> SortProperties {
-        -children[0]
+    fn get_ordering(&self, children: &[ExprProperties]) -> SortProperties {
+        -children[0].sort_properties
     }
 }
 

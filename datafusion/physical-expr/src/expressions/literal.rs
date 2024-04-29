@@ -90,11 +90,7 @@ impl PhysicalExpr for Literal {
         self.hash(&mut s);
     }
 
-    fn get_ordering(
-        &self,
-        _children: &[SortProperties],
-        _input_schema: &Schema,
-    ) -> SortProperties {
+    fn get_ordering(&self, _children: &[ExprProperties]) -> SortProperties {
         SortProperties::Singleton
     }
 }

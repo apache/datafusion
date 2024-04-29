@@ -445,18 +445,15 @@ impl PhysicalExpr for BinaryExpr {
 
     /// For each operator, [`BinaryExpr`] has distinct ordering rules.
     /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        _input_schema: &Schema,
-    ) -> SortProperties {
-        let (left_child, right_child) = (&children[0], &children[1]);
+    fn get_ordering(&self, children: &[ExprProperties]) -> SortProperties {
+        let (left_child_sp, right_child_sp) =
+            (&children[0].sort_properties, &children[1].sort_properties);
         match self.op() {
-            Operator::Plus => left_child.add(right_child),
-            Operator::Minus => left_child.sub(right_child),
-            Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
-            Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
-            Operator::And | Operator::Or => left_child.and_or(right_child),
+            Operator::Plus => left_child_sp.add(right_child_sp),
+            Operator::Minus => left_child_sp.sub(right_child_sp),
+            Operator::Gt | Operator::GtEq => left_child_sp.gt_or_gteq(right_child_sp),
+            Operator::Lt | Operator::LtEq => right_child_sp.gt_or_gteq(left_child_sp),
+            Operator::And | Operator::Or => left_child_sp.and_or(right_child_sp),
             _ => SortProperties::Unordered,
         }
     }
