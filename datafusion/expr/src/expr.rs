@@ -912,7 +912,16 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema.
     pub fn display_name(&self) -> Result<String> {
-        create_name(self)
+        match self {
+            Expr::TryCast(TryCast { expr, data_type }) | Expr::Cast(Cast { expr, data_type }) => {
+                let name = match **expr {
+                    Expr::Column(_) => create_name(expr)?,
+                    _ => format!("CAST({expr} AS {data_type:?})"),
+                };
+                Ok(name)
+            }
+            _ => create_name(self),
+        }
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -1046,6 +1055,7 @@ impl Expr {
         match self {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
+            // Expr::Cast(Cast { expr, .. }) => expr.name_for_alias(),
             expr => expr.display_name(),
         }
     }
@@ -1737,13 +1747,9 @@ fn create_name(e: &Expr) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::TryCast(TryCast { expr, data_type })
-        | Expr::Cast(Cast { expr, data_type }) => {
-            let name = match **expr {
-                Expr::Column(_) => create_name(expr)?,
-                _ => format!("CAST({expr} AS {data_type:?})"),
-            };
-            Ok(name)
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            // CAST does not change the expression name
+            create_name(expr)
         }
         Expr::Not(expr) => {
             let expr = create_name(expr)?;
