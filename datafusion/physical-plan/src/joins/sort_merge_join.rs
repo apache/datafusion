@@ -1161,6 +1161,12 @@ impl SMJStream {
             let filter_columns = if chunk.buffered_batch_idx.is_some() {
                 if matches!(self.join_type, JoinType::Right) {
                     get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+                } else if matches!(self.join_type, JoinType::LeftSemi) {
+                    let buffered_columns = self.buffered_data.batches
+                        [chunk.buffered_batch_idx.unwrap()]
+                    .batch
+                    .columns();
+                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
                 } else {
                     get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
                 }
@@ -1357,6 +1363,9 @@ fn get_filter_column(
             .filter(|col_index| col_index.side == JoinSide::Right)
             .map(|i| buffered_columns[i.index].clone())
             .collect::<Vec<_>>();
+
+//        dbg!(&left_columns);
+//        dbg!(&right_columns);
 
         filter_columns.extend(left_columns);
         filter_columns.extend(right_columns);
