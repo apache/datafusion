@@ -454,9 +454,6 @@ fn coerced_from<'a>(
         }
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
-        // convert string numeric to numeric, let arrow::cast handle the actual conversion
-        // expect arrow error for non-numeric strings
-        // (data_type, Utf8 | LargeUtf8) if data_type.is_numeric() => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
         (List(_), _) if matches!(type_from, FixedSizeList(_, _)) => {

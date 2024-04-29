@@ -23,7 +23,6 @@ use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result};
-// use datafusion_expr::type_coercion::binary::type_resolution;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -60,7 +59,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // In theroy arg_types are coerced types, so we can just return the first one.
+        // arg_types are coerced, so we can just return the first one.
         Ok(arg_types[0].clone())
     }
 
