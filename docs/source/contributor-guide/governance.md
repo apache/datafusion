@@ -27,7 +27,12 @@ The current PMC and committers are listed in the [Apache Phonebook].
 
 DataFusion is part of the [Apache Software Foundation] and is governed following
 the [Apache Way] and [project management guidelines], [independently of
-commercial interests].
+commercial interests]. That means that the DataFusion project manages code for
+the benefit of all users, and not just for some company or vendor. In
+particular, DataFusion only recognizes individuals as committers never
+companies.[^1]
+
+[^1]: [How Apache _really_ works](https://medium.com/@shanecurcuru/how-apache-really-works-995a091a72d3)
 
 [apache software foundation]: https://www.apache.org/
 [apache way]: https://www.apache.org/theapacheway/
