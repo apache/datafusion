@@ -1940,6 +1940,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                                     .iter()
                                     .map(|sort_expr| format!("{sort_expr}"))
                                     .collect::<Vec<_>>();
+                                // name.into()
                                 format!("{name} ORDER BY [{}]", reqs.join(", "))
                             }
                         }

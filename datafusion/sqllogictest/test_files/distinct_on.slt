@@ -112,11 +112,44 @@ SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2
 query error DataFusion error: Error during planning: No `ON` expressions provided
 SELECT DISTINCT ON () c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
 
-# query BII
-# SELECT c2 % 2 = 0, c2, c3 - 100
-# FROM aggregate_test_100
-# ORDER BY c2 % 2 = 0, c3 DESC;
+# # Use expressions in the ON and ORDER BY clauses, as well as the selection
+# query TT
+# EXPLAIN verbose SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
 # ----
+
+query II
+SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
+----
+5 -140
+2 -99
+
+# Use expressions in the ON and ORDER BY clauses, as well as the selection
+query TT
+EXPLAIN SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
+----
+logical_plan
+01)Projection: FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] AS c2, FIRST_VALUE(aggregate_test_100.c3 - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] AS aggregate_test_100.c3 - Int64(100)
+02)--Sort: aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST
+03)----Aggregate: groupBy=[[CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0)]], aggr=[[FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] AS FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST], FIRST_VALUE(CAST(aggregate_test_100.c3 AS Int64) - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] AS FIRST_VALUE(aggregate_test_100.c3 - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST]]]
+04)------Projection: CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) AS CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2, aggregate_test_100.c2, aggregate_test_100.c3
+05)--------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+01)ProjectionExec: expr=[FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST]@1 as c2, FIRST_VALUE(aggregate_test_100.c3 - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST]@2 as aggregate_test_100.c3 - Int64(100)]
+02)--SortPreservingMergeExec: [aggregate_test_100.c2 % Int64(2) = Int64(0)@0 ASC NULLS LAST]
+03)----SortExec: expr=[aggregate_test_100.c2 % Int64(2) = Int64(0)@0 ASC NULLS LAST]
+04)------AggregateExec: mode=FinalPartitioned, gby=[aggregate_test_100.c2 % Int64(2) = Int64(0)@0 as aggregate_test_100.c2 % Int64(2) = Int64(0)], aggr=[FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST], FIRST_VALUE(aggregate_test_100.c3 - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST]]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([aggregate_test_100.c2 % Int64(2) = Int64(0)@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2@0 as aggregate_test_100.c2 % Int64(2) = Int64(0)], aggr=[FIRST_VALUE(aggregate_test_100.c2) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST], FIRST_VALUE(aggregate_test_100.c3 - Int64(100)) ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST] ORDER BY [CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2 AS aggregate_test_100.c2 % Int64(2) = Int64(0) ASC NULLS LAST, aggregate_test_100.c3 DESC NULLS FIRST]]
+08)--------------ProjectionExec: expr=[CAST(c2@0 AS Int64) % 2 = 0 as CAST(aggregate_test_100.c2 AS Int64) % Int64(2) = Int64(0)Int64(0)CAST(aggregate_test_100.c2 AS Int64) % Int64(2)Int64(2)CAST(aggregate_test_100.c2 AS Int64)aggregate_test_100.c2, c2@0 as c2, c3@1 as c3]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+
+query BII
+SELECT c2 % 2 = 0, c2, c3 - 100
+FROM aggregate_test_100
+ORDER BY c2 % 2 = 0, c3 DESC;
+----
 
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
