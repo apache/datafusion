@@ -418,7 +418,7 @@ pub fn type_resolution(data_types: &[DataType]) -> Option<DataType> {
         }
     }
 
-    println!("candidate_type: {:?}", candidate_type);
+    // println!("candidate_type: {:?}", candidate_type);
 
     candidate_type
 }
@@ -429,20 +429,13 @@ fn type_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<
         return Some(lhs_type.clone());
     }
     
+    // numeric coercion is the same as comparison coercion, both find the narrowest type
+    // that can accommodate both types
     if let Some(t) = binary_numeric_coercion(lhs_type, rhs_type) {
         return Some(t);
     }
 
     match (lhs_type, rhs_type) {
-        // (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
-        //     decimal_coercion(lhs_type, rhs_type)
-        // }
-        // (Decimal128(_, _) | Decimal256(_, _), other_type)
-        // | (other_type, Decimal128(_, _) | Decimal256(_, _))
-        //     if matches!(other_type, Int8 | Int16 | Int32 | Int64) =>
-        // {
-        //     decimal_coercion(lhs_type, rhs_type)
-        // }
         (data_type, Utf8 | LargeUtf8) |
         (Utf8 | LargeUtf8, data_type) if data_type.is_numeric() => {
             // let arrow_cast handle the actual casting
@@ -554,6 +547,11 @@ pub(crate) fn binary_numeric_coercion(
         // accommodates all values of both types. Note that some information
         // loss is inevitable when we have a signed type and a `UInt64`, in
         // which case we use `Int64`;i.e. the widest signed integral type.
+        
+        // TODO: For i64 and u64, we can use decimal or float64
+        // Postgres has no unsigned type :(
+        // DuckDB v.0.10.0 has double (double precision floating-point number (8 bytes)) 
+        // for largest signed (signed sixteen-byte integer) and unsigned integer (unsigned sixteen-byte integer)
         (Int64, _)
         | (_, Int64)
         | (UInt64, Int8)

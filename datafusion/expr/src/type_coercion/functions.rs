@@ -54,7 +54,7 @@ pub fn data_types(
         }
     }
 
-    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
+    let mut valid_types = get_valid_types(&signature.type_signature, current_types)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -62,11 +62,21 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
+    // Well-supported signature that returns exact valid types.
+    if !valid_types.is_empty() && matches!(signature.type_signature,TypeSignature::VariadicEqualOrNull) {
+        // exact valid types
+        assert_eq!(valid_types.len(), 1);
+        let valid_types = valid_types.swap_remove(0);
+        if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
+            return Ok(t);
+        }
+    } else {
+        // Try and coerce the argument types to match the signature, returning the
+        // coerced types from the first matching signature.
+        for valid_types in valid_types {
+            if let Some(types) = maybe_data_types(&valid_types, current_types) {
+                return Ok(types);
+            }
         }
     }
 
@@ -294,21 +304,42 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
-
-            if can_cast_types(current_type, valid_type) {
-                new_type.push(valid_type.clone());
-                
+            // TODO: Replace with `can_cast_types` after failing cases are resolved 
+            // (they need new signature that returns exactly valid types instead of list of possible valid types).
+            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
+                new_type.push(coerced_type)
             } else {
                 // not possible
                 return None;
             }
+        }
+    }
+    Some(new_type)
+}
 
-            // if let Some(coerced_type) = coerced_from(valid_type, current_type) {
-            //     new_type.push(coerced_type)
-            // } else {
-            //     // not possible
-            //     return None;
-            // }
+/// Check if the current argument types can be coerced to match the given `valid_types`
+/// unlike `maybe_data_types`, this function does not coerce the types.
+/// TODO: I think this function should replace `maybe_data_types` after signature are well-supported.
+fn maybe_data_types_without_coercion(
+    valid_types: &[DataType],
+    current_types: &[DataType],
+) -> Option<Vec<DataType>> {
+    if valid_types.len() != current_types.len() {
+        return None;
+    }
+
+    let mut new_type = Vec::with_capacity(valid_types.len());
+    for (i, valid_type) in valid_types.iter().enumerate() {
+        let current_type = &current_types[i];
+
+        if current_type == valid_type {
+            new_type.push(current_type.clone())
+        } else {
+            if can_cast_types(current_type, valid_type) {
+                new_type.push(valid_type.clone())
+            } else {
+                return None;
+            }
         }
     }
     Some(new_type)
@@ -439,6 +470,9 @@ pub(crate) fn coerced_from<'a>(
         }
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        // convert string numeric to numeric, let arrow::cast handle the actual conversion
+        // expect arrow error for non-numeric strings
+        // (data_type, Utf8 | LargeUtf8) if data_type.is_numeric() => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
         (List(_), _) if matches!(type_from, FixedSizeList(_, _)) => {

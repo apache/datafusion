@@ -1235,12 +1235,13 @@ select
 ----
 2 Int64
 
-# TODO:
-# i64 and u64, should cast to i128 or decimal, not yet support
-query error
+# TODO: Got types (i64, u64), casting to decimal or double or even i128 if supported
+query IT
 select
   coalesce(2, arrow_cast(3, 'UInt64')),
   arrow_typeof(coalesce(2, arrow_cast(3, 'UInt64')));
+----
+2 Int64
 
 statement ok
 create table t1 (a bigint, b int, c int) as values (null, null, 1), (null, 2, null);
