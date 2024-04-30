@@ -1519,11 +1519,8 @@ fn compare_join_arrays(
             DataType::Date64 => compare_value!(Date64Array),
             dt => {
                 return not_impl_err!(
-                    "{}",
-                    format!(
-                        "Unsupported data type in sort merge join comparator: {}",
-                        dt
-                    )
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
@@ -1589,11 +1586,8 @@ fn is_join_arrays_equal(
             DataType::Date64 => compare_value!(Date64Array),
             dt => {
                 return not_impl_err!(
-                    "{}",
-                    format!(
-                        "Unsupported data type in sort merge join comparator: {}",
-                        dt
-                    )
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
