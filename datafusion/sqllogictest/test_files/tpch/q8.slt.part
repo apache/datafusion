@@ -91,7 +91,7 @@ logical_plan
 33)----------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("AMERICA")]
 physical_plan
 01)SortPreservingMergeExec: [o_year@0 ASC NULLS LAST]
-02)--SortExec: expr=[o_year@0 ASC NULLS LAST]
+02)--SortExec: expr=[o_year@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[o_year@0 as o_year, CAST(CAST(SUM(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END)@1 AS Decimal128(12, 2)) / CAST(SUM(all_nations.volume)@2 AS Decimal128(12, 2)) AS Decimal128(15, 2)) as mkt_share]
 04)------AggregateExec: mode=FinalPartitioned, gby=[o_year@0 as o_year], aggr=[SUM(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), SUM(all_nations.volume)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
