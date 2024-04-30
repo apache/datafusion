@@ -81,6 +81,36 @@ async fn describe_boolean_binary() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn describe_null() -> Result<()> {
+    let ctx = parquet_context().await;
+
+    //add test case for only boolean boolean/binary column
+    let result = ctx
+        .sql("select 'a' as a, null as b")
+        .await?
+        .describe()
+        .await?
+        .collect()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+------------+------+------+",
+        "| describe   | a    | b    |",
+        "+------------+------+------+",
+        "| count      | 1    | 0    |",
+        "| null_count | 0    | 1    |",
+        "| mean       | null | null |",
+        "| std        | null | null |",
+        "| min        | null | null |",
+        "| max        | null | null |",
+        "| median     | null | null |",
+        "+------------+------+------+"
+    ];
+    assert_batches_eq!(expected, &result);
+    Ok(())
+}
+
 /// Return a SessionContext with parquet file registered
 async fn parquet_context() -> SessionContext {
     let ctx = SessionContext::new();

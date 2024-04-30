@@ -215,18 +215,6 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the COUNT(IS NULL x) aggregate function
-pub fn count_null(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Count,
-        vec![expr.clone()],
-        false,
-        Some(Box::new(expr.is_null())),
-        None,
-        None,
-    ))
-}
-
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(
