@@ -900,7 +900,7 @@ ORDER BY SUM(column1)
 16
 
 statement ok
-create table ambiguity_test(a int, b int) as values (1,2), (2,1);
+create table ambiguity_test(a int, b int) as values (1,20), (2,10);
 
 # Order-by expressions prioritize referencing columns from the select list.
 query II
