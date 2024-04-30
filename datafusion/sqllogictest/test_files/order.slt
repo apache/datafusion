@@ -899,6 +899,16 @@ ORDER BY SUM(column1)
 ----
 16
 
+# ORDER BY without a HAVING clause
+query I
+SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
+----
+16
+
+# Order by unprojected aggregate expressions is not supported
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+SELECT column2 FROM foo ORDER BY SUM(column1)
+
 statement ok
 create table ambiguity_test(a int, b int) as values (1,20), (2,10);
 
@@ -906,8 +916,8 @@ create table ambiguity_test(a int, b int) as values (1,20), (2,10);
 query II
 select a as b, b as c2 from ambiguity_test order by b
 ----
-1 2
-2 1
+1 20
+2 10
 
 # Cleanup
 statement ok
