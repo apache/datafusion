@@ -41,7 +41,7 @@ impl OptimizerRule for EliminateNestedUnion {
         _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateFilter::rewrite")
+        internal_err!("Should have called EliminateNestedUnion::rewrite")
     }
 
     fn name(&self) -> &str {
