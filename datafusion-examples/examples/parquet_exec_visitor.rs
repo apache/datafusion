@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
+use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
@@ -54,7 +54,7 @@ async fn main() {
 
     // Create empty visitor
     let mut visitor = ParquetExecVisitor {
-        file_scan_config: None,
+        file_groups: None,
         bytes_scanned: None,
     };
 
@@ -74,14 +74,16 @@ async fn main() {
     );
     println!(
         "ParquetExecVisitor file_groups: {:?}",
-        visitor.file_scan_config.unwrap().file_groups
+        visitor.file_groups.unwrap()
     );
 }
 
-/// Define a struct with fields to hold the information you want to collect
+/// Define a struct with fields to hold the execution information you want to
+/// collect. In this case, I want information on how many bytes were scanned
+/// and `file_groups` from the FileScanConfig.
 #[derive(Debug)]
 struct ParquetExecVisitor {
-    file_scan_config: Option<FileScanConfig>,
+    file_groups: Option<Vec<Vec<PartitionedFile>>>,
     bytes_scanned: Option<MetricValue>,
 }
 
@@ -95,7 +97,7 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
         // If needed match on a specific `ExecutionPlan` node type
         let maybe_parquet_exec = plan.as_any().downcast_ref::<ParquetExec>();
         if let Some(parquet_exec) = maybe_parquet_exec {
-            self.file_scan_config = Some(parquet_exec.base_config().clone());
+            self.file_groups = Some(parquet_exec.base_config().file_groups.clone());
 
             let metrics = match parquet_exec.metrics() {
                 None => return Ok(true),
