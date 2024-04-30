@@ -1192,7 +1192,11 @@ fn ensure_distribution(
     .collect::<Result<Vec<_>>>()?;
 
     let children_plans = children.iter().map(|c| c.plan.clone()).collect::<Vec<_>>();
-    plan = if plan.as_any().is::<UnionExec>() && can_interleave(children_plans.iter()) {
+
+    plan = if plan.as_any().is::<UnionExec>()
+        && !config.optimizer.prefer_existing_union
+        && can_interleave(children_plans.iter())
+    {
         // Add a special case for [`UnionExec`] since we want to "bubble up"
         // hash-partitioned data. So instead of
         //
@@ -1721,16 +1725,25 @@ pub(crate) mod tests {
     /// * `TARGET_PARTITIONS` (optional) - number of partitions to repartition to
     /// * `REPARTITION_FILE_SCANS` (optional) - if true, will repartition file scans
     /// * `REPARTITION_FILE_MIN_SIZE` (optional) - minimum file size to repartition
+    /// * `PREFER_EXISTING_UNION` (optional) - if true, will not attempt to convert Union to Interleave
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
-            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, false, 10, false, 1024);
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, false, 10, false, 1024, false);
         };
 
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr) => {
-            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, 10, false, 1024);
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, 10, false, 1024, false);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $PREFER_EXISTING_UNION: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, 10, false, 1024, $PREFER_EXISTING_UNION);
         };
 
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, $TARGET_PARTITIONS, $REPARTITION_FILE_SCANS, $REPARTITION_FILE_MIN_SIZE, false);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr, $PREFER_EXISTING_UNION: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
@@ -1738,6 +1751,7 @@ pub(crate) mod tests {
             config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
             config.optimizer.prefer_existing_sort = $PREFER_EXISTING_SORT;
+            config.optimizer.prefer_existing_union = $PREFER_EXISTING_UNION;
 
             // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
             //       because they were written prior to the separation of `BasicEnforcement` into
@@ -3097,7 +3111,67 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, plan.clone(), true);
-        assert_optimized!(expected, plan, false);
+        assert_optimized!(expected, plan.clone(), false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn union_not_to_interleave() -> Result<()> {
+        // group by (a as a1)
+        let left = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+        // group by (a as a2)
+        let right = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+
+        //  Union
+        let plan = Arc::new(UnionExec::new(vec![left, right]));
+
+        // final agg
+        let plan =
+            aggregate_exec_with_alias(plan, vec![("a1".to_string(), "a2".to_string())]);
+
+        // Only two RepartitionExecs added, no final RepartitionExec required
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=20",
+            "AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
+            "UnionExec",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        // no sort in the plan but since we need it as a parameter, make it default false
+        let prefer_existing_sort = false;
+        let first_enforce_distribution = true;
+        let prefer_existing_union = true;
+
+        assert_optimized!(
+            expected,
+            plan.clone(),
+            first_enforce_distribution,
+            prefer_existing_sort,
+            prefer_existing_union
+        );
+        assert_optimized!(
+            expected,
+            plan,
+            !first_enforce_distribution,
+            prefer_existing_sort,
+            prefer_existing_union
+        );
 
         Ok(())
     }
@@ -3651,7 +3725,8 @@ pub(crate) mod tests {
             true,
             target_partitions,
             true,
-            repartition_size
+            repartition_size,
+            false
         );
 
         let expected = [
@@ -3668,7 +3743,8 @@ pub(crate) mod tests {
             true,
             target_partitions,
             true,
-            repartition_size
+            repartition_size,
+            false
         );
 
         Ok(())
@@ -3731,7 +3807,7 @@ pub(crate) mod tests {
                 )),
                 vec![("a".to_string(), "a".to_string())],
             );
-            assert_optimized!(expected, plan, true, false, 2, true, 10);
+            assert_optimized!(expected, plan, true, false, 2, true, 10, false);
         }
         Ok(())
     }

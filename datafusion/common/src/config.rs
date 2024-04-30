@@ -571,6 +571,9 @@ config_namespace! {
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
         pub default_filter_selectivity: u8, default = 20
+
+        /// When set to true, the optimizer will not attempt to convert Union to Interleave
+        pub prefer_existing_union: bool, default = false
     }
 }
 
