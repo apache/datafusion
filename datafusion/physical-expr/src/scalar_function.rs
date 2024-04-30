@@ -37,7 +37,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
 };
@@ -153,7 +153,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
                 if let ColumnarValue::Array(array) = &output {
                     if array.len() != batch.num_rows() {
-                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}", 
+                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
                         batch.num_rows(), array.len());
                     }
                 }
