@@ -62,7 +62,6 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             created_by,
             column_index_truncate_length,
             data_page_row_count_limit,
-            bloom_filter_on_read_enabled,
             bloom_filter_on_write_enabled,
             encoding,
             dictionary_enabled,
@@ -81,6 +80,7 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
+            bloom_filter_on_read_enabled: _,
         } = &parquet_options.global;
 
         let key_value_metadata = if !parquet_options.key_value_metadata.is_empty() {
