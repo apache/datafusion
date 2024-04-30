@@ -153,14 +153,13 @@ impl ScalarUDFImpl for PowerFunc {
 
 /// Return true if this function call is a call to `Log`
 fn is_log(func_def: &ScalarFunctionDefinition) -> bool {
-    if let ScalarFunctionDefinition::UDF(fun) = func_def {
-        fun.as_ref()
+    match func_def {
+        ScalarFunctionDefinition::UDF(fun) => fun
+            .as_ref()
             .inner()
             .as_any()
             .downcast_ref::<LogFunc>()
-            .is_some()
-    } else {
-        false
+            .is_some(),
     }
 }
 

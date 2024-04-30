@@ -316,9 +316,6 @@ pub fn create_physical_expr(
                     args,
                     input_dfschema,
                 ),
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
             }
         }
         Expr::Between(Between {
