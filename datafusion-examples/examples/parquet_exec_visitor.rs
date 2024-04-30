@@ -27,6 +27,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 
+/// Example of collecting metrics after execution by visiting the `ExecutionPlan`
 #[tokio::main]
 async fn main() {
     let ctx = SessionContext::new();
@@ -35,17 +36,13 @@ async fn main() {
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
-    let listing_options = ListingOptions::new(Arc::new(file_format))
-        // This is a workaround for this example since `test_data` contains
-        // many different parquet different files,
-        // in practice use FileType::PARQUET.get_ext().
-        .with_file_extension("alltypes_plain.parquet");
+    let listing_options = ListingOptions::new(Arc::new(file_format));
 
     // First example were we use an absolute path, which requires no additional setup.
     let _ = ctx
         .register_listing_table(
             "my_table",
-            &format!("file://{test_data}/"),
+            &format!("file://{test_data}/alltypes_plain.parquet"),
             listing_options.clone(),
             None,
             None,
@@ -66,12 +63,19 @@ async fn main() {
     // but the `bytes_scanned` would be None if we did not execute.
     let mut batch_stream = execute_stream(plan.clone(), ctx.task_ctx()).unwrap();
     while let Some(batch) = batch_stream.next().await {
-        println!("Do something with batch");
+        println!("Batch rows: {}", batch.unwrap().num_rows());
     }
 
     visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
 
-    println!("ParquetExecVisitor: {:?}", visitor);
+    println!(
+        "ParquetExecVisitor bytes_scanned: {:?}",
+        visitor.bytes_scanned
+    );
+    println!(
+        "ParquetExecVisitor file_groups: {:?}",
+        visitor.file_scan_config.unwrap().file_groups
+    );
 }
 
 /// Define a struct with fields to hold the information you want to collect
@@ -84,7 +88,9 @@ struct ParquetExecVisitor {
 impl ExecutionPlanVisitor for ParquetExecVisitor {
     type Error = datafusion_common::DataFusionError;
 
-    /// Based on your needs implement either `pre_visit` or `post_visit`
+    /// This function is called once for every node in the tree.
+    /// Based on your needs implement either `pre_visit` (visit each node before its children/inputs)
+    /// or `post_visit` (visit each node after its children/inputs)
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
         let maybe_parquet_exec = plan.as_any().downcast_ref::<ParquetExec>();
