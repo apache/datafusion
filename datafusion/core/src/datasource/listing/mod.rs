@@ -69,8 +69,8 @@ pub struct PartitionedFile {
     pub range: Option<FileRange>,
     /// Optional statistics that describe the data in this file if known.
     ///
-    /// DataFusion relies on these statistics for planning so if they are incorrect,
-    /// incorrect answers may result.
+    /// DataFusion relies on these statistics for planning (in particular to sort file groups),
+    /// so if they are incorrect, incorrect answers may result.
     pub statistics: Option<Statistics>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
