@@ -19,7 +19,10 @@
 
 # Download
 
-The official Apache DataFusion releases are provided as source artifacts.
+While DataFusion is also distributed via the Rust [crates.io] package manager as a convenience, the
+official Apache DataFusion releases are provided as source artifacts.
+
+[crates.io]: https://crates.io/crates/datafusion
 
 ## Releases
 
@@ -32,7 +35,7 @@ The latest source release is [37.0.0][source-link] ([asc][asc-link],
 
 For previous releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
 
-For older releases (<= 37) when DataFusion was a subproject of Apache Arrow, please check [Arrow's archive](https://archive.apache.org/dist/arrow/).
+For releases earlier than 37.0.0, please check [Arrow's archive](https://archive.apache.org/dist/arrow/).
 
 ## Notes
 
