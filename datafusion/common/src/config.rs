@@ -1657,6 +1657,7 @@ config_namespace! {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum FormatOptions {
     CSV(CsvOptions),
     JSON(JsonOptions),
