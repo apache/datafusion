@@ -284,7 +284,9 @@ fn is_comparison_op(op: &Operator) -> bool {
 
 /// Returns true if [UnwrapCastExprRewriter] supports this data type
 fn is_supported_type(data_type: &DataType) -> bool {
-    is_supported_numeric_type(data_type) || is_supported_string_type(data_type)
+    is_supported_numeric_type(data_type)
+        || is_supported_string_type(data_type)
+        || is_supported_dictionary_type(data_type)
 }
 
 /// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
@@ -307,8 +309,12 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
 /// Returns true if [UnwrapCastExprRewrite] supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Utf8)
-        || matches!(data_type,
-                    DataType::Dictionary(_, inner) if matches!(**inner, DataType::Utf8))
+}
+
+/// returns true if [UnwrapCastExprRewrite] supports casting this value as a dictionary
+fn is_supported_dictionary_type(data_type: &DataType) -> bool {
+    matches!(data_type,
+                    DataType::Dictionary(_, inner) if is_supported_type(inner))
 }
 
 /// Convert a numeric value from one numeric data type to another
@@ -325,7 +331,7 @@ fn try_cast_literal_to_type(
         return ScalarValue::try_from(target_type).ok();
     }
     try_cast_numeric_literal(lit_value, target_type)
-        .or_else(|| try_cast_string_literal(lit_value, target_type))
+        .or_else(|| try_cast_dictionary(lit_value, target_type))
 }
 
 /// Convert a numeric value from one numeric data type to another
@@ -469,16 +475,12 @@ fn try_cast_numeric_literal(
     }
 }
 
-fn try_cast_string_literal(
+/// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
+fn try_cast_dictionary(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_value_type = lit_value.data_type();
-    if !is_supported_string_type(&lit_value_type)
-        || !is_supported_string_type(target_type)
-    {
-        return None;
-    }
     if lit_value_type == *target_type {
         return Some(lit_value.clone());
     }
@@ -490,8 +492,8 @@ fn try_cast_string_literal(
             (**inner_value).clone()
         }
         // Wrap Utf8 when target type is dictionary
-        (ScalarValue::Utf8(_), DataType::Dictionary(index_type, inner_type))
-            if **inner_type == DataType::Utf8 =>
+        (_, DataType::Dictionary(index_type, inner_type))
+            if **inner_type == lit_value_type =>
         {
             ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
         }
