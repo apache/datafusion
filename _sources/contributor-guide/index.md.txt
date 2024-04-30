@@ -68,9 +68,11 @@ ideas with the community to get feedback on implementation.
 
 We welcome pull requests (PRs) from anyone from the community.
 
-DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
+DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [committers] will merge your PR.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
+
+[committers]: https://people.apache.org/phonebook.html?unix=datafusion
 
 ## Creating Pull Requests
 
