@@ -62,7 +62,8 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             created_by,
             column_index_truncate_length,
             data_page_row_count_limit,
-            bloom_filter_enabled,
+            bloom_filter_on_read_enabled,
+            bloom_filter_on_write_enabled,
             encoding,
             dictionary_enabled,
             compression,
@@ -104,7 +105,7 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_enabled)
+            .set_bloom_filter_enabled(*bloom_filter_on_write_enabled)
             .set_key_value_metadata(key_value_metadata);
 
         if let Some(encoding) = &encoding {

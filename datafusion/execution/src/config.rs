@@ -344,12 +344,12 @@ impl SessionConfig {
 
     /// Returns true if bloom filter should be used to skip parquet row groups
     pub fn parquet_bloom_filter_pruning(&self) -> bool {
-        self.options.execution.parquet.bloom_filter_enabled
+        self.options.execution.parquet.bloom_filter_on_read_enabled
     }
 
     /// Enables or disables the use of bloom filter for parquet readers to skip row groups
     pub fn with_parquet_bloom_filter_pruning(mut self, enabled: bool) -> Self {
-        self.options.execution.parquet.bloom_filter_enabled = enabled;
+        self.options.execution.parquet.bloom_filter_on_read_enabled = enabled;
         self
     }
 

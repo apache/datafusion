@@ -395,8 +395,11 @@ config_namespace! {
         /// default parquet writer setting
         pub encoding: Option<String>, default = None
 
-        /// Sets if bloom filter is enabled for any column
-        pub bloom_filter_enabled: bool, default = false
+        /// Sets if bloom filter on read is enabled for any column
+        pub bloom_filter_on_read_enabled: bool, default = true
+
+        /// Sets if bloom filter on write is enabled for any column
+        pub bloom_filter_on_write_enabled: bool, default = true
 
         /// Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting
