@@ -88,15 +88,15 @@ impl TableProvider for StreamingTable {
         _state: &SessionState,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: push limit down
         Ok(Arc::new(StreamingTableExec::try_new(
             self.schema.clone(),
             self.partitions.clone(),
             projection,
             None,
             self.infinite,
+            limit,
         )?))
     }
 }

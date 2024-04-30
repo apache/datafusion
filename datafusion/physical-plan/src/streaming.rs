@@ -31,6 +31,8 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
+use crate::limit::LimitStream;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
@@ -58,7 +60,9 @@ pub struct StreamingTableExec {
     projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
+    limit: Option<usize>,
     cache: PlanProperties,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl StreamingTableExec {
@@ -69,6 +73,7 @@ impl StreamingTableExec {
         projection: Option<&Vec<usize>>,
         projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
+        limit: Option<usize>,
     ) -> Result<Self> {
         for x in partitions.iter() {
             let partition_schema = x.schema();
@@ -99,7 +104,9 @@ impl StreamingTableExec {
             projection: projection.cloned().map(Into::into),
             projected_output_ordering,
             infinite,
+            limit,
             cache,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -125,6 +132,10 @@ impl StreamingTableExec {
 
     pub fn is_infinite(&self) -> bool {
         self.infinite
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -224,7 +235,7 @@ impl ExecutionPlan for StreamingTableExec {
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.partitions[partition].execute(ctx);
-        Ok(match self.projection.clone() {
+        let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 self.projected_schema.clone(),
                 stream.map(move |x| {
@@ -232,6 +243,22 @@ impl ExecutionPlan for StreamingTableExec {
                 }),
             )),
             None => stream,
+        };
+        Ok(match self.limit {
+            None => projected_stream,
+            Some(fetch) => {
+                let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                Box::pin(LimitStream::new(
+                    projected_stream,
+                    0,
+                    Some(fetch),
+                    baseline_metrics,
+                ))
+            }
         })
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
