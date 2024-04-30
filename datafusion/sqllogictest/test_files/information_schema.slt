@@ -216,6 +216,7 @@ datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072
 datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_existing_sort false
+datafusion.optimizer.prefer_existing_union false
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.repartition_aggregations true
 datafusion.optimizer.repartition_file_min_size 10485760
@@ -294,6 +295,7 @@ datafusion.optimizer.hash_join_single_partition_threshold 1048576 The maximum es
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072 The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.max_passes 3 Number of times that the optimizer will attempt to optimize the plan
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
+datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_file_min_size 10485760 Minimum total files size in bytes to perform file scan repartitioning.
