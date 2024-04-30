@@ -318,9 +318,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         ScalarFunction::new_udf(fun, new_expr),
                     )))
                 }
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
             },
             Expr::AggregateFunction(expr::AggregateFunction {
                 func_def,
