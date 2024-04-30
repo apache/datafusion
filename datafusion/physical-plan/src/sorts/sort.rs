@@ -406,7 +406,7 @@ impl ExternalSorter {
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
-        self.metrics.spilled_rows.add(spilled_rows as usize);
+        self.metrics.spilled_rows.add(spilled_rows);
         self.spills.push(spill_file);
         Ok(used)
     }
@@ -674,7 +674,7 @@ async fn spill_sorted_batches(
     batches: Vec<RecordBatch>,
     path: &Path,
     schema: SchemaRef,
-) -> Result<u64> {
+) -> Result<usize> {
     let path: PathBuf = path.into();
     let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
     match task.join().await {
@@ -705,7 +705,7 @@ fn write_sorted(
     batches: Vec<RecordBatch>,
     path: PathBuf,
     schema: SchemaRef,
-) -> Result<u64> {
+) -> Result<usize> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
     for batch in batches {
         writer.write(&batch)?;
@@ -715,7 +715,7 @@ fn write_sorted(
         "Spilled {} batches of total {} rows to disk, memory released {}",
         writer.num_batches,
         writer.num_rows,
-        human_readable_size(writer.num_bytes as usize),
+        human_readable_size(writer.num_bytes),
     );
     Ok(writer.num_rows)
 }
