@@ -68,6 +68,11 @@ GET 27
 PUT 25
 DELETE 24
 
+query T
+SELECT strings['not_found'] FROM data LIMIT 1;
+----
+NULL
+
 # Select non existent key, expect NULL for each row
 query I
 SELECT COUNT(CASE WHEN strings['not_found'] IS NULL THEN 1 ELSE 0 END) FROM data;
