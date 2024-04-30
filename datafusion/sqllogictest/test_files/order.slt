@@ -899,6 +899,35 @@ ORDER BY SUM(column1)
 ----
 16
 
+# ORDER BY with a GROUP BY clause
+query I
+SELECT SUM(column1) 
+  FROM foo 
+GROUP BY column2 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+3
+3
+4
+
+# ORDER BY with a GROUP BY clause and a HAVING clause
+query I
+SELECT 
+  SUM(column1) 
+FROM foo 
+GROUP BY column2 
+HAVING SUM(column1) < 3 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+
 # ORDER BY without a HAVING clause
 query I
 SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
