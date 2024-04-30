@@ -399,7 +399,7 @@ config_namespace! {
         pub bloom_filter_on_read_enabled: bool, default = true
 
         /// Sets if bloom filter on write is enabled for any column
-        pub bloom_filter_on_write_enabled: bool, default = true
+        pub bloom_filter_on_write_enabled: bool, default = false
 
         /// Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting
