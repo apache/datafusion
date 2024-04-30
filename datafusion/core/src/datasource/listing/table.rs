@@ -1603,7 +1603,7 @@ mod tests {
             "50".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.bloom_filter_enabled".into(),
+            "datafusion.execution.parquet.bloom_filter_on_write_enabled".into(),
             "true".into(),
         );
         config_map.insert(
@@ -1681,7 +1681,7 @@ mod tests {
             "delta_binary_packed".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.bloom_filter_enabled".into(),
+            "datafusion.execution.parquet.bloom_filter_on_write_enabled".into(),
             "true".into(),
         );
         config_map.insert(
