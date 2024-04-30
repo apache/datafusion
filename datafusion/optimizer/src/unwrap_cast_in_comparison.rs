@@ -306,12 +306,12 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
     )
 }
 
-/// Returns true if [UnwrapCastExprRewrite] supports casting this value as a string
+/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Utf8)
 }
 
-/// returns true if [UnwrapCastExprRewrite] supports casting this value as a dictionary
+/// returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
 fn is_supported_dictionary_type(data_type: &DataType) -> bool {
     matches!(data_type,
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
