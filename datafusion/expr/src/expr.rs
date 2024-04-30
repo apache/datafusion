@@ -1057,7 +1057,7 @@ impl Expr {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
             // Expr::Cast(Cast { expr, .. }) => expr.name_for_alias(),
-            expr => expr.display_name(),
+            expr => create_name(expr),
         }
     }
 
