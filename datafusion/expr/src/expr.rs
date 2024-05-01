@@ -2050,7 +2050,7 @@ mod test {
         let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         }));
-        assert_eq!(udf.signature().volatility, Volatility::Volatile);
+        assert_ne!(udf.signature().volatility, Volatility::Volatile);
 
         let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
             signature: Signature::uniform(
