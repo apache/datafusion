@@ -2207,9 +2207,9 @@ impl ScalarValue {
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
         let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
-        let ret = match arrays.len() > 0 {
+        let ret = match !arrays.is_empty() {
             true => arrow::compute::concat(arrays.as_slice())?,
-            false => arr.slice(0, 0)
+            false => arr.slice(0, 0),
         };
         Ok(ret)
     }
