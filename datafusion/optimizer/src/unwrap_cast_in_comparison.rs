@@ -632,11 +632,11 @@ mod tests {
         let expected = lit("value").eq(col("str1"));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
-    
+
     #[test]
     fn test_unwrap_cast_comparison_large_string() {
         let schema = expr_test_schema();
-            // cast(largestr as Dictionary<Int32, LargeUtf8>) = arrow_cast('value', 'Dictionary<Int32, LargeUtf8>') => str1 = LargeUtf8('value1')
+        // cast(largestr as Dictionary<Int32, LargeUtf8>) = arrow_cast('value', 'Dictionary<Int32, LargeUtf8>') => str1 = LargeUtf8('value1')
         let dict = ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
@@ -645,7 +645,6 @@ mod tests {
         let expected =
             col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);
-
     }
 
     #[test]
