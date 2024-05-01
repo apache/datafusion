@@ -65,6 +65,7 @@ use arrow::{
     compute::{can_cast_types, cast, SortColumn},
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
+    row::Row,
 };
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::expressions::Column;
@@ -720,6 +721,13 @@ impl MinMaxStatistics {
             max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
             sort_order: sort_order.to_vec(),
         })
+    }
+
+    // Return a sorted list of the min statistics together with the original indices
+    fn min_values_sorted(&self) -> Vec<(usize, Row<'_>)> {
+        let mut sort: Vec<_> = self.min_by_sort_order.iter().enumerate().collect();
+        sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+        sort
     }
 
     fn is_sorted(&self) -> bool {

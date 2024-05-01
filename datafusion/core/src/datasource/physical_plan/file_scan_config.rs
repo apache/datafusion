@@ -231,13 +231,7 @@ impl FileScanConfig {
             e.context("construct min/max statistics for split_groups_by_statistics")
         })?;
 
-        let indices_sorted_by_min = {
-            let mut sort: Vec<_> =
-                statistics.min_by_sort_order.iter().enumerate().collect();
-            sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-            sort
-        };
-
+        let indices_sorted_by_min = statistics.min_values_sorted();
         let mut file_groups_indices: Vec<Vec<usize>> = vec![];
 
         for (idx, min) in indices_sorted_by_min {
