@@ -20,6 +20,33 @@ CREATE EXTERNAL TABLE data
 STORED AS PARQUET
 LOCATION '../core/tests/data/parquet_map.parquet';
 
+# Show shape of data: 3 columns, 209 rows
+query TTT
+describe data;
+----
+ints Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
+strings Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
+timestamp Utf8 NO
+
+query ??T
+SELECT * FROM data ORDER by ints['bytes'] DESC LIMIT 10;
+----
+{bytes: 49960} {host: 21.169.210.169, method: GET, protocol: HTTP/1.1, referer: https://up.de/booper/bopper/mooper/mopper, request: /user/booperbot124, status: 500, user-identifier: shaneIxD} 06/Oct/2023:17:53:58
+{bytes: 49689} {host: 244.231.56.81, method: PATCH, protocol: HTTP/2.0, referer: https://names.de/this/endpoint/prints/money, request: /controller/setup, status: 500, user-identifier: ahmadajmi} 06/Oct/2023:17:53:54
+{bytes: 48768} {host: 127.152.34.105, method: POST, protocol: HTTP/1.1, referer: https://for.com/secret-info/open-sesame, request: /secret-info/open-sesame, status: 200, user-identifier: Karimmove} 06/Oct/2023:17:53:59
+{bytes: 48574} {host: 121.67.176.60, method: POST, protocol: HTTP/2.0, referer: https://names.com/this/endpoint/prints/money, request: /apps/deploy, status: 401, user-identifier: benefritz} 06/Oct/2023:17:54:02
+{bytes: 48274} {host: 39.37.198.203, method: DELETE, protocol: HTTP/1.0, referer: https://some.de/booper/bopper/mooper/mopper, request: /secret-info/open-sesame, status: 550, user-identifier: ahmadajmi} 06/Oct/2023:17:54:00
+{bytes: 47775} {host: 50.89.77.82, method: OPTION, protocol: HTTP/1.0, referer: https://random.com/observability/metrics/production, request: /controller/setup, status: 200, user-identifier: meln1ks} 06/Oct/2023:17:53:54
+{bytes: 47557} {host: 108.242.133.203, method: OPTION, protocol: HTTP/2.0, referer: https://we.org/observability/metrics/production, request: /apps/deploy, status: 500, user-identifier: meln1ks} 06/Oct/2023:17:53:48
+{bytes: 47552} {host: 206.248.141.240, method: HEAD, protocol: HTTP/1.1, referer: https://up.us/user/booperbot124, request: /wp-admin, status: 400, user-identifier: jesseddy} 06/Oct/2023:17:53:50
+{bytes: 47342} {host: 110.222.38.8, method: HEAD, protocol: HTTP/2.0, referer: https://we.com/controller/setup, request: /do-not-access/needs-work, status: 301, user-identifier: ahmadajmi} 06/Oct/2023:17:53:59
+{bytes: 47238} {host: 241.134.69.76, method: POST, protocol: HTTP/2.0, referer: https://up.de/do-not-access/needs-work, request: /controller/setup, status: 503, user-identifier: ahmadajmi} 06/Oct/2023:17:53:58
+
+query I
+SELECT COUNT(*) FROM data;
+----
+209
+
 query I
 SELECT SUM(ints['bytes']) FROM data;
 ----
@@ -44,10 +71,20 @@ DELETE 24
 query T
 SELECT strings['not_found'] FROM data LIMIT 1;
 ----
+NULL
+
+# Select non existent key, expect NULL for each row
+query I
+SELECT COUNT(CASE WHEN strings['not_found'] IS NULL THEN 1 ELSE 0 END) FROM data;
+----
+209
 
 statement ok
 drop table data;
 
+query I?
+select * from table_with_map where int_field > 0;
+----
 
 # Testing explain on a table with a map filter, registered in test_context.rs.
 query TT

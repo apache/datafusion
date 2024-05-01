@@ -197,7 +197,7 @@ fn has_work_table_reference(
     work_table_source: &Arc<dyn TableSource>,
 ) -> bool {
     let mut has_reference = false;
-    plan.apply(&mut |node| {
+    plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node {
             if Arc::ptr_eq(&scan.source, work_table_source) {
                 has_reference = true;

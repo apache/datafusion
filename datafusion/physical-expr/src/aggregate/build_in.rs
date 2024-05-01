@@ -353,14 +353,12 @@ pub fn create_aggregate_expr(
                 "APPROX_MEDIAN(DISTINCT) aggregations are not available"
             );
         }
-        (AggregateFunction::Median, false) => Arc::new(expressions::Median::new(
+        (AggregateFunction::Median, distinct) => Arc::new(expressions::Median::new(
             input_phy_exprs[0].clone(),
             name,
             data_type,
+            distinct,
         )),
-        (AggregateFunction::Median, true) => {
-            return not_impl_err!("MEDIAN(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]

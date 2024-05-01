@@ -155,10 +155,10 @@ impl Analyzer {
 
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    plan.apply_with_subqueries(&mut |plan: &LogicalPlan| {
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
         plan.apply_expressions(|expr| {
             // recursively look for subqueries
-            expr.apply(&mut |expr| {
+            expr.apply(|expr| {
                 match expr {
                     Expr::Exists(Exists { subquery, .. })
                     | Expr::InSubquery(InSubquery { subquery, .. })

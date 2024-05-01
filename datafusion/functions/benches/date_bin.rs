@@ -15,32 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::string_expressions::concat;
+extern crate criterion;
+
 use std::sync::Arc;
 
-fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
-    let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
-    let scalar = ScalarValue::Utf8(Some(", ".to_string()));
-    vec![
-        ColumnarValue::Array(array.clone()),
-        ColumnarValue::Scalar(scalar),
-        ColumnarValue::Array(array),
-    ]
+use arrow::array::{ArrayRef, TimestampSecondArray};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::ScalarValue;
+use rand::rngs::ThreadRng;
+use rand::Rng;
+
+use datafusion_expr::ColumnarValue;
+use datafusion_functions::datetime::date_bin;
+
+fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
+    let mut seconds = vec![];
+    for _ in 0..1000 {
+        seconds.push(rng.gen_range(0..1_000_000));
+    }
+
+    TimestampSecondArray::from(seconds)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for size in [1024, 4096, 8192] {
-        let args = create_args(size, 32);
-        let mut group = c.benchmark_group("concat function");
-        group.bench_function(BenchmarkId::new("concat", size), |b| {
-            b.iter(|| criterion::black_box(concat(&args).unwrap()))
-        });
-        group.finish();
-    }
+    c.bench_function("date_bin_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
+        let timestamps = ColumnarValue::Array(Arc::new(timestamps(&mut rng)) as ArrayRef);
+        let udf = date_bin();
+
+        b.iter(|| {
+            black_box(
+                udf.invoke(&[interval.clone(), timestamps.clone()])
+                    .expect("date_bin should work on valid values"),
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -19,9 +19,9 @@
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    expr::{Between, BinaryExpr, InList, ScalarFunction},
-    expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
-    lit, BuiltinScalarFunction, Expr, Like, Operator,
+    expr::{Between, BinaryExpr, InList},
+    expr_fn::{and, bitwise_and, bitwise_or, or},
+    Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -339,122 +339,5 @@ pub fn distribute_negation(expr: Expr) -> Expr {
         Expr::Negative(expr) => *expr,
         // use negative clause
         _ => Expr::Negative(Box::new(expr)),
-    }
-}
-
-/// Simplify the `concat` function by
-/// 1. filtering out all `null` literals
-/// 2. concatenating contiguous literal arguments
-///
-/// For example:
-/// `concat(col(a), 'hello ', 'world', col(b), null)`
-/// will be optimized to
-/// `concat(col(a), 'hello world', col(b))`
-pub fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
-    let mut new_args = Vec::with_capacity(args.len());
-    let mut contiguous_scalar = "".to_string();
-    for arg in args {
-        match arg {
-            // filter out `null` args
-            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
-            // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-            // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
-            ) => contiguous_scalar += &v,
-            Expr::Literal(x) => {
-                return internal_err!(
-                "The scalar {x} should be casted to string type during the type coercion."
-            )
-            }
-            // If the arg is not a literal, we should first push the current `contiguous_scalar`
-            // to the `new_args` (if it is not empty) and reset it to empty string.
-            // Then pushing this arg to the `new_args`.
-            arg => {
-                if !contiguous_scalar.is_empty() {
-                    new_args.push(lit(contiguous_scalar));
-                    contiguous_scalar = "".to_string();
-                }
-                new_args.push(arg);
-            }
-        }
-    }
-    if !contiguous_scalar.is_empty() {
-        new_args.push(lit(contiguous_scalar));
-    }
-
-    Ok(Expr::ScalarFunction(ScalarFunction::new(
-        BuiltinScalarFunction::Concat,
-        new_args,
-    )))
-}
-
-/// Simply the `concat_ws` function by
-/// 1. folding to `null` if the delimiter is null
-/// 2. filtering out `null` arguments
-/// 3. using `concat` to replace `concat_ws` if the delimiter is an empty string
-/// 4. concatenating contiguous literals if the delimiter is a literal.
-pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
-    match delimiter {
-        Expr::Literal(
-            ScalarValue::Utf8(delimiter) | ScalarValue::LargeUtf8(delimiter),
-        ) => {
-            match delimiter {
-                // when the delimiter is an empty string,
-                // we can use `concat` to replace `concat_ws`
-                Some(delimiter) if delimiter.is_empty() => simpl_concat(args.to_vec()),
-                Some(delimiter) => {
-                    let mut new_args = Vec::with_capacity(args.len());
-                    new_args.push(lit(delimiter));
-                    let mut contiguous_scalar = None;
-                    for arg in args {
-                        match arg {
-                            // filter out null args
-                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
-                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v))) => {
-                                match contiguous_scalar {
-                                    None => contiguous_scalar = Some(v.to_string()),
-                                    Some(mut pre) => {
-                                        pre += delimiter;
-                                        pre += v;
-                                        contiguous_scalar = Some(pre)
-                                    }
-                                }
-                            }
-                            Expr::Literal(s) => return internal_err!("The scalar {s} should be casted to string type during the type coercion."),
-                            // If the arg is not a literal, we should first push the current `contiguous_scalar`
-                            // to the `new_args` and reset it to None.
-                            // Then pushing this arg to the `new_args`.
-                            arg => {
-                                if let Some(val) = contiguous_scalar {
-                                    new_args.push(lit(val));
-                                }
-                                new_args.push(arg.clone());
-                                contiguous_scalar = None;
-                            }
-                        }
-                    }
-                    if let Some(val) = contiguous_scalar {
-                        new_args.push(lit(val));
-                    }
-                    Ok(Expr::ScalarFunction(ScalarFunction::new(
-                        BuiltinScalarFunction::ConcatWithSeparator,
-                        new_args,
-                    )))
-                }
-                // if the delimiter is null, then the value of the whole expression is null.
-                None => Ok(Expr::Literal(ScalarValue::Utf8(None))),
-            }
-        }
-        Expr::Literal(d) => internal_err!(
-            "The scalar {d} should be casted to string type during the type coercion."
-        ),
-        d => Ok(concat_ws(
-            d.clone(),
-            args.iter()
-                .filter(|&x| !is_null(x))
-                .cloned()
-                .collect::<Vec<Expr>>(),
-        )),
     }
 }

@@ -19,7 +19,7 @@
 ## Date/Time Handling Tests
 ##########
 
-# Reproducer for https://github.com/apache/arrow-datafusion/issues/3944
+# Reproducer for https://github.com/apache/datafusion/issues/3944
 statement ok
 CREATE TABLE test(
   i_item_desc VARCHAR,

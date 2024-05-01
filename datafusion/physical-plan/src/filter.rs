@@ -433,20 +433,16 @@ pub type EqualAndNonEqual<'a> =
 
 #[cfg(test)]
 mod tests {
-    use std::iter::Iterator;
-    use std::sync::Arc;
 
     use super::*;
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-    use crate::ExecutionPlan;
 
     use crate::empty::EmptyExec;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{Field, Schema};
     use arrow_schema::{UnionFields, UnionMode};
-    use datafusion_common::{ColumnStatistics, ScalarValue};
-    use datafusion_expr::Operator;
+    use datafusion_common::ScalarValue;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {

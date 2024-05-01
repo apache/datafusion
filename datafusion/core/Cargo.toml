@@ -32,6 +32,9 @@ authors = { workspace = true }
 # https://github.com/foresterre/cargo-msrv/issues/590
 rust-version = "1.73"
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion"
 path = "src/lib.rs"

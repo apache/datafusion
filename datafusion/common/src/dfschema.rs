@@ -19,7 +19,6 @@
 //! fields with optional relation names.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -348,9 +347,22 @@ impl DFSchema {
         matches.next()
     }
 
-    /// Find the index of the column with the given qualifier and name
-    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `None` if not found
+    ///
+    /// See [Self::index_of_column] for a version that returns an error if the
+    /// column is not found
+    pub fn maybe_index_of_column(&self, col: &Column) -> Option<usize> {
         self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+    }
+
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `Err` if not found
+    ///
+    /// See [Self::maybe_index_of_column] for a version that returns `None` if
+    /// the column is not found
+    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        self.maybe_index_of_column(col)
             .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
@@ -453,7 +465,7 @@ impl DFSchema {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok((matches[0].0, &matches[0].1)),
+            1 => Ok((matches[0].0, (matches[0].1))),
             _ => {
                 // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
                 // Because name may generate from Alias/... . It means that it don't own qualifier.
@@ -798,9 +810,16 @@ impl From<&DFSchema> for Schema {
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> Result<Self, Self::Error> {
+        Self::try_from(Arc::new(schema))
+    }
+}
+
+impl TryFrom<SchemaRef> for DFSchema {
+    type Error = DataFusionError;
+    fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         let field_count = schema.fields.len();
         let dfschema = Self {
-            inner: schema.into(),
+            inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -844,12 +863,7 @@ impl ToDFSchema for Schema {
 
 impl ToDFSchema for SchemaRef {
     fn to_dfschema(self) -> Result<DFSchema> {
-        // Attempt to use the Schema directly if there are no other
-        // references, otherwise clone
-        match Self::try_unwrap(self) {
-            Ok(schema) => DFSchema::try_from(schema),
-            Err(schemaref) => DFSchema::try_from(schemaref.as_ref().clone()),
-        }
+        DFSchema::try_from(self)
     }
 }
 
@@ -1004,7 +1018,6 @@ mod tests {
     use crate::assert_contains;
 
     use super::*;
-    use arrow::datatypes::DataType;
 
     #[test]
     fn qualifier_in_name() -> Result<()> {

@@ -72,7 +72,7 @@ logical_plan
 20)--------------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("9496"), lineitem.l_shipdate < Date32("9587")]
 physical_plan
 01)SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
-02)--SortExec: expr=[s_suppkey@0 ASC NULLS LAST]
+02)--SortExec: expr=[s_suppkey@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(total_revenue@4, MAX(revenue0.total_revenue)@0)], projection=[s_suppkey@0, s_name@1, s_address@2, s_phone@3, total_revenue@4]
 05)--------CoalesceBatchesExec: target_batch_size=8192

@@ -164,7 +164,7 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
@@ -333,7 +333,7 @@ drop table foo;
 
 
 #####
-# Tests for https://github.com/apache/arrow-datafusion/issues/4854
+# Tests for https://github.com/apache/datafusion/issues/4854
 # Ordering / grouping by the same column
 #####
 statement ok
@@ -680,7 +680,7 @@ logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -699,12 +699,12 @@ logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Minimal reproduction of issue 5970
-# https://github.com/apache/arrow-datafusion/issues/5970
+# https://github.com/apache/datafusion/issues/5970
 statement ok
 set datafusion.execution.target_partitions = 2;
 
@@ -766,7 +766,7 @@ logical_plan
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
 04)------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])

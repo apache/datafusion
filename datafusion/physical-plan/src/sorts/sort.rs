@@ -46,7 +46,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
-use arrow_array::{Array, UInt32Array};
+use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -406,7 +406,7 @@ impl ExternalSorter {
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
-        self.metrics.spilled_rows.add(spilled_rows as usize);
+        self.metrics.spilled_rows.add(spilled_rows);
         self.spills.push(spill_file);
         Ok(used)
     }
@@ -617,7 +617,12 @@ pub(crate) fn sort_batch(
         .map(|c| take(c.as_ref(), &indices, None))
         .collect::<Result<_, _>>()?;
 
-    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+    let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 #[inline]
@@ -669,7 +674,7 @@ async fn spill_sorted_batches(
     batches: Vec<RecordBatch>,
     path: &Path,
     schema: SchemaRef,
-) -> Result<u64> {
+) -> Result<usize> {
     let path: PathBuf = path.into();
     let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
     match task.join().await {
@@ -700,7 +705,7 @@ fn write_sorted(
     batches: Vec<RecordBatch>,
     path: PathBuf,
     schema: SchemaRef,
-) -> Result<u64> {
+) -> Result<usize> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
     for batch in batches {
         writer.write(&batch)?;
@@ -710,7 +715,7 @@ fn write_sorted(
         "Spilled {} batches of total {} rows to disk, memory released {}",
         writer.num_batches,
         writer.num_rows,
-        human_readable_size(writer.num_bytes as usize),
+        human_readable_size(writer.num_bytes),
     );
     Ok(writer.num_rows)
 }
@@ -863,11 +868,12 @@ impl DisplayAs for SortExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
+                let preserve_partioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partioning}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{expr}]"),
+                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partioning}]"),
                 }
             }
         }
@@ -1008,6 +1014,8 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
 
+    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::Literal;
     use futures::FutureExt;
 
     #[tokio::test]
@@ -1414,5 +1422,21 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_empty_sort_batch() {
+        let schema = Arc::new(Schema::empty());
+        let options = RecordBatchOptions::new().with_row_count(Some(1));
+        let batch =
+            RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+
+        let expressions = vec![PhysicalSortExpr {
+            expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+            options: SortOptions::default(),
+        }];
+
+        let result = sort_batch(&batch, &expressions, None).unwrap();
+        assert_eq!(result.num_rows(), 1);
     }
 }

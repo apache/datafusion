@@ -46,7 +46,6 @@ use arrow::array::*;
 use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
@@ -1518,9 +1517,10 @@ fn compare_join_arrays(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
@@ -1584,9 +1584,10 @@ fn is_join_arrays_equal(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }

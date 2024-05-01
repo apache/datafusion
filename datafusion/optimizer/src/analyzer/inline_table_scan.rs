@@ -38,7 +38,7 @@ impl InlineTableScan {
 
 impl AnalyzerRule for InlineTableScan {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_up(&analyze_internal).data()
+        plan.transform_up(analyze_internal).data()
     }
 
     fn name(&self) -> &str {
@@ -49,7 +49,7 @@ impl AnalyzerRule for InlineTableScan {
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     // rewrite any subqueries in the plan first
     let transformed_plan =
-        plan.map_subqueries(|plan| plan.transform_up(&analyze_internal))?;
+        plan.map_subqueries(|plan| plan.transform_up(analyze_internal))?;
 
     let transformed_plan = transformed_plan.transform_data(|plan| {
         match plan {

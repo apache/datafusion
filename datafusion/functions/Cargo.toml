@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [features]
 # enable core functions
 core_expressions = []
@@ -91,6 +94,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "concat"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "to_timestamp"
 required-features = ["datetime_expressions"]
 
@@ -102,6 +110,11 @@ required-features = ["regex_expressions"]
 [[bench]]
 harness = false
 name = "make_date"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_bin"
 required-features = ["datetime_expressions"]
 
 [[bench]]

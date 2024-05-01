@@ -83,6 +83,30 @@ fn timestamp_nano_ts_utc_predicates() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[test]
+fn concat_literals() -> Result<()> {
+    let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
+        AS col
+        FROM test";
+    let expected =
+        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
+    quick_test(sql, expected);
+    Ok(())
+}
+
+#[test]
+fn concat_ws_literals() -> Result<()> {
+    let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
+        AS col
+        FROM test";
+    let expected =
+        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
+    quick_test(sql, expected);
+    Ok(())
+}
+
 fn quick_test(sql: &str, expected_plan: &str) {
     let plan = test_sql(sql).unwrap();
     assert_eq!(expected_plan, format!("{:?}", plan));
@@ -97,7 +121,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // create a logical query plan
     let context_provider = MyContextProvider::default()
         .with_udf(datetime::now())
-        .with_udf(datafusion_functions::core::arrow_cast());
+        .with_udf(datafusion_functions::core::arrow_cast())
+        .with_udf(datafusion_functions::string::concat())
+        .with_udf(datafusion_functions::string::concat_ws());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 

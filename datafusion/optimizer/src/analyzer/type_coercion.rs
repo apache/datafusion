@@ -24,8 +24,8 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
+    DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
@@ -108,7 +108,7 @@ fn analyze_internal(
         .into_iter()
         .map(|expr| {
             // ensure aggregate names don't change:
-            // https://github.com/apache/arrow-datafusion/issues/3555
+            // https://github.com/apache/datafusion/issues/3555
             rewrite_preserving_name(expr, &mut expr_rewrite)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -125,7 +125,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
-            Expr::Unnest(_) => internal_err!(
+            Expr::Unnest(_) => not_impl_err!(
                 "Unnest should be rewritten to LogicalPlan::Unnest before type coercion"
             ),
             Expr::ScalarSubquery(Subquery {
@@ -171,26 +171,26 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ))))
             }
             Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
-                &expr,
+                *expr,
                 &self.schema,
             )?))),
             Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(&expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, &self.schema)?,
             ))),
             Expr::Like(Like {
                 negated,
@@ -306,33 +306,17 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let new_args = coerce_arguments_for_signature(
-                        args.as_slice(),
-                        &self.schema,
-                        &fun.signature(),
-                    )?;
-                    Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                        fun, new_args,
-                    ))))
-                }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
-                        args.as_slice(),
+                        args,
                         &self.schema,
                         fun.signature(),
                     )?;
-                    let new_expr = coerce_arguments_for_fun(
-                        new_expr.as_slice(),
-                        &self.schema,
-                        &fun,
-                    )?;
+                    let new_expr =
+                        coerce_arguments_for_fun(new_expr, &self.schema, &fun)?;
                     Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(fun, new_expr),
                     )))
-                }
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::AggregateFunction(expr::AggregateFunction {
@@ -346,7 +330,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let new_expr = coerce_agg_exprs_for_signature(
                         &fun,
-                        &args,
+                        args,
                         &self.schema,
                         &fun.signature(),
                     )?;
@@ -363,7 +347,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
-                        args.as_slice(),
+                        args,
                         &self.schema,
                         fun.signature(),
                     )?;
@@ -397,7 +381,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
-                            &args,
+                            args,
                             &self.schema,
                             &fun.signature(),
                         )?
@@ -464,12 +448,12 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
     target_type: &DataType,
-    value: &ScalarValue,
+    value: ScalarValue,
 ) -> Result<ScalarValue> {
-    coerce_scalar(target_type, value).or_else(|err| {
+    coerce_scalar(target_type, &value).or_else(|err| {
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, value).map_or_else(
+            coerce_scalar(largest_type, &value).map_or_else(
                 |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
@@ -494,7 +478,7 @@ fn get_widest_type_in_family(given_type: &DataType) -> Option<&DataType> {
 /// Coerces the given (window frame) `bound` to `target_type`.
 fn coerce_frame_bound(
     target_type: &DataType,
-    bound: &WindowFrameBound,
+    bound: WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     match bound {
         WindowFrameBound::Preceding(v) => {
@@ -540,18 +524,17 @@ fn coerce_window_frame(
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
     };
-    window_frame.start_bound =
-        coerce_frame_bound(target_type, &window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, &window_frame.end_bound)?;
+    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
+fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
-    cast_expr(expr, &DataType::Boolean, schema)
+    expr.cast_to(&DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -559,12 +542,12 @@ fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr
 ///
 /// See the module level documentation for more detail on coercion.
 fn coerce_arguments_for_signature(
-    expressions: &[Expr],
+    expressions: Vec<Expr>,
     schema: &DFSchema,
     signature: &Signature,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
-        return Ok(vec![]);
+        return Ok(expressions);
     }
 
     let current_types = expressions
@@ -575,45 +558,34 @@ fn coerce_arguments_for_signature(
     let new_types = data_types(&current_types, signature)?;
 
     expressions
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
-        .collect::<Result<Vec<_>>>()
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .collect()
 }
 
 fn coerce_arguments_for_fun(
-    expressions: &[Expr],
+    expressions: Vec<Expr>,
     schema: &DFSchema,
     fun: &Arc<ScalarUDF>,
 ) -> Result<Vec<Expr>> {
-    if expressions.is_empty() {
-        return Ok(vec![]);
-    }
-    let mut expressions: Vec<Expr> = expressions.to_vec();
-
     // Cast Fixedsizelist to List for array functions
     if fun.name() == "make_array" {
-        expressions = expressions
+        expressions
             .into_iter()
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
                 if let DataType::FixedSizeList(field, _) = data_type {
-                    let field = field.as_ref().clone();
-                    let to_type = DataType::List(Arc::new(field));
+                    let to_type = DataType::List(field.clone());
                     expr.cast_to(&to_type, schema)
                 } else {
                     Ok(expr)
                 }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect()
+    } else {
+        Ok(expressions)
     }
-
-    Ok(expressions)
-}
-
-/// Cast `expr` to the specified type, if possible
-fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
-    expr.clone().cast_to(to_type, schema)
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
@@ -621,12 +593,12 @@ fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr>
 /// data type of `input_exprs` need to be coerced.
 fn coerce_agg_exprs_for_signature(
     agg_fun: &AggregateFunction,
-    input_exprs: &[Expr],
+    input_exprs: Vec<Expr>,
     schema: &DFSchema,
     signature: &Signature,
 ) -> Result<Vec<Expr>> {
     if input_exprs.is_empty() {
-        return Ok(vec![]);
+        return Ok(input_exprs);
     }
     let current_types = input_exprs
         .iter()
@@ -637,10 +609,10 @@ fn coerce_agg_exprs_for_signature(
         type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
 
     input_exprs
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, expr)| cast_expr(expr, &coerced_types[i], schema))
-        .collect::<Result<Vec<_>>>()
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
+        .collect()
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
@@ -757,8 +729,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
 #[cfg(test)]
 mod test {
     use std::any::Any;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
+    use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -766,10 +739,10 @@ mod test {
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
     use datafusion_expr::{
-        cast, col, concat, concat_ws, create_udaf, is_true, lit,
-        AccumulatorFactoryFunction, AggregateFunction, AggregateUDF, BinaryExpr, Case,
-        ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Volatility,
+        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction,
+        AggregateFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -821,10 +794,11 @@ mod test {
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
-    static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+    #[derive(Debug, Clone)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
 
-    #[derive(Debug, Clone, Default)]
-    struct TestScalarUDF {}
     impl ScalarUDFImpl for TestScalarUDF {
         fn as_any(&self) -> &dyn Any {
             self
@@ -833,11 +807,11 @@ mod test {
         fn name(&self) -> &str {
             "TestScalarUDF"
         }
+
         fn signature(&self) -> &Signature {
-            TEST_SIGNATURE.get_or_init(|| {
-                Signature::uniform(1, vec![DataType::Float32], Volatility::Stable)
-            })
+            &self.signature
         }
+
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Utf8)
         }
@@ -851,7 +825,10 @@ mod test {
     fn scalar_udf() -> Result<()> {
         let empty = empty();
 
-        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit(123_i32)]);
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit(123_i32)]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -861,7 +838,10 @@ mod test {
     #[test]
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
-        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit("Apple")]);
         let plan_err = Projection::try_new(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
 
@@ -876,7 +856,9 @@ mod test {
         // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {});
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        });
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
@@ -1233,24 +1215,16 @@ mod test {
         let empty = empty_with_type(DataType::Utf8);
         let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
 
-        // concat
+        // concat-type signature
         {
-            let expr = concat(&args);
-
+            let expr = ScalarUDF::new_from_impl(TestScalarUDF {
+                signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+            })
+            .call(args.to_vec());
             let plan =
                 LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
             let expected =
-                "Projection: concat(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
-            assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
-        }
-
-        // concat_ws
-        {
-            let expr = concat_ws(lit("-"), args.to_vec());
-
-            let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-            let expected =
-                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 
