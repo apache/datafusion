@@ -25,7 +25,7 @@ use datafusion_expr::{
     Operator,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
+    Expr as SQLExpr, Offset as SQLOffset, Query, SelectInto, SetExpr, Value,
 };
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -46,29 +46,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut set_expr = query.body;
         if let Some(with) = query.with {
             self.plan_with_clause(with, planner_context)?;
         }
-        // Take the `SelectInto` for later processing.
-        let select_into = match set_expr.as_mut() {
-            SetExpr::Select(select) => select.into.take(),
-            _ => None,
-        };
-        let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
-        let plan = self.order_by(plan, query.order_by, planner_context)?;
-        let mut plan = self.limit(plan, query.offset, query.limit)?;
-        if let Some(into) = select_into {
-            plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
-                name: self.object_name_to_table_reference(into.name)?,
-                constraints: Constraints::empty(),
-                input: Arc::new(plan),
-                if_not_exists: false,
-                or_replace: false,
-                column_defaults: vec![],
-            }))
+
+        let set_expr = *query.body;
+        match set_expr {
+            SetExpr::Select(mut select) => {
+                let select_into = select.into.take();
+                // Order-by expressions may refer to columns in the `FROM` clause,
+                // so we need to process `SELECT` and `ORDER BY` together.
+                let plan =
+                    self.select_to_plan(*select, query.order_by, planner_context)?;
+                let plan = self.limit(plan, query.offset, query.limit)?;
+                // Process the `SELECT INTO` after `LIMIT`.
+                self.select_into(plan, select_into)
+            }
+            other => {
+                let plan = self.set_expr_to_plan(other, planner_context)?;
+                let order_by_rex = self.order_by_to_sort_expr(
+                    &query.order_by,
+                    plan.schema(),
+                    planner_context,
+                    true,
+                    None,
+                )?;
+                let plan = self.order_by(plan, order_by_rex)?;
+                self.limit(plan, query.offset, query.limit)
+            }
         }
-        Ok(plan)
     }
 
     /// Wrap a plan in a limit
@@ -114,26 +120,43 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap the logical in a sort
-    fn order_by(
+    pub(super) fn order_by(
         &self,
         plan: LogicalPlan,
-        order_by: Vec<OrderByExpr>,
-        planner_context: &mut PlannerContext,
+        order_by: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
             return Ok(plan);
         }
 
-        let order_by_rex =
-            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context, true)?;
-
         if let LogicalPlan::Distinct(Distinct::On(ref distinct_on)) = plan {
             // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
             // optimization we're effectively doing a `first_value` aggregation according to them.
-            let distinct_on = distinct_on.clone().with_sort_expr(order_by_rex)?;
+            let distinct_on = distinct_on.clone().with_sort_expr(order_by)?;
             Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
         } else {
-            LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+            LogicalPlanBuilder::from(plan).sort(order_by)?.build()
+        }
+    }
+
+    /// Wrap the logical plan in a `SelectInto`
+    fn select_into(
+        &self,
+        plan: LogicalPlan,
+        select_into: Option<SelectInto>,
+    ) -> Result<LogicalPlan> {
+        match select_into {
+            Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                CreateMemoryTable {
+                    name: self.object_name_to_table_reference(into.name)?,
+                    constraints: Constraints::empty(),
+                    input: Arc::new(plan),
+                    if_not_exists: false,
+                    or_replace: false,
+                    column_defaults: vec![],
+                },
+            ))),
+            _ => Ok(plan),
         }
     }
 }
