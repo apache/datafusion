@@ -54,10 +54,16 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
-pub use datafusion_expr_common::accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
+pub use datafusion_expr_common::accumulator::Accumulator;
+pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::signature::{
+    ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
+    TIMEZONE_WILDCARD,
+};
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     Like, ScalarFunctionDefinition, TryCast, WindowFunctionDefinition,
@@ -68,15 +74,9 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
-pub use datafusion_expr_common::operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
-pub use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
-    TIMEZONE_WILDCARD,
-};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{AggregateUDF, AggregateUDFImpl};
 pub use udf::{ScalarUDF, ScalarUDFImpl};

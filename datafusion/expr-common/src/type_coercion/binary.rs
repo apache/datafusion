@@ -19,8 +19,6 @@
 
 use std::sync::Arc;
 
-use crate::Operator;
-
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -29,6 +27,8 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
+
+use crate::operator::Operator;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -361,7 +361,7 @@ fn string_temporal_coercion(
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one both are numeric
-pub(crate) fn comparison_binary_numeric_coercion(
+pub fn comparison_binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

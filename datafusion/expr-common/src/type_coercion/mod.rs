@@ -15,10 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`AggregateUDF`]: User Defined Aggregate Functions
-
-pub mod accumulator;
-pub mod groups_accumulator;
-pub mod operator;
-pub mod signature;
-pub mod type_coercion;
+pub mod binary;

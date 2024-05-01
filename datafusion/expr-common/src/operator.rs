@@ -19,7 +19,6 @@
 
 use std::fmt::{Display, Formatter, Result};
 
-
 /// Operators applied to expressions
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Operator {

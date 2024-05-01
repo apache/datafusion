@@ -17,9 +17,8 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-
-use std::{any::Any, sync::Arc};
 use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
@@ -42,7 +41,6 @@ pub struct AccumulatorArgs<'a> {
     /// SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
     /// ```
     pub ignore_nulls: bool,
-
     // / The expressions in the `ORDER BY` clause passed to this aggregator.
     // /
     // / SQL allows the user to specify the ordering of arguments to the
@@ -57,11 +55,7 @@ pub struct AccumulatorArgs<'a> {
 }
 
 impl<'a> AccumulatorArgs<'a> {
-    pub fn new(
-        data_type: &'a DataType,
-        schema: &'a Schema,
-        ignore_nulls: bool,
-    ) -> Self {
+    pub fn new(data_type: &'a DataType, schema: &'a Schema, ignore_nulls: bool) -> Self {
         Self {
             data_type,
             schema,
@@ -73,7 +67,6 @@ impl<'a> AccumulatorArgs<'a> {
 /// Factory that returns an accumulator for the given aggregate function.
 pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
-
 
 /// Trait for implementing [`AggregateUDF`].
 ///

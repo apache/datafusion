@@ -32,9 +32,12 @@
 //! values which can not be represented by i32 values.
 
 pub mod aggregates;
-pub mod binary;
 pub mod functions;
 pub mod other;
+
+pub mod binary {
+    pub use datafusion_expr_common::type_coercion::binary::*;
+}
 
 use arrow::datatypes::DataType;
 /// Determine whether the given data type `dt` represents signed numeric values.

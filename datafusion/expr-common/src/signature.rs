@@ -204,10 +204,7 @@ impl TypeSignature {
     }
 
     /// Helper function to join types with specified delimiter.
-    pub fn join_types<T: std::fmt::Display>(
-        types: &[T],
-        delimiter: &str,
-    ) -> String {
+    pub fn join_types<T: std::fmt::Display>(types: &[T], delimiter: &str) -> String {
         types
             .iter()
             .map(|t| t.to_string())
