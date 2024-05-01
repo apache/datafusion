@@ -170,7 +170,7 @@ impl std::fmt::Display for ArrayFunctionSignature {
 }
 
 impl TypeSignature {
-    pub(crate) fn to_string_repr(&self) -> Vec<String> {
+    pub fn to_string_repr(&self) -> Vec<String> {
         match self {
             TypeSignature::Variadic(types) => {
                 vec![format!("{}, ..", Self::join_types(types, "/"))]
@@ -204,7 +204,7 @@ impl TypeSignature {
     }
 
     /// Helper function to join types with specified delimiter.
-    pub(crate) fn join_types<T: std::fmt::Display>(
+    pub fn join_types<T: std::fmt::Display>(
         types: &[T],
         delimiter: &str,
     ) -> String {

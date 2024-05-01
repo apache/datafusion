@@ -17,7 +17,7 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
-use arrow_array::{ArrayRef, BooleanArray};
+use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
 /// Describes how many rows should be emitted during grouping.

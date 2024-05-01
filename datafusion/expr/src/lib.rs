@@ -25,13 +25,11 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
-mod accumulator;
 mod built_in_window_function;
 mod columnar_value;
 mod literal;
 mod operator;
 mod partition_evaluator;
-mod signature;
 mod table_source;
 mod udaf;
 mod udf;
@@ -46,7 +44,6 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
-pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
 pub mod simplify;
@@ -57,7 +54,7 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
-pub use accumulator::Accumulator;
+pub use datafusion_expr_common::accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
@@ -71,12 +68,12 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use groups_accumulator::{EmitTo, GroupsAccumulator};
+pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
-pub use signature::{
+pub use datafusion_expr_common::signature::{
     ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
     TIMEZONE_WILDCARD,
 };
@@ -85,6 +82,14 @@ pub use udaf::{AggregateUDF, AggregateUDFImpl};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
+mod signature {
+    pub use datafusion_expr_common::signature::*;
+}
+
+mod groups_accumulator {
+    pub use datafusion_expr_common::groups_accumulator::*;
+}
 
 #[cfg(test)]
 #[ctor::ctor]

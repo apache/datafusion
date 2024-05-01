@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-expr"
-description = "Logical plan and expression representation for DataFusion query engine"
+name = "datafusion-expr-common"
+description = "Common logical expression packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
@@ -32,27 +32,11 @@ rust-version = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_expr"
+name = "datafusion_expr_common"
 path = "src/lib.rs"
 
-[features]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-chrono = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr-common = { workspace = true }
-datafusion-functions-aggregate-common = { workspace = true }
-paste = "^1.0"
-serde_json = { workspace = true }
-sqlparser = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
-strum_macros = "0.26.0"
-
-[dev-dependencies]
-ctor = { workspace = true }
-env_logger = { workspace = true }
+datafusion-common = { workspace = true }
