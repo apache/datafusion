@@ -111,6 +111,11 @@ impl Analyzer {
         self.function_rewrites.push(rewrite);
     }
 
+    /// return the list of function rewrites in this analyzer
+    pub fn function_rewrites(&self) -> &[Arc<dyn FunctionRewrite + Send + Sync>] {
+        &self.function_rewrites
+    }
+
     /// Analyze the logical plan by applying analyzer rules, and
     /// do necessary check and fail the invalid plans
     pub fn execute_and_check<F>(
