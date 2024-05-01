@@ -191,6 +191,9 @@ impl DisplayAs for StreamingTableExec {
                 if self.infinite {
                     write!(f, ", infinite_source=true")?;
                 }
+                if let Some(fetch) = self.limit {
+                    write!(f, ", fetch={fetch}")?;
+                }
 
                 display_orderings(f, &self.projected_output_ordering)?;
 

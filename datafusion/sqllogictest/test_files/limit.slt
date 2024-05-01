@@ -39,6 +39,26 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "date"   DATE,
+    "ticker" VARCHAR,
+    "time"   TIMESTAMP,
+) STORED AS CSV
+WITH ORDER ("date", "ticker", "time")
+LOCATION './a.parquet';
+
+# query
+query TT
+explain SELECT * FROM data LIMIT 10;
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--TableScan: data projection=[date, ticker, time], fetch=10
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=10
+02)--StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, fetch=10, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
 # async fn csv_query_limit
 query T
 SELECT c1 FROM aggregate_test_100 LIMIT 2
@@ -512,3 +532,6 @@ SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 9);
 
 statement ok
 drop table aggregate_test_100;
+
+statement ok
+drop table data;
