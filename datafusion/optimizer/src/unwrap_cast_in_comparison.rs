@@ -311,13 +311,13 @@ fn is_supported_string_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
 }
 
-/// returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
+/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
 fn is_supported_dictionary_type(data_type: &DataType) -> bool {
     matches!(data_type,
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
 }
 
-/// Convert a numeric value from one numeric data type to another
+/// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
@@ -505,7 +505,7 @@ fn try_cast_dictionary(
         {
             (**inner_value).clone()
         }
-        // Wrap Utf8 when target type is dictionary
+        // Wrap type when target type is dictionary
         (_, DataType::Dictionary(index_type, inner_type))
             if **inner_type == lit_value_type =>
         {
