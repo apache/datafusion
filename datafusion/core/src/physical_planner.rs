@@ -271,12 +271,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                         "aggregate expression with filter is not supported"
                     );
                 }
-
-                let names = args
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(format!("{}({})", fun.name(), names.join(",")))
+                create_function_physical_name(
+                    fun.name(),
+                    *distinct,
+                    args,
+                    order_by.as_ref(),
+                )
             }
             AggregateFunctionDefinition::Name(_) => {
                 internal_err!("Aggregate function `Expr` with name should be resolved.")

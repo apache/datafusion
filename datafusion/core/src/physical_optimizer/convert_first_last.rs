@@ -219,14 +219,16 @@ fn try_convert_first_last_if_better(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
-                let name = first_value.name();
+                let name = first_value.name().to_string();
+                let mut name = format!("LAST{}", &name[5..]);
+                replace_order_by_clause(&mut name);
 
-                let name = if let Some(n) = name.strip_prefix("FIRST") {
-                    format!("LAST{}", n)
-                } else {
-                    let expr = first_value.expressions().swap_remove(0);
-                    format!("LAST_VALUE({})", expr)
-                };
+                // let name = if let Some(n) = name.strip_prefix("FIRST") {
+                //     format!("LAST{}", n)
+                // } else {
+                //     let expr = first_value.expressions().swap_remove(0);
+                //     format!("LAST_VALUE({})", expr)
+                // };
 
                 let reversed_sort_exprs = reverse_sort_exprs(&first_value);
 
@@ -262,14 +264,9 @@ fn try_convert_first_last_if_better(
                 // Converting to FIRST_VALUE enables more efficient execution
                 // given the existing ordering:
 
-                let name = last_value.name();
-
-                let name = if let Some(n) = name.strip_prefix("LAST") {
-                    format!("FIRST{}", n)
-                } else {
-                    let expr = last_value.expressions().swap_remove(0);
-                    format!("FIRST_VALUE({})", expr)
-                };
+                let name = last_value.name().to_string();
+                let mut name = format!("FIRST{}", &name[4..]);
+                replace_order_by_clause(&mut name);
 
                 let reversed_sort_exprs = reverse_sort_exprs(&last_value);
 
@@ -304,4 +301,29 @@ fn reverse_sort_exprs(e: &AggregateFunctionExpr) -> Vec<Expr> {
             }
         })
         .collect::<Vec<_>>()
+}
+
+fn replace_order_by_clause(order_by: &mut String) {
+    let suffixes = [
+        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+    ];
+
+    if let Some(start) = order_by.find("ORDER BY [") {
+        if let Some(end) = order_by[start..].find(']') {
+            let order_by_start = start + 9;
+            let order_by_end = start + end;
+
+            let column_order = &order_by[order_by_start..=order_by_end];
+            for &(suffix, replacement) in &suffixes {
+                if column_order.ends_with(suffix) {
+                    let new_order = column_order.replace(suffix, replacement);
+                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                    break;
+                }
+            }
+        }
+    }
 }
