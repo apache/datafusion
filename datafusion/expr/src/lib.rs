@@ -34,7 +34,6 @@ mod udaf;
 mod udf;
 mod udwf;
 
-pub mod aggregate_function;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;
@@ -52,10 +51,14 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
-pub use aggregate_function::AggregateFunction;
+pub mod aggregate_function {
+    pub use datafusion_functions_aggregate_common::builtin::AggregateFunction;
+}
+
+pub use datafusion_functions_aggregate_common::builtin::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
-pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::accumulator::Accumulator;
+pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{

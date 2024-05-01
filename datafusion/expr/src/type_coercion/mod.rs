@@ -31,9 +31,12 @@
 //! i64. However, i64 -> i32 is never performed as there are i64
 //! values which can not be represented by i32 values.
 
-pub mod aggregates;
 pub mod functions;
 pub mod other;
+
+pub mod aggregates {
+    pub use datafusion_functions_aggregate_common::type_coercion::*;
+}
 
 pub mod binary {
     pub use datafusion_expr_common::type_coercion::binary::*;

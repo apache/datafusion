@@ -41,3 +41,6 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+strum = { version = "0.26.1", features = ["derive"] }
+strum_macros = "0.26.0"

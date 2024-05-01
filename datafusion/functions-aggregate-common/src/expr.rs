@@ -15,63 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod utils;
-
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{not_impl_err, Result};
+use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-use self::utils::{down_cast_any_ref, ordering_fields};
-
-/// Creates a physical expression of the UDAF, that includes all necessary type coercion.
-/// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
-pub fn create_aggregate_expr(
-    fun: &AggregateUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    sort_exprs: &[Expr],
-    ordering_req: &[PhysicalSortExpr],
-    schema: &Schema,
-    name: impl Into<String>,
-    ignore_nulls: bool,
-) -> Result<Arc<dyn AggregateExpr>> {
-    let input_exprs_types = input_phy_exprs
-        .iter()
-        .map(|arg| arg.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    check_arg_count(
-        fun.name(),
-        &input_exprs_types,
-        &fun.signature().type_signature,
-    )?;
-
-    let ordering_types = ordering_req
-        .iter()
-        .map(|e| e.expr.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let ordering_fields = ordering_fields(ordering_req, &ordering_types);
-
-    Ok(Arc::new(AggregateFunctionExpr {
-        fun: fun.clone(),
-        args: input_phy_exprs.to_vec(),
-        data_type: fun.return_type(&input_exprs_types)?,
-        name: name.into(),
-        schema: schema.clone(),
-        sort_exprs: sort_exprs.to_vec(),
-        ordering_req: ordering_req.to_vec(),
-        ignore_nulls,
-        ordering_fields,
-    }))
-}
+use crate::function::{AccumulatorArgs, AggregateUDF};
+use crate::utils::{check_arg_count, down_cast_any_ref, ordering_fields};
 
 /// An aggregate expression that:
 /// * knows its resulting field
@@ -146,6 +101,48 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     }
 }
 
+/// Creates a physical expression of the UDAF, that includes all necessary type coercion.
+/// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+pub fn create_aggregate_expr(
+    fun: &AggregateUDF,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    // sort_exprs: &[Expr],
+    ordering_req: &[PhysicalSortExpr],
+    schema: &Schema,
+    name: impl Into<String>,
+    ignore_nulls: bool,
+) -> Result<Arc<dyn AggregateExpr>> {
+    let input_exprs_types = input_phy_exprs
+        .iter()
+        .map(|arg| arg.data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    check_arg_count(
+        fun.name(),
+        &input_exprs_types,
+        &fun.signature().type_signature,
+    )?;
+
+    let ordering_types = ordering_req
+        .iter()
+        .map(|e| e.expr.data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let ordering_fields = ordering_fields(ordering_req, &ordering_types);
+
+    Ok(Arc::new(AggregateFunctionExpr {
+        fun: fun.clone(),
+        args: input_phy_exprs.to_vec(),
+        data_type: fun.return_type(&input_exprs_types)?,
+        name: name.into(),
+        schema: schema.clone(),
+        // sort_exprs: sort_exprs.to_vec(),
+        ordering_req: ordering_req.to_vec(),
+        ignore_nulls,
+        ordering_fields,
+    }))
+}
+
 /// Physical aggregate expression of a UDAF.
 #[derive(Debug)]
 pub struct AggregateFunctionExpr {
@@ -156,7 +153,7 @@ pub struct AggregateFunctionExpr {
     name: String,
     schema: Schema,
     // The logical order by expressions
-    sort_exprs: Vec<Expr>,
+    // sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
     ignore_nulls: bool,
@@ -197,7 +194,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.data_type,
             &self.schema,
             self.ignore_nulls,
-            &self.sort_exprs,
+            // &self.sort_exprs,
         );
 
         self.fun.accumulator(acc_args)

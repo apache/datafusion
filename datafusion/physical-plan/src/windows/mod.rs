@@ -26,7 +26,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -91,25 +91,30 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            // TODO: Ordering not supported for Window UDFs yet
-            let sort_exprs = &[];
-            let ordering_req = &[];
+            todo!("regression");
 
-            let aggregate = udaf::create_aggregate_expr(
-                fun.as_ref(),
-                args,
-                sort_exprs,
-                ordering_req,
-                input_schema,
-                name,
-                ignore_nulls,
-            )?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
+            // // TODO: Ordering not supported for Window UDFs yet
+
+            // let sort_exprs = &[];
+            // let ordering_req = &[];
+
+
+
+            // let aggregate = udaf::create_aggregate_expr(
+            //     fun.as_ref(),
+            //     args,
+            //     // sort_exprs,
+            //     ordering_req,
+            //     input_schema,
+            //     name,
+            //     ignore_nulls,
+            // )?;
+            // window_expr_from_aggregate_expr(
+            //     partition_by,
+            //     order_by,
+            //     window_frame,
+            //     aggregate,
+            // )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,

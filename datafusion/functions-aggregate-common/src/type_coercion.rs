@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! TO DEPRECATE after Builtin functions are deprecated
+//! Type coercion for Builtin Aggregate Functions
+
 use std::ops::Deref;
 
-use super::functions::can_coerce_from;
-use crate::{AggregateFunction, Signature, TypeSignature};
+use datafusion_expr_common::{signature::{Signature, TypeSignature}, type_coercion::functions::can_coerce_from};
 
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{internal_err, plan_err, Result};
+
+use crate::builtin::AggregateFunction;
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 

@@ -351,6 +351,36 @@ impl Signature {
 /// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
 pub type FuncMonotonicity = Vec<Option<bool>>;
 
+/// Creates a detailed error message for a function with wrong signature.
+///
+/// For example, a query like `select round(3.14, 1.1);` would yield:
+/// ```text
+/// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
+///     Candidate functions:
+///     round(Float64, Int64)
+///     round(Float32, Int64)
+///     round(Float64)
+///     round(Float32)
+/// ```
+pub fn generate_signature_error_msg(
+    func_name: &str,
+    func_signature: Signature,
+    input_expr_types: &[DataType],
+) -> String {
+    let candidate_signatures = func_signature
+        .type_signature
+        .to_string_repr()
+        .iter()
+        .map(|args_str| format!("\t{func_name}({args_str})"))
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    format!(
+            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
+            func_name, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

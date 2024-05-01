@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate function module contains all built-in aggregate functions definitions
 
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{fmt, str::FromStr};
-
-use crate::utils;
-use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 
+use datafusion_expr_common::signature::{generate_signature_error_msg, Signature, TypeSignature, Volatility};
 use strum_macros::EnumIter;
+
+use crate::type_coercion::*;
 
 /// Enum of all built-in aggregate functions
 // Contributor's guide for adding new aggregate functions
@@ -154,8 +154,8 @@ impl AggregateFunction {
     }
 }
 
-impl fmt::Display for AggregateFunction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for AggregateFunction {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
 }
@@ -232,7 +232,7 @@ impl AggregateFunction {
             .map_err(|_| {
                 plan_datafusion_err!(
                     "{}",
-                    utils::generate_signature_error_msg(
+                    generate_signature_error_msg(
                         &format!("{self}"),
                         self.signature(),
                         input_expr_types,
@@ -307,7 +307,7 @@ pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
     // Note that this function *must* return the same type that the respective physical expression returns
     // or the execution panics.
     let fun = AggregateFunction::Avg;
-    let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
+    let coerced_data_types = coerce_types(
         &fun,
         input_expr_types,
         &fun.signature(),

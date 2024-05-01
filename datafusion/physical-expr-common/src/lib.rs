@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod aggregate;
 pub mod expressions;
 pub mod physical_expr;
 pub mod sort_expr;

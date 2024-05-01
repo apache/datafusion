@@ -21,10 +21,11 @@ use arrow::{
     compute::SortOptions,
     datatypes::{DataType, Field},
 };
+use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_expr_common::signature::TypeSignature;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-use crate::sort_expr::PhysicalSortExpr;
-
-use super::AggregateExpr;
+use crate::expr::AggregateExpr;
 
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
 /// and return the inner trait object as [`Any`] so
@@ -66,4 +67,60 @@ pub fn ordering_fields(
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
 pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
+}
+
+/// Validate the length of `input_types` matches the `signature` for `agg_fun`.
+///
+/// This method DOES NOT validate the argument types - only that (at least one,
+/// in the case of [`TypeSignature::OneOf`]) signature matches the desired
+/// number of input types.
+pub fn check_arg_count(
+    func_name: &str,
+    input_types: &[DataType],
+    signature: &TypeSignature,
+) -> Result<()> {
+    match signature {
+        TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
+            if input_types.len() != *agg_count {
+                return plan_err!(
+                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
+                    agg_count,
+                    input_types.len()
+                );
+            }
+        }
+        TypeSignature::Exact(types) => {
+            if types.len() != input_types.len() {
+                return plan_err!(
+                    "The function {func_name} expects {:?} arguments, but {:?} were provided",
+                    types.len(),
+                    input_types.len()
+                );
+            }
+        }
+        TypeSignature::OneOf(variants) => {
+            let ok = variants
+                .iter()
+                .any(|v| check_arg_count(func_name, input_types, v).is_ok());
+            if !ok {
+                return plan_err!(
+                    "The function {func_name} does not accept {:?} function arguments.",
+                    input_types.len()
+                );
+            }
+        }
+        TypeSignature::VariadicAny => {
+            if input_types.is_empty() {
+                return plan_err!(
+                    "The function {func_name} expects at least one argument"
+                );
+            }
+        }
+        _ => {
+            return internal_err!(
+                "Aggregate functions do not support this {signature:?}"
+            );
+        }
+    }
+    Ok(())
 }

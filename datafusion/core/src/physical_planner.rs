@@ -1939,7 +1939,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
                         &args,
-                        &sort_exprs,
+                        // &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
                         name,

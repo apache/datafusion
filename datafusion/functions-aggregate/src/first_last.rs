@@ -25,16 +25,16 @@ use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_functions_aggregate_common::type_coercion::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::{
+use datafusion_functions_aggregate_common::expr::AggregateExpr;
+use datafusion_functions_aggregate_common::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
-use datafusion_physical_expr_common::aggregate::AggregateExpr;
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};

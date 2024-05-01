@@ -91,9 +91,12 @@ pub use datafusion_physical_expr::{
 pub use crate::stream::EmptyRecordBatchStream;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub mod udaf {
-    pub use datafusion_physical_expr_common::aggregate::{
+    pub use datafusion_functions_aggregate_common::expr::{
         create_aggregate_expr, AggregateFunctionExpr,
     };
+    // pub use datafusion_physical_expr_common::aggregate::{
+    //     create_aggregate_expr, AggregateFunctionExpr,
+    // };
 }
 
 /// Represent nodes in the DataFusion Physical Plan.
