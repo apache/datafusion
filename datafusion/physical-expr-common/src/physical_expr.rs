@@ -26,8 +26,8 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::interval_arithmetic::Interval;
 
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;

@@ -21,8 +21,8 @@ use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
+use crate::operator::Operator;
 use crate::type_coercion::binary::get_result_type;
-use crate::Operator;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;

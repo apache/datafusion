@@ -1263,6 +1263,7 @@ version = "37.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "paste",
 ]
 
 [[package]]
@@ -1384,6 +1385,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-expr-common",
 ]
 
 [[package]]

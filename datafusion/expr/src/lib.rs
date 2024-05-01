@@ -44,7 +44,6 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
-pub mod interval_arithmetic;
 pub mod logical_plan;
 pub mod simplify;
 pub mod tree_node;
@@ -89,6 +88,10 @@ mod signature {
 
 mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
+}
+
+pub mod interval_arithmetic {
+    pub use datafusion_expr_common::interval_arithmetic::*;
 }
 
 #[cfg(test)]
