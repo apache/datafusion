@@ -750,13 +750,21 @@ impl TableProvider for ListingTable {
         }
 
         let output_ordering = self.try_create_output_ordering()?;
-        match output_ordering.first().map(|output_ordering| {
-            FileScanConfig::split_groups_by_statistics(
-                &self.table_schema,
-                &partitioned_file_lists,
-                output_ordering,
-            )
-        }) {
+        match state
+            .config_options()
+            .execution
+            .split_file_groups_by_statistics
+            .then(|| {
+                output_ordering.first().map(|output_ordering| {
+                    FileScanConfig::split_groups_by_statistics(
+                        &self.table_schema,
+                        &partitioned_file_lists,
+                        output_ordering,
+                    )
+                })
+            })
+            .flatten()
+        {
             Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
             Some(Ok(new_groups)) => {
                 if new_groups.len() <= self.options.target_partitions {

@@ -25,6 +25,10 @@ set datafusion.execution.target_partitions = 2;
 statement ok
 set datafusion.execution.collect_statistics = true;
 
+# Enable split_file_groups_by_statistics since it's currently disabled by default
+statement ok
+set datafusion.execution.split_file_groups_by_statistics = true;
+
 # Create a table as a data source
 statement ok
 CREATE TABLE src_table (
