@@ -22,8 +22,11 @@ use crate::expr::{
     Placeholder, TryCast,
 };
 use crate::function::{
-    AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+    AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
+
+use datafusion_functions_aggregate_common::function::AccumulatorArgs;
+
 use crate::{
     aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
     AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,

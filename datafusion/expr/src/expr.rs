@@ -28,7 +28,7 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
-    aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
+    aggregate_function, built_in_window_function, ExprSchemable, Operator,
     Signature,
 };
 
@@ -37,6 +37,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
+use datafusion_functions_aggregate_common::function;
 use sqlparser::ast::NullTreatment;
 
 /// `Expr` is a central struct of DataFusion's query API, and
@@ -548,7 +549,7 @@ impl Sort {
 pub enum AggregateFunctionDefinition {
     BuiltIn(aggregate_function::AggregateFunction),
     /// Resolved to a user defined aggregate function
-    UDF(Arc<crate::AggregateUDF>),
+    UDF(Arc<function::AggregateUDF>),
     /// A aggregation function constructed with name. This variant can not be executed directly
     /// and instead must be resolved to one of the other variants prior to physical planning.
     Name(Arc<str>),
@@ -602,7 +603,7 @@ impl AggregateFunction {
 
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        udf: Arc<crate::AggregateUDF>,
+        udf: Arc<function::AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
@@ -629,7 +630,7 @@ pub enum WindowFunctionDefinition {
     /// A a built-in window function
     BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<function::AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<crate::WindowUDF>),
 }
@@ -763,7 +764,7 @@ impl Exists {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateUDF {
     /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
+    pub fun: Arc<function::AggregateUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Optional filter
@@ -775,7 +776,7 @@ pub struct AggregateUDF {
 impl AggregateUDF {
     /// Create a new AggregateUDF expression
     pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
+        fun: Arc<function::AggregateUDF>,
         args: Vec<Expr>,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,

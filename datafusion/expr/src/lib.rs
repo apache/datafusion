@@ -71,25 +71,22 @@ pub use expr::{
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
+pub use datafusion_functions_aggregate_common::function::AccumulatorFactoryFunction;
 pub use function::{
-    AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
+    PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl};
+pub use datafusion_functions_aggregate_common::function::{AggregateUDF, AggregateUDFImpl};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 mod signature {
     pub use datafusion_expr_common::signature::*;
-}
-
-mod groups_accumulator {
-    pub use datafusion_expr_common::groups_accumulator::*;
 }
 
 pub mod interval_arithmetic {
