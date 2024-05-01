@@ -26,7 +26,6 @@
 //! The [expr_fn] module contains functions for creating expressions.
 
 mod built_in_window_function;
-mod columnar_value;
 mod literal;
 mod operator;
 mod partition_evaluator;
@@ -55,7 +54,7 @@ pub mod window_state;
 
 pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
-pub use columnar_value::ColumnarValue;
+pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;

@@ -26,7 +26,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 

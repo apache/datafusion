@@ -25,7 +25,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use crate::physical_expr::PhysicalExpr;
 
