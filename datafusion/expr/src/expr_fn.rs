@@ -21,9 +21,7 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     Placeholder, TryCast,
 };
-use crate::function::{
-    AccumulatorFactoryFunction, PartitionEvaluatorFactory,
-};
+use crate::function::{AccumulatorFactoryFunction, PartitionEvaluatorFactory};
 
 use datafusion_functions_aggregate_common::function::AccumulatorArgs;
 

@@ -190,7 +190,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.data_type,
             &self.schema,
             self.ignore_nulls,
-            // &self.sort_exprs,
+            &self.ordering_req,
         );
 
         self.fun.accumulator(acc_args)

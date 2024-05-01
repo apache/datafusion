@@ -1299,6 +1299,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "log",
  "paste",
@@ -1312,6 +1313,9 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr-common",
+ "datafusion-physical-expr-common",
+ "strum 0.26.2",
+ "strum_macros 0.26.2",
 ]
 
 [[package]]
@@ -1366,6 +1370,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.3",
@@ -1384,7 +1389,6 @@ version = "37.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
- "datafusion-expr",
  "datafusion-expr-common",
 ]
 
@@ -1405,6 +1409,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "futures",

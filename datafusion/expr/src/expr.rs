@@ -28,8 +28,7 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
-    aggregate_function, built_in_window_function, ExprSchemable, Operator,
-    Signature,
+    aggregate_function, built_in_window_function, ExprSchemable, Operator, Signature,
 };
 
 use arrow::datatypes::{DataType, FieldRef};

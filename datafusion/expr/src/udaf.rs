@@ -21,10 +21,11 @@ use crate::Accumulator;
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_functions_aggregate_common::function::{AccumulatorArgs, AggregateUDFImpl};
+use datafusion_functions_aggregate_common::function::{
+    AccumulatorArgs, AggregateUDFImpl,
+};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
-
 
 /// Implementation of [`AggregateUDFImpl`] that wraps the function style pointers
 /// of the older API

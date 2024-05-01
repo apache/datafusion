@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::{accumulator::Accumulator, signature::Signature};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
@@ -39,25 +40,31 @@ pub struct AccumulatorArgs<'a> {
     /// SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
     /// ```
     pub ignore_nulls: bool,
-    // / The expressions in the `ORDER BY` clause passed to this aggregator.
-    // /
-    // / SQL allows the user to specify the ordering of arguments to the
-    // / aggregate using an `ORDER BY`. For example:
-    // /
-    // / ```sql
-    // / SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
-    // / ```
-    // /
-    // / If no `ORDER BY` is specified, `sort_exprs`` will be empty.
-    // pub ordering_req: &'a LexOrdering,
+    /// The expressions in the `ORDER BY` clause passed to this aggregator.
+    ///
+    /// SQL allows the user to specify the ordering of arguments to the
+    /// aggregate using an `ORDER BY`. For example:
+    ///
+    /// ```sql
+    /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
+    /// ```
+    ///
+    /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
+    pub ordering_req: &'a LexOrdering,
 }
 
 impl<'a> AccumulatorArgs<'a> {
-    pub fn new(data_type: &'a DataType, schema: &'a Schema, ignore_nulls: bool) -> Self {
+    pub fn new(
+        data_type: &'a DataType,
+        schema: &'a Schema,
+        ignore_nulls: bool,
+        ordering_req: &'a LexOrdering,
+    ) -> Self {
         Self {
             data_type,
             schema,
             ignore_nulls,
+            ordering_req,
         }
     }
 }

@@ -23,6 +23,7 @@ use datafusion::arrow::{
 use datafusion::{error::Result, physical_plan::Accumulator};
 use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
 use datafusion_common::cast::as_float64_array;
+use datafusion_expr::expr::AggregateFunction;
 use std::sync::Arc;
 
 // create local session context with an in-memory table
@@ -162,8 +163,17 @@ async fn main() -> Result<()> {
     // this table has 1 column `a` f32 with values {2,4,8,64}, whose geometric mean is 8.0.
     let df = ctx.table("t").await?;
 
+    let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+        Arc::new(geometric_mean),
+        vec![col("a")],
+        false,
+        None,
+        None,
+        None,
+    ));
+
     // perform the aggregation
-    let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")])])?;
+    let df = df.aggregate(vec![], vec![expr])?;
 
     // note that "a" is f32, not f64. DataFusion coerces it to match the UDAF's signature.
 

@@ -99,8 +99,6 @@ pub fn create_window_expr(
             // let sort_exprs = &[];
             let ordering_req = &[];
 
-
-
             let aggregate = create_aggregate_expr(
                 fun.as_ref(),
                 args,

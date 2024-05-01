@@ -24,14 +24,14 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_functions_aggregate_common::function::AccumulatorArgs;
-use datafusion_functions_aggregate_common::type_coercion::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::expr::AggregateExpr;
+use datafusion_functions_aggregate_common::function::AccumulatorArgs;
+use datafusion_functions_aggregate_common::type_coercion::NUMERICS;
 use datafusion_functions_aggregate_common::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -105,46 +105,21 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        todo!("asd")
-        // let mut all_sort_orders = vec![];
+        let ordering_dtypes = acc_args
+            .ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
 
-        // // Construct PhysicalSortExpr objects from Expr objects:
-        // let mut sort_exprs = vec![];
-        // for expr in acc_args.sort_exprs {
-        //     if let Expr::Sort(sort) = expr {
-        //         if let Expr::Column(col) = sort.expr.as_ref() {
-        //             let name = &col.name;
-        //             let e = expressions::column::col(name, acc_args.schema)?;
-        //             sort_exprs.push(PhysicalSortExpr {
-        //                 expr: e,
-        //                 options: SortOptions {
-        //                     descending: !sort.asc,
-        //                     nulls_first: sort.nulls_first,
-        //                 },
-        //             });
-        //         }
-        //     }
-        // }
-        // if !sort_exprs.is_empty() {
-        //     all_sort_orders.extend(sort_exprs);
-        // }
+        let requirement_satisfied = acc_args.ordering_req.is_empty();
 
-        // let ordering_req = all_sort_orders;
-
-        // let ordering_dtypes = ordering_req
-        //     .iter()
-        //     .map(|e| e.expr.data_type(acc_args.schema))
-        //     .collect::<Result<Vec<_>>>()?;
-
-        // let requirement_satisfied = ordering_req.is_empty();
-
-        // FirstValueAccumulator::try_new(
-        //     acc_args.data_type,
-        //     &ordering_dtypes,
-        //     ordering_req,
-        //     acc_args.ignore_nulls,
-        // )
-        // .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+        FirstValueAccumulator::try_new(
+            acc_args.data_type,
+            &ordering_dtypes,
+            acc_args.ordering_req.to_vec(),
+            acc_args.ignore_nulls,
+        )
+        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     }
 
     fn state_fields(

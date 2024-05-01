@@ -423,7 +423,6 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         &udaf,
         &[col("b", &schema)?],
         &[],
-        &[],
         &schema,
         "example_agg",
         false,

@@ -31,8 +31,8 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, AggregateUDFImpl,
-    GroupsAccumulator, Signature,
+    expr::AggregateFunction, function::AccumulatorArgs, Accumulator, AggregateUDF,
+    AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
@@ -417,7 +417,16 @@ async fn main() -> Result<()> {
     let df = ctx.table("t").await?;
 
     // perform the aggregation
-    let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")])])?;
+    let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+        Arc::new(geometric_mean),
+        vec![col("a")],
+        false,
+        None,
+        None,
+        None,
+    ));
+
+    let df = df.aggregate(vec![], vec![expr])?;
 
     // note that "a" is f32, not f64. DataFusion coerces it to match the UDAF's signature.
 

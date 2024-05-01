@@ -20,7 +20,10 @@
 
 use std::ops::Deref;
 
-use datafusion_expr_common::{signature::{Signature, TypeSignature}, type_coercion::functions::can_coerce_from};
+use datafusion_expr_common::{
+    signature::{Signature, TypeSignature},
+    type_coercion::functions::can_coerce_from,
+};
 
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,

@@ -55,7 +55,6 @@ pub mod aggregate_function {
     pub use datafusion_functions_aggregate_common::builtin::AggregateFunction;
 }
 
-pub use datafusion_functions_aggregate_common::builtin::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -65,22 +64,25 @@ pub use datafusion_expr_common::signature::{
     ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
     TIMEZONE_WILDCARD,
 };
+pub use datafusion_functions_aggregate_common::builtin::AggregateFunction;
+pub use datafusion_functions_aggregate_common::function::AccumulatorFactoryFunction;
+pub use datafusion_functions_aggregate_common::function::{
+    AggregateUDF, AggregateUDFImpl,
+};
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     Like, ScalarFunctionDefinition, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
-pub use datafusion_functions_aggregate_common::function::AccumulatorFactoryFunction;
 pub use function::{
-    PartitionEvaluatorFactory, ReturnTypeFunction,
-    ScalarFunctionImplementation, StateTypeFunction,
+    PartitionEvaluatorFactory, ReturnTypeFunction, ScalarFunctionImplementation,
+    StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use datafusion_functions_aggregate_common::function::{AggregateUDF, AggregateUDFImpl};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

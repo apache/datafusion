@@ -24,6 +24,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::sync::Arc;
 
+pub use datafusion_functions_aggregate_common::function::AccumulatorArgs;
 pub use datafusion_functions_aggregate_common::function::AccumulatorFactoryFunction;
 
 /// Scalar function

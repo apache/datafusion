@@ -17,10 +17,16 @@
 
 use std::sync::Arc;
 
-use arrow::{compute::can_cast_types, datatypes::{DataType, TimeUnit}};
+use arrow::{
+    compute::can_cast_types,
+    datatypes::{DataType, TimeUnit},
+};
 use datafusion_common::utils::list_ndims;
 
-use crate::{signature::{TIMEZONE_WILDCARD, FIXED_SIZE_LIST_WILDCARD}, type_coercion::binary::comparison_binary_numeric_coercion};
+use crate::{
+    signature::{FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
+    type_coercion::binary::comparison_binary_numeric_coercion,
+};
 
 /// Return true if a value of type `type_from` can be coerced
 /// (losslessly converted) into a value of `type_to`
@@ -41,7 +47,7 @@ fn coerced_from<'a>(
     type_from: &'a DataType,
 ) -> Option<DataType> {
     use self::DataType::*;
-    
+
     // match Dictionary first
     match (type_into, type_from) {
         // coerced dictionary first
