@@ -22,7 +22,9 @@ use std::{
     borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
 };
 
-use super::{get_projected_output_ordering, FileGroupPartitioner, MinMaxStatistics};
+use super::{
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -238,7 +240,7 @@ impl FileScanConfig {
             let file_group_to_insert = file_groups_indices.iter_mut().find(|group| {
                 // If our file is non-overlapping and comes _after_ the last file,
                 // it fits in this file group.
-                min > statistics.max_by_sort_order.row(
+                min > statistics.max(
                     *group
                         .last()
                         .expect("groups should be nonempty at construction"),

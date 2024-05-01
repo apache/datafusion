@@ -26,6 +26,7 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
+mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
@@ -62,12 +63,11 @@ use crate::{
 
 use arrow::{
     array::new_null_array,
-    compute::{can_cast_types, cast, SortColumn},
+    compute::{can_cast_types, cast},
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
-    row::Row,
 };
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::plan_err;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -483,7 +483,7 @@ fn get_projected_output_ordering(
                 return false;
             }
 
-            let statistics = match MinMaxStatistics::new_from_files(
+            let statistics = match statistics::MinMaxStatistics::new_from_files(
                 &new_ordering,
                 projected_schema,
                 base_config.projection.as_deref(),
@@ -510,245 +510,6 @@ fn get_projected_output_ordering(
         all_orderings.push(new_ordering);
     }
     all_orderings
-}
-
-/// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
-/// The min/max values are ordered by [`Self::sort_order`].
-/// Furthermore, any columns that are reversed in the sort order have their min/max values swapped.
-pub(crate) struct MinMaxStatistics {
-    min_by_sort_order: arrow::row::Rows,
-    max_by_sort_order: arrow::row::Rows,
-    sort_order: Vec<PhysicalSortExpr>,
-}
-
-impl MinMaxStatistics {
-    #[allow(unused)]
-    fn sort_order(&self) -> &[PhysicalSortExpr] {
-        &self.sort_order
-    }
-
-    fn new_from_files<'a>(
-        projected_sort_order: &[PhysicalSortExpr], // Sort order with respect to projected schema
-        projected_schema: &SchemaRef,              // Projected schema
-        projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
-        files: impl IntoIterator<Item = &'a PartitionedFile>,
-    ) -> Result<Self> {
-        use datafusion_common::ScalarValue;
-
-        let statistics_and_partition_values = files
-            .into_iter()
-            .map(|file| {
-                file.statistics
-                    .as_ref()
-                    .zip(Some(file.partition_values.as_slice()))
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("Parquet file missing statistics".to_string())
-            })?;
-
-        // Helper function to get min/max statistics for a given column of projected_schema
-        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
-            Ok(statistics_and_partition_values
-                .iter()
-                .map(|(s, pv)| {
-                    if i < s.column_statistics.len() {
-                        s.column_statistics[i]
-                            .min_value
-                            .get_value()
-                            .cloned()
-                            .zip(s.column_statistics[i].max_value.get_value().cloned())
-                            .ok_or_else(|| {
-                                DataFusionError::Plan("statistics not found".to_string())
-                            })
-                    } else {
-                        let partition_value = &pv[i - s.column_statistics.len()];
-                        Ok((partition_value.clone(), partition_value.clone()))
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .unzip())
-        };
-
-        let sort_columns = sort_columns_from_physical_sort_exprs(projected_sort_order)
-            .ok_or(DataFusionError::Plan(
-                "sort expression must be on column".to_string(),
-            ))?;
-
-        // Project the schema & sort order down to just the relevant columns
-        let min_max_schema = Arc::new(
-            projected_schema
-                .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
-        );
-        let min_max_sort_order = sort_columns
-            .iter()
-            .zip(projected_sort_order.iter())
-            .enumerate()
-            .map(|(i, (col, sort))| PhysicalSortExpr {
-                expr: Arc::new(Column::new(col.name(), i)),
-                options: sort.options,
-            })
-            .collect::<Vec<_>>();
-
-        let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
-            .iter()
-            .map(|c| {
-                // Reverse the projection to get the index of the column in the full statistics
-                // The file statistics contains _every_ column , but the sort column's index()
-                // refers to the index in projected_schema
-                let i = projection.map(|p| p[c.index()]).unwrap_or(c.index());
-
-                let (min, max) = get_min_max(i).map_err(|e| {
-                    e.context(format!("get min/max for column: '{}'", c.name()))
-                })?;
-                Ok((
-                    ScalarValue::iter_to_array(min)?,
-                    ScalarValue::iter_to_array(max)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map_err(|e| e.context("collect min/max values"))?
-            .into_iter()
-            .unzip();
-
-        Self::new(
-            &min_max_sort_order,
-            &min_max_schema,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
-                },
-            )?,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
-                },
-            )?,
-        )
-    }
-
-    fn new(
-        sort_order: &[PhysicalSortExpr],
-        schema: &SchemaRef,
-        min_values: RecordBatch,
-        max_values: RecordBatch,
-    ) -> Result<Self> {
-        use arrow::row::*;
-
-        let sort_fields = sort_order
-            .iter()
-            .map(|expr| {
-                expr.expr
-                    .data_type(schema)
-                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map_err(|e| e.context("create sort fields"))?;
-        let converter = RowConverter::new(sort_fields)?;
-
-        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
-            DataFusionError::Plan("sort expression must be on column".to_string()),
-        )?;
-
-        // swap min/max if they're reversed in the ordering
-        let (new_min_cols, new_max_cols): (Vec<_>, Vec<_>) = sort_order
-            .iter()
-            .zip(sort_columns.iter().copied())
-            .map(|(sort_expr, column)| {
-                if sort_expr.options.descending {
-                    max_values
-                        .column_by_name(column.name())
-                        .zip(min_values.column_by_name(column.name()))
-                } else {
-                    min_values
-                        .column_by_name(column.name())
-                        .zip(max_values.column_by_name(column.name()))
-                }
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "missing column in MinMaxStatistics::new: '{}'",
-                        column.name()
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .unzip();
-
-        let [min, max] = [new_min_cols, new_max_cols].map(|cols| {
-            let values = RecordBatch::try_new(
-                min_values.schema(),
-                cols.into_iter().cloned().collect(),
-            )?;
-            let sorting_columns = sort_order
-                .iter()
-                .zip(sort_columns.iter().copied())
-                .map(|(sort_expr, column)| {
-                    let schema = values.schema();
-
-                    let idx = schema.index_of(column.name())?;
-                    let field = schema.field(idx);
-
-                    // check that sort columns are non-nullable
-                    if field.is_nullable() {
-                        return Err(DataFusionError::Plan(
-                            "cannot sort by nullable column".to_string(),
-                        ));
-                    }
-
-                    Ok(SortColumn {
-                        values: Arc::clone(values.column(idx)),
-                        options: Some(sort_expr.options),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()
-                .map_err(|e| e.context("create sorting columns"))?;
-            converter
-                .convert_columns(
-                    &sorting_columns
-                        .into_iter()
-                        .map(|c| c.values)
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|e| {
-                    DataFusionError::ArrowError(e, Some("convert columns".to_string()))
-                })
-        });
-
-        Ok(Self {
-            min_by_sort_order: min.map_err(|e| e.context("build min rows"))?,
-            max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
-            sort_order: sort_order.to_vec(),
-        })
-    }
-
-    // Return a sorted list of the min statistics together with the original indices
-    fn min_values_sorted(&self) -> Vec<(usize, Row<'_>)> {
-        let mut sort: Vec<_> = self.min_by_sort_order.iter().enumerate().collect();
-        sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-        sort
-    }
-
-    fn is_sorted(&self) -> bool {
-        self.max_by_sort_order
-            .iter()
-            .zip(self.min_by_sort_order.iter().skip(1))
-            .all(|(max, next_min)| max < next_min)
-    }
-}
-
-fn sort_columns_from_physical_sort_exprs(
-    sort_order: &[PhysicalSortExpr],
-) -> Option<Vec<&datafusion_physical_plan::expressions::Column>> {
-    sort_order
-        .iter()
-        .map(|expr| {
-            expr.expr
-                .as_any()
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-        })
-        .collect::<Option<Vec<_>>>()
 }
 
 /// Represents the possible outcomes of a range calculation.
