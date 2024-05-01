@@ -373,6 +373,7 @@ pub async fn pruned_partition_list<'a>(
                     object_meta,
                     partition_values: partition_values.clone(),
                     range: None,
+                    statistics: None,
                     extensions: None,
                 })
             }));
