@@ -1300,8 +1300,7 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::{
-        ColumnarValue, Operator, ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility,
+        ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
         BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
@@ -1362,9 +1361,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
-                    DummyUDF::new(),
-                ))),
+                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1430,9 +1427,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
-                    DummyUDF::new(),
-                ))),
+                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1501,9 +1496,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
-                    DummyUDF::new(),
-                ))),
+                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1569,9 +1562,7 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f_new", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
-                    DummyUDF::new(),
-                ))),
+                Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b_new", 1)),

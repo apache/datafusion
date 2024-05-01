@@ -24,9 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    lit, ColumnarValue, Expr, FuncMonotonicity, ScalarFunctionDefinition,
-};
+use datafusion_expr::{lit, ColumnarValue, Expr, FuncMonotonicity, ScalarUDF};
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
@@ -207,15 +205,12 @@ impl ScalarUDFImpl for LogFunc {
 }
 
 /// Returns true if the function is `PowerFunc`
-fn is_pow(func_def: &ScalarFunctionDefinition) -> bool {
-    match func_def {
-        ScalarFunctionDefinition::UDF(fun) => fun
-            .as_ref()
-            .inner()
-            .as_any()
-            .downcast_ref::<PowerFunc>()
-            .is_some(),
-    }
+fn is_pow(func_def: &ScalarUDF) -> bool {
+    func_def
+        .inner()
+        .as_any()
+        .downcast_ref::<PowerFunc>()
+        .is_some()
 }
 
 #[cfg(test)]

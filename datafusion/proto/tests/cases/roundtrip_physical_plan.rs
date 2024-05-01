@@ -75,9 +75,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
-    ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
-    WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
+    ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -618,7 +617,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         scalar_fn.clone(),
     );
 
-    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(udf.clone()));
+    let fun_def = Arc::new(udf.clone());
 
     let expr = ScalarFunctionExpr::new(
         "dummy",
@@ -750,7 +749,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let udf = ScalarUDF::from(MyRegexUdf::new(pattern.to_string()));
     let udf_expr = Arc::new(ScalarFunctionExpr::new(
         udf.name(),
-        ScalarFunctionDefinition::UDF(Arc::new(udf.clone())),
+        Arc::new(udf.clone()),
         vec![col("text", &schema)?],
         DataType::Int64,
         None,

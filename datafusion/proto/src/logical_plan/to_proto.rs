@@ -36,8 +36,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, Unnest,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction, Sort,
+    Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -769,23 +769,17 @@ pub fn serialize_expr(
         }
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
             let args = serialize_exprs(args, codec)?;
-            match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let mut buf = Vec::new();
-                    let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_udf(func_def.as_ref(), &mut buf);
 
-                    let fun_definition = if buf.is_empty() { None } else { Some(buf) };
+            let fun_definition = if buf.is_empty() { None } else { Some(buf) };
 
-                    protobuf::LogicalExprNode {
-                        expr_type: Some(ExprType::ScalarUdfExpr(
-                            protobuf::ScalarUdfExprNode {
-                                fun_name: fun.name().to_string(),
-                                fun_definition,
-                                args,
-                            },
-                        )),
-                    }
-                }
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+                    fun_name: func_def.name().to_string(),
+                    fun_definition,
+                    args,
+                })),
             }
         }
         Expr::Not(expr) => {

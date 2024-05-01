@@ -22,9 +22,7 @@ use arrow_schema::Schema;
 
 use datafusion_common::{DFSchema, Result};
 pub use datafusion_expr::ScalarUDF;
-use datafusion_expr::{
-    type_coercion::functions::data_types, Expr, ScalarFunctionDefinition,
-};
+use datafusion_expr::{type_coercion::functions::data_types, Expr};
 
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 
@@ -50,7 +48,7 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
-    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
+    let fun_def = Arc::new(fun.clone());
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
         fun_def,

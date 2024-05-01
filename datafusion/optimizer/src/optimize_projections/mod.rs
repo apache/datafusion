@@ -555,7 +555,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
                 .map(|expr| rewrite_expr(expr, input))
                 .collect::<Result<Option<_>>>()?
                 .map(|new_args| {
-                    Expr::ScalarFunction(ScalarFunction::new_func_def(
+                    Expr::ScalarFunction(ScalarFunction::new_udf(
                         scalar_fn.func_def.clone(),
                         new_args,
                     ))

@@ -20,7 +20,7 @@
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
     Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
+    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
@@ -282,10 +282,10 @@ impl TreeNode for Expr {
             }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
-                    }
+                transform_vec(args, &mut f)?.map_data(|new_args| {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        func_def, new_args,
+                    )))
                 })?
             }
             Expr::WindowFunction(WindowFunction {

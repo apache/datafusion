@@ -23,7 +23,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionDefinition};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDF};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion_expr::TypeSignature::*;
@@ -152,15 +152,12 @@ impl ScalarUDFImpl for PowerFunc {
 }
 
 /// Return true if this function call is a call to `Log`
-fn is_log(func_def: &ScalarFunctionDefinition) -> bool {
-    match func_def {
-        ScalarFunctionDefinition::UDF(fun) => fun
-            .as_ref()
-            .inner()
-            .as_any()
-            .downcast_ref::<LogFunc>()
-            .is_some(),
-    }
+fn is_log(func_def: &ScalarUDF) -> bool {
+    func_def
+        .inner()
+        .as_any()
+        .downcast_ref::<LogFunc>()
+        .is_some()
 }
 
 #[cfg(test)]

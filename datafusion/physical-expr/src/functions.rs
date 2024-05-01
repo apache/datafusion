@@ -41,7 +41,7 @@ pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     type_coercion::functions::data_types, ColumnarValue, ScalarFunctionImplementation,
 };
-use datafusion_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF};
 
 use crate::sort_properties::SortProperties;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
@@ -67,7 +67,7 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
-    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
+    let fun_def = Arc::new(fun.clone());
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
         fun_def,

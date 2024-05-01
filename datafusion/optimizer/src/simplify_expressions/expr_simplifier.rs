@@ -37,8 +37,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator,
-    ScalarFunctionDefinition, Volatility,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -524,11 +523,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    Self::volatility_ok(fun.signature().volatility)
-                }
-            },
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                Self::volatility_ok(func_def.signature().volatility)
+            }
             Expr::Literal(_)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
@@ -1303,12 +1300,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
             Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(udf),
+                func_def: udf,
                 args,
             }) => match udf.simplify(args, info)? {
                 ExprSimplifyResult::Original(args) => {
                     Transformed::no(Expr::ScalarFunction(ScalarFunction {
-                        func_def: ScalarFunctionDefinition::UDF(udf),
+                        func_def: udf,
                         args,
                     }))
                 }
