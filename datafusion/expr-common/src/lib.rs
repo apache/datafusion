@@ -19,4 +19,5 @@
 
 pub mod accumulator;
 pub mod groups_accumulator;
+pub mod operator;
 pub mod signature;
