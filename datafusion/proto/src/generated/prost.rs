@@ -1924,10 +1924,10 @@ pub struct ParquetOptions {
     pub maximum_buffered_record_batches_per_stream: u64,
     /// default = true
     #[prost(bool, tag = "26")]
-    pub bloom_filter_on_read_enabled: bool,
+    pub bloom_filter_on_read: bool,
     /// default = false
     #[prost(bool, tag = "27")]
-    pub bloom_filter_on_write_enabled: bool,
+    pub bloom_filter_on_write: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

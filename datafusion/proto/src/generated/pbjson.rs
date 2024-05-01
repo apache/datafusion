@@ -15985,10 +15985,10 @@ impl serde::Serialize for ParquetOptions {
         if self.maximum_buffered_record_batches_per_stream != 0 {
             len += 1;
         }
-        if self.bloom_filter_on_read_enabled {
+        if self.bloom_filter_on_read {
             len += 1;
         }
-        if self.bloom_filter_on_write_enabled {
+        if self.bloom_filter_on_write {
             len += 1;
         }
         if self.dictionary_page_size_limit != 0 {
@@ -16068,11 +16068,11 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("maximumBufferedRecordBatchesPerStream", ToString::to_string(&self.maximum_buffered_record_batches_per_stream).as_str())?;
         }
-        if self.bloom_filter_on_read_enabled {
-            struct_ser.serialize_field("bloomFilterOnReadEnabled", &self.bloom_filter_on_read_enabled)?;
+        if self.bloom_filter_on_read {
+            struct_ser.serialize_field("bloomFilterOnRead", &self.bloom_filter_on_read)?;
         }
-        if self.bloom_filter_on_write_enabled {
-            struct_ser.serialize_field("bloomFilterOnWriteEnabled", &self.bloom_filter_on_write_enabled)?;
+        if self.bloom_filter_on_write {
+            struct_ser.serialize_field("bloomFilterOnWrite", &self.bloom_filter_on_write)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -16187,10 +16187,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maximumParallelRowGroupWriters",
             "maximum_buffered_record_batches_per_stream",
             "maximumBufferedRecordBatchesPerStream",
-            "bloom_filter_on_read_enabled",
-            "bloomFilterOnReadEnabled",
-            "bloom_filter_on_write_enabled",
-            "bloomFilterOnWriteEnabled",
+            "bloom_filter_on_read",
+            "bloomFilterOnRead",
+            "bloom_filter_on_write",
+            "bloomFilterOnWrite",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -16230,8 +16230,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             AllowSingleFileParallelism,
             MaximumParallelRowGroupWriters,
             MaximumBufferedRecordBatchesPerStream,
-            BloomFilterOnReadEnabled,
-            BloomFilterOnWriteEnabled,
+            BloomFilterOnRead,
+            BloomFilterOnWrite,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -16277,8 +16277,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "allowSingleFileParallelism" | "allow_single_file_parallelism" => Ok(GeneratedField::AllowSingleFileParallelism),
                             "maximumParallelRowGroupWriters" | "maximum_parallel_row_group_writers" => Ok(GeneratedField::MaximumParallelRowGroupWriters),
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
-                            "bloomFilterOnReadEnabled" | "bloom_filter_on_read_enabled" => Ok(GeneratedField::BloomFilterOnReadEnabled),
-                            "bloomFilterOnWriteEnabled" | "bloom_filter_on_write_enabled" => Ok(GeneratedField::BloomFilterOnWriteEnabled),
+                            "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
+                            "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -16322,8 +16322,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut allow_single_file_parallelism__ = None;
                 let mut maximum_parallel_row_group_writers__ = None;
                 let mut maximum_buffered_record_batches_per_stream__ = None;
-                let mut bloom_filter_on_read_enabled__ = None;
-                let mut bloom_filter_on_write_enabled__ = None;
+                let mut bloom_filter_on_read__ = None;
+                let mut bloom_filter_on_write__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -16413,17 +16413,17 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::BloomFilterOnReadEnabled => {
-                            if bloom_filter_on_read_enabled__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterOnReadEnabled"));
+                        GeneratedField::BloomFilterOnRead => {
+                            if bloom_filter_on_read__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterOnRead"));
                             }
-                            bloom_filter_on_read_enabled__ = Some(map_.next_value()?);
+                            bloom_filter_on_read__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::BloomFilterOnWriteEnabled => {
-                            if bloom_filter_on_write_enabled__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterOnWriteEnabled"));
+                        GeneratedField::BloomFilterOnWrite => {
+                            if bloom_filter_on_write__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterOnWrite"));
                             }
-                            bloom_filter_on_write_enabled__ = Some(map_.next_value()?);
+                            bloom_filter_on_write__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
@@ -16523,8 +16523,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     allow_single_file_parallelism: allow_single_file_parallelism__.unwrap_or_default(),
                     maximum_parallel_row_group_writers: maximum_parallel_row_group_writers__.unwrap_or_default(),
                     maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
-                    bloom_filter_on_read_enabled: bloom_filter_on_read_enabled__.unwrap_or_default(),
-                    bloom_filter_on_write_enabled: bloom_filter_on_write_enabled__.unwrap_or_default(),
+                    bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
+                    bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
