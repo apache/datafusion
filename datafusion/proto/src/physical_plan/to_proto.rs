@@ -546,11 +546,6 @@ pub fn serialize_physical_expr(
             ScalarFunctionDefinition::UDF(udf) => {
                 codec.try_encode_udf(udf, &mut buf)?;
             }
-            _ => {
-                return not_impl_err!(
-                    "Proto serialization error: Trying to serialize a unresolved function"
-                );
-            }
         }
 
         let fun_definition = if buf.is_empty() { None } else { Some(buf) };

@@ -24,8 +24,8 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
+    DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
@@ -125,7 +125,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
-            Expr::Unnest(_) => internal_err!(
+            Expr::Unnest(_) => not_impl_err!(
                 "Unnest should be rewritten to LogicalPlan::Unnest before type coercion"
             ),
             Expr::ScalarSubquery(Subquery {
@@ -317,9 +317,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(fun, new_expr),
                     )))
-                }
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::AggregateFunction(expr::AggregateFunction {
