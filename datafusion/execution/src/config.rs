@@ -331,6 +331,14 @@ impl SessionConfig {
         self
     }
 
+    /// Prefer existing union (true). See [prefer_existing_union] for more details
+    ///
+    /// [prefer_existing_union]: datafusion_common::config::OptimizerOptions::prefer_existing_union
+    pub fn with_prefer_existing_union(mut self, enabled: bool) -> Self {
+        self.options.optimizer.prefer_existing_union = enabled;
+        self
+    }
+
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options.execution.parquet.pruning = enabled;

@@ -286,9 +286,6 @@ impl TreeNode for Expr {
                     ScalarFunctionDefinition::UDF(fun) => {
                         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
                     }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
                 })?
             }
             Expr::WindowFunction(WindowFunction {

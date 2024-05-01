@@ -153,16 +153,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
                 if let ColumnarValue::Array(array) = &output {
                     if array.len() != batch.num_rows() {
-                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}", 
+                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
                         batch.num_rows(), array.len());
                     }
                 }
                 Ok(output)
-            }
-            ScalarFunctionDefinition::Name(_) => {
-                internal_err!(
-                    "Name function must be resolved to one of the other variants prior to physical planning"
-                )
             }
         }
     }

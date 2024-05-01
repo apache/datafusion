@@ -488,7 +488,7 @@ select '1' from foo order by column1;
 1
 
 # foo distinct order by
-statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions foo\.column1 must appear in select list
 select distinct '1' from foo order by column1;
 
 # distincts for float nan
@@ -1211,7 +1211,7 @@ logical_plan
 01)Sort: table1.a ASC NULLS LAST
 02)--TableScan: table1 projection=[a]
 physical_plan
-01)SortExec: expr=[a@0 ASC NULLS LAST]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
@@ -1357,7 +1357,7 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
-02)--SortExec: expr=[c@3 ASC NULLS LAST]
+02)--SortExec: expr=[c@3 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: a@1 = 0 OR b@2 = 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1

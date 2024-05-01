@@ -614,7 +614,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
-        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC]",
+        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
@@ -721,7 +721,7 @@ async fn csv_explain_analyze_order_by() {
     // Ensure that the ordering is not optimized away from the plan
     // https://github.com/apache/datafusion/issues/6379
     let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 

@@ -275,6 +275,21 @@ fn test_same_name_but_not_ambiguous() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[test]
+fn eliminate_nested_filters() {
+    let sql = "\
+        SELECT col_int32 FROM test \
+        WHERE (1=1) AND (col_int32 > 0) \
+        AND (1=1) AND (1=0 OR 1=1)";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Filter: test.col_int32 > Int32(0)\
+        \n  TableScan: test projection=[col_int32]";
+
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
