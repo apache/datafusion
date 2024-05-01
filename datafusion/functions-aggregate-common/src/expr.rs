@@ -106,7 +106,6 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    // sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
     name: impl Into<String>,
@@ -136,7 +135,6 @@ pub fn create_aggregate_expr(
         data_type: fun.return_type(&input_exprs_types)?,
         name: name.into(),
         schema: schema.clone(),
-        // sort_exprs: sort_exprs.to_vec(),
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
@@ -152,8 +150,6 @@ pub struct AggregateFunctionExpr {
     data_type: DataType,
     name: String,
     schema: Schema,
-    // The logical order by expressions
-    // sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
     ignore_nulls: bool,

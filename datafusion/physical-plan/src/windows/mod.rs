@@ -36,6 +36,7 @@ use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
 };
+use datafusion_functions_aggregate_common::expr::create_aggregate_expr;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
@@ -91,30 +92,30 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            todo!("regression");
+            // todo!("regression");
 
-            // // TODO: Ordering not supported for Window UDFs yet
+            // TODO: Ordering not supported for Window UDFs yet
 
             // let sort_exprs = &[];
-            // let ordering_req = &[];
+            let ordering_req = &[];
 
 
 
-            // let aggregate = udaf::create_aggregate_expr(
-            //     fun.as_ref(),
-            //     args,
-            //     // sort_exprs,
-            //     ordering_req,
-            //     input_schema,
-            //     name,
-            //     ignore_nulls,
-            // )?;
-            // window_expr_from_aggregate_expr(
-            //     partition_by,
-            //     order_by,
-            //     window_frame,
-            //     aggregate,
-            // )
+            let aggregate = create_aggregate_expr(
+                fun.as_ref(),
+                args,
+                // sort_exprs,
+                ordering_req,
+                input_schema,
+                name,
+                ignore_nulls,
+            )?;
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,
