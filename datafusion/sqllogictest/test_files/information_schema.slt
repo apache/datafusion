@@ -174,8 +174,8 @@ datafusion.execution.minimum_parallel_output_files 4
 datafusion.execution.parquet.allow_single_file_parallelism true
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
-datafusion.execution.parquet.bloom_filter_on_read_enabled true
-datafusion.execution.parquet.bloom_filter_on_write_enabled false
+datafusion.execution.parquet.bloom_filter_on_read true
+datafusion.execution.parquet.bloom_filter_on_write false
 datafusion.execution.parquet.column_index_truncate_length NULL
 datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
@@ -253,8 +253,8 @@ datafusion.execution.minimum_parallel_output_files 4 Guarantees a minimum level 
 datafusion.execution.parquet.allow_single_file_parallelism true Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
-datafusion.execution.parquet.bloom_filter_on_read_enabled true Sets if bloom filter on read is enabled for any column
-datafusion.execution.parquet.bloom_filter_on_write_enabled false Sets if bloom filter on write is enabled for any column
+datafusion.execution.parquet.bloom_filter_on_read true Sets if bloom filter on read is enabled for any column
+datafusion.execution.parquet.bloom_filter_on_write false Sets if bloom filter on write is enabled for any column
 datafusion.execution.parquet.column_index_truncate_length NULL Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) Sets default parquet compression codec Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.created_by datafusion Sets "created by" property

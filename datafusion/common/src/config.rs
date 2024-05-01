@@ -396,10 +396,10 @@ config_namespace! {
         pub encoding: Option<String>, default = None
 
         /// Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read_enabled: bool, default = true
+        pub bloom_filter_on_read: bool, default = true
 
         /// Write bloom filters for all columns when creating parquet files
-        pub bloom_filter_on_write_enabled: bool, default = false
+        pub bloom_filter_on_write: bool, default = false
 
         /// Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting

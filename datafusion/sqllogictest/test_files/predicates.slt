@@ -515,7 +515,7 @@ statement ok
 CREATE EXTERNAL TABLE data_index_bloom_encoding_stats STORED AS PARQUET LOCATION '../../parquet-testing/data/data_index_bloom_encoding_stats.parquet';
 
 statement ok
-set datafusion.execution.parquet.bloom_filter_on_read_enabled=true;
+set datafusion.execution.parquet.bloom_filter_on_read=true;
 
 query T
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
@@ -537,7 +537,7 @@ over
 the lazy
 
 statement ok
-set datafusion.execution.parquet.bloom_filter_on_read_enabled=false;
+set datafusion.execution.parquet.bloom_filter_on_read=false;
 
 
 ########
