@@ -1248,11 +1248,21 @@ dependencies = [
  "arrow-array",
  "chrono",
  "datafusion-common",
+ "datafusion-expr-common",
+ "datafusion-functions-aggregate-common",
  "paste",
  "serde_json",
  "sqlparser",
  "strum 0.26.2",
  "strum_macros 0.26.2",
+]
+
+[[package]]
+name = "datafusion-expr-common"
+version = "37.1.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
 ]
 
 [[package]]
@@ -1292,6 +1302,15 @@ dependencies = [
  "log",
  "paste",
  "sqlparser",
+]
+
+[[package]]
+name = "datafusion-functions-aggregate-common"
+version = "37.1.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr-common",
 ]
 
 [[package]]
