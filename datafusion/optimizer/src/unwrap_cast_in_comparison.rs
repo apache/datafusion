@@ -498,9 +498,6 @@ fn try_cast_dictionary(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_value_type = lit_value.data_type();
-    if lit_value_type == *target_type {
-        return Some(lit_value.clone());
-    }
     let result_scalar = match (lit_value, target_type) {
         // Unwrap dictionary when inner type matches target type
         (ScalarValue::Dictionary(_, inner_value), _)
