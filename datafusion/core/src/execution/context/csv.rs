@@ -90,7 +90,6 @@ mod tests {
     use crate::assert_batches_eq;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
 
-    use async_trait::async_trait;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -124,22 +123,5 @@ mod tests {
         assert_batches_eq!(expected, &results);
 
         Ok(())
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_csv(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
-        }
     }
 }
