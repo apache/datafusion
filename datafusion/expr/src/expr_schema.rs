@@ -133,18 +133,18 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                         // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, func_def.signature()).map_err(|_| {
+                        data_types(&arg_data_types, func.signature()).map_err(|_| {
                             plan_datafusion_err!(
                                 "{}",
                                 utils::generate_signature_error_msg(
-                                    func_def.name(),
-                                    func_def.signature().clone(),
+                                    func.name(),
+                                    func.signature().clone(),
                                     &arg_data_types,
                                 )
                             )
@@ -152,7 +152,7 @@ impl ExprSchemable for Expr {
 
                         // perform additional function arguments validation (due to limited
                         // expressiveness of `TypeSignature`), then infer return type
-                        Ok(func_def.return_type_from_exprs(args, schema, &arg_data_types)?)
+                        Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args

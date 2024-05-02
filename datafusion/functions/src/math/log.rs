@@ -176,8 +176,8 @@ impl ScalarUDFImpl for LogFunc {
                     &info.get_data_type(&base)?,
                 )?)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, mut args })
-                if is_pow(&func_def) && args.len() == 2 && base == args[0] =>
+            Expr::ScalarFunction(ScalarFunction { func, mut args })
+                if is_pow(&func) && args.len() == 2 && base == args[0] =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
@@ -205,12 +205,8 @@ impl ScalarUDFImpl for LogFunc {
 }
 
 /// Returns true if the function is `PowerFunc`
-fn is_pow(func_def: &ScalarUDF) -> bool {
-    func_def
-        .inner()
-        .as_any()
-        .downcast_ref::<PowerFunc>()
-        .is_some()
+fn is_pow(func: &ScalarUDF) -> bool {
+    func.inner().as_any().downcast_ref::<PowerFunc>().is_some()
 }
 
 #[cfg(test)]

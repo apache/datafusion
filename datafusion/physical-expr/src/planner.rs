@@ -304,12 +304,12 @@ pub fn create_physical_expr(
             }
         },
 
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
             udf::create_physical_expr(
-                func_def.clone().as_ref(),
+                func.clone().as_ref(),
                 &physical_args,
                 input_schema,
                 args,

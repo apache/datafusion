@@ -403,7 +403,7 @@ impl Between {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
-    pub func_def: Arc<crate::ScalarUDF>,
+    pub func: Arc<crate::ScalarUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
@@ -411,17 +411,14 @@ pub struct ScalarFunction {
 impl ScalarFunction {
     // return the Function's name
     pub fn name(&self) -> &str {
-        self.func_def.name()
+        self.func.name()
     }
 }
 
 impl ScalarFunction {
     /// Create a new ScalarFunction expression with a user-defined function (UDF)
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self {
-            func_def: udf,
-            args,
-        }
+        Self { func: udf, args }
     }
 }
 
@@ -1249,7 +1246,7 @@ impl Expr {
     /// results when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
         self.exists(|expr| {
-            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func_def.signature().volatility == Volatility::Volatile ))
+            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile ))
         })
     }
 
@@ -1284,9 +1281,7 @@ impl Expr {
     /// and thus any side effects (like divide by zero) may not be encountered
     pub fn short_circuits(&self) -> bool {
         match self {
-            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                func_def.short_circuits()
-            }
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
             }
@@ -2021,7 +2016,7 @@ mod test {
     }
 
     #[test]
-    fn test_is_volatile_scalar_func_definition() {
+    fn test_is_volatile_scalar_func() {
         // UDF
         #[derive(Debug)]
         struct TestScalarUDF {

@@ -89,7 +89,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.func_def.signature().volatility {
+                match scalar_function.func.signature().volatility {
                     Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {

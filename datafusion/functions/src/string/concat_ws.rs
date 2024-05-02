@@ -266,7 +266,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
 
                     Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
                         ScalarFunction {
-                            func_def: concat_ws(),
+                            func: concat_ws(),
                             args: new_args,
                         },
                     )))

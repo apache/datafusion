@@ -523,8 +523,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                Self::volatility_ok(func_def.signature().volatility)
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+                Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
             | Expr::Unnest(_)
@@ -1299,18 +1299,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
             }
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: udf,
-                args,
-            }) => match udf.simplify(args, info)? {
-                ExprSimplifyResult::Original(args) => {
-                    Transformed::no(Expr::ScalarFunction(ScalarFunction {
-                        func_def: udf,
-                        args,
-                    }))
+            Expr::ScalarFunction(ScalarFunction { func: udf, args }) => {
+                match udf.simplify(args, info)? {
+                    ExprSimplifyResult::Original(args) => {
+                        Transformed::no(Expr::ScalarFunction(ScalarFunction {
+                            func: udf,
+                            args,
+                        }))
+                    }
+                    ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
                 }
-                ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
-            },
+            }
 
             //
             // Rules for Between

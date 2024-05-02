@@ -182,7 +182,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     if !args.eq(&new_args) {
         Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
             ScalarFunction {
-                func_def: concat(),
+                func: concat(),
                 args: new_args,
             },
         )))

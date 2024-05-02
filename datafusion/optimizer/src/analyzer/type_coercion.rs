@@ -304,16 +304,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let case = coerce_case_expression(case, &self.schema)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                let new_expr = coerce_arguments_for_signature(
-                    args,
-                    &self.schema,
-                    func_def.signature(),
-                )?;
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let new_expr =
-                    coerce_arguments_for_fun(new_expr, &self.schema, &func_def)?;
+                    coerce_arguments_for_signature(args, &self.schema, func.signature())?;
+                let new_expr = coerce_arguments_for_fun(new_expr, &self.schema, &func)?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
-                    ScalarFunction::new_udf(func_def, new_expr),
+                    ScalarFunction::new_udf(func, new_expr),
                 )))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
