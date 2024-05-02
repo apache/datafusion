@@ -243,14 +243,24 @@ impl ParquetExec {
     }
 
     /// If enabled, the reader will read by the bloom filter
-    pub fn with_enable_bloom_filter(mut self, enable_bloom_filter: bool) -> Self {
-        self.table_parquet_options.global.bloom_filter_enabled = enable_bloom_filter;
+    pub fn with_bloom_filter_on_read(mut self, bloom_filter_on_read: bool) -> Self {
+        self.table_parquet_options.global.bloom_filter_on_read = bloom_filter_on_read;
         self
     }
 
-    /// Return the value described in [`Self::with_enable_bloom_filter`]
-    fn enable_bloom_filter(&self) -> bool {
-        self.table_parquet_options.global.bloom_filter_enabled
+    /// If enabled, the writer will write by the bloom filter
+    pub fn with_bloom_filter_on_write(
+        mut self,
+        enable_bloom_filter_on_write: bool,
+    ) -> Self {
+        self.table_parquet_options.global.bloom_filter_on_write =
+            enable_bloom_filter_on_write;
+        self
+    }
+
+    /// Return the value described in [`Self::with_bloom_filter_on_read`]
+    fn bloom_filter_on_read(&self) -> bool {
+        self.table_parquet_options.global.bloom_filter_on_read
     }
 
     fn output_partitioning_helper(file_config: &FileScanConfig) -> Partitioning {
@@ -407,7 +417,7 @@ impl ExecutionPlan for ParquetExec {
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
-            enable_bloom_filter: self.enable_bloom_filter(),
+            enable_bloom_filter: self.bloom_filter_on_read(),
         };
 
         let stream =

@@ -344,7 +344,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut parquet_format = table_options.parquet;
 
-    parquet_format.global.bloom_filter_enabled = true;
+    parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = "PARQUET_2_0".to_string();
     parquet_format.global.write_batch_size = 111;

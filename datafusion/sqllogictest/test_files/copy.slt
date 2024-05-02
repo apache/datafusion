@@ -271,7 +271,7 @@ OPTIONS (
 'format.created_by' 'DF copy.slt',
 'format.column_index_truncate_length' 123,
 'format.data_page_row_count_limit' 1234,
-'format.bloom_filter_enabled' true,
+'format.bloom_filter_on_read' true,
 'format.bloom_filter_enabled::col1' false,
 'format.bloom_filter_fpp::col2' 0.456,
 'format.bloom_filter_ndv::col2' 456,
