@@ -31,9 +31,7 @@ use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
@@ -207,14 +205,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
-    ///
-    // Would be nice if this API could use the SimplifyInfo
-    // rather than creating an DFSchemaRef coerces rather than doing
-    // it manually.
-    // https://github.com/apache/datafusion/issues/3793
-    pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
+    pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
-
         expr.rewrite(&mut expr_rewrite).data()
     }
 
@@ -1682,7 +1674,7 @@ mod tests {
         sync::Arc,
     };
 
-    use datafusion_common::{assert_contains, ToDFSchema};
+    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
 
     use crate::simplify_expressions::SimplifyContext;
@@ -1717,11 +1709,7 @@ mod tests {
         // should fully simplify to 3 < i (though i has been coerced to i64)
         let expected = lit(3i64).lt(col("i"));
 
-        // Would be nice if this API could use the SimplifyInfo
-        // rather than creating an DFSchemaRef coerces rather than doing
-        // it manually.
-        // https://github.com/apache/datafusion/issues/3793
-        let expr = simplifier.coerce(expr, schema).unwrap();
+        let expr = simplifier.coerce(expr, &schema).unwrap();
 
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }

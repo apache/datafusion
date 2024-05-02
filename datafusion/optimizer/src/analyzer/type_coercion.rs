@@ -25,7 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    DFSchemaRef, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
@@ -98,9 +98,7 @@ fn analyze_internal(
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
 
-    let mut expr_rewrite = TypeCoercionRewriter {
-        schema: Arc::new(schema),
-    };
+    let mut expr_rewrite = TypeCoercionRewriter { schema: &schema };
 
     let new_expr = plan
         .expressions()
@@ -115,11 +113,11 @@ fn analyze_internal(
     plan.with_new_exprs(new_expr, new_inputs)
 }
 
-pub(crate) struct TypeCoercionRewriter {
-    pub(crate) schema: DFSchemaRef,
+pub(crate) struct TypeCoercionRewriter<'a> {
+    pub(crate) schema: &'a DFSchema,
 }
 
-impl TreeNodeRewriter for TypeCoercionRewriter {
+impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -131,14 +129,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery)?;
+                let new_plan = analyze_internal(self.schema, &subquery)?;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
+                let new_plan = analyze_internal(self.schema, &subquery.subquery)?;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -152,8 +150,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
-                let expr_type = expr.get_type(&self.schema)?;
+                let new_plan = analyze_internal(self.schema, &subquery.subquery)?;
+                let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
                         "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
@@ -164,32 +162,32 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    Box::new(expr.cast_to(&common_type, self.schema)?),
                     cast_subquery(new_subquery, &common_type)?,
                     negated,
                 ))))
             }
             Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
                 *expr,
-                &self.schema,
+                self.schema,
             )?))),
             Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::Like(Like {
                 negated,
@@ -198,8 +196,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 escape_char,
                 case_insensitive,
             }) => {
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = pattern.get_type(&self.schema)?;
+                let left_type = expr.get_type(self.schema)?;
+                let right_type = pattern.get_type(self.schema)?;
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
                     let op_name = if case_insensitive {
                         "ILIKE"
@@ -210,8 +208,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
-                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
+                let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
                 Ok(Transformed::yes(Expr::Like(Like::new(
                     negated,
                     expr,
@@ -222,14 +220,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (left_type, right_type) = get_input_types(
-                    &left.get_type(&self.schema)?,
+                    &left.get_type(self.schema)?,
                     &op,
-                    &right.get_type(&self.schema)?,
+                    &right.get_type(self.schema)?,
                 )?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(left.cast_to(&left_type, &self.schema)?),
+                    Box::new(left.cast_to(&left_type, self.schema)?),
                     op,
-                    Box::new(right.cast_to(&right_type, &self.schema)?),
+                    Box::new(right.cast_to(&right_type, self.schema)?),
                 ))))
             }
             Expr::Between(Between {
@@ -238,15 +236,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 low,
                 high,
             }) => {
-                let expr_type = expr.get_type(&self.schema)?;
-                let low_type = low.get_type(&self.schema)?;
+                let expr_type = expr.get_type(self.schema)?;
+                let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         ))
                     })?;
-                let high_type = high.get_type(&self.schema)?;
+                let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
@@ -261,10 +259,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                             ))
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
-                    Box::new(expr.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(expr.cast_to(&coercion_type, self.schema)?),
                     negated,
-                    Box::new(low.cast_to(&coercion_type, &self.schema)?),
-                    Box::new(high.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(low.cast_to(&coercion_type, self.schema)?),
+                    Box::new(high.cast_to(&coercion_type, self.schema)?),
                 ))))
             }
             Expr::InList(InList {
@@ -272,10 +270,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 list,
                 negated,
             }) => {
-                let expr_data_type = expr.get_type(&self.schema)?;
+                let expr_data_type = expr.get_type(self.schema)?;
                 let list_data_types = list
                     .iter()
-                    .map(|list_expr| list_expr.get_type(&self.schema))
+                    .map(|list_expr| list_expr.get_type(self.schema))
                     .collect::<Result<Vec<_>>>()?;
                 let result_type =
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
@@ -285,11 +283,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, &self.schema)?;
+                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
                         let cast_list_expr = list
                             .into_iter()
                             .map(|list_expr| {
-                                list_expr.cast_to(&coerced_type, &self.schema)
+                                list_expr.cast_to(&coerced_type, self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Ok(Transformed::yes(Expr::InList(InList ::new(
@@ -301,13 +299,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
             }
             Expr::Case(case) => {
-                let case = coerce_case_expression(case, &self.schema)?;
+                let case = coerce_case_expression(case, self.schema)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let new_expr =
-                    coerce_arguments_for_signature(args, &self.schema, func.signature())?;
-                let new_expr = coerce_arguments_for_fun(new_expr, &self.schema, &func)?;
+                    coerce_arguments_for_signature(args, self.schema, func.signature())?;
+                let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
                 )))
@@ -324,7 +322,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     let new_expr = coerce_agg_exprs_for_signature(
                         &fun,
                         args,
-                        &self.schema,
+                        self.schema,
                         &fun.signature(),
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
@@ -341,7 +339,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 AggregateFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature(
                         args,
-                        &self.schema,
+                        self.schema,
                         fun.signature(),
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
@@ -368,14 +366,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 null_treatment,
             }) => {
                 let window_frame =
-                    coerce_window_frame(window_frame, &self.schema, &order_by)?;
+                    coerce_window_frame(window_frame, self.schema, &order_by)?;
 
                 let args = match &fun {
                     expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
                             args,
-                            &self.schema,
+                            self.schema,
                             &fun.signature(),
                         )?
                     }
@@ -488,7 +486,7 @@ fn coerce_frame_bound(
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
     window_frame: WindowFrame,
-    schema: &DFSchemaRef,
+    schema: &DFSchema,
     expressions: &[Expr],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
@@ -524,7 +522,7 @@ fn coerce_window_frame(
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
     expr.cast_to(&DataType::Boolean, schema)
@@ -608,7 +606,7 @@ fn coerce_agg_exprs_for_signature(
         .collect()
 }
 
-fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
+fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     // Given expressions like:
     //
     // CASE a1
@@ -1231,7 +1229,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1242,7 +1240,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1253,7 +1251,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;

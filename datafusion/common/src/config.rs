@@ -297,6 +297,11 @@ config_namespace! {
 
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
+
+        /// Attempt to eliminate sorts by packing & sorting files with non-overlapping
+        /// statistics into the same file groups.
+        /// Currently experimental
+        pub split_file_groups_by_statistics: bool, default = false
     }
 }
 
@@ -395,8 +400,11 @@ config_namespace! {
         /// default parquet writer setting
         pub encoding: Option<String>, default = None
 
-        /// Sets if bloom filter is enabled for any column
-        pub bloom_filter_enabled: bool, default = false
+        /// Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
+
+        /// Write bloom filters for all columns when creating parquet files
+        pub bloom_filter_on_write: bool, default = false
 
         /// Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting
@@ -1657,6 +1665,7 @@ config_namespace! {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum FormatOptions {
     CSV(CsvOptions),
     JSON(JsonOptions),
