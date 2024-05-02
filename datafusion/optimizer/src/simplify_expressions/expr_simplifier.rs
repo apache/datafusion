@@ -191,23 +191,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 
         let mut num_iterations = 0;
         loop {
-            let result = expr.rewrite(&mut const_evaluator)?;
-            let mut transformed = result.transformed;
-            expr = result.data;
-
-            let result = expr.rewrite(&mut simplifier)?;
-            transformed |= result.transformed;
-            expr = result.data;
-
-            let result = expr.rewrite(&mut guarantee_rewriter)?;
-            transformed |= result.transformed;
-            expr = result.data;
-
-            // shorten inlist should be started after other inlist rules are applied
-            let result = expr.rewrite(&mut shorten_in_list_simplifier)?;
-            transformed |= result.transformed;
-            expr = result.data;
-
+            let Transformed { data, transformed, .. } = expr
+                .rewrite(&mut const_evaluator)?
+                .transform_data(|expr| expr.rewrite(&mut simplifier))?
+                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?
+                .transform_data(|expr| expr.rewrite(&mut shorten_in_list_simplifier))?;
+            expr = data;
             num_iterations += 1;
             if !transformed || num_iterations >= self.max_simplifier_iterations {
                 return Ok((expr, num_iterations));
