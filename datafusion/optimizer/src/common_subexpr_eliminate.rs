@@ -33,12 +33,13 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
+use indexmap::IndexMap;
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
 /// - counter
 /// - DataType of this expression.
-type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
+type ExprSet = HashMap<Identifier, (usize, DataType)>;
 
 /// An ordered map of Identifiers assigned by `ExprIdentifierVisitor` in an
 /// initial expression  walk.
@@ -119,7 +120,7 @@ impl CommonSubexprEliminate {
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
         expr_set: &ExprSet,
-        affected_id: &mut BTreeSet<Identifier>,
+        affected_id: &mut IndexMap<Identifier, Expr>,
     ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
             .iter()
@@ -153,7 +154,7 @@ impl CommonSubexprEliminate {
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-        let mut affected_id = BTreeSet::<Identifier>::new();
+        let mut affected_id = IndexMap::new();
 
         let rewrite_exprs =
             self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
@@ -287,7 +288,7 @@ impl CommonSubexprEliminate {
             &mut expr_set,
             ExprMask::NormalAndAggregates,
         )?;
-        let mut affected_id = BTreeSet::<Identifier>::new();
+        let mut affected_id = IndexMap::new();
         let mut rewritten = self.rewrite_exprs_list(
             &[&new_aggr_expr],
             &[&aggr_arrays],
@@ -309,19 +310,13 @@ impl CommonSubexprEliminate {
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
         } else {
-            let mut agg_exprs = vec![];
-
-            for id in affected_id {
-                match expr_set.get(&id) {
-                    Some((expr, _, _)) => {
-                        // todo: check `nullable`
-                        agg_exprs.push(expr.clone().alias(&id));
-                    }
-                    _ => {
-                        return internal_err!("expr_set invalid state");
-                    }
-                }
-            }
+            let mut agg_exprs = affected_id
+                .into_iter()
+                .map(|(expr_id, expr)| {
+                    // todo: check `nullable`
+                    expr.alias(&expr_id)
+                })
+                .collect::<Vec<_>>();
 
             let mut proj_exprs = vec![];
             for expr in &new_group_expr {
@@ -495,25 +490,22 @@ fn to_arrays(
 /// expr_set: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
-    affected_id: BTreeSet<Identifier>,
+    affected_id: IndexMap<Identifier, Expr>,
     expr_set: &ExprSet,
 ) -> Result<LogicalPlan> {
-    let mut project_exprs = vec![];
     let mut fields_set = BTreeSet::new();
-
-    for id in affected_id {
-        match expr_set.get(&id) {
-            Some((expr, _, data_type)) => {
-                // todo: check `nullable`
-                let field = Field::new(&id, data_type.clone(), true);
-                fields_set.insert(field.name().to_owned());
-                project_exprs.push(expr.clone().alias(&id));
-            }
-            _ => {
+    let mut project_exprs = affected_id
+        .into_iter()
+        .map(|(expr_id, expr)| {
+            let Some((_, data_type)) = expr_set.get(&expr_id) else {
                 return internal_err!("expr_set invalid state");
-            }
-        }
-    }
+            };
+            // todo: check `nullable`
+            let field = Field::new(&expr_id, data_type.clone(), true);
+            fields_set.insert(field.name().to_owned());
+            Ok(expr.alias(expr_id))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     for (qualifier, field) in input.schema().iter() {
         if fields_set.insert(qualified_name(qualifier, field.name())) {
@@ -707,11 +699,10 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
             // TODO: why do we capture data type here?
             let data_type = expr.get_type(&self.input_schema)?;
-            let (_, count, _) = self.expr_set.entry(expr_id.clone()).or_insert((
-                expr.clone(),
-                0,
-                data_type,
-            ));
+            let (count, _) = self
+                .expr_set
+                .entry(expr_id.clone())
+                .or_insert((0, data_type));
             *count += 1;
         }
         self.visit_stack.push(VisitRecord::ExprItem(expr_id));
@@ -753,7 +744,7 @@ struct CommonSubexprRewriter<'a> {
     expr_set: &'a ExprSet,
     id_array: &'a IdArray,
     /// Which identifier is replaced.
-    affected_id: &'a mut BTreeSet<Identifier>,
+    affected_id: &'a mut IndexMap<Identifier, Expr>,
     /// current node's information's index in `id_array`.
     down_index: usize,
 }
@@ -777,7 +768,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             return Ok(Transformed::no(expr));
         }
 
-        let (_, counter, _) = self.expr_set.get(expr_id).unwrap();
+        let (counter, _) = self.expr_set.get(expr_id).unwrap();
         if *counter > 1 {
             // step index to skip all sub-node (which has smaller series number).
             while self.down_index < self.id_array.len()
@@ -786,8 +777,8 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                 self.down_index += 1;
             }
 
-            self.affected_id.insert(expr_id.clone());
             let expr_name = expr.display_name()?;
+            self.affected_id.insert(expr_id.clone(), expr);
             // Alias this `Column` expr to it original "expr name",
             // `projection_push_down` optimizer use "expr name" to eliminate useless
             // projections.
@@ -809,7 +800,7 @@ fn replace_common_expr(
     expr: Expr,
     id_array: &IdArray,
     expr_set: &ExprSet,
-    affected_id: &mut BTreeSet<Identifier>,
+    affected_id: &mut IndexMap<Identifier, Expr>,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
@@ -1156,31 +1147,27 @@ mod test {
     #[test]
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
-        let affected_id: BTreeSet<Identifier> =
-            ["c+a".to_string(), "b+a".to_string()].into_iter().collect();
-        let expr_set_1 = [
-            (
-                "c+a".to_string(),
-                (col("c") + col("a"), 1, DataType::UInt32),
-            ),
-            (
-                "b+a".to_string(),
-                (col("b") + col("a"), 1, DataType::UInt32),
-            ),
-        ]
-        .into_iter()
-        .collect();
-        let expr_set_2 = [
-            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
-            ("b+a".to_string(), (col("b+a"), 1, DataType::UInt32)),
-        ]
-        .into_iter()
-        .collect();
+        let expr_set_1 = ExprSet::from([
+            ("c+a".to_string(), (1, DataType::UInt32)),
+            ("b+a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let affected_id_1 = IndexMap::from([
+            ("c+a".to_string(), col("c") + col("a")),
+            ("b+a".to_string(), col("b") + col("a")),
+        ]);
+        let expr_set_2 = ExprSet::from([
+            ("c+a".to_string(), (1, DataType::UInt32)),
+            ("b+a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let affected_id_2 = IndexMap::from([
+            ("c+a".to_string(), col("c+a")),
+            ("b+a".to_string(), col("b+a")),
+        ]);
         let project =
-            build_common_expr_project_plan(table_scan, affected_id.clone(), &expr_set_1)
+            build_common_expr_project_plan(table_scan, affected_id_1, &expr_set_1)
                 .unwrap();
         let project_2 =
-            build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
+            build_common_expr_project_plan(project, affected_id_2, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for name in project_2.schema().field_names() {
@@ -1197,39 +1184,32 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        let affected_id: BTreeSet<Identifier> =
-            ["test1.c+test1.a".to_string(), "test1.b+test1.a".to_string()]
-                .into_iter()
-                .collect();
-        let expr_set_1 = [
+        let expr_set_1 = ExprSet::from([
+            ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
+            ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let affected_id_1 = IndexMap::from([
             (
                 "test1.c+test1.a".to_string(),
-                (col("test1.c") + col("test1.a"), 1, DataType::UInt32),
+                col("test1.c") + col("test1.a"),
             ),
             (
                 "test1.b+test1.a".to_string(),
-                (col("test1.b") + col("test1.a"), 1, DataType::UInt32),
+                col("test1.b") + col("test1.a"),
             ),
-        ]
-        .into_iter()
-        .collect();
-        let expr_set_2 = [
-            (
-                "test1.c+test1.a".to_string(),
-                (col("test1.c+test1.a"), 1, DataType::UInt32),
-            ),
-            (
-                "test1.b+test1.a".to_string(),
-                (col("test1.b+test1.a"), 1, DataType::UInt32),
-            ),
-        ]
-        .into_iter()
-        .collect();
+        ]);
+        let expr_set_2 = ExprSet::from([
+            ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
+            ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let affected_id_2 = IndexMap::from([
+            ("test1.c+test1.a".to_string(), col("test1.c+test1.a")),
+            ("test1.b+test1.a".to_string(), col("test1.b+test1.a")),
+        ]);
         let project =
-            build_common_expr_project_plan(join, affected_id.clone(), &expr_set_1)
-                .unwrap();
+            build_common_expr_project_plan(join, affected_id_1, &expr_set_1).unwrap();
         let project_2 =
-            build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
+            build_common_expr_project_plan(project, affected_id_2, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for name in project_2.schema().field_names() {
