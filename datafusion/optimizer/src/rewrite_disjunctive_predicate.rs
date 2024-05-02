@@ -288,7 +288,7 @@ fn delete_duplicate_predicates(or_predicates: Vec<Predicate>) -> Predicate {
             Predicate::And { args } => {
                 let args_num = args.len();
                 if shortest_exprs.is_empty() || args_num < shortest_exprs_len {
-                    shortest_exprs = (*args).clone();
+                    shortest_exprs.clone_from(args);
                     shortest_exprs_len = args_num;
                 }
             }
