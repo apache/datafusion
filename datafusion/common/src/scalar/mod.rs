@@ -2207,7 +2207,11 @@ impl ScalarValue {
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
         let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
-        Ok(arrow::compute::concat(arrays.as_slice())?)
+        let ret = match !arrays.is_empty() {
+            true => arrow::compute::concat(arrays.as_slice())?,
+            false => arr.slice(0, 0),
+        };
+        Ok(ret)
     }
 
     /// Retrieve ScalarValue for each row in `array`
@@ -3560,6 +3564,12 @@ mod tests {
             &expected_arr,
             as_fixed_size_list_array(actual_arr.as_ref()).unwrap()
         );
+
+        let empty_array = sv
+            .to_array_of_size(0)
+            .expect("Failed to convert to empty array");
+
+        assert_eq!(empty_array.len(), 0);
     }
 
     #[test]
