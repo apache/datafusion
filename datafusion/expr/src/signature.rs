@@ -267,14 +267,16 @@ impl Signature {
             volatility,
         }
     }
-    /// One or more number of arguments to the same type.
+    /// One or more number of arguments that is coercible to the same type, with `comparison_coercion`
+    /// See [TypeSignature::VariadicEqual] for more details.
     pub fn variadic_equal(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicEqual,
             volatility,
         }
     }
-    /// One or more number of arguments of the same type.
+    /// One or more number of arguments that is coercible to the same type, with `type_union_resolution`
+    /// See [TypeSignature::Union] for more details.
     pub fn union_variadic(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Union(Box::new(TypeSignature::VariadicAny)),
