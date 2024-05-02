@@ -53,5 +53,6 @@ log = { workspace = true }
 regex-syntax = "0.8.0"
 [dev-dependencies]
 ctor = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }

@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
+// Licensed to the Apac
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -17,9 +17,9 @@
 
 //! Expression simplification API
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Not;
+use std::{borrow::Cow, u32};
 
 use arrow::{
     array::{new_null_array, AsArray},
@@ -175,7 +175,11 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = simplifier.simplify(expr).unwrap();
     /// assert_eq!(expr, b_lt_2);
     /// ```
-    pub fn simplify(&self, mut expr: Expr) -> Result<Expr> {
+    pub fn simplify(&self, expr: Expr) -> Result<Expr> {
+        Ok(self.simplify_inner(expr)?.0)
+    }
+
+    fn simplify_inner(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -185,7 +189,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
         }
 
-        let mut i = 0;
+        let mut num_iterations = 0;
         loop {
             let result = expr.rewrite(&mut const_evaluator)?;
             let mut transformed = result.transformed;
@@ -204,9 +208,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             transformed |= result.transformed;
             expr = result.data;
 
-            i += 1;
-            if !transformed || i >= self.max_simplifier_iterations {
-                return Ok(expr);
+            num_iterations += 1;
+            if !transformed || num_iterations >= self.max_simplifier_iterations {
+                return Ok((expr, num_iterations));
             }
         }
     }
@@ -331,6 +335,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```
     pub fn with_canonicalize(mut self, canonicalize: bool) -> Self {
         self.canonicalize = canonicalize;
+        self
+    }
+
+    pub fn with_max_simplifier_iterations(
+        mut self,
+        max_simplifier_iterations: u32,
+    ) -> Self {
+        self.max_simplifier_iterations = max_simplifier_iterations;
         self
     }
 }
@@ -1682,14 +1694,14 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
+    use datafusion_expr::{interval_arithmetic::Interval, *};
+    use datafusion_functions::expr_fn::*;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
-    use datafusion_expr::{interval_arithmetic::Interval, *};
 
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
@@ -2878,6 +2890,19 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
+    fn try_simplify_count(expr: Expr) -> Result<(Expr, u32)> {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        );
+        simplifier.simplify_inner(expr)
+    }
+
+    fn simplify_count(expr: Expr) -> (Expr, u32) {
+        try_simplify_count(expr).unwrap()
+    }
+
     fn simplify_with_guarantee(
         expr: Expr,
         guarantees: Vec<(Expr, NullableInterval)>,
@@ -3584,5 +3609,22 @@ mod tests {
         let expected = lit(false);
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_iterations() {
+        let expr = binary_expr(
+            cast(now(), DataType::Int64),
+            Operator::Lt,
+            binary_expr(
+                cast(to_timestamp(vec![lit(0)]), DataType::Int64),
+                Operator::Plus,
+                lit(i64::MAX),
+            ),
+        );
+        let expected = lit(true);
+        let (expr, num_iter) = simplify_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 2);
     }
 }
