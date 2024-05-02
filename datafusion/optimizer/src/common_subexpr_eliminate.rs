@@ -35,50 +35,56 @@ use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
 use indexmap::IndexMap;
 
-/// A map from expression's identifier to tuple including
-/// - the expression itself (cloned)
-/// - counter
-/// - DataType of this expression.
-type ExprSet = HashMap<Identifier, (usize, DataType)>;
-
-/// An ordered map of Identifiers assigned by `ExprIdentifierVisitor` in an
-/// initial expression  walk.
+/// Identifier that represents a subexpression tree.
 ///
-/// Used by `CommonSubexprRewriter`, which rewrites the expressions to remove
-/// common subexpressions.
-///
-/// Elements in this array are created on the walk down the expression tree
-/// during `f_down`. Thus element 0 is the root of the expression tree. The
-/// tuple contains:
-/// - series_number.
-///     - Incremented during `f_up`, start from 1.
-///     - Thus, items with higher idx have the lower series_number.
-/// - [`Identifier`]
-///     - Identifier of the expression. If empty (`""`), expr should not be considered for common elimination.
-///
-/// # Example
-/// An expression like `(a + b)` would have the following `IdArray`:
-/// ```text
-/// [
-///   (3, "a + b"),
-///   (2, "a"),
-///   (1, "b")
-/// ]
-/// ```
-type IdArray = Vec<(usize, Identifier)>;
-
-/// Identifier for each subexpression.
-///
-/// Note that the current implementation uses the `Display` of an expression
-/// (a `String`) as `Identifier`.
+/// Note that the current implementation contains:
+/// - the `Display` of an expression (a `String`) and
+/// - the identifiers of the childrens of the expression
+/// concatenated.
 ///
 /// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
 /// collision (as low as possible)"
 ///
 /// Since an identifier is likely to be copied many times, it is better that an identifier
-/// is small or "copy". otherwise some kinds of reference count is needed. String description
-/// here is not such a good choose.
+/// is small or "copy". otherwise some kinds of reference count is needed. String
+/// description here is not such a good choose.
 type Identifier = String;
+
+/// A cache that contains the postorder index and the identifier of expression tree nodes
+/// by the preorder index of the nodes.
+///
+/// This cache is filled by `ExprIdentifierVisitor` during the first traversal and is used
+/// by `CommonSubexprRewriter` during the second traversal.
+///
+/// The purpose of this cache is to quickly find the identifier of a node during the
+/// second traversal.
+///
+/// Elements in this array are added during `f_down` so the indexes represent the preorder
+/// index of expression nodes and thus element 0 belongs to the root of the expression
+/// tree.
+/// The elements of the array are tuples that contain:
+/// - Postorder index that belongs to the preorder index. Assigned during `f_up`, start
+///   from 0.
+/// - Identifier of the expression. If empty (`""`), expr should not be considered for
+///   CSE.
+///
+/// # Example
+/// An expression like `(a + b)` would have the following `IdArray`:
+/// ```text
+/// [
+///   (2, "a + b"),
+///   (1, "a"),
+///   (0, "b")
+/// ]
+/// ```
+type IdArray = Vec<(usize, Identifier)>;
+
+/// A map that contains statistics of expressions by their identifiers.
+/// It contains:
+/// - The number of occurrences and
+/// - The DataType
+/// of an expression.
+type ExprStats = HashMap<Identifier, (usize, DataType)>;
 
 /// Performs Common Sub-expression Elimination optimization.
 ///
@@ -112,15 +118,15 @@ impl CommonSubexprEliminate {
     /// Rewrites `exprs_list` with common sub-expressions replaced with a new
     /// column.
     ///
-    /// `affected_id` is updated with any sub expressions that were replaced.
+    /// `common_exprs` is updated with any sub expressions that were replaced.
     ///
     /// Returns the rewritten expressions
     fn rewrite_exprs_list(
         &self,
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
-        expr_set: &ExprSet,
-        affected_id: &mut IndexMap<Identifier, Expr>,
+        expr_stats: &ExprStats,
+        common_exprs: &mut IndexMap<Identifier, Expr>,
     ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
             .iter()
@@ -131,7 +137,7 @@ impl CommonSubexprEliminate {
                     .cloned()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
-                        replace_common_expr(expr, id_array, expr_set, affected_id)
+                        replace_common_expr(expr, id_array, expr_stats, common_exprs)
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -151,19 +157,24 @@ impl CommonSubexprEliminate {
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
         input: &LogicalPlan,
-        expr_set: &ExprSet,
+        expr_stats: &ExprStats,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-        let mut affected_id = IndexMap::new();
+        let mut common_exprs = IndexMap::new();
 
-        let rewrite_exprs =
-            self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
+        let rewrite_exprs = self.rewrite_exprs_list(
+            exprs_list,
+            arrays_list,
+            expr_stats,
+            &mut common_exprs,
+        )?;
 
         let mut new_input = self
             .try_optimize(input, config)?
             .unwrap_or_else(|| input.clone());
-        if !affected_id.is_empty() {
-            new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
+        if !common_exprs.is_empty() {
+            new_input =
+                build_common_expr_project_plan(new_input, common_exprs, expr_stats)?;
         }
 
         Ok((rewrite_exprs, new_input))
@@ -176,7 +187,7 @@ impl CommonSubexprEliminate {
     ) -> Result<LogicalPlan> {
         let mut window_exprs = vec![];
         let mut arrays_per_window = vec![];
-        let mut expr_set = ExprSet::new();
+        let mut expr_stats = ExprStats::new();
 
         // Get all window expressions inside the consecutive window operators.
         // Consecutive window expressions may refer to same complex expression.
@@ -195,8 +206,12 @@ impl CommonSubexprEliminate {
             plan = input.as_ref().clone();
 
             let input_schema = Arc::clone(input.schema());
-            let arrays =
-                to_arrays(&window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+            let arrays = to_arrays(
+                &window_expr,
+                input_schema,
+                &mut expr_stats,
+                ExprMask::Normal,
+            )?;
 
             window_exprs.push(window_expr);
             arrays_per_window.push(arrays);
@@ -216,7 +231,7 @@ impl CommonSubexprEliminate {
             &window_exprs,
             &arrays_per_window,
             &plan,
-            &expr_set,
+            &expr_stats,
             config,
         )?;
         assert_eq!(window_exprs.len(), new_expr.len());
@@ -255,24 +270,24 @@ impl CommonSubexprEliminate {
             input,
             ..
         } = aggregate;
-        let mut expr_set = ExprSet::new();
+        let mut expr_stats = ExprStats::new();
 
         // rewrite inputs
         let input_schema = Arc::clone(input.schema());
         let group_arrays = to_arrays(
             group_expr,
             Arc::clone(&input_schema),
-            &mut expr_set,
+            &mut expr_stats,
             ExprMask::Normal,
         )?;
         let aggr_arrays =
-            to_arrays(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+            to_arrays(aggr_expr, input_schema, &mut expr_stats, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) = self.rewrite_expr(
             &[group_expr, aggr_expr],
             &[&group_arrays, &aggr_arrays],
             input,
-            &expr_set,
+            &expr_stats,
             config,
         )?;
         // note the reversed pop order.
@@ -280,24 +295,24 @@ impl CommonSubexprEliminate {
         let new_group_expr = pop_expr(&mut new_expr)?;
 
         // create potential projection on top
-        let mut expr_set = ExprSet::new();
+        let mut expr_stats = ExprStats::new();
         let new_input_schema = Arc::clone(new_input.schema());
         let aggr_arrays = to_arrays(
             &new_aggr_expr,
             new_input_schema.clone(),
-            &mut expr_set,
+            &mut expr_stats,
             ExprMask::NormalAndAggregates,
         )?;
-        let mut affected_id = IndexMap::new();
+        let mut common_exprs = IndexMap::new();
         let mut rewritten = self.rewrite_exprs_list(
             &[&new_aggr_expr],
             &[&aggr_arrays],
-            &expr_set,
-            &mut affected_id,
+            &expr_stats,
+            &mut common_exprs,
         )?;
         let rewritten = pop_expr(&mut rewritten)?;
 
-        if affected_id.is_empty() {
+        if common_exprs.is_empty() {
             // Alias aggregation expressions if they have changed
             let new_aggr_expr = new_aggr_expr
                 .iter()
@@ -310,11 +325,11 @@ impl CommonSubexprEliminate {
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
         } else {
-            let mut agg_exprs = affected_id
+            let mut agg_exprs = common_exprs
                 .into_iter()
                 .map(|(expr_id, expr)| {
                     // todo: check `nullable`
-                    expr.alias(&expr_id)
+                    expr.alias(expr_id)
                 })
                 .collect::<Vec<_>>();
 
@@ -364,13 +379,13 @@ impl CommonSubexprEliminate {
         let inputs = plan.inputs();
         let input = inputs[0];
         let input_schema = Arc::clone(input.schema());
-        let mut expr_set = ExprSet::new();
+        let mut expr_stats = ExprStats::new();
 
-        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
-        let arrays = to_arrays(&expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        // Visit expr list and build expr identifier to occuring count map (`expr_stats`).
+        let arrays = to_arrays(&expr, input_schema, &mut expr_stats, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[&expr], &[&arrays], input, &expr_set, config)?;
+            self.rewrite_expr(&[&expr], &[&arrays], input, &expr_stats, config)?;
 
         plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input])
     }
@@ -459,7 +474,7 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
 fn to_arrays(
     expr: &[Expr],
     input_schema: DFSchemaRef,
-    expr_set: &mut ExprSet,
+    expr_stats: &mut ExprStats,
     expr_mask: ExprMask,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
@@ -467,7 +482,7 @@ fn to_arrays(
             let mut id_array = vec![];
             expr_to_identifier(
                 e,
-                expr_set,
+                expr_stats,
                 &mut id_array,
                 Arc::clone(&input_schema),
                 expr_mask,
@@ -484,21 +499,21 @@ fn to_arrays(
 /// # Arguments
 /// input: the input plan
 ///
-/// affected_id: which common subexpressions were used (and thus are added to
+/// common_exprs: which common subexpressions were used (and thus are added to
 /// intermediate projection)
 ///
-/// expr_set: the set of common subexpressions
+/// expr_stats: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
-    affected_id: IndexMap<Identifier, Expr>,
-    expr_set: &ExprSet,
+    common_exprs: IndexMap<Identifier, Expr>,
+    expr_stats: &ExprStats,
 ) -> Result<LogicalPlan> {
     let mut fields_set = BTreeSet::new();
-    let mut project_exprs = affected_id
+    let mut project_exprs = common_exprs
         .into_iter()
         .map(|(expr_id, expr)| {
-            let Some((_, data_type)) = expr_set.get(&expr_id) else {
-                return internal_err!("expr_set invalid state");
+            let Some((_, data_type)) = expr_stats.get(&expr_id) else {
+                return internal_err!("expr_stats invalid state");
             };
             // todo: check `nullable`
             let field = Field::new(&expr_id, data_type.clone(), true);
@@ -614,27 +629,26 @@ impl ExprMask {
 /// `Expr` without sub-expr (column, literal etc.) will not have identifier
 /// because they should not be recognized as common sub-expr.
 struct ExprIdentifierVisitor<'a> {
-    // param
-    expr_set: &'a mut ExprSet,
-    /// series number (usize) and identifier.
+    // statistics of expressions
+    expr_stats: &'a mut ExprStats,
+    // cache to speed up second traversal
     id_array: &'a mut IdArray,
-    /// input schema for the node that we're optimizing, so we can determine the correct datatype
-    /// for each subexpression
+    // input schema for the node that we're optimizing, so we can determine the correct datatype
+    // for each subexpression
     input_schema: DFSchemaRef,
     // inner states
     visit_stack: Vec<VisitRecord>,
-    /// increased in fn_down, start from 0.
+    // preorder index, start from 0.
     down_index: usize,
-    /// increased in fn_up, start from 1.
+    // postorder index, start from 0.
     up_index: usize,
-    /// which expression should be skipped?
+    // which expression should be skipped?
     expr_mask: ExprMask,
 }
 
 /// Record item that used when traversing a expression tree.
 enum VisitRecord {
-    /// `usize` is the monotone increasing series number assigned in pre_visit().
-    /// Starts from 0. Is used to index the identifier array `id_array` in post_visit().
+    /// `usize` postorder index assigned in `f-down`(). Starts from 0.
     EnterMark(usize),
     /// the node's children were skipped => jump to f_up on same node
     JumpMark,
@@ -671,7 +685,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         // TODO: propagate is_volatile state bottom-up + consider non-volatile sub-expressions for CSE
-        // TODO: consider surely executed children of short circuited for CSE
+        // TODO: consider surely executed children of "short circuited"s for CSE
         if expr.short_circuits() || expr.is_volatile()? {
             self.visit_stack.push(VisitRecord::JumpMark);
 
@@ -697,10 +711,11 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         if !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1.clone_from(&expr_id);
 
-            // TODO: why do we capture data type here?
+            // TODO: can we capture the data type in the second traversal only for
+            //  replaced expressions?
             let data_type = expr.get_type(&self.input_schema)?;
             let (count, _) = self
-                .expr_set
+                .expr_stats
                 .entry(expr_id.clone())
                 .or_insert((0, data_type));
             *count += 1;
@@ -719,13 +734,13 @@ fn expr_identifier(expr: &Expr, sub_expr_identifier: Identifier) -> Identifier {
 /// Go through an expression tree and generate identifier for every node in this tree.
 fn expr_to_identifier(
     expr: &Expr,
-    expr_set: &mut ExprSet,
+    expr_stats: &mut ExprStats,
     id_array: &mut Vec<(usize, Identifier)>,
     input_schema: DFSchemaRef,
     expr_mask: ExprMask,
 ) -> Result<()> {
     expr.visit(&mut ExprIdentifierVisitor {
-        expr_set,
+        expr_stats,
         id_array,
         input_schema,
         visit_stack: vec![],
@@ -741,11 +756,14 @@ fn expr_to_identifier(
 /// the corresponding temporary column name. That column contains the
 /// evaluate result of replaced expression.
 struct CommonSubexprRewriter<'a> {
-    expr_set: &'a ExprSet,
+    // statistics of expressions
+    expr_stats: &'a ExprStats,
+    // cache to speed up second traversal
     id_array: &'a IdArray,
-    /// Which identifier is replaced.
-    affected_id: &'a mut IndexMap<Identifier, Expr>,
-    /// current node's information's index in `id_array`.
+    // common expression, that are replaced during the second traversal, are collected to
+    // this map
+    common_exprs: &'a mut IndexMap<Identifier, Expr>,
+    // preorder index, starts from 0.
     down_index: usize,
 }
 
@@ -768,7 +786,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             return Ok(Transformed::no(expr));
         }
 
-        let (counter, _) = self.expr_set.get(expr_id).unwrap();
+        let (counter, _) = self.expr_stats.get(expr_id).unwrap();
         if *counter > 1 {
             // step index to skip all sub-node (which has smaller series number).
             while self.down_index < self.id_array.len()
@@ -778,7 +796,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             }
 
             let expr_name = expr.display_name()?;
-            self.affected_id.insert(expr_id.clone(), expr);
+            self.common_exprs.insert(expr_id.clone(), expr);
             // Alias this `Column` expr to it original "expr name",
             // `projection_push_down` optimizer use "expr name" to eliminate useless
             // projections.
@@ -795,17 +813,17 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 }
 
 /// Replace common sub-expression in `expr` with the corresponding temporary
-/// column name, updating `affected_id` with any replaced expressions
+/// column name, updating `common_exprs` with any replaced expressions
 fn replace_common_expr(
     expr: Expr,
     id_array: &IdArray,
-    expr_set: &ExprSet,
-    affected_id: &mut IndexMap<Identifier, Expr>,
+    expr_stats: &ExprStats,
+    common_exprs: &mut IndexMap<Identifier, Expr>,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
-        expr_set,
+        expr_stats,
         id_array,
-        affected_id,
+        common_exprs,
         down_index: 0,
     })
     .data()
@@ -1147,27 +1165,28 @@ mod test {
     #[test]
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
-        let expr_set_1 = ExprSet::from([
+        let expr_stats_1 = ExprStats::from([
             ("c+a".to_string(), (1, DataType::UInt32)),
             ("b+a".to_string(), (1, DataType::UInt32)),
         ]);
-        let affected_id_1 = IndexMap::from([
+        let common_exprs_1 = IndexMap::from([
             ("c+a".to_string(), col("c") + col("a")),
             ("b+a".to_string(), col("b") + col("a")),
         ]);
-        let expr_set_2 = ExprSet::from([
+        let exprs_stats_2 = ExprStats::from([
             ("c+a".to_string(), (1, DataType::UInt32)),
             ("b+a".to_string(), (1, DataType::UInt32)),
         ]);
-        let affected_id_2 = IndexMap::from([
+        let common_exprs_2 = IndexMap::from([
             ("c+a".to_string(), col("c+a")),
             ("b+a".to_string(), col("b+a")),
         ]);
         let project =
-            build_common_expr_project_plan(table_scan, affected_id_1, &expr_set_1)
+            build_common_expr_project_plan(table_scan, common_exprs_1, &expr_stats_1)
                 .unwrap();
         let project_2 =
-            build_common_expr_project_plan(project, affected_id_2, &expr_set_2).unwrap();
+            build_common_expr_project_plan(project, common_exprs_2, &exprs_stats_2)
+                .unwrap();
 
         let mut field_set = BTreeSet::new();
         for name in project_2.schema().field_names() {
@@ -1184,11 +1203,11 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        let expr_set_1 = ExprSet::from([
+        let expr_stats_1 = ExprStats::from([
             ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
             ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
         ]);
-        let affected_id_1 = IndexMap::from([
+        let common_exprs_1 = IndexMap::from([
             (
                 "test1.c+test1.a".to_string(),
                 col("test1.c") + col("test1.a"),
@@ -1198,18 +1217,19 @@ mod test {
                 col("test1.b") + col("test1.a"),
             ),
         ]);
-        let expr_set_2 = ExprSet::from([
+        let expr_stats_2 = ExprStats::from([
             ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
             ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
         ]);
-        let affected_id_2 = IndexMap::from([
+        let common_exprs_2 = IndexMap::from([
             ("test1.c+test1.a".to_string(), col("test1.c+test1.a")),
             ("test1.b+test1.a".to_string(), col("test1.b+test1.a")),
         ]);
         let project =
-            build_common_expr_project_plan(join, affected_id_1, &expr_set_1).unwrap();
+            build_common_expr_project_plan(join, common_exprs_1, &expr_stats_1).unwrap();
         let project_2 =
-            build_common_expr_project_plan(project, affected_id_2, &expr_set_2).unwrap();
+            build_common_expr_project_plan(project, common_exprs_2, &expr_stats_2)
+                .unwrap();
 
         let mut field_set = BTreeSet::new();
         for name in project_2.schema().field_names() {
