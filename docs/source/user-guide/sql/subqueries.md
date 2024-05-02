@@ -20,9 +20,8 @@
 # Subqueries
 
 Subqueries (also known as inner queries or nested queries) are queries within
-a query. 
+a query.
 Subqueries can be used in `SELECT`, `FROM`, `WHERE`, and `HAVING` clauses.
-
 
 The examples below are based on the following tables.
 
@@ -107,7 +106,7 @@ SELECT * FROM x WHERE column_1 NOT IN (1,3);
 
 `SELECT` clause subqueries use values returned from the inner query as part
 of the outer query's `SELECT` list.
-The `SELECT` clause only supports [scalar subqueries](#scalar-subqueries) that 
+The `SELECT` clause only supports [scalar subqueries](#scalar-subqueries) that
 return a single value per execution of the inner query.
 The returned value can be unique per row.
 
