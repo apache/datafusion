@@ -313,28 +313,20 @@ mod tests {
         let context = SimplifyContext::new(&props).with_schema(schema);
         // One argument with no simplifications
         let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
-        match result {
-            ExprSimplifyResult::Simplified(_) => {
-                panic!("Expected ExprSimplifyResult::Original")
-            }
-            ExprSimplifyResult::Original(args) => {
-                assert_eq!(args.len(), 1);
-                assert_eq!(args[0], lit(2));
-            }
-        }
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], lit(2));
         // Two arguments with no simplifications
         let result = LogFunc::new()
             .simplify(vec![lit(2), lit(3)], &context)
             .unwrap();
-        match result {
-            ExprSimplifyResult::Simplified(_) => {
-                panic!("Expected ExprSimplifyResult::Original")
-            }
-            ExprSimplifyResult::Original(args) => {
-                assert_eq!(args.len(), 2);
-                assert_eq!(args[0], lit(2));
-                assert_eq!(args[1], lit(3));
-            }
-        }
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], lit(2));
+        assert_eq!(args[1], lit(3));
     }
 }
