@@ -92,9 +92,12 @@ pub struct ExprSimplifier<S> {
     /// Should expressions be canonicalized before simplification? Defaults to
     /// true
     canonicalize: bool,
+    /// Maximum number of simplifier iterations
+    max_simplifier_iterations: usize,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const DEFAULT_MAX_SIMPLIFIER_ITERATIONS: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -107,6 +110,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             info,
             guarantees: vec![],
             canonicalize: true,
+            max_simplifier_iterations: DEFAULT_MAX_SIMPLIFIER_ITERATIONS,
         }
     }
 
@@ -181,24 +185,30 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
         }
 
-        // TODO iterate until no changes are made during rewrite
-        // (evaluating constants can enable new simplifications and
-        // simplifications can enable new constant evaluation)
-        // https://github.com/apache/datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)
-            .data()?
-            .rewrite(&mut simplifier)
-            .data()?
-            .rewrite(&mut guarantee_rewriter)
-            .data()?
-            // run both passes twice to try an minimize simplifications that we missed
-            .rewrite(&mut const_evaluator)
-            .data()?
-            .rewrite(&mut simplifier)
-            .data()?
+        let mut i = 0;
+        loop {
+            let result = expr.rewrite(&mut const_evaluator)?;
+            let mut transformed = result.transformed;
+            expr = result.data;
+
+            let result = expr.rewrite(&mut simplifier)?;
+            transformed |= result.transformed;
+            expr = result.data;
+
+            let result = expr.rewrite(&mut guarantee_rewriter)?;
+            transformed |= result.transformed;
+            expr = result.data;
+
             // shorten inlist should be started after other inlist rules are applied
-            .rewrite(&mut shorten_in_list_simplifier)
-            .data()
+            let result = expr.rewrite(&mut shorten_in_list_simplifier)?;
+            transformed |= result.transformed;
+            expr = result.data;
+
+            i += 1;
+            if !transformed || i >= self.max_simplifier_iterations {
+                return Ok(expr);
+            }
+        }
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be

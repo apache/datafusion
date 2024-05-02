@@ -29,7 +29,7 @@ use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarUDF, Volatility,
+    LogicalPlanBuilder, Operator, ScalarUDF, Volatility,
 };
 use datafusion_functions::{math, string};
 use datafusion_optimizer::optimizer::Optimizer;
@@ -656,5 +656,20 @@ fn test_simplify_concat() {
         null,
     ]);
     let expected = concat(vec![col("c0"), lit("hello rust"), col("c1")]);
+    test_simplify(expr, expected)
+}
+
+#[test]
+fn test_simplify_iterations() {
+    let expr = binary_expr(
+        cast(now(), DataType::Int64),
+        Operator::Lt,
+        binary_expr(
+            cast(to_timestamp(vec![lit(0)]), DataType::Int64),
+            Operator::Plus,
+            lit(i64::MAX),
+        ),
+    );
+    let expected = lit(true);
     test_simplify(expr, expected)
 }
