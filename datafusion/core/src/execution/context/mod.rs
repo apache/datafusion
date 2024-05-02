@@ -1998,7 +1998,7 @@ impl SessionState {
         df_schema: &DFSchema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let simplifier =
-            ExprSimplifier::new(SessionSimpifyProvider::new(self, df_schema));
+            ExprSimplifier::new(SessionSimplifyProvider::new(self, df_schema));
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
@@ -2089,7 +2089,7 @@ impl SessionState {
     }
 }
 
-struct SessionSimpifyProvider<'a> {
+struct SessionSimplifyProvider<'a> {
     state: &'a SessionState,
     df_schema: &'a DFSchema,
 }
@@ -2100,7 +2100,7 @@ impl<'a> SessionSimplifyProvider<'a> {
     }
 }
 
-impl<'a> SimplifyInfo for SessionSimpifyProvider<'a> {
+impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
     }
