@@ -42,6 +42,7 @@ pub mod stats;
 pub mod test_util;
 pub mod tree_node;
 pub mod utils;
+pub mod franz_arrow;
 
 /// Reexport arrow crate
 pub use arrow;

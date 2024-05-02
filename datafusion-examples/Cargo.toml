@@ -77,3 +77,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.11"
 url = { workspace = true }
 uuid = "1.7"
+
+[dependencies]
+apache-avro = "0.16.0"
+arrow-json = "51.0.0"
+base64 = "0.22.0"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"

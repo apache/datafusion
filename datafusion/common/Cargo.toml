@@ -36,21 +36,19 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
+apache-avro = ["dep:apache-avro"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.16", default-features = false, features = [
-    "bzip",
-    "snappy",
-    "xz",
-    "zstandard",
-], optional = true }
+apache-avro = { version = "0.16", default-features = false, features = ["bzip", "snappy", "xz", "zstandard"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
+arrow-json = "51.0.0"
 arrow-schema = { workspace = true }
+base64 = "0.22.1"
 chrono = { workspace = true }
 half = { workspace = true }
 libc = "0.2.140"
@@ -58,6 +56,7 @@ num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 pyo3 = { version = "0.20.0", optional = true }
+serde_json = "1.0.116"
 sqlparser = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
