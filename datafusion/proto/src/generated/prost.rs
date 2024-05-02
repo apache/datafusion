@@ -1911,9 +1911,8 @@ pub struct ParquetOptions {
     /// default = "1.0"
     #[prost(string, tag = "9")]
     pub writer_version: ::prost::alloc::string::String,
-    /// default = false
-    #[prost(bool, tag = "20")]
-    pub bloom_filter_enabled: bool,
+    /// bool bloom_filter_enabled = 20; // default = false
+    ///
     /// default = true
     #[prost(bool, tag = "23")]
     pub allow_single_file_parallelism: bool,
@@ -1923,6 +1922,12 @@ pub struct ParquetOptions {
     /// default = 2
     #[prost(uint64, tag = "25")]
     pub maximum_buffered_record_batches_per_stream: u64,
+    /// default = true
+    #[prost(bool, tag = "26")]
+    pub bloom_filter_on_read: bool,
+    /// default = false
+    #[prost(bool, tag = "27")]
+    pub bloom_filter_on_write: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

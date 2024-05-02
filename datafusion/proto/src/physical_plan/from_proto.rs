@@ -880,7 +880,8 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
-            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp: value.clone()
                 .bloom_filter_fpp_opt
                 .map(|opt| match opt {
