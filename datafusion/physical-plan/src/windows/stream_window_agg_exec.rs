@@ -1,9 +1,6 @@
 use std::{
-    alloc::System,
     any::Any,
     collections::BTreeMap,
-    fmt::Display,
-    future::ready,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -11,19 +8,17 @@ use std::{
 };
 
 use arrow::{
-    compute::{concat, concat_batches, filter_record_batch, gt_eq},
+    compute::{concat, concat_batches, filter_record_batch},
     datatypes::TimestampMillisecondType,
-    record_batch,
 };
 
 use arrow_array::{
-    new_empty_array, Array, ArrayRef, Int64Array, PrimitiveArray, RecordBatch,
-    TimestampMillisecondArray,
+    Array, ArrayRef, PrimitiveArray, RecordBatch, TimestampMillisecondArray,
 };
 use arrow_ord::cmp;
 use arrow_schema::{ArrowError, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
-    internal_err, stats::Precision, utils::evaluate_partition_ranges, ColumnStatistics,
+    stats::Precision, utils::evaluate_partition_ranges, ColumnStatistics,
     DataFusionError, Statistics,
 };
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
@@ -31,8 +26,8 @@ use datafusion_physical_expr::{
     window::WindowExpr, Distribution, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-use futures::{ready, Stream, StreamExt};
-use tracing::info;
+use futures::{Stream, StreamExt};
+use tracing::{debug, error, info};
 
 use crate::time::RecordBatchWatermark;
 use crate::{
@@ -98,10 +93,6 @@ impl FranzWindowFrame {
 
     pub fn push(&mut self, batch: &RecordBatch) -> Result<(), DataFusionError> {
         let num_rows = batch.num_rows();
-        info!(
-            "push called for frame {:?} {}",
-            self.window_start_time, num_rows
-        );
 
         let ts_column = batch
             .column_by_name(self.timestamp_column.as_str())
@@ -124,7 +115,6 @@ impl FranzWindowFrame {
             &TimestampMillisecondArray::new_scalar(start_time_duration),
         )?;
 
-        info!("applying gte filter for frame {:?}", self.window_start_time);
         let filtered_batch: RecordBatch = filter_record_batch(batch, &gte_cmp_filter)?;
 
         let end_time_duration = self
@@ -147,7 +137,6 @@ impl FranzWindowFrame {
             &ts_array,
             &TimestampMillisecondArray::new_scalar(end_time_duration),
         )?;
-        info!("applying lt filter for frame {:?}", self.window_start_time);
         let final_batch = filter_record_batch(&filtered_batch, &lt_cmp_filter)?;
         info!(
             "WindowFrame - {:?} original_num_rows {} final_num_rows {}",
@@ -194,8 +183,6 @@ impl FranzWindowExec {
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         window_type: FranzWindowType,
     ) -> Result<Self> {
-        println!("New wine old bottle");
-
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
 
@@ -323,7 +310,6 @@ impl ExecutionPlan for FranzWindowExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        info!("reporting for duty {}", partition);
         let input: Pin<Box<dyn RecordBatchStream + Send>> =
             self.input.execute(partition, context)?;
         let stream: Pin<Box<FranzWindowAggStream>> = Box::pin(FranzWindowAggStream::new(
@@ -489,11 +475,11 @@ impl FranzWindowAggStream {
         }
 
         if results.is_empty() {
-            return (Ok(RecordBatch::new_empty(self.schema.clone())), true);
+            return (Ok(RecordBatch::new_empty(self.input.schema())), true);
         }
 
         (
-            concat_batches(&self.schema, &results)
+            concat_batches(&self.input.schema(), &results)
                 .map_err(|err| DataFusionError::ArrowError(err, None)),
             false,
         )
@@ -547,11 +533,12 @@ impl FranzWindowAggStream {
 
     fn process_watermark(&mut self, watermark: RecordBatchWatermark) {
         // should this be within a mutex?
-        let mut watermark_lock = self.latest_watermark.lock().unwrap();
+        let mut watermark_lock: std::sync::MutexGuard<Option<SystemTime>> =
+            self.latest_watermark.lock().unwrap();
 
+        debug!("latest watermark currently is {:?}", *watermark_lock);
         if let Some(current_watermark) = *watermark_lock {
             if current_watermark <= watermark.min_timestamp {
-                println!("watermark updated to {:?}", watermark);
                 *watermark_lock = Some(watermark.min_timestamp)
             }
         } else {
@@ -589,18 +576,14 @@ impl FranzWindowAggStream {
                 match self.input.poll_next_unpin(cx) {
                     Poll::Ready(rdy) => match rdy {
                         Some(Ok(batch)) => {
-                            info!("----->>>>> processing incoming data");
                             let watermark: RecordBatchWatermark =
                                 RecordBatchWatermark::try_from(
                                     &batch,
                                     "franz_canonical_timestamp",
                                 )?;
                             let window_length = self.get_window_length();
-                            info!("getting window ranges. ");
                             let ranges = get_window_ranges(&watermark, window_length);
-                            info!("ensuring that the frames exist");
                             self.get_frames_for_ranges(&ranges);
-                            info!("frames for ranges are done and set. {:?}", ranges);
                             for range in ranges {
                                 let frame = self.window_frames.get_mut(&range.0).unwrap();
                                 match frame.push(&batch) {
@@ -608,10 +591,9 @@ impl FranzWindowAggStream {
                                         "frame {:?} successfully updated.",
                                         frame.window_start_time
                                     ),
-                                    Err(err) => info!("error ----> {:?}", err),
+                                    Err(err) => error!("error ----> {:?}", err),
                                 }
                             }
-                            info!("processing the watermark");
                             self.process_watermark(watermark);
                             let (result, is_empty) = self.trigger_windows();
                             if is_empty {
@@ -619,21 +601,13 @@ impl FranzWindowAggStream {
                             }
                             self.compute_aggregates(result.unwrap())
                         }
-                        Some(Err(e)) => {
-                            println!("ze error {:?}", e);
-                            Err(e)
-                        }
-                        None => {
-                            println!("reached None in the poll loop");
-                            Ok(RecordBatch::new_empty(self.schema.clone()))
-                        }
+                        Some(Err(e)) => Err(e),
+                        None => Ok(RecordBatch::new_empty(self.schema.clone())),
                     },
                     Poll::Pending => {
-                        info!("pending on data from {:p}", &self.input);
                         return Poll::Pending;
                     }
                 };
-            println!("end of innocence");
             return Poll::Ready(Some(result));
         }
     }
@@ -652,7 +626,6 @@ impl Stream for FranzWindowAggStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        info!("polling the streaming agg.");
         let poll: Poll<Option<std::prelude::v1::Result<RecordBatch, DataFusionError>>> =
             self.poll_next_inner(cx);
         self.baseline_metrics.record_poll(poll)
