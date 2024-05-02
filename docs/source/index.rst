@@ -123,6 +123,6 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    :maxdepth: 1
    :caption: DataFusion Subprojects
 
-   DataFusion Python <https://datafusion.apache.org/python/>
-   DataFusion Comet <https://datafusion.apache.org/comet/>
    DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Python <https://datafusion.apache.org/python/>
