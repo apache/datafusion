@@ -516,7 +516,7 @@ impl SessionContext {
     }
 
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
-    /// coercion, and function rewrites.
+    /// coercion and function rewrites.
     ///
     /// # Example
     /// ```
@@ -2094,7 +2094,7 @@ struct SessionSimpifyProvider<'a> {
     df_schema: &'a DFSchema,
 }
 
-impl<'a> SessionSimpifyProvider<'a> {
+impl<'a> SessionSimplifyProvider<'a> {
     fn new(state: &'a SessionState, df_schema: &'a DFSchema) -> Self {
         Self { state, df_schema }
     }
