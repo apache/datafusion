@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::dml::CopyTo;
 use crate::expr::Alias;
@@ -924,6 +925,19 @@ impl LogicalPlanBuilder {
         )?)))
     }
 
+    /// Apply franz window functions to extend the schema
+    pub fn franz_window(
+        self,
+        window_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        window_length: Duration,
+    ) -> Result<Self> {
+        let window_expr = normalize_cols(window_expr, &self.plan)?;
+        validate_unique_names("Windows", &window_expr)?;
+        Ok(Self::from(LogicalPlan::Window(Window::try_new(
+            window_expr,
+            Arc::new(self.plan),
+        )?)))
+    }
     /// Apply an aggregate: grouping on the `group_expr` expressions
     /// and calculating `aggr_expr` aggregates for each distinct
     /// value of the `group_expr`;
