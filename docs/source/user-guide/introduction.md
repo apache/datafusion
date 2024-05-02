@@ -95,7 +95,6 @@ Here are some active projects using DataFusion:
  <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
-- [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
@@ -112,7 +111,6 @@ Here are some active projects using DataFusion:
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [qv](https://github.com/timvw/qv) Quickly view your data
-- [bdt](https://github.com/andygrove/bdt) Boring Data Tool
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
@@ -123,6 +121,8 @@ Here are some active projects using DataFusion:
 
 Here are some less active projects that used DataFusion:
 
+- [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
+- [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
 - [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
