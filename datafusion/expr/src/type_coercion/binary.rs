@@ -302,52 +302,54 @@ enum TypeCategory {
     NotSupported,
 }
 
-fn data_type_category(data_type: &DataType) -> TypeCategory {
-    if data_type.is_numeric() {
-        return TypeCategory::Numeric;
-    }
+impl From<&DataType> for TypeCategory {
+    fn from(data_type: &DataType) -> Self {
+        if data_type.is_numeric() {
+            return TypeCategory::Numeric;
+        }
 
-    if matches!(data_type, DataType::Boolean) {
-        return TypeCategory::Boolean;
-    }
+        if matches!(data_type, DataType::Boolean) {
+            return TypeCategory::Boolean;
+        }
 
-    if matches!(
-        data_type,
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_)
-    ) {
-        return TypeCategory::Array;
-    }
+        if matches!(
+            data_type,
+            DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_)
+        ) {
+            return TypeCategory::Array;
+        }
 
-    // String literal is possible to cast to many other types like numeric or datetime,
-    // therefore, it is categorized as a unknown type
-    if matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
-    ) {
-        return TypeCategory::Unknown;
-    }
+        // String literal is possible to cast to many other types like numeric or datetime,
+        // therefore, it is categorized as a unknown type
+        if matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
+        ) {
+            return TypeCategory::Unknown;
+        }
 
-    if matches!(
-        data_type,
-        DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Timestamp(_, _)
-            | DataType::Interval(_)
-            | DataType::Duration(_)
-    ) {
-        return TypeCategory::DateTime;
-    }
+        if matches!(
+            data_type,
+            DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Timestamp(_, _)
+                | DataType::Interval(_)
+                | DataType::Duration(_)
+        ) {
+            return TypeCategory::DateTime;
+        }
 
-    if matches!(
-        data_type,
-        DataType::Dictionary(_, _) | DataType::Struct(_) | DataType::Union(_, _)
-    ) {
-        return TypeCategory::Composite;
-    }
+        if matches!(
+            data_type,
+            DataType::Dictionary(_, _) | DataType::Struct(_) | DataType::Union(_, _)
+        ) {
+            return TypeCategory::Composite;
+        }
 
-    TypeCategory::NotSupported
+        TypeCategory::NotSupported
+    }
 }
 
 /// Coerce dissimilar data types to a single data type.
@@ -377,7 +379,7 @@ pub(super) fn type_union_resolution(data_types: &[DataType]) -> Option<DataType>
     let data_types_category: Vec<TypeCategory> = data_types
         .iter()
         .filter(|&t| t != &DataType::Null)
-        .map(data_type_category)
+        .map(|t| t.into())
         .collect();
 
     if data_types_category

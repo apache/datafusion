@@ -27,7 +27,9 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
-use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
+};
 
 use super::binary::comparison_coercion;
 
@@ -64,7 +66,7 @@ pub fn data_types(
 
     // Well-supported signature that returns exact valid types.
     if !valid_types.is_empty()
-        && matches!(signature.type_signature, TypeSignature::VariadicEqualOrNull)
+        && matches!(signature.type_signature, TypeSignature::Union(_))
     {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
@@ -196,13 +198,21 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::VariadicEqualOrNull => {
-            if let Some(common_type) = type_union_resolution(current_types) {
-                vec![vec![common_type; current_types.len()]]
-            } else {
-                vec![]
+        TypeSignature::Union(sig) => match sig.as_ref() {
+            TypeSignature::VariadicAny => {
+                if let Some(common_type) = type_union_resolution(current_types) {
+                    vec![vec![common_type; current_types.len()]]
+                } else {
+                    vec![]
+                }
             }
-        }
+            _ => {
+                return not_impl_err!(
+                    "Union type with signature {:?} not supported.",
+                    sig
+                )
+            }
+        },
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
@@ -332,6 +342,7 @@ fn maybe_data_types_without_coercion(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else if can_cast_types(current_type, valid_type) {
+            // validate the valid type is castable from the current type
             new_type.push(valid_type.clone())
         } else {
             return None;
