@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 
 use std::str::FromStr;
@@ -6,26 +5,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::datatypes::TimestampMillisecondType;
-use datafusion_common::franz_arrow::json_records_to_arrow_record_batch;
-use tracing::{info, instrument};
-//use arrow::ipc::Timestamp;
-use crate::common; //franz_arrow::json_records_to_arrow_record_batch;
-use crate::{LexOrdering, PhysicalSortExpr};
 use arrow_array::{Array, PrimitiveArray, RecordBatch};
-use arrow_schema::{Schema, SchemaRef, SortOptions};
-use async_trait::async_trait;
+use arrow_schema::SchemaRef;
+use datafusion_common::franz_arrow::json_records_to_arrow_record_batch;
+use tracing::{debug, error, info, instrument};
 //use datafusion::datasource::TableProvider;
 //use datafusion_execution::context::SessionState;
 use futures::StreamExt;
 use serde_json::Value;
 
 use crate::stream::RecordBatchReceiverStreamBuilder;
-use crate::streaming::{PartitionStream, StreamingTableExec};
-use crate::{expressions, ExecutionPlan};
+use crate::streaming::PartitionStream;
 use arrow::compute::{max, min};
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{Expr, TableType};
+use datafusion_expr::Expr;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::{ClientConfig, Message, Timestamp, TopicPartitionList};
 // Import min_max function
@@ -115,19 +109,14 @@ impl PartitionStream for KafkaStreamRead {
         let mut builder =
             RecordBatchReceiverStreamBuilder::new(self.config.schema.clone(), 1);
         let tx = builder.tx();
-        info!("my sender is {:?}", tx);
         let canonical_schema = self.config.schema.clone();
         let json_schema = self.config.original_schema.clone();
         let timestamp_column: String = self.config.timestamp_column.clone();
         let timestamp_unit = self.config.timestamp_unit.clone();
 
-        let task_id = _ctx.task_id();
-        info!("task_id is {:?}", task_id);
-        let x = builder.spawn(async move {
-            let mut bleh = 0;
+        let _ = builder.spawn(async move {
             // should this be blocking?
             loop {
-                println!("loop count {}", bleh);
                 let batch: Vec<serde_json::Value> = consumer
                     .stream()
                     .take_until(tokio::time::sleep(Duration::from_secs(1)))
@@ -162,7 +151,10 @@ impl PartitionStream for KafkaStreamRead {
                                 serde_json::to_value(deserialized_record).unwrap();
                             new_payload
                         }
-                        Err(err) => todo!(),
+                        Err(err) => {
+                            error!("Error reading from Kafka {:?}", err);
+                            panic!("Error reading from Kafka {:?}", err)
+                        }
                     })
                     .collect()
                     .await;
@@ -184,7 +176,7 @@ impl PartitionStream for KafkaStreamRead {
 
                 let max_timestamp: Option<_> = max::<TimestampMillisecondType>(&ts_array);
                 let min_timestamp: Option<_> = min::<TimestampMillisecondType>(&ts_array);
-                println!("min: {:?}, max: {:?}", min_timestamp, max_timestamp);
+                debug!("min: {:?}, max: {:?}", min_timestamp, max_timestamp);
                 let mut columns: Vec<Arc<dyn Array>> = record_batch.columns().to_vec();
                 columns.push(ts_column);
 
@@ -195,12 +187,9 @@ impl PartitionStream for KafkaStreamRead {
                     Ok(m) => println!("result ok {:?}", m),
                     Err(err) => println!("result err {:?}", err),
                 }
-                bleh += 1;
             }
             Ok(())
         });
-        let ret = builder.build();
-        info!("sendable batch record stream is at {:p}", &ret);
-        ret
+        builder.build()
     }
 }

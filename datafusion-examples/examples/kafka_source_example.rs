@@ -257,6 +257,7 @@ async fn main() {
     loop {
         let rb = stream.next().await.transpose();
         println!("{:?}", rb);
+        println!("<<<<< window end >>>>>>");
     }
 }
 
