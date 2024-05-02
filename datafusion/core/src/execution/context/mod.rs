@@ -518,6 +518,10 @@ impl SessionContext {
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
     /// coercion and function rewrites.
     ///
+    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
+    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// See the [expr_api] example for how to simplify expressions.
+    ///
     /// # Example
     /// ```
     /// # use std::sync::Arc;
@@ -535,6 +539,9 @@ impl SessionContext {
     /// ```
     /// # See Also
     /// * [`SessionState::create_physical_expr`] for a lower level API
+    ///
+    /// [simplified]: datafusion_optimizer::simplify_expressions
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
     pub fn create_physical_expr(
         &self,
         expr: Expr,
@@ -1985,13 +1992,16 @@ impl SessionState {
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
     /// coercion, and function rewrites.
     ///
-    /// Note: The expression is not [simplified]
+    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
+    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// See the [expr_api] example for how to simplify expressions.
     ///
     /// # See Also:
     /// * [`SessionContext::create_physical_expr`] for a higher-level API
     /// * [`create_physical_expr`] for a lower-level API
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
     pub fn create_physical_expr(
         &self,
         expr: Expr,
