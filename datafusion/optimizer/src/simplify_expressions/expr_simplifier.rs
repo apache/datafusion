@@ -93,11 +93,11 @@ pub struct ExprSimplifier<S> {
     /// true
     canonicalize: bool,
     /// Maximum number of simplifier iterations
-    max_simplifier_iterations: usize,
+    max_simplifier_iterations: u32,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
-pub const DEFAULT_MAX_SIMPLIFIER_ITERATIONS: usize = 3;
+pub const DEFAULT_MAX_SIMPLIFIER_ITERATIONS: u32 = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
