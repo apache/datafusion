@@ -23,7 +23,6 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -41,6 +40,7 @@ use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
+use datafusion_physical_expr_common::sort_properties::ExprProperties;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -444,15 +444,43 @@ impl PhysicalExpr for BinaryExpr {
 
     /// For each operator, [`BinaryExpr`] has distinct ordering rules.
     /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        let (left_child, right_child) = (&children[0], &children[1]);
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
+        let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
-            Operator::Plus => left_child.add(right_child),
-            Operator::Minus => left_child.sub(right_child),
-            Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
-            Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
-            Operator::And | Operator::Or => left_child.and_or(right_child),
-            _ => SortProperties::Unordered,
+            Operator::Plus => Ok(ExprProperties {
+                sort_properties: l_order.add(&r_order),
+                range: l_range.add(r_range)?,
+            }),
+            Operator::Minus => Ok(ExprProperties {
+                sort_properties: l_order.sub(&r_order),
+                range: l_range.sub(r_range)?,
+            }),
+            Operator::Gt => Ok(ExprProperties {
+                sort_properties: l_order.gt_or_gteq(&r_order),
+                range: l_range.gt(r_range)?,
+            }),
+            Operator::GtEq => Ok(ExprProperties {
+                sort_properties: l_order.gt_or_gteq(&r_order),
+                range: l_range.gt_eq(r_range)?,
+            }),
+            Operator::Lt => Ok(ExprProperties {
+                sort_properties: r_order.gt_or_gteq(&l_order),
+                range: l_range.lt(r_range)?,
+            }),
+            Operator::LtEq => Ok(ExprProperties {
+                sort_properties: r_order.gt_or_gteq(&l_order),
+                range: l_range.lt_eq(r_range)?,
+            }),
+            Operator::And => Ok(ExprProperties {
+                sort_properties: r_order.and_or(&l_order),
+                range: l_range.and(r_range)?,
+            }),
+            Operator::Or => Ok(ExprProperties {
+                sort_properties: r_order.and_or(&l_order),
+                range: l_range.or(r_range)?,
+            }),
+            _ => Ok(ExprProperties::new_unknown()),
         }
     }
 }

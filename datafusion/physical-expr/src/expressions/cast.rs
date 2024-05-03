@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
+use datafusion_physical_expr_common::sort_properties::ExprProperties;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -164,8 +164,18 @@ impl PhysicalExpr for CastExpr {
     }
 
     /// A [`CastExpr`] preserves the ordering of its child.
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        children[0]
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        let source_datatype = children[0].range.data_type();
+        let target_type = &self.cast_type;
+
+        let unbounded = Interval::make_unbounded(target_type)?;
+        if source_datatype.is_numeric() && source_datatype.is_numeric()
+            || self.cast_type.is_temporal() && source_datatype.is_temporal()
+        {
+            Ok(children[0].clone().with_range(unbounded))
+        } else {
+            Ok(ExprProperties::new_unknown().with_range(unbounded))
+        }
     }
 }
 

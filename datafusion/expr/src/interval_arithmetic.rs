@@ -369,7 +369,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
@@ -402,7 +402,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
@@ -435,7 +435,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt(self)
     }
 
@@ -446,7 +446,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt_eq(self)
     }
 
@@ -457,7 +457,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
             internal_err!(
@@ -480,7 +480,7 @@ impl Interval {
 
     /// Compute the logical conjunction of this (boolean) interval with the
     /// given boolean interval.
-    pub(crate) fn and<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn and<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
             (
@@ -501,8 +501,31 @@ impl Interval {
         }
     }
 
+    /// Compute the logical disjunction of this boolean interval with the
+    /// given boolean interval.
+    pub fn or<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        let rhs = other.borrow();
+        match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
+            (
+                &ScalarValue::Boolean(Some(self_lower)),
+                &ScalarValue::Boolean(Some(self_upper)),
+                &ScalarValue::Boolean(Some(other_lower)),
+                &ScalarValue::Boolean(Some(other_upper)),
+            ) => {
+                let lower = self_lower || other_lower;
+                let upper = self_upper || other_upper;
+
+                Ok(Self {
+                    lower: ScalarValue::Boolean(Some(lower)),
+                    upper: ScalarValue::Boolean(Some(upper)),
+                })
+            }
+            _ => internal_err!("Incompatible data types for logical conjunction"),
+        }
+    }
+
     /// Compute the logical negation of this (boolean) interval.
-    pub(crate) fn not(&self) -> Result<Self> {
+    pub fn not(&self) -> Result<Self> {
         if self.data_type().ne(&DataType::Boolean) {
             internal_err!("Cannot apply logical negation to a non-boolean interval")
         } else if self == &Self::CERTAINLY_TRUE {
@@ -760,6 +783,13 @@ impl Interval {
             None
         }
         .map(|result| result + 1)
+    }
+
+    pub fn arithmetic_negate(self) -> Result<Self> {
+        Ok(Self {
+            lower: self.upper().clone().arithmetic_negate()?,
+            upper: self.lower().clone().arithmetic_negate()?,
+        })
     }
 }
 

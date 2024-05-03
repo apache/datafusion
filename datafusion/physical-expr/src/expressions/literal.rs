@@ -30,7 +30,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_physical_expr_common::sort_properties::ExprProperties;
 
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -90,8 +92,11 @@ impl PhysicalExpr for Literal {
         self.hash(&mut s);
     }
 
-    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
-        SortProperties::Singleton
+    fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
+        Ok(ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::try_new(self.value().clone(), self.value().clone())?,
+        })
     }
 }
 

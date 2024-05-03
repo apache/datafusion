@@ -19,6 +19,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_physical_expr_common::sort_properties::{
+    ExprProperties, ExprPropertiesNode,
+};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -29,7 +34,7 @@ use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{CastExpr, Literal};
-use crate::sort_properties::{ExprOrdering, SortProperties};
+use crate::sort_properties::SortProperties;
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -323,11 +328,16 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let expr_ordering = self.get_expr_ordering(req.expr.clone());
-        let ExprOrdering { expr, data, .. } = expr_ordering;
-        match data {
+        let expr_props = self.get_expr_properties(req.expr.clone());
+        let ExprProperties {
+            sort_properties, ..
+        } = expr_props;
+        match sort_properties {
             SortProperties::Ordered(options) => {
-                let sort_expr = PhysicalSortExpr { expr, options };
+                let sort_expr = PhysicalSortExpr {
+                    expr: req.expr.clone(),
+                    options,
+                };
                 sort_expr.satisfy(req, self.schema())
             }
             // Singleton expressions satisfies any ordering.
@@ -643,8 +653,9 @@ impl EquivalenceProperties {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
                 .filter_map(|relevant_deps| {
-                    if let SortProperties::Ordered(options) =
-                        get_expr_ordering(source, &relevant_deps)
+                    if let Ok(SortProperties::Ordered(options)) =
+                        get_expr_properties(source, &relevant_deps, self.schema.clone())
+                            .map(|prop| prop.sort_properties)
                     {
                         Some((options, relevant_deps))
                     } else {
@@ -782,16 +793,27 @@ impl EquivalenceProperties {
             let ordered_exprs = search_indices
                 .iter()
                 .flat_map(|&idx| {
-                    let ExprOrdering { expr, data, .. } =
-                        eq_properties.get_expr_ordering(exprs[idx].clone());
-                    match data {
-                        SortProperties::Ordered(options) => {
-                            Some((PhysicalSortExpr { expr, options }, idx))
-                        }
+                    let ExprProperties {
+                        sort_properties, ..
+                    } = eq_properties.get_expr_properties(exprs[idx].clone());
+                    match sort_properties {
+                        SortProperties::Ordered(options) => Some((
+                            PhysicalSortExpr {
+                                expr: exprs[idx].clone(),
+                                options,
+                            },
+                            idx,
+                        )),
                         SortProperties::Singleton => {
                             // Assign default ordering to constant expressions
                             let options = SortOptions::default();
-                            Some((PhysicalSortExpr { expr, options }, idx))
+                            Some((
+                                PhysicalSortExpr {
+                                    expr: exprs[idx].clone(),
+                                    options,
+                                },
+                                idx,
+                            ))
                         }
                         SortProperties::Unordered => None,
                     }
@@ -842,7 +864,7 @@ impl EquivalenceProperties {
 
     /// Retrieves the ordering information for a given physical expression.
     ///
-    /// This function constructs an `ExprOrdering` object for the provided
+    /// This function constructs an [`ExprPropertiesNode`] object for the provided
     /// expression, which encapsulates information about the expression's
     /// ordering, including its [`SortProperties`].
     ///
@@ -853,18 +875,23 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns an `ExprOrdering` object containing the ordering information for
+    /// Returns an [`ExprProperties`] object containing the ordering information for
     /// the given expression.
-    pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
-        ExprOrdering::new_default(expr.clone())
-            .transform_up(|expr| Ok(update_ordering(expr, self)))
+    pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
+        let mut node = ExprPropertiesNode::new_unknown(expr.clone());
+        node.data = node.data.with_range(
+            Interval::make_unbounded(&expr.data_type(self.schema()).unwrap()).unwrap(),
+        );
+
+        node.transform_up(|expr| update_ordering(expr, self))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
+            .data
     }
 }
 
-/// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
+/// Calculates the [`ExprPropertiesNode`] of a given [`ExprPropertiesNode`].
 /// The node can either be a leaf node, or an intermediate node:
 /// - If it is a leaf node, we directly find the order of the node by looking
 /// at the given sort expression and equivalence properties if it is a `Column`
@@ -877,29 +904,30 @@ impl EquivalenceProperties {
 /// sort expression emerges at that node immediately, discarding the recursive
 /// result coming from its children.
 fn update_ordering(
-    mut node: ExprOrdering,
+    mut node: ExprPropertiesNode,
     eq_properties: &EquivalenceProperties,
-) -> Transformed<ExprOrdering> {
+) -> Result<Transformed<ExprPropertiesNode>> {
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
-        node.data = SortProperties::Singleton;
+        node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = eq_properties
         .normalized_oeq_class()
         .get_options(&normalized_expr)
     {
-        node.data = SortProperties::Ordered(options);
+        node.data.sort_properties = SortProperties::Ordered(options);
     } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
-        let children_orderings = node.children.iter().map(|c| c.data).collect_vec();
-        node.data = node.expr.get_ordering(&children_orderings);
+        let children_orderings =
+            node.children.iter().map(|c| c.data.clone()).collect_vec();
+        node.data = node.expr.get_properties(&children_orderings)?;
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
-        node.data = node.expr.get_ordering(&[]);
+        node.data = node.expr.get_properties(&[])?;
     } else {
-        return Transformed::no(node);
+        return Ok(Transformed::no(node));
     }
-    Transformed::yes(node)
+    Ok(Transformed::yes(node))
 }
 
 /// This function determines whether the provided expression is constant
@@ -1082,22 +1110,36 @@ fn generate_dependency_orderings(
 /// # Returns
 ///
 /// A `SortProperties` indicating the ordering information of the given expression.
-fn get_expr_ordering(
+fn get_expr_properties(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
-) -> SortProperties {
+    schema: SchemaRef,
+) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
-        SortProperties::Ordered(column_order.options)
+        Ok(ExprProperties {
+            sort_properties: SortProperties::Ordered(column_order.options),
+            range: Interval::make_unbounded(&expr.data_type(&schema)?)?,
+        })
+    } else if expr.as_any().downcast_ref::<Column>().is_some() {
+        Ok(ExprProperties {
+            sort_properties: SortProperties::Unordered,
+            range: Interval::make_unbounded(&expr.data_type(&schema)?)?,
+        })
+    } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        Ok(ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
+        })
     } else {
         // Find orderings of its children
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_ordering(child, dependencies))
-            .collect::<Vec<_>>();
+            .map(|child| get_expr_properties(child, dependencies, schema.clone()))
+            .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
-        expr.get_ordering(&child_states)
+        expr.get_properties(&child_states)
     }
 }
 
@@ -1766,12 +1808,12 @@ mod tests {
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_ordering = eq_properties.get_expr_ordering(expr.clone());
+            let expr_props = eq_properties.get_expr_properties(expr.clone());
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
-                expr, expected, expr_ordering.data
+                expr, expected, expr_props.sort_properties
             );
-            assert_eq!(expr_ordering.data, expected, "{}", err_msg);
+            assert_eq!(expr_props.sort_properties, expected, "{}", err_msg);
         }
 
         Ok(())

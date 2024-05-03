@@ -29,7 +29,7 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
-use crate::sort_properties::SortProperties;
+use crate::sort_properties::ExprProperties;
 use crate::utils::scatter;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
@@ -164,8 +164,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
     /// the propagation of unordered columns and literals, the `SortProperties`
     /// struct is used.
-    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
-        SortProperties::Unordered
+    fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
+        Ok(ExprProperties::new_unknown())
     }
 }
 

@@ -29,6 +29,7 @@ mod projection;
 mod properties;
 
 pub use class::{EquivalenceClass, EquivalenceGroup};
+use datafusion_physical_expr_common::sort_properties::ExprProperties;
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
@@ -58,6 +59,7 @@ fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
+            let item = item.clone();
             // If it's the last entry, there is no next entry
             if i == input.len() - 1 {
                 return Some(item);
@@ -78,16 +80,23 @@ fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
                 Some(opts) => opts,
             };
 
-            if item.options.map(SortProperties::Ordered)
-                == Some(item.expr.get_ordering(&[SortProperties::Ordered(opts)]))
+            match item
+                .expr
+                .get_properties(&[ExprProperties::new_unknown()
+                    .with_order(SortProperties::Ordered(opts))])
             {
-                // Remove the redundant sort
-                return None;
+                Ok(prop)
+                    if item.options.map(SortProperties::Ordered)
+                        == Some(prop.sort_properties) =>
+                {
+                    {
+                        // Remove the redundant sort
+                        None
+                    }
+                }
+                _ => Some(item),
             }
-
-            Some(item)
         })
-        .cloned()
         .collect::<Vec<_>>()
 }
 

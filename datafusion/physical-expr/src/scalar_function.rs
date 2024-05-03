@@ -38,9 +38,11 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{internal_err, Result};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
 };
+use datafusion_physical_expr_common::sort_properties::ExprProperties;
 
 use crate::functions::out_ordering;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
@@ -187,11 +189,21 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // Add `self.fun` when hash is available
     }
 
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        self.monotonicity
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        let child_orderings = children
+            .iter()
+            .map(|c| c.sort_properties)
+            .collect::<Vec<_>>();
+        let order = self
+            .monotonicity
             .as_ref()
-            .map(|monotonicity| out_ordering(monotonicity, children))
-            .unwrap_or(SortProperties::Unordered)
+            .map(|monotonicity| out_ordering(monotonicity, &child_orderings))
+            .unwrap_or(SortProperties::Unordered);
+
+        Ok(ExprProperties {
+            sort_properties: order,
+            range: Interval::make_unbounded(&self.return_type)?,
+        })
     }
 }
 
