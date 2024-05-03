@@ -43,7 +43,7 @@ pub enum Unparsed {
 }
 
 impl Unparsed {
-    fn into_order_by_expr(self) -> Result<ast::OrderByExpr> {
+    pub fn into_order_by_expr(self) -> Result<ast::OrderByExpr> {
         if let Unparsed::OrderByExpr(order_by_expr) = self {
             Ok(order_by_expr)
         } else {
@@ -230,6 +230,11 @@ impl Unparser<'_> {
                         ast::WindowFrameUnits::Groups
                     }
                 };
+                let order_by: Vec<ast::OrderByExpr> = order_by
+                    .iter()
+                    .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
+                    .collect::<Result<Vec<_>>>()?;
+
                 let start_bound = self.convert_bound(&window_frame.start_bound);
                 let end_bound = self.convert_bound(&window_frame.end_bound);
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
@@ -238,18 +243,13 @@ impl Unparser<'_> {
                         .iter()
                         .map(|e| self.expr_to_sql(e))
                         .collect::<Result<Vec<_>>>()?,
-                    order_by: vec![],
+                    order_by,
                     window_frame: Some(ast::WindowFrame {
                         units,
                         start_bound,
                         end_bound: Option::from(end_bound),
                     }),
                 }));
-
-                let order_by_expr_vec: Vec<ast::OrderByExpr> = order_by
-                    .iter()
-                    .flat_map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
-                    .collect();
 
                 Ok(ast::Expr::Function(Function {
                     name: ast::ObjectName(vec![Ident {
@@ -262,7 +262,7 @@ impl Unparser<'_> {
                     over,
                     distinct: false,
                     special: false,
-                    order_by: order_by_expr_vec,
+                    order_by: vec![],
                 }))
             }
             Expr::SimilarTo(Like {
@@ -355,7 +355,7 @@ impl Unparser<'_> {
                 expr: _,
                 asc: _,
                 nulls_first: _,
-            }) => internal_err!("Sort expression should be handled by expr_to_unparsed"),
+            }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -413,6 +413,8 @@ impl Unparser<'_> {
         }
     }
 
+    /// This function can convert more [`Expr`] types than `expr_to_sql`, returning an [`Unparsed`]
+    /// like `Sort` expressions to `OrderByExpr` expressions.
     pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
         match expr {
             Expr::Sort(Sort {
@@ -1076,7 +1078,7 @@ mod tests {
                     ),
                     null_treatment: None,
                 }),
-                r#"COUNT(* ORDER BY "a" DESC NULLS FIRST) OVER (RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
             (
