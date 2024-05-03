@@ -114,7 +114,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         }
     }
 
-    /// Simplifies this [`Expr`]`s as much as possible, evaluating
+    /// Simplifies this [`Expr`] as much as possible, evaluating
     /// constants and applying algebraic simplifications.
     ///
     /// The types of the expression must match what operators expect,
@@ -176,10 +176,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(expr, b_lt_2);
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
-        Ok(self.simplify_inner(expr)?.0)
+        Ok(self.simplify_with_count(expr)?.0)
     }
 
-    fn simplify_inner(&self, mut expr: Expr) -> Result<(Expr, u32)> {
+
+    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
+    /// constants and applying algebraic simplifications. Additionally returns a `u32`
+    /// representing the number of iterations performed, which can be useful for testing
+    /// optimizations.
+    ///
+    /// See [Self::simplify] for details and usage examples.
+    ///
+    pub fn simplify_with_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -1694,7 +1702,6 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_functions::expr_fn::*;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -2888,17 +2895,17 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
-    fn try_simplify_count(expr: Expr) -> Result<(Expr, u32)> {
+    fn try_simplify_with_count(expr: Expr) -> Result<(Expr, u32)> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify_inner(expr)
+        simplifier.simplify_with_count(expr)
     }
 
-    fn simplify_count(expr: Expr) -> (Expr, u32) {
-        try_simplify_count(expr).unwrap()
+    fn simplify_with_count(expr: Expr) -> (Expr, u32) {
+        try_simplify_with_count(expr).unwrap()
     }
 
     fn simplify_with_guarantee(
@@ -3614,30 +3621,23 @@ mod tests {
         // TRUE
         let expr = lit(true);
         let expected = lit(true);
-        let (expr, num_iter) = simplify_count(expr);
+        let (expr, num_iter) = simplify_with_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 1);
 
         // (true != NULL) OR (5 > 10)
         let expr = lit(true).not_eq(lit_bool_null()).or(lit(5).gt(lit(10)));
         let expected = lit_bool_null();
-        let (expr, num_iter) = simplify_count(expr);
+        let (expr, num_iter) = simplify_with_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
 
-        // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
-        let expr = cast(now(), DataType::Int64)
-            .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
-        let expected = lit(true);
-        let (expr, num_iter) = simplify_count(expr);
-        assert_eq!(expr, expected);
-        assert_eq!(num_iter, 3);
 
         // NOTE: this currently does not simplify
         // (((c4 - 10) + 10) *100) / 100
         let expr = (((col("c4") - lit(10)) + lit(10)) * lit(100)) / lit(100);
         let expected = expr.clone();
-        let (expr, num_iter) = simplify_count(expr);
+        let (expr, num_iter) = simplify_with_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 1);
 
@@ -3648,7 +3648,7 @@ mod tests {
             .and(col("c3_non_null").lt(lit(3)))
             .and(lit(false));
         let expected = lit(false);
-        let (expr, num_iter) = simplify_count(expr);
+        let (expr, num_iter) = simplify_with_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
