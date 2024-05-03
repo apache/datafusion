@@ -115,7 +115,7 @@ impl Analyzer {
     /// do necessary check and fail the invalid plans
     pub fn execute_and_check<F>(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &ConfigOptions,
         mut observer: F,
     ) -> Result<LogicalPlan>
