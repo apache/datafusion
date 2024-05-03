@@ -1859,7 +1859,7 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
                 AggregateFunctionDefinition::UDF(..) => {
                     let names: Vec<String> =
                         args.iter().map(create_name).collect::<Result<_>>()?;
-                    names.join(",")
+                    names.join(", ")
                 }
             };
             let mut info = String::new();
