@@ -508,7 +508,11 @@ fn test_simplify(input_expr: Expr, expected_expr: Expr) {
         "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
     );
 }
-fn test_simplify_with_cycle_count(input_expr: Expr, expected_expr: Expr, expected_count: u32) {
+fn test_simplify_with_cycle_count(
+    input_expr: Expr,
+    expected_expr: Expr,
+    expected_count: u32,
+) {
     let info: MyInfo = MyInfo {
         schema: expr_test_schema(),
         execution_props: ExecutionProps::new(),

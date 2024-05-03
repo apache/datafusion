@@ -17,9 +17,9 @@
 
 //! Expression simplification API
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Not;
-use std::{borrow::Cow, u32};
 
 use arrow::{
     array::{new_null_array, AsArray},
@@ -373,10 +373,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    .with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
-    /// // Expression: a IS NOT NULL 
+    /// // Expression: a IS NOT NULL
     /// let expr = col("a").is_not_null();
     ///
-    /// // When using default maximum cycles, 2 cycles will be performed. 
+    /// // When using default maximum cycles, 2 cycles will be performed.
     /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count(expr.clone()).unwrap();
     /// assert_eq!(simplified_expr, lit(true));
     /// // 2 cycles were executed, but only 1 was needed
