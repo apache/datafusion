@@ -515,7 +515,7 @@ fn test_simplify_with_count(input_expr: Expr, expected_expr: Expr, expected_coun
     };
     let simplifier = ExprSimplifier::new(info);
     let (simplified_expr, count) = simplifier
-        .simplify_with_count(input_expr.clone())
+        .simplify_with_cycle_count(input_expr.clone())
         .expect("successfully evaluated");
 
     assert_eq!(
@@ -524,7 +524,7 @@ fn test_simplify_with_count(input_expr: Expr, expected_expr: Expr, expected_coun
     );
     assert_eq!(
         count, expected_count,
-        "Mismatch simplifier iteration conunt\n Expected: {expected_count}\n Got:{count}"
+        "Mismatch simplifier cycle count\n Expected: {expected_count}\n Got:{count}"
     );
 }
 
@@ -678,7 +678,7 @@ fn test_simplify_concat() {
     test_simplify(expr, expected)
 }
 #[test]
-fn test_simplify_iterations() {
+fn test_simplify_cycles() {
     // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
     let expr = cast(now(), DataType::Int64)
         .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));

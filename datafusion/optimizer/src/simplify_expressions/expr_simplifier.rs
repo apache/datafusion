@@ -92,12 +92,12 @@ pub struct ExprSimplifier<S> {
     /// Should expressions be canonicalized before simplification? Defaults to
     /// true
     canonicalize: bool,
-    /// Maximum number of simplifier iterations
-    max_simplifier_iterations: u32,
+    /// Maximum number of simplifier cycles
+    max_simplifier_cycles: u32,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
-pub const DEFAULT_MAX_SIMPLIFIER_ITERATIONS: u32 = 3;
+pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -110,7 +110,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             info,
             guarantees: vec![],
             canonicalize: true,
-            max_simplifier_iterations: DEFAULT_MAX_SIMPLIFIER_ITERATIONS,
+            max_simplifier_cycles: DEFAULT_MAX_SIMPLIFIER_CYCLES,
         }
     }
 
@@ -176,18 +176,17 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(expr, b_lt_2);
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
-        Ok(self.simplify_with_count(expr)?.0)
+        Ok(self.simplify_with_cycle_count(expr)?.0)
     }
-
 
     /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
     /// constants and applying algebraic simplifications. Additionally returns a `u32`
-    /// representing the number of iterations performed, which can be useful for testing
+    /// representing the number of simplification cycles performed, which can be useful for testing
     /// optimizations.
     ///
     /// See [Self::simplify] for details and usage examples.
     ///
-    pub fn simplify_with_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
+    pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -197,7 +196,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
         }
 
-        let mut num_iterations = 0;
+        let mut num_cycles = 0;
         loop {
             let Transformed {
                 data, transformed, ..
@@ -206,14 +205,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
-            num_iterations += 1;
-            if !transformed || num_iterations >= self.max_simplifier_iterations {
+            num_cycles += 1;
+            if !transformed || num_cycles >= self.max_simplifier_cycles {
                 break;
             }
         }
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
-        Ok((expr, num_iterations))
+        Ok((expr, num_cycles))
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -339,11 +338,60 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self
     }
 
-    pub fn with_max_simplifier_iterations(
-        mut self,
-        max_simplifier_iterations: u32,
-    ) -> Self {
-        self.max_simplifier_iterations = max_simplifier_iterations;
+    /// Specifies the maximum number of simplification cycles to run.
+    ///
+    /// The simplifier can perform multiple passes of simplification. This is
+    /// because the output of one simplification step can allow more optimizations
+    /// in another simplification step. For example, constant evaluation can allow more
+    /// expression simplifications, and expression simplifications can allow more constant
+    /// evaluations.
+    ///
+    /// This method specifies the maximum number of allowed iteration cycles before the simplifier
+    /// returns an [Expr] output. However, it does not always perform the maximum number of cycles.
+    /// The simplifier will attempt to detect when an [Expr] is unchanged by all the simplification
+    /// passes, and return early. This avoids wasting time on unnecessary [Expr] tree traversals.
+    ///
+    /// If no maximum is specified, the value of [DEFAULT_MAX_SIMPLIFIER_CYCLES] is used
+    /// instead.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
+    ///
+    /// // Expression: a IS NOT NULL 
+    /// let expr = col("a").is_not_null();
+    ///
+    /// // When using default maximum cycles, 2 cycles will be performed. 
+    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count(expr.clone()).unwrap();
+    /// assert_eq!(simplified_expr, lit(true));
+    /// // 2 cycles were executed, but only 1 was needed
+    /// assert_eq!(count, 2);
+    ///
+    /// // Only 1 simplification pass is necessary here, so we can set the maximum cycles to 1.
+    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count(expr.clone()).unwrap();
+    /// // Expression has been rewritten to: (c = a AND b = 1)
+    /// assert_eq!(simplified_expr, lit(true));
+    /// // Only 1 cycle was executed
+    /// assert_eq!(count, 1);
+    ///
+    /// ```
+    pub fn with_max_cycles(mut self, max_simplifier_cycles: u32) -> Self {
+        self.max_simplifier_cycles = max_simplifier_cycles;
         self
     }
 }
@@ -2895,17 +2943,17 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
-    fn try_simplify_with_count(expr: Expr) -> Result<(Expr, u32)> {
+    fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify_with_count(expr)
+        simplifier.simplify_with_cycle_count(expr)
     }
 
-    fn simplify_with_count(expr: Expr) -> (Expr, u32) {
-        try_simplify_with_count(expr).unwrap()
+    fn simplify_with_cycle_count(expr: Expr) -> (Expr, u32) {
+        try_simplify_with_cycle_count(expr).unwrap()
     }
 
     fn simplify_with_guarantee(
@@ -3617,27 +3665,26 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_iterations() {
+    fn test_simplify_cycles() {
         // TRUE
         let expr = lit(true);
         let expected = lit(true);
-        let (expr, num_iter) = simplify_with_count(expr);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 1);
 
         // (true != NULL) OR (5 > 10)
         let expr = lit(true).not_eq(lit_bool_null()).or(lit(5).gt(lit(10)));
         let expected = lit_bool_null();
-        let (expr, num_iter) = simplify_with_count(expr);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
-
 
         // NOTE: this currently does not simplify
         // (((c4 - 10) + 10) *100) / 100
         let expr = (((col("c4") - lit(10)) + lit(10)) * lit(100)) / lit(100);
         let expected = expr.clone();
-        let (expr, num_iter) = simplify_with_count(expr);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 1);
 
@@ -3648,7 +3695,7 @@ mod tests {
             .and(col("c3_non_null").lt(lit(3)))
             .and(lit(false));
         let expected = lit(false);
-        let (expr, num_iter) = simplify_with_count(expr);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
