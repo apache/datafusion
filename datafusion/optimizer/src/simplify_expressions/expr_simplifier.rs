@@ -41,7 +41,7 @@ use datafusion_expr::{
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::analyzer::type_coercion::TypeCoercionExprRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
@@ -207,7 +207,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
     pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
-        let mut expr_rewrite = TypeCoercionRewriter { schema };
+        let mut expr_rewrite = TypeCoercionExprRewriter { schema };
         expr.rewrite(&mut expr_rewrite).data()
     }
 

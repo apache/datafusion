@@ -508,7 +508,7 @@ fn field_for_index(
 
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
-    if subquery.subquery.schema().field(0).data_type() == cast_to_type {
+    if subquery.data_type() == cast_to_type {
         return Ok(subquery);
     }
 

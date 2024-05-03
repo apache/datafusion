@@ -2685,6 +2685,11 @@ impl Subquery {
             outer_ref_columns: self.outer_ref_columns.clone(),
         }
     }
+
+    /// Returns the type of the first column of the subquery
+    pub fn data_type(&self) -> &DataType {
+        self.subquery.schema().fields()[0].data_type()
+    }
 }
 
 impl Debug for Subquery {

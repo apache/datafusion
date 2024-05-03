@@ -22,7 +22,7 @@ use log::debug;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
@@ -61,6 +61,17 @@ pub mod type_coercion;
 pub trait AnalyzerRule {
     /// Rewrite `plan`
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
+
+    /// Rewrite a plan indicating if the plan was modified
+    /// The default implementation calls `analyze`
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &ConfigOptions,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let new_plan = self.analyze(plan, config)?;
+        Ok(Transformed::yes(new_plan))
+    }
 
     /// A human readable name for this analyzer rule
     fn name(&self) -> &str;

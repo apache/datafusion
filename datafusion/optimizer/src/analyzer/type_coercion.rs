@@ -22,7 +22,9 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeIterator, TreeNodeRewriter,
+};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     DataFusionError, Result, ScalarValue,
@@ -45,7 +47,7 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
+    type_coercion, AggregateFunction, Expr, ExprSchemable, Join, LogicalPlan, Operator,
     ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
@@ -68,110 +70,100 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        let empty_schema = DFSchema::empty();
+        let empty = DFSchema::empty();
+        let mut plan_rewriter = TypeCoercionPlanRewriter::new(&empty);
 
-        let transformed_plan = plan
-            .transform_up_with_subqueries(|plan| analyze_internal(&empty_schema, plan))?
-            .data;
+        let transformed_plan = plan.rewrite_with_subqueries(&mut plan_rewriter)?.data;
 
         Ok(transformed_plan)
     }
 }
 
-/// use the external schema to handle the correlated subqueries case
-///
-/// Assumes that children have already been optimized
-fn analyze_internal(
-    external_schema: &DFSchema,
-    plan: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    // get schema representing all available input fields. This is used for data type
-    // resolution only, so order does not matter here
-    let mut schema = merge_schema(plan.inputs());
-
-    if let LogicalPlan::TableScan(ts) = &plan {
-        let source_schema = DFSchema::try_from_qualified_schema(
-            ts.table_name.clone(),
-            &ts.source.schema(),
-        )?;
-        schema.merge(&source_schema);
-    }
-
-    // merge the outer schema for correlated subqueries
-    // like case:
-    // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
-    schema.merge(external_schema);
-
-    let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
-
-    let name_preserver = NamePreserver::new(&plan);
-    // apply coercion rewrite all expressions in the plan indivdually
-    plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
-        expr.rewrite(&mut expr_rewrite)?
-            .map_data(|expr| original_name.restore(expr))
-    })?
-    // coerce join expressions specially
-    .map_data(|plan| expr_rewrite.coerce_joins(plan))?
-    // recompute the schema after the expressions have been rewritten as the types may have changed
-    .map_data(|plan| plan.recompute_schema())
+/// Rewrites plans to ensure that all expressions have valid types
+/// tracking if any input plans have been transformed
+pub struct TypeCoercionPlanRewriter<'a> {
+    /// were any child plans transformed? If so, we need to recompute the schema
+    /// of the parent plan as some plan outputs are dependent on the schema of
+    /// the children
+    any_plan_transformed: bool,
+    /// The outer query schema, if any
+    external_schema: &'a DFSchema,
 }
 
-pub(crate) struct TypeCoercionRewriter<'a> {
+impl<'a> TypeCoercionPlanRewriter<'a> {
+    fn new(external_schema: &'a DFSchema) -> Self {
+        Self {
+            any_plan_transformed: false,
+            external_schema,
+        }
+    }
+}
+
+impl<'a> TreeNodeRewriter for TypeCoercionPlanRewriter<'a> {
+    type Node = LogicalPlan;
+
+    fn f_up(&mut self, plan: Self::Node) -> Result<Transformed<Self::Node>> {
+        // get schema representing all available input fields. This is used for data type
+        // resolution only, so order does not matter here
+        let mut schema = merge_schema(plan.inputs());
+
+        if let LogicalPlan::TableScan(ts) = &plan {
+            let source_schema = DFSchema::try_from_qualified_schema(
+                ts.table_name.clone(),
+                &ts.source.schema(),
+            )?;
+            schema.merge(&source_schema);
+        }
+
+        // merge the outer schema for correlated subqueries
+        // like case:
+        // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
+        schema.merge(self.external_schema);
+
+        let mut expr_rewrite = TypeCoercionExprRewriter::new(&schema);
+        let name_preserver = NamePreserver::new(&plan);
+        // apply coercion rewrite to all expressions in the plan individually
+        let transformed_plan = plan
+            .map_expressions(|expr| {
+                let original_name = name_preserver.save(&expr)?;
+                expr.rewrite(&mut expr_rewrite)?
+                    .map_data(|expr| original_name.restore(expr))
+            })?
+            // coerce join expressions specially
+            .transform_data(|plan| expr_rewrite.coerce_joins(plan))?;
+
+        // Note: We must recompute the schema if any of expressions (or inputs)
+        // have been rewritten, as the types may have changed.
+
+        if transformed_plan.transformed {
+            self.any_plan_transformed = true;
+        }
+
+        // Hack: For subquery alias need to recompute the schema for unknown reasons
+        if matches!(transformed_plan.data, LogicalPlan::SubqueryAlias(_)) {
+            self.any_plan_transformed = true;
+        }
+
+        if self.any_plan_transformed {
+            transformed_plan
+                .transform_data(|plan| plan.recompute_schema().map(Transformed::yes))
+        } else {
+            Ok(transformed_plan)
+        }
+    }
+}
+
+pub(crate) struct TypeCoercionExprRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
 }
 
-impl<'a> TypeCoercionRewriter<'a> {
+impl<'a> TypeCoercionExprRewriter<'a> {
     fn new(schema: &'a DFSchema) -> Self {
         Self { schema }
     }
-
-    /// Coerce join equality expressions
-    ///
-    /// Joins must be treated specially as their equality expressions are stored
-    /// as a parallel list of left and right expressions, rather than a single
-    /// equality expression
-    ///
-    /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
-    /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_joins(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let LogicalPlan::Join(mut join) = plan else {
-            return Ok(plan);
-        };
-
-        join.on = join
-            .on
-            .into_iter()
-            .map(|(lhs, rhs)| {
-                // coerce the arguments as though they were a single binary equality
-                // expression
-                let (lhs, rhs) = self.coerce_binary_op(lhs, Operator::Eq, rhs)?;
-                Ok((lhs, rhs))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(LogicalPlan::Join(join))
-    }
-
-    fn coerce_binary_op(
-        &self,
-        left: Expr,
-        op: Operator,
-        right: Expr,
-    ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = get_input_types(
-            &left.get_type(self.schema)?,
-            &op,
-            &right.get_type(self.schema)?,
-        )?;
-        Ok((
-            left.cast_to(&left_type, self.schema)?,
-            right.cast_to(&right_type, self.schema)?,
-        ))
-    }
 }
 
-impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
+impl<'a> TreeNodeRewriter for TypeCoercionExprRewriter<'a> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -179,72 +171,67 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             Expr::Unnest(_) => not_impl_err!(
                 "Unnest should be rewritten to LogicalPlan::Unnest before type coercion"
             ),
-            Expr::ScalarSubquery(Subquery {
-                subquery,
-                outer_ref_columns,
-            }) => {
-                let new_plan = analyze_internal(self.schema, unwrap_arc(subquery))?.data;
-                Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns,
-                })))
-            }
-            Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
-                Ok(Transformed::yes(Expr::Exists(Exists {
-                    subquery: Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                    },
-                    negated,
-                })))
-            }
+            Expr::ScalarSubquery(subsquery) => self
+                .coerce_in_subquery(subsquery)?
+                .map_data(|subquery| Ok(Expr::ScalarSubquery(subquery))),
+            Expr::Exists(Exists { subquery, negated }) => self
+                .coerce_in_subquery(subquery)?
+                .map_data(|subquery| Ok(Expr::Exists(Exists { subquery, negated }))),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
-                let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
-                        "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
-                    ),
-                )?;
-                let new_subquery = Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns: subquery.outer_ref_columns,
-                };
-                Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
-                    negated,
-                ))))
+                self.coerce_in_subquery(subquery)?
+                    .transform_data(|subquery| {
+                        let new_plan = &subquery.subquery;
+                        let expr_type = expr.get_type(self.schema)?;
+                        let subquery_type = new_plan.schema().field(0).data_type();
+                        let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
+                            "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
+                        ))?;
+                        // coerce the expr and subquery to the common type if needed
+                        let expr = self.maybe_cast_from(*expr, &expr_type, &common_type)?;
+                        let subquery = if subquery.data_type() != &common_type {
+                            Transformed::yes(cast_subquery(subquery, &common_type)?)
+                        } else {
+                            Transformed::no(subquery)
+                        };
+                        // transformation was applied if either the expr or the
+                        // subquery transformed
+                        let transformed = expr.transformed || subquery.transformed;
+                        // create output
+                        let new_expr = Expr::InSubquery(InSubquery::new(
+                            Box::new(expr.data),
+                            subquery.data,
+                            negated,
+                        ));
+                        if transformed {
+                            Ok(Transformed::yes(new_expr))
+                        } else {
+                            Ok(Transformed::no(new_expr))
+                        }
+                    })
             }
-            Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
-                *expr,
-                self.schema,
-            )?))),
-            Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
-            Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
-            Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
-            Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
-            Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
-            Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(*expr, self.schema)?,
-            ))),
+            Expr::Not(expr) => self.coerce_bool_op(*expr)?.map_data(|expr| Ok(not(expr))),
+            Expr::IsTrue(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_true(expr))),
+            Expr::IsNotTrue(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_not_true(expr))),
+            Expr::IsFalse(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_false(expr))),
+            Expr::IsNotFalse(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_not_false(expr))),
+            Expr::IsUnknown(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_unknown(expr))),
+            Expr::IsNotUnknown(expr) => self
+                .coerce_bool_op(*expr)?
+                .map_data(|expr| Ok(is_not_unknown(expr))),
             Expr::Like(Like {
                 negated,
                 expr,
@@ -264,24 +251,32 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
-                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
-                let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
-                Ok(Transformed::yes(Expr::Like(Like::new(
+                let mut caster = self.caster();
+
+                let expr =
+                    Box::new(caster.maybe_cast_from(*expr, &left_type, &coerced_type)?);
+                let pattern = Box::new(caster.maybe_cast_from(
+                    *pattern,
+                    &right_type,
+                    &coerced_type,
+                )?);
+                caster.build(Expr::Like(Like::new(
                     negated,
                     expr,
                     pattern,
                     escape_char,
                     case_insensitive,
-                ))))
+                )))
             }
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) = self.coerce_binary_op(*left, op, *right)?;
-                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(left),
-                    op,
-                    Box::new(right),
-                ))))
-            }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => self
+                .coerce_binary_op(*left, op, *right)?
+                .map_data(|(left, right)| {
+                    Ok(Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op,
+                        Box::new(right),
+                    )))
+                }),
             Expr::Between(Between {
                 expr,
                 negated,
@@ -310,12 +305,16 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                                 "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                             ))
                         })?;
-                Ok(Transformed::yes(Expr::Between(Between::new(
-                    Box::new(expr.cast_to(&coercion_type, self.schema)?),
+                let mut caster = self.caster();
+                let expr = caster.maybe_cast_from(*expr, &expr_type, &coercion_type)?;
+                let low = caster.maybe_cast_from(*low, &low_type, &coercion_type)?;
+                let high = caster.maybe_cast_from(*high, &high_type, &coercion_type)?;
+                caster.build(Expr::Between(Between::new(
+                    Box::new(expr),
                     negated,
-                    Box::new(low.cast_to(&coercion_type, self.schema)?),
-                    Box::new(high.cast_to(&coercion_type, self.schema)?),
-                ))))
+                    Box::new(low),
+                    Box::new(high),
+                )))
             }
             Expr::InList(InList {
                 expr,
@@ -329,43 +328,37 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     .collect::<Result<Vec<_>>>()?;
                 let result_type =
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
-                match result_type {
-                    None => plan_err!(
+                let Some(coerced_type) = result_type else {
+                    return plan_err!(
                         "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
-                    ),
-                    Some(coerced_type) => {
-                        // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
-                        let cast_list_expr = list
-                            .into_iter()
-                            .map(|list_expr| {
-                                list_expr.cast_to(&coerced_type, self.schema)
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Ok(Transformed::yes(Expr::InList(InList ::new(
-                             Box::new(cast_expr),
-                             cast_list_expr,
-                            negated,
-                        ))))
-                    }
-                }
+                    );
+                };
+                // find the coerced type
+                let mut caster = self.caster();
+                let cast_expr =
+                    caster.maybe_cast_from(*expr, &expr_data_type, &coerced_type)?;
+                let cast_list_expr = list
+                    .into_iter()
+                    .map(|list_expr| caster.maybe_cast(list_expr, &coerced_type))
+                    .collect::<Result<Vec<_>>>()?;
+                caster.build(Expr::InList(InList::new(
+                    Box::new(cast_expr),
+                    cast_list_expr,
+                    negated,
+                )))
             }
-            Expr::Case(case) => {
-                let case = coerce_case_expression(case, self.schema)?;
-                Ok(Transformed::yes(Expr::Case(case)))
-            }
+            Expr::Case(case) => self
+                .coerce_case_expression(case)?
+                .map_data(|case| Ok(Expr::Case(case))),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
-                        args,
-                        self.schema,
-                        fun.signature(),
-                    )?;
-                    let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &fun)?;
-                    Ok(Transformed::yes(Expr::ScalarFunction(
-                        ScalarFunction::new_udf(fun, new_expr),
-                    )))
-                }
+                ScalarFunctionDefinition::UDF(fun) => self
+                    .coerce_arguments_for_signature(args, fun.signature())?
+                    .transform_data(|new_expr| {
+                        self.coerce_arguments_for_fun(new_expr, &fun)
+                    })?
+                    .map_data(|new_expr| {
+                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_expr)))
+                    }),
             },
             Expr::AggregateFunction(expr::AggregateFunction {
                 func_def,
@@ -375,41 +368,30 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 order_by,
                 null_treatment,
             }) => match func_def {
-                AggregateFunctionDefinition::BuiltIn(fun) => {
-                    let new_expr = coerce_agg_exprs_for_signature(
-                        &fun,
-                        args,
-                        self.schema,
-                        &fun.signature(),
-                    )?;
-                    Ok(Transformed::yes(Expr::AggregateFunction(
-                        expr::AggregateFunction::new(
+                AggregateFunctionDefinition::BuiltIn(fun) => self
+                    .coerce_agg_exprs_for_signature(&fun, args, &fun.signature())?
+                    .map_data(|new_expr| {
+                        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                             fun,
                             new_expr,
                             distinct,
                             filter,
                             order_by,
                             null_treatment,
-                        ),
-                    )))
-                }
-                AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
-                        args,
-                        self.schema,
-                        fun.signature(),
-                    )?;
-                    Ok(Transformed::yes(Expr::AggregateFunction(
-                        expr::AggregateFunction::new_udf(
+                        )))
+                    }),
+                AggregateFunctionDefinition::UDF(fun) => self
+                    .coerce_arguments_for_signature(args, fun.signature())?
+                    .map_data(|new_expr| {
+                        Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                             fun,
                             new_expr,
                             false,
                             filter,
                             order_by,
                             null_treatment,
-                        ),
-                    )))
-                }
+                        )))
+                    }),
                 AggregateFunctionDefinition::Name(_) => {
                     internal_err!("Function `Expr` with name should be resolved.")
                 }
@@ -422,29 +404,29 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 window_frame,
                 null_treatment,
             }) => {
-                let window_frame =
-                    coerce_window_frame(window_frame, self.schema, &order_by)?;
+                let window_frame = self.coerce_window_frame(window_frame, &order_by)?;
 
                 let args = match &fun {
                     expr::WindowFunctionDefinition::AggregateFunction(fun) => {
-                        coerce_agg_exprs_for_signature(
-                            fun,
-                            args,
-                            self.schema,
-                            &fun.signature(),
-                        )?
+                        self.coerce_agg_exprs_for_signature(fun, args, &fun.signature())?
                     }
-                    _ => args,
+                    _ => Transformed::no(args),
                 };
-
-                Ok(Transformed::yes(Expr::WindowFunction(WindowFunction::new(
+                let transformed = window_frame.transformed | args.transformed;
+                let window_func = Expr::WindowFunction(WindowFunction::new(
                     fun,
-                    args,
+                    args.data,
                     partition_by,
                     order_by,
-                    window_frame,
+                    window_frame.data,
                     null_treatment,
-                ))))
+                ));
+
+                if transformed {
+                    Ok(Transformed::yes(window_func))
+                } else {
+                    Ok(Transformed::no(window_func))
+                }
             }
             Expr::Alias(_)
             | Expr::Column(_)
@@ -465,313 +447,512 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
         }
     }
 }
-
-/// Casts the given `value` to `target_type`. Note that this function
-/// only considers `Null` or `Utf8` values.
-fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarValue> {
-    match value {
-        // Coerce Utf8 values:
-        ScalarValue::Utf8(Some(val)) => {
-            ScalarValue::try_from_string(val.clone(), target_type)
-        }
-        s => {
-            if s.is_null() {
-                // Coerce `Null` values:
-                ScalarValue::try_from(target_type)
-            } else {
-                // Values except `Utf8`/`Null` variants already have the right type
-                // (casted before) since we convert `sqlparser` outputs to `Utf8`
-                // for all possible cases. Therefore, we return a clone here.
-                Ok(s.clone())
-            }
-        }
-    }
-}
-
-/// This function coerces `value` to `target_type` in a range-aware fashion.
-/// If the coercion is successful, we return an `Ok` value with the result.
-/// If the coercion fails because `target_type` is not wide enough (i.e. we
-/// can not coerce to `target_type`, but we can to a wider type in the same
-/// family), we return a `Null` value of this type to signal this situation.
-/// Downstream code uses this signal to treat these values as *unbounded*.
-fn coerce_scalar_range_aware(
-    target_type: &DataType,
-    value: ScalarValue,
-) -> Result<ScalarValue> {
-    coerce_scalar(target_type, &value).or_else(|err| {
-        // If type coercion fails, check if the largest type in family works:
-        if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, &value).map_or_else(
-                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
-                |_| ScalarValue::try_from(target_type),
-            )
-        } else {
-            Err(err)
-        }
-    })
-}
-
-/// This function returns the widest type in the family of `given_type`.
-/// If the given type is already the widest type, it returns `None`.
-/// For example, if `given_type` is `Int8`, it returns `Int64`.
-fn get_widest_type_in_family(given_type: &DataType) -> Option<&DataType> {
-    match given_type {
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => Some(&DataType::UInt64),
-        DataType::Int8 | DataType::Int16 | DataType::Int32 => Some(&DataType::Int64),
-        DataType::Float16 | DataType::Float32 => Some(&DataType::Float64),
-        _ => None,
-    }
-}
-
-/// Coerces the given (window frame) `bound` to `target_type`.
-fn coerce_frame_bound(
-    target_type: &DataType,
-    bound: WindowFrameBound,
-) -> Result<WindowFrameBound> {
-    match bound {
-        WindowFrameBound::Preceding(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Preceding)
-        }
-        WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
-        WindowFrameBound::Following(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Following)
-        }
-    }
-}
-
-// Coerces the given `window_frame` to use appropriate natural types.
-// For example, ROWS and GROUPS frames use `UInt64` during calculations.
-fn coerce_window_frame(
-    window_frame: WindowFrame,
-    schema: &DFSchema,
-    expressions: &[Expr],
-) -> Result<WindowFrame> {
-    let mut window_frame = window_frame;
-    let current_types = expressions
-        .iter()
-        .map(|e| e.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let target_type = match window_frame.units {
-        WindowFrameUnits::Range => {
-            if let Some(col_type) = current_types.first() {
-                if col_type.is_numeric()
-                    || is_utf8_or_large_utf8(col_type)
-                    || matches!(col_type, DataType::Null)
-                {
-                    col_type
-                } else if is_datetime(col_type) {
-                    &DataType::Interval(IntervalUnit::MonthDayNano)
-                } else {
-                    return internal_err!(
-                        "Cannot run range queries on datatype: {col_type:?}"
-                    );
-                }
-            } else {
-                return internal_err!("ORDER BY column cannot be empty");
-            }
-        }
-        WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
-    };
-    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
-    Ok(window_frame)
-}
-
-// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
-// The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let left_type = expr.get_type(schema)?;
-    get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
-    expr.cast_to(&DataType::Boolean, schema)
-}
-
-/// Returns `expressions` coerced to types compatible with
-/// `signature`, if possible.
-///
-/// See the module level documentation for more detail on coercion.
-fn coerce_arguments_for_signature(
-    expressions: Vec<Expr>,
-    schema: &DFSchema,
-    signature: &Signature,
-) -> Result<Vec<Expr>> {
-    if expressions.is_empty() {
-        return Ok(expressions);
+impl<'a> TypeCoercionExprRewriter<'a> {
+    /// Casts expr to new_type if it is different from the current type
+    ///
+    /// Note: current_type is passed in as an optimization to avoid recomputing the type
+    fn maybe_cast_from(
+        &self,
+        expr: Expr,
+        cur_type: &DataType,
+        new_type: &DataType,
+    ) -> Result<Transformed<Expr>> {
+        let mut caster = self.caster();
+        let expr = caster.maybe_cast_from(expr, cur_type, new_type)?;
+        caster.build(expr)
     }
 
-    let current_types = expressions
-        .iter()
-        .map(|e| e.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
+    /// Create a [`Caster`] for tracking when expressions have been changed
+    fn caster(&self) -> Caster {
+        Caster::new(self.schema)
+    }
 
-    let new_types = data_types(&current_types, signature)?;
+    /// Coerce the subquery recursively
+    fn coerce_in_subquery(&self, subquery: Subquery) -> Result<Transformed<Subquery>> {
+        let Subquery {
+            subquery,
+            outer_ref_columns,
+        } = subquery;
 
-    expressions
-        .into_iter()
-        .enumerate()
-        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
-        .collect()
-}
-
-fn coerce_arguments_for_fun(
-    expressions: Vec<Expr>,
-    schema: &DFSchema,
-    fun: &Arc<ScalarUDF>,
-) -> Result<Vec<Expr>> {
-    // Cast Fixedsizelist to List for array functions
-    if fun.name() == "make_array" {
-        expressions
-            .into_iter()
-            .map(|expr| {
-                let data_type = expr.get_type(schema).unwrap();
-                if let DataType::FixedSizeList(field, _) = data_type {
-                    let to_type = DataType::List(field.clone());
-                    expr.cast_to(&to_type, schema)
-                } else {
-                    Ok(expr)
-                }
+        // use TypeCoercionPlanRewriter rather than calling analyze_internal
+        // directly to pass along info if any of the subquery inputs were
+        // transformed
+        let mut subquery_rewriter = TypeCoercionPlanRewriter::new(self.schema);
+        unwrap_arc(subquery)
+            .rewrite_with_subqueries(&mut subquery_rewriter)?
+            .map_data(|new_plan| {
+                Ok(Subquery {
+                    subquery: Arc::new(new_plan),
+                    outer_ref_columns,
+                })
             })
-            .collect()
-    } else {
-        Ok(expressions)
     }
-}
 
-/// Returns the coerced exprs for each `input_exprs`.
-/// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
-/// data type of `input_exprs` need to be coerced.
-fn coerce_agg_exprs_for_signature(
-    agg_fun: &AggregateFunction,
-    input_exprs: Vec<Expr>,
-    schema: &DFSchema,
-    signature: &Signature,
-) -> Result<Vec<Expr>> {
-    if input_exprs.is_empty() {
-        return Ok(input_exprs);
+    /// Coerce join equality expressions
+    ///
+    /// Joins must be treated specially as their equality expressions are stored
+    /// as a parallel list of left and right expressions, rather than a single
+    /// equality expression
+    ///
+    /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
+    /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
+    fn coerce_joins(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        let LogicalPlan::Join(Join {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            join_constraint,
+            schema,
+            null_equals_null,
+        }) = plan
+        else {
+            return Ok(Transformed::no(plan));
+        };
+
+        // apply the coercion to each equality expression
+        let on = on.into_iter().map_until_stop_and_collect(|(lhs, rhs)| {
+            // coerce the arguments as though they were a single binary equality
+            // expression
+            self.coerce_binary_op(lhs, Operator::Eq, rhs)
+        })?;
+
+        // pass the transformed flag back up
+        on.map_data(|on| {
+            Ok(LogicalPlan::Join(Join {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                join_constraint,
+                schema,
+                null_equals_null,
+            }))
+        })
     }
-    let current_types = input_exprs
-        .iter()
-        .map(|e| e.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
+    fn coerce_binary_op(
+        &self,
+        left: Expr,
+        op: Operator,
+        right: Expr,
+    ) -> Result<Transformed<(Expr, Expr)>> {
+        let initial_left_type = left.get_type(self.schema)?;
+        let initial_right_type = right.get_type(self.schema)?;
 
-    let coerced_types =
-        type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
+        let (left_type, right_type) =
+            get_input_types(&initial_left_type, &op, &initial_right_type)?;
 
-    input_exprs
-        .into_iter()
-        .enumerate()
-        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
-        .collect()
-}
+        let mut caster = Caster::new(self.schema);
+        let result = (
+            caster.maybe_cast_from(left, &initial_left_type, &left_type)?,
+            caster.maybe_cast_from(right, &initial_right_type, &right_type)?,
+        );
+        caster.build(result)
+    }
 
-fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
-    // Given expressions like:
-    //
-    // CASE a1
-    //   WHEN a2 THEN b1
-    //   WHEN a3 THEN b2
-    //   ELSE b3
-    // END
-    //
-    // or:
-    //
-    // CASE
-    //   WHEN x1 THEN b1
-    //   WHEN x2 THEN b2
-    //   ELSE b3
-    // END
-    //
-    // Then all aN (a1, a2, a3) must be converted to a common data type in the first example
-    // (case-when expression coercion)
-    //
-    // All xN (x1, x2) must be converted to a boolean data type in the second example
-    // (when-boolean expression coercion)
-    //
-    // And all bN (b1, b2, b3) must be converted to a common data type in both examples
-    // (then-else expression coercion)
-    //
-    // If any fail to find and cast to a common/specific data type, will return error
-    //
-    // Note that case-when and when-boolean expression coercions are mutually exclusive
-    // Only one or the other can occur for a case expression, whilst then-else expression coercion will always occur
+    /// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion by coercing
+    /// the input expr to `Boolean` type.
+    /// The above Exprs will be rewrite to the binary op when creating the physical op.
+    fn coerce_bool_op(&self, expr: Expr) -> Result<Transformed<Expr>> {
+        let left_type = expr.get_type(self.schema)?;
+        // error check
+        get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+        self.maybe_cast_from(expr, &left_type, &DataType::Boolean)
+    }
 
-    // prepare types
-    let case_type = case
-        .expr
-        .as_ref()
-        .map(|expr| expr.get_type(schema))
-        .transpose()?;
-    let then_types = case
-        .when_then_expr
-        .iter()
-        .map(|(_when, then)| then.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let else_type = case
-        .else_expr
-        .as_ref()
-        .map(|expr| expr.get_type(schema))
-        .transpose()?;
+    /// Casts the given `value` to `target_type`. Note that this function
+    /// only considers `Null` or `Utf8` values.
+    fn coerce_scalar(
+        &self,
+        target_type: &DataType,
+        value: &ScalarValue,
+    ) -> Result<Transformed<ScalarValue>> {
+        match value {
+            // Coerce Utf8 values:
+            ScalarValue::Utf8(Some(val)) => {
+                ScalarValue::try_from_string(val.clone(), target_type)
+                    .map(Transformed::yes)
+            }
+            s => {
+                if s.is_null() {
+                    // Coerce `Null` values:
+                    ScalarValue::try_from(target_type).map(Transformed::yes)
+                } else {
+                    // Values except `Utf8`/`Null` variants already have the right type
+                    // (casted before) since we convert `sqlparser` outputs to `Utf8`
+                    // for all possible cases. Therefore, we return a clone here.
+                    Ok(Transformed::no(s.clone()))
+                }
+            }
+        }
+    }
 
-    // find common coercible types
-    let case_when_coerce_type = case_type
-        .as_ref()
-        .map(|case_type| {
-            let when_types = case
-                .when_then_expr
-                .iter()
-                .map(|(when, _then)| when.get_type(schema))
+    /// This function coerces `value` to `target_type` in a range-aware fashion.
+    /// If the coercion is successful, we return an `Ok` value with the result.
+    /// If the coercion fails because `target_type` is not wide enough (i.e. we
+    /// can not coerce to `target_type`, but we can to a wider type in the same
+    /// family), we return a `Null` value of this type to signal this situation.
+    /// Downstream code uses this signal to treat these values as *unbounded*.
+    fn coerce_scalar_range_aware(
+        &self,
+        target_type: &DataType,
+        value: ScalarValue,
+    ) -> Result<Transformed<ScalarValue>> {
+        self.coerce_scalar(target_type, &value).or_else(|err| {
+            // If type coercion fails, check if the largest type in family works:
+            if let Some(largest_type) = self.get_widest_type_in_family(target_type) {
+                self.coerce_scalar(largest_type, &value).map_or_else(
+                    |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
+                    |_| ScalarValue::try_from(target_type).map(Transformed::yes),
+                )
+            } else {
+                Err(err)
+            }
+        })
+    }
+
+    /// This function returns the widest type in the family of `given_type`.
+    /// If the given type is already the widest type, it returns `None`.
+    /// For example, if `given_type` is `Int8`, it returns `Int64`.
+    fn get_widest_type_in_family(&self, given_type: &DataType) -> Option<&DataType> {
+        match given_type {
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => {
+                Some(&DataType::UInt64)
+            }
+            DataType::Int8 | DataType::Int16 | DataType::Int32 => Some(&DataType::Int64),
+            DataType::Float16 | DataType::Float32 => Some(&DataType::Float64),
+            _ => None,
+        }
+    }
+
+    /// Coerces the given (window frame) `bound` to `target_type`.
+    fn coerce_frame_bound(
+        &self,
+        target_type: &DataType,
+        bound: WindowFrameBound,
+    ) -> Result<Transformed<WindowFrameBound>> {
+        Ok(match bound {
+            WindowFrameBound::Preceding(v) => self
+                .coerce_scalar_range_aware(target_type, v)?
+                .update_data(WindowFrameBound::Preceding),
+            WindowFrameBound::CurrentRow => Transformed::no(WindowFrameBound::CurrentRow),
+            WindowFrameBound::Following(v) => self
+                .coerce_scalar_range_aware(target_type, v)?
+                .update_data(WindowFrameBound::Following),
+        })
+    }
+
+    // Coerces the given `window_frame` to use appropriate natural types.
+    // For example, ROWS and GROUPS frames use `UInt64` during calculations.
+    fn coerce_window_frame(
+        &self,
+        mut window_frame: WindowFrame,
+        expressions: &[Expr],
+    ) -> Result<Transformed<WindowFrame>> {
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(self.schema))
+            .collect::<Result<Vec<_>>>()?;
+        let target_type = match window_frame.units {
+            WindowFrameUnits::Range => {
+                if let Some(col_type) = current_types.first() {
+                    if col_type.is_numeric()
+                        || is_utf8_or_large_utf8(col_type)
+                        || matches!(col_type, DataType::Null)
+                    {
+                        col_type
+                    } else if is_datetime(col_type) {
+                        &DataType::Interval(IntervalUnit::MonthDayNano)
+                    } else {
+                        return internal_err!(
+                            "Cannot run range queries on datatype: {col_type:?}"
+                        );
+                    }
+                } else {
+                    return internal_err!("ORDER BY column cannot be empty");
+                }
+            }
+            WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
+        };
+
+        let start_bound =
+            self.coerce_frame_bound(target_type, window_frame.start_bound)?;
+        let end_bound = self.coerce_frame_bound(target_type, window_frame.end_bound)?;
+        let transformed = start_bound.transformed | end_bound.transformed;
+
+        window_frame.start_bound = start_bound.data;
+        window_frame.end_bound = end_bound.data;
+
+        if transformed {
+            Ok(Transformed::yes(window_frame))
+        } else {
+            Ok(Transformed::no(window_frame))
+        }
+    }
+
+    /// Returns `expressions` coerced to types compatible with
+    /// `signature`, if possible.
+    ///
+    /// See the module level documentation for more detail on coercion.
+    fn coerce_arguments_for_signature(
+        &self,
+        expressions: Vec<Expr>,
+        signature: &Signature,
+    ) -> Result<Transformed<Vec<Expr>>> {
+        if expressions.is_empty() {
+            return Ok(Transformed::no(expressions));
+        }
+
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(self.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_types = data_types(&current_types, signature)?;
+
+        let mut caster = self.caster();
+        let new_expressions = expressions
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                caster.maybe_cast_from(expr, &current_types[i], &new_types[i])
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        caster.build(new_expressions)
+    }
+
+    fn coerce_arguments_for_fun(
+        &self,
+        expressions: Vec<Expr>,
+        fun: &Arc<ScalarUDF>,
+    ) -> Result<Transformed<Vec<Expr>>> {
+        // Cast Fixedsizelist to List for array functions
+        if fun.name() == "make_array" {
+            let mut caster = self.caster();
+            let new_expressions = expressions
+                .into_iter()
+                .map(|expr| {
+                    let data_type = expr.get_type(self.schema)?;
+                    if let DataType::FixedSizeList(field, _) = &data_type {
+                        let to_type = DataType::List(field.clone());
+                        caster.maybe_cast_from(expr, &data_type, &to_type)
+                    } else {
+                        Ok(expr)
+                    }
+                })
                 .collect::<Result<Vec<_>>>()?;
-            let coerced_type =
-                get_coerce_type_for_case_expression(&when_types, Some(case_type));
-            coerced_type.ok_or_else(|| {
-                plan_datafusion_err!(
+            // Hack: force the schema to be computed again even if seemingly
+            // nothing changed
+            // caster.build(new_expressions)
+            Ok(Transformed::yes(new_expressions))
+        } else {
+            Ok(Transformed::no(expressions))
+        }
+    }
+
+    /// Returns the coerced exprs for each `input_exprs`.
+    /// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
+    /// data type of `input_exprs` need to be coerced.
+    fn coerce_agg_exprs_for_signature(
+        &self,
+        agg_fun: &AggregateFunction,
+        input_exprs: Vec<Expr>,
+        signature: &Signature,
+    ) -> Result<Transformed<Vec<Expr>>> {
+        if input_exprs.is_empty() {
+            return Ok(Transformed::no(input_exprs));
+        }
+        let current_types = input_exprs
+            .iter()
+            .map(|e| e.get_type(self.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let coerced_types =
+            type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
+
+        let mut caster = Caster::new(self.schema);
+        let new_exprs = input_exprs
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                caster.maybe_cast_from(expr, &current_types[i], &coerced_types[i])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        caster.build(new_exprs)
+    }
+
+    /// Given expressions like:
+    ///
+    /// ```sql
+    /// CASE a1
+    ///   WHEN a2 THEN b1
+    ///   WHEN a3 THEN b2
+    ///   ELSE b3
+    /// END
+    /// ```
+    ///
+    /// or:
+    ///
+    /// ```sql
+    /// CASE
+    ///   WHEN x1 THEN b1
+    ///   WHEN x2 THEN b2
+    ///   ELSE b3
+    /// END
+    /// ```
+    ///
+    /// Then all aN (a1, a2, a3) must be converted to a common data type in the first example
+    /// (case-when expression coercion)
+    ///
+    /// All xN (x1, x2) must be converted to a boolean data type in the second example
+    /// (when-boolean expression coercion)
+    ///
+    /// And all bN (b1, b2, b3) must be converted to a common data type in both examples
+    /// (then-else expression coercion)
+    ///
+    /// If any fail to find and cast to a common/specific data type, will return error
+    ///
+    /// Note that case-when and when-boolean expression coercions are mutually
+    /// exclusive Only one or the other can occur for a case expression, whilst
+    /// then-else expression coercion will always occur
+    fn coerce_case_expression(&self, case: Case) -> Result<Transformed<Case>> {
+        // prepare types
+        let case_type = case
+            .expr
+            .as_ref()
+            .map(|expr| expr.get_type(self.schema))
+            .transpose()?;
+        let then_types = case
+            .when_then_expr
+            .iter()
+            .map(|(_when, then)| then.get_type(self.schema))
+            .collect::<Result<Vec<_>>>()?;
+        let else_type = case
+            .else_expr
+            .as_ref()
+            .map(|expr| expr.get_type(self.schema))
+            .transpose()?;
+
+        // find common coercible types
+        let case_when_coerce_type = case_type
+            .as_ref()
+            .map(|case_type| {
+                let when_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(when, _then)| when.get_type(self.schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let coerced_type =
+                    get_coerce_type_for_case_expression(&when_types, Some(case_type));
+                coerced_type.ok_or_else(|| {
+                    plan_datafusion_err!(
                     "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
                      to common types in CASE WHEN expression"
                 )
+                })
             })
-        })
-        .transpose()?;
-    let then_else_coerce_type =
-        get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
-            || {
-                plan_datafusion_err!(
+            .transpose()?;
+        let then_else_coerce_type =
+            get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
                     "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
                      to common types in CASE WHEN expression"
                 )
-            },
-        )?;
+                })?;
 
-    // do cast if found common coercible types
-    let case_expr = case
-        .expr
-        .zip(case_when_coerce_type.as_ref())
-        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, schema))
-        .transpose()?
-        .map(Box::new);
-    let when_then = case
-        .when_then_expr
-        .into_iter()
-        .map(|(when, then)| {
-            let when_type = case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
-            let when = when.cast_to(when_type, schema).map_err(|e| {
-                DataFusionError::Context(
-                    format!(
-                        "WHEN expressions in CASE couldn't be \
+        // do cast if found common coercible types
+        let mut caster = Caster::new(self.schema);
+        let case_expr = case
+            .expr
+            .zip(case_when_coerce_type.as_ref())
+            .map(|(case_expr, coercible_type)| {
+                caster.maybe_cast(*case_expr, coercible_type)
+            })
+            .transpose()?
+            .map(Box::new);
+        let when_then = case
+            .when_then_expr
+            .into_iter()
+            .map(|(when, then)| {
+                let when_type =
+                    case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
+                let when = caster.maybe_cast(*when, when_type).map_err(|e| {
+                    DataFusionError::Context(
+                        format!(
+                            "WHEN expressions in CASE couldn't be \
                          converted to common type ({when_type})"
-                    ),
-                    Box::new(e),
-                )
-            })?;
-            let then = then.cast_to(&then_else_coerce_type, schema)?;
-            Ok((Box::new(when), Box::new(then)))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let else_expr = case
-        .else_expr
-        .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
-        .transpose()?
-        .map(Box::new);
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+                let then = caster.maybe_cast(*then, &then_else_coerce_type)?;
+                Ok((Box::new(when), Box::new(then)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let else_expr = case
+            .else_expr
+            .map(|expr| caster.maybe_cast(*expr, &then_else_coerce_type))
+            .transpose()?
+            .map(Box::new);
 
-    Ok(Case::new(case_expr, when_then, else_expr))
+        caster.build(Case::new(case_expr, when_then, else_expr))
+    }
+}
+
+/// Casts exprs to new types, tracking if any types have been changed
+///
+/// This is used  when casting multiple expressions to track if any have been
+/// transformed to set the transformed flag correctly
+#[derive(Debug)]
+struct Caster<'a> {
+    schema: &'a DFSchema,
+    transformed: bool,
+}
+
+impl<'a> Caster<'a> {
+    fn new(schema: &'a DFSchema) -> Self {
+        Self {
+            schema,
+            transformed: false,
+        }
+    }
+
+    /// cast expr to new_type if it is different from the current type
+    fn maybe_cast(&mut self, expr: Expr, new_type: &DataType) -> Result<Expr> {
+        let original_type = expr.get_type(self.schema)?;
+        self.maybe_cast_from(expr, &original_type, new_type)
+    }
+
+    /// Casts expr to new_type if it is different from the current type
+    ///
+    /// Note: current_type is passed in as an optimziation to avoid recomputing the type
+    fn maybe_cast_from(
+        &mut self,
+        expr: Expr,
+        cur_type: &DataType,
+        new_type: &DataType,
+    ) -> Result<Expr> {
+        if cur_type == new_type {
+            Ok(expr)
+        } else {
+            self.transformed = true;
+            expr.cast_to(new_type, self.schema)
+        }
+    }
+
+    /// Returns a Transformed::yes/Transformed::no based on whether any expr has
+    /// been transformed
+    fn build<T>(self, arg: T) -> Result<Transformed<T>> {
+        Ok(if self.transformed {
+            Transformed::yes(arg)
+        } else {
+            Transformed::no(arg)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -795,7 +976,7 @@ mod test {
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
     use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+        coerce_case_expression, TypeCoercion, TypeCoercionExprRewriter,
     };
     use crate::test::assert_analyzed_plan_eq;
 
@@ -1286,7 +1467,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionExprRewriter { schema: &schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1297,7 +1478,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionExprRewriter { schema: &schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1308,7 +1489,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema: &schema };
+        let mut rewriter = TypeCoercionExprRewriter { schema: &schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
