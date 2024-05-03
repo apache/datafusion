@@ -126,7 +126,7 @@ pub fn mem_exec(partitions: usize) -> MemoryExec {
 }
 
 // construct a stream partition for test purposes
-pub(crate) struct TestPartitionStream {
+pub struct TestPartitionStream {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
 }
