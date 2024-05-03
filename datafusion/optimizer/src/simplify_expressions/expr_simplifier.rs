@@ -415,6 +415,8 @@ struct ConstEvaluator<'a> {
 enum ConstSimplifyResult {
     // Expr was simplifed and contains the new expression
     Simplified(ScalarValue),
+    // Expr was not simplified and original value is returned
+    NotSimplified(ScalarValue),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
@@ -460,6 +462,9 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
                 match result {
                     ConstSimplifyResult::Simplified(s) => {
                         Ok(Transformed::yes(Expr::Literal(s)))
+                    }
+                    ConstSimplifyResult::NotSimplified(s) => {
+                        Ok(Transformed::no(Expr::Literal(s)))
                     }
                     ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
                         Ok(Transformed::yes(expr))
@@ -559,7 +564,7 @@ impl<'a> ConstEvaluator<'a> {
     /// Internal helper to evaluates an Expr
     pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
-            return ConstSimplifyResult::Simplified(s);
+            return ConstSimplifyResult::NotSimplified(s);
         }
 
         let phys_expr =
