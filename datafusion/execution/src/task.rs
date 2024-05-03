@@ -32,7 +32,7 @@ use crate::{
 
 /// Task Execution Context
 ///
-/// A [`TaskContext`] contains the state available during a single
+/// A [`TaskContext`] contains the state required during a single
 /// query's execution. Please see [`SessionContext`] for a user level
 /// multi-query API.
 ///
