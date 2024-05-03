@@ -196,14 +196,16 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             } = expr
                 .rewrite(&mut const_evaluator)?
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
-                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?
-                .transform_data(|expr| expr.rewrite(&mut shorten_in_list_simplifier))?;
+                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
             num_iterations += 1;
             if !transformed || num_iterations >= self.max_simplifier_iterations {
-                return Ok((expr, num_iterations));
+                break;
             }
         }
+        // shorten inlist should be started after other inlist rules are applied
+        expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+        Ok((expr, num_iterations))
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
