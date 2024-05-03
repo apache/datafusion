@@ -123,7 +123,7 @@ impl Analyzer {
         F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
     {
         let start_time = Instant::now();
-        let mut new_plan = plan.clone();
+        let mut new_plan = plan;
 
         // Create an analyzer pass that rewrites `Expr`s to function_calls, as
         // appropriate.
