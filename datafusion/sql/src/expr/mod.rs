@@ -17,6 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use datafusion_expr::GetIndexedField;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -29,7 +30,7 @@ use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
-    GetFieldAccess, GetIndexedField, Like, Literal, Operator, TryCast,
+    GetFieldAccess, Like, Literal, Operator, TryCast,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -999,6 +1000,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             },
         };
 
+        println!("field: {:?}", field);
+
         Ok(field)
     }
 
@@ -1019,10 +1022,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr
         };
 
-        Ok(Expr::GetIndexedField(GetIndexedField::new(
-            Box::new(expr),
-            self.plan_indices(indices, schema, planner_context)?,
-        )))
+        println!("expr: {:?}", expr);
+
+        let field = self.plan_indices(indices, schema, planner_context)?;
+        println!("field: {:?}", field);
+        match field {
+            GetFieldAccess::NamedStructField { name} => {
+                if let Some(udf) = self.context_provider.get_function_meta("get_field") {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![expr, lit(name)])))
+                } else {
+                    internal_err!("get_field not found")
+                }
+            }
+            // expr[idx] ==> array_element(expr, idx)
+            GetFieldAccess::ListIndex { key } => {
+                if let Some(udf) = self.context_provider.get_function_meta("array_element") {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![expr, *key])))
+                } else {
+                    internal_err!("get_field not found")
+                }
+            }
+            _ => {
+                Ok(Expr::GetIndexedField(GetIndexedField::new(
+                    Box::new(expr),
+                    field,
+                )))
+            }
+        }
     }
 }
 

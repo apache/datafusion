@@ -67,6 +67,8 @@ impl ProjectionMapping {
                             // Conceptually, `source_expr` and `expression` should be the same.
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
+                            println!("col: {:?}", col);
+                            println!("col.name: {:?}", col.name());
                             if col.name() != matching_input_field.name() {
                                 return internal_err!("Input field name {} does not match with the projection expression {}",
                                     matching_input_field.name(),col.name())
