@@ -612,6 +612,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+            statistics: pf.statistics.as_ref().map(|s| s.into()),
         })
     }
 }
@@ -906,7 +907,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
-            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
             allow_single_file_parallelism: value.allow_single_file_parallelism,

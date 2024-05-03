@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SessionContext`] contains methods for registering data sources and executing queries
+//! [`SessionContext`] API for registering data sources and executing queries
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fmt::Debug;
@@ -216,17 +216,29 @@ where
 ///
 /// # `SessionContext`, `SessionState`, and `TaskContext`
 ///
-/// A [`SessionContext`] can be created from a [`SessionConfig`] and
-/// stores the state for a particular query session. A single
-/// [`SessionContext`] can run multiple queries.
+/// The state required to optimize, and evaluate queries is
+/// broken into three levels to allow tailoring
 ///
-/// [`SessionState`] contains information available during query
-/// planning (creating [`LogicalPlan`]s and [`ExecutionPlan`]s).
+/// The objects are:
 ///
-/// [`TaskContext`] contains the state available during query
-/// execution [`ExecutionPlan::execute`].  It contains a subset of the
-/// information in[`SessionState`] and is created from a
-/// [`SessionContext`] or a [`SessionState`].
+/// 1. [`SessionContext`]: Most users should use a `SessionContext`. It contains
+/// all information required to execute queries including  high level APIs such
+/// as [`SessionContext::sql`]. All queries run with the same `SessionContext`
+/// share the same configuration and resources (e.g. memory limits).
+///
+/// 2. [`SessionState`]: contains information required to plan and execute an
+/// individual query (e.g. creating a [`LogicalPlan`] or [`ExecutionPlan`]).
+/// Each query is planned and executed using its own `SessionState`, which can
+/// be created with [`SessionContext::state`]. `SessionState` allows finer
+/// grained control over query execution, for example disallowing DDL operations
+/// such as `CREATE TABLE`.
+///
+/// 3. [`TaskContext`] contains the state required for query execution (e.g.
+/// [`ExecutionPlan::execute`]). It contains a subset of information in
+/// [`SessionState`]. `TaskContext` allows executing [`ExecutionPlan`]s
+/// [`PhysicalExpr`]s without requiring a full [`SessionState`].
+///
+/// [`PhysicalExpr`]: crate::physical_expr::PhysicalExpr
 #[derive(Clone)]
 pub struct SessionContext {
     /// UUID for the session
@@ -1320,6 +1332,7 @@ pub enum RegisterFunction {
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }
+
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
 ///

@@ -57,29 +57,3 @@ impl SessionContext {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use async_trait::async_trait;
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_avro(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_avro(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_avro("dummy", AvroReadOptions::default())
-                .await
-                .unwrap()
-        }
-    }
-}

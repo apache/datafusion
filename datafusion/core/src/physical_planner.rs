@@ -2035,7 +2035,7 @@ impl DefaultPhysicalPlanner {
             let config = &session_state.config_options().explain;
 
             if !config.physical_plan_only {
-                stringified_plans = e.stringified_plans.clone();
+                stringified_plans.clone_from(&e.stringified_plans);
                 if e.logical_optimization_succeeded {
                     stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
                 }
