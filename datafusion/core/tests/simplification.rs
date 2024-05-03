@@ -508,7 +508,7 @@ fn test_simplify(input_expr: Expr, expected_expr: Expr) {
         "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
     );
 }
-fn test_simplify_with_count(input_expr: Expr, expected_expr: Expr, expected_count: u32) {
+fn test_simplify_with_cycle_count(input_expr: Expr, expected_expr: Expr, expected_count: u32) {
     let info: MyInfo = MyInfo {
         schema: expr_test_schema(),
         execution_props: ExecutionProps::new(),
@@ -683,5 +683,5 @@ fn test_simplify_cycles() {
     let expr = cast(now(), DataType::Int64)
         .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
     let expected = lit(true);
-    test_simplify_with_count(expr, expected, 3);
+    test_simplify_with_cycle_count(expr, expected, 3);
 }
