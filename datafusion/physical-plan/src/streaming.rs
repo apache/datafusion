@@ -265,3 +265,89 @@ impl ExecutionPlan for StreamingTableExec {
         Some(self.metrics.clone_inner())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::collect_partitioned;
+    use crate::streaming::PartitionStream;
+    use crate::test::{make_partition, TestPartitionStream};
+    use arrow::record_batch::RecordBatch;
+
+    #[tokio::test]
+    async fn test_no_limit() {
+        let exec = TestBuilder::new()
+            // make 2 batches, each with 100 rows
+            .with_batches(vec![make_partition(100), make_partition(100)])
+            .build();
+
+        let counts = collect_num_rows(Arc::new(exec)).await;
+        assert_eq!(counts, vec![200]);
+    }
+
+    #[tokio::test]
+    async fn test_limit() {
+        let exec = TestBuilder::new()
+            // make 2 batches, each with 100 rows
+            .with_batches(vec![make_partition(100), make_partition(100)])
+            // limit to only the first 75 rows back
+            .with_limit(Some(75))
+            .build();
+
+        let counts = collect_num_rows(Arc::new(exec)).await;
+        assert_eq!(counts, vec![75]);
+    }
+
+    /// Runs the provided execution plan and returns a vector of the number of
+    /// rows in each partition
+    async fn collect_num_rows(exec: Arc<dyn ExecutionPlan>) -> Vec<usize> {
+        let ctx = Arc::new(TaskContext::default());
+        let partition_batches = collect_partitioned(exec, ctx).await.unwrap();
+        partition_batches
+            .into_iter()
+            .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
+            .collect()
+    }
+
+    #[derive(Default)]
+    struct TestBuilder {
+        schema: Option<SchemaRef>,
+        partitions: Vec<Arc<dyn PartitionStream>>,
+        projection: Option<Vec<usize>>,
+        projected_output_ordering: Vec<LexOrdering>,
+        infinite: bool,
+        limit: Option<usize>,
+    }
+
+    impl TestBuilder {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        /// Set the batches for the stream
+        fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+            let stream = TestPartitionStream::new_with_batches(batches);
+            self.schema = Some(stream.schema().clone());
+            self.partitions = vec![Arc::new(stream)];
+            self
+        }
+
+        /// Set the limit for the stream
+        fn with_limit(mut self, limit: Option<usize>) -> Self {
+            self.limit = limit;
+            self
+        }
+
+        fn build(self) -> StreamingTableExec {
+            StreamingTableExec::try_new(
+                self.schema.unwrap(),
+                self.partitions,
+                self.projection.as_ref(),
+                self.projected_output_ordering,
+                self.infinite,
+                self.limit,
+            )
+            .unwrap()
+        }
+    }
+}
