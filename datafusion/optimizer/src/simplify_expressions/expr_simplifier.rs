@@ -191,7 +191,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 
         let mut num_iterations = 0;
         loop {
-            let Transformed { data, transformed, .. } = expr
+            let Transformed {
+                data, transformed, ..
+            } = expr
                 .rewrite(&mut const_evaluator)?
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?
@@ -3607,16 +3609,43 @@ mod tests {
 
     #[test]
     fn test_simplify_iterations() {
-        let expr = binary_expr(
-            cast(now(), DataType::Int64),
-            Operator::Lt,
-            binary_expr(
-                cast(to_timestamp(vec![lit(0)]), DataType::Int64),
-                Operator::Plus,
-                lit(i64::MAX),
-            ),
-        );
+        // TRUE
+        let expr = lit(true);
         let expected = lit(true);
+        let (expr, num_iter) = simplify_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 1);
+
+        // (true != NULL) OR (5 > 10)
+        let expr = lit(true).not_eq(lit_bool_null()).or(lit(5).gt(lit(10)));
+        let expected = lit_bool_null();
+        let (expr, num_iter) = simplify_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 2);
+
+        // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
+        let expr = cast(now(), DataType::Int64)
+            .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
+        let expected = lit(true);
+        let (expr, num_iter) = simplify_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 3);
+
+        // NOTE: this currently does not simplify
+        // (((c4 - 10) + 10) *100) / 100
+        let expr = (((col("c4") - lit(10)) + lit(10)) * lit(100)) / lit(100);
+        let expected = expr.clone();
+        let (expr, num_iter) = simplify_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 1);
+
+        // ((c4<1 or c3<2) and c3_non_null<3) and false
+        let expr = col("c4")
+            .lt(lit(1))
+            .or(col("c3").lt(lit(2)))
+            .and(col("c3_non_null").lt(lit(3)))
+            .and(lit(false));
+        let expected = lit(false);
         let (expr, num_iter) = simplify_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
