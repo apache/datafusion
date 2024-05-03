@@ -121,7 +121,7 @@ fn create_function_physical_name(
         false => "",
     };
 
-    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
+    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(", "));
 
     Ok(order_by
         .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))

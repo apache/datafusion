@@ -1656,7 +1656,7 @@ fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<Stri
         true => "DISTINCT ",
         false => "",
     };
-    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+    Ok(format!("{}({}{})", fun, distinct_str, names.join(", ")))
 }
 
 /// Returns a readable name of an expression based on the input schema.
