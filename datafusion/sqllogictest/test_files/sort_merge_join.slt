@@ -280,5 +280,122 @@ SELECT * FROM (
 ) ORDER BY 1, 2;
 ----
 
+
+# LEFTSEMI join tests
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b = t1.b)
+) order by 1, 2
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b = t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+
+# This gives a wrong result for now
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b union all
+#    select 11 a, 13 b),
+#t2 as (
+#    select 11 a, 12 b union all
+#    select 11 a, 14 b
+#    )
+#select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+#) order by 1, 2;
+#----
+
+#LEFTANTI tests
+# returns no rows instead of correct result
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c union all
+#    select 11 a, 14 b, 4 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+----
+11 12 1
+11 13 2
+
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
