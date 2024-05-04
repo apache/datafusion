@@ -17,7 +17,6 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_expr::GetIndexedField;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -1045,10 +1044,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     internal_err!("get_field not found")
                 }
             }
-            _ => Ok(Expr::GetIndexedField(GetIndexedField::new(
-                Box::new(expr),
-                field,
-            ))),
+            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+            GetFieldAccess::ListRange { start, stop, stride } => {
+                if let Some(udf) = self.context_provider.get_function_meta("array_slice") {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, *start, *stop, *stride],
+                    )))
+                } else {
+                    internal_err!("array_slice not found")
+                }
+            }
         }
     }
 }
