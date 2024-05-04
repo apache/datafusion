@@ -1022,27 +1022,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let field = self.plan_indices(indices, schema, planner_context)?;
         match field {
-            GetFieldAccess::NamedStructField { name} => {
+            GetFieldAccess::NamedStructField { name } => {
                 if let Some(udf) = self.context_provider.get_function_meta("get_field") {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![expr, lit(name)])))
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, lit(name)],
+                    )))
                 } else {
                     internal_err!("get_field not found")
                 }
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key } => {
-                if let Some(udf) = self.context_provider.get_function_meta("array_element") {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![expr, *key])))
+                if let Some(udf) =
+                    self.context_provider.get_function_meta("array_element")
+                {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, *key],
+                    )))
                 } else {
                     internal_err!("get_field not found")
                 }
             }
-            _ => {
-                Ok(Expr::GetIndexedField(GetIndexedField::new(
-                    Box::new(expr),
-                    field,
-                )))
-            }
+            _ => Ok(Expr::GetIndexedField(GetIndexedField::new(
+                Box::new(expr),
+                field,
+            ))),
         }
     }
 }

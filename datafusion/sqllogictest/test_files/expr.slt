@@ -2345,6 +2345,7 @@ host1 101
 host2 202
 host3 303
 
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query error
 select 
     t2.server['c3'] as host, 
@@ -2389,6 +2390,24 @@ host1 1.1 101
 host2 2.2 202
 host3 3.3 303
 
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query error DataFusion error: Schema error: No field named time\.
+select 
+    t2.server['c3'] as host, 
+    sum(coalesce(server['c1'])),
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server,
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+
 query TRR
 select 
     t2.server_host as host, 
@@ -2416,6 +2435,7 @@ host1 1.1 101
 host2 2.2 202
 host3 3.3 303
 
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query error
 select 
     t2.server['c3'] as host, 
