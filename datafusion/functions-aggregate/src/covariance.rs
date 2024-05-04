@@ -40,7 +40,7 @@ make_udaf_expr_and_func!(
     covar_samp,
     y x,
     "Computes the sample covariance.",
-    covar_samp_udf
+    covar_samp_udaf
 );
 
 pub struct CovarianceSample {
