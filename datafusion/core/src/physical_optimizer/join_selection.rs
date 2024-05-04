@@ -1544,7 +1544,6 @@ mod hash_join_tests {
 
     use arrow::datatypes::{DataType, Field};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::utils::DataPtr;
 
     struct TestCase {
         case: String,
@@ -1937,8 +1936,8 @@ mod hash_join_tests {
             ..
         }) = plan.as_any().downcast_ref::<HashJoinExec>()
         {
-            let left_changed = Arc::data_ptr_eq(left, &right_exec);
-            let right_changed = Arc::data_ptr_eq(right, &left_exec);
+            let left_changed = Arc::ptr_eq(left, &right_exec);
+            let right_changed = Arc::ptr_eq(right, &left_exec);
             // If this is not equal, we have a bigger problem.
             assert_eq!(left_changed, right_changed);
             assert_eq!(
