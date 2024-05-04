@@ -261,10 +261,12 @@ physical_plan
 02)--SortExec: expr=[constant_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[constant_col]
 
+statement ok
+DROP TABLE test_table;
 
 # Create a table as a data source
 statement ok
-CREATE TABLE my_test (
+CREATE TABLE src_table2 (
   a INT,
   b INT,
   c INT
@@ -284,7 +286,7 @@ CREATE TABLE my_test (
 
 # Create file1.parquet
 query III
-COPY (SELECT * FROM my_test WHERE a <= 3 ORDER BY a)
+COPY (SELECT * FROM src_table2 WHERE a <= 3 ORDER BY a)
 TO 'test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet'
 STORED AS PARQUET;
 ----
@@ -292,7 +294,7 @@ STORED AS PARQUET;
 
 # Create file2.parquet
 query III
-COPY (SELECT c, b, a FROM my_test WHERE a > 6 ORDER BY a)
+COPY (SELECT c, b, a FROM src_table2 WHERE a > 6 ORDER BY a)
 TO 'test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet'
 STORED AS PARQUET;
 ----
@@ -300,7 +302,7 @@ STORED AS PARQUET;
 
 # Create an external table a, b, c with explicit order by a
 statement ok
-CREATE EXTERNAL TABLE my_test_table (
+CREATE EXTERNAL TABLE test_table (
   partition_col TEXT NOT NULL,
   a INT NOT NULL,
   b INT NOT NULL,
@@ -313,22 +315,22 @@ LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table1';
 
 query TT
 EXPLAIN SELECT *
-FROM my_test_table
+FROM test_table
 ORDER BY a;
 ----
 logical_plan
-01)Sort: my_test_table.a ASC NULLS LAST
-02)--TableScan: my_test_table projection=[a, b, c, partition_col]
+01)Sort: test_table.a ASC NULLS LAST
+02)--TableScan: test_table projection=[a, b, c, partition_col]
 physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
 
 query TT
 EXPLAIN SELECT *
-FROM my_test_table
+FROM test_table
 ORDER BY b;
 ----
 logical_plan
-01)Sort: my_test_table.b ASC NULLS LAST
-02)--TableScan: my_test_table projection=[a, b, c, partition_col]
+01)Sort: test_table.b ASC NULLS LAST
+02)--TableScan: test_table projection=[a, b, c, partition_col]
 physical_plan
 01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
