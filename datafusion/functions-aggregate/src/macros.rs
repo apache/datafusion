@@ -21,13 +21,13 @@ macro_rules! make_udaf_function {
             // "fluent expr_fn" style function
             #[doc = $DOC]
             pub fn $EXPR_FN(
-                args: Vec<Expr>,
+                args: Vec<datafusion_expr::Expr>,
                 distinct: bool,
-                filter: Option<Box<Expr>>,
-                order_by: Option<Vec<Expr>>,
-                null_treatment: Option<NullTreatment>
-            ) -> Expr {
-                Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                filter: Option<Box<datafusion_expr::Expr>>,
+                order_by: Option<Vec<datafusion_expr::Expr>>,
+                null_treatment: Option<sqlparser::ast::NullTreatment>
+            ) -> datafusion_expr::Expr {
+                datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                     $AGGREGATE_UDF_FN(),
                     args,
                     distinct,

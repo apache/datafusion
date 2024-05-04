@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod utils;
+pub mod stats;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
