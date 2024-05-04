@@ -260,3 +260,75 @@ physical_plan
 01)SortPreservingMergeExec: [constant_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[constant_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[constant_col]
+
+
+# Create a table as a data source
+statement ok
+CREATE TABLE my_test (
+  a INT,
+  b INT,
+  c INT
+) AS VALUES
+-- first file
+(1, 100, 0),
+(2, 200, 0),
+(3, 300, 0),
+-- second file
+(7, 700, 0),
+(8, 800, 0),
+(9, 900, 0);
+
+# Create files: file1.parquet, file2.parquet both sorted on a
+# but file 1 has the columns in the order a, b, c and file 2 has the columns in the order c, b, a
+# The keyranges of values of a should be non overlapping
+
+# Create file1.parquet
+query III
+COPY (SELECT * FROM my_test WHERE a <= 3 ORDER BY a)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+# Create file2.parquet
+query III
+COPY (SELECT c, b, a FROM my_test WHERE a > 6 ORDER BY a)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet'
+STORED AS PARQUET;
+----
+3
+
+# Create an external table a, b, c with explicit order by a
+statement ok
+CREATE EXTERNAL TABLE my_test_table (
+  partition_col TEXT NOT NULL,
+  a INT NOT NULL,
+  b INT NOT NULL,
+  c INT NOT NULL
+)
+STORED AS PARQUET
+PARTITIONED BY (partition_col)
+WITH ORDER (a ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table1';
+
+query TT
+EXPLAIN SELECT *
+FROM my_test_table
+ORDER BY a;
+----
+logical_plan
+01)Sort: my_test_table.a ASC NULLS LAST
+02)--TableScan: my_test_table projection=[a, b, c, partition_col]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
+
+query TT
+EXPLAIN SELECT *
+FROM my_test_table
+ORDER BY b;
+----
+logical_plan
+01)Sort: my_test_table.b ASC NULLS LAST
+02)--TableScan: my_test_table projection=[a, b, c, partition_col]
+physical_plan
+01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
