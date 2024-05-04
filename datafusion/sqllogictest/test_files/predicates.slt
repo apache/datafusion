@@ -20,6 +20,9 @@
 ##########
 
 statement ok
+set datafusion.catalog.information_schema = true;
+
+statement ok
 CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
   c2  TINYINT NOT NULL,
@@ -514,8 +517,38 @@ DROP TABLE t;
 statement ok
 CREATE EXTERNAL TABLE data_index_bloom_encoding_stats STORED AS PARQUET LOCATION '../../parquet-testing/data/data_index_bloom_encoding_stats.parquet';
 
+query TT
+SHOW datafusion.execution.parquet.bloom_filter_on_read
+----
+datafusion.execution.parquet.bloom_filter_on_read true
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
+----
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';
+----
+test
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" like '%e%';
+----
+Hello
+test
+are you
+the quick
+over
+the lazy
+
+
+########
+# Test query without bloom filter
+# Refer to https://github.com/apache/datafusion/pull/7821#pullrequestreview-1688062599
+########
+
 statement ok
-set datafusion.execution.parquet.bloom_filter_enabled=true;
+set datafusion.execution.parquet.bloom_filter_on_read=false;
 
 query T
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
@@ -537,7 +570,7 @@ over
 the lazy
 
 statement ok
-set datafusion.execution.parquet.bloom_filter_enabled=false;
+set datafusion.execution.parquet.bloom_filter_on_read=true;
 
 
 ########

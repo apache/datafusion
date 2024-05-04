@@ -192,7 +192,7 @@ impl ScalarUDFImpl for LogFunc {
                 } else {
                     let args = match num_args {
                         1 => vec![number],
-                        2 => vec![number, base],
+                        2 => vec![base, number],
                         _ => {
                             return internal_err!(
                                 "Unexpected number of arguments in log::simplify"
@@ -220,7 +220,13 @@ fn is_pow(func_def: &ScalarFunctionDefinition) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use std::collections::HashMap;
+
+    use datafusion_common::{
+        cast::{as_float32_array, as_float64_array},
+        DFSchema,
+    };
+    use datafusion_expr::{execution_props::ExecutionProps, simplify::SimplifyContext};
 
     use super::*;
 
@@ -282,5 +288,45 @@ mod tests {
                 panic!("Expected an array value")
             }
         }
+    }
+    #[test]
+    // Test log() simplification errors
+    fn test_log_simplify_errors() {
+        let props = ExecutionProps::new();
+        let schema =
+            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
+        let context = SimplifyContext::new(&props).with_schema(schema);
+        // Expect 0 args to error
+        let _ = LogFunc::new().simplify(vec![], &context).unwrap_err();
+        // Expect 3 args to error
+        let _ = LogFunc::new()
+            .simplify(vec![lit(1), lit(2), lit(3)], &context)
+            .unwrap_err();
+    }
+
+    #[test]
+    // Test that non-simplifiable log() expressions are unchanged after simplification
+    fn test_log_simplify_original() {
+        let props = ExecutionProps::new();
+        let schema =
+            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
+        let context = SimplifyContext::new(&props).with_schema(schema);
+        // One argument with no simplifications
+        let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], lit(2));
+        // Two arguments with no simplifications
+        let result = LogFunc::new()
+            .simplify(vec![lit(2), lit(3)], &context)
+            .unwrap();
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], lit(2));
+        assert_eq!(args[1], lit(3));
     }
 }

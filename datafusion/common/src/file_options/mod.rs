@@ -67,7 +67,7 @@ mod tests {
             "format.data_page_row_count_limit".to_owned(),
             "123".to_owned(),
         );
-        option_map.insert("format.bloom_filter_enabled".to_owned(), "true".to_owned());
+        option_map.insert("format.bloom_filter_on_write".to_owned(), "true".to_owned());
         option_map.insert("format.encoding".to_owned(), "plain".to_owned());
         option_map.insert("format.dictionary_enabled".to_owned(), "true".to_owned());
         option_map.insert("format.compression".to_owned(), "zstd(4)".to_owned());

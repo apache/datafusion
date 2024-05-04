@@ -250,7 +250,7 @@ fn coerce_exprs_for_schema(
                     _ => expr.cast_to(new_type, src_schema),
                 }
             } else {
-                Ok(expr.clone())
+                Ok(expr)
             }
         })
         .collect::<Result<_>>()

@@ -26,6 +26,7 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
+mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
@@ -451,11 +452,6 @@ fn get_projected_output_ordering(
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
-            debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
-            base_config.output_ordering[0], base_config.file_groups);
-            return vec![];
-        }
         let mut new_ordering = vec![];
         for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
@@ -473,11 +469,45 @@ fn get_projected_output_ordering(
             // since rest of the orderings are violated
             break;
         }
+
         // do not push empty entries
         // otherwise we may have `Some(vec![])` at the output ordering.
-        if !new_ordering.is_empty() {
-            all_orderings.push(new_ordering);
+        if new_ordering.is_empty() {
+            continue;
         }
+
+        // Check if any file groups are not sorted
+        if base_config.file_groups.iter().any(|group| {
+            if group.len() <= 1 {
+                // File groups with <= 1 files are always sorted
+                return false;
+            }
+
+            let statistics = match statistics::MinMaxStatistics::new_from_files(
+                &new_ordering,
+                projected_schema,
+                base_config.projection.as_deref(),
+                group,
+            ) {
+                Ok(statistics) => statistics,
+                Err(e) => {
+                    log::trace!("Error fetching statistics for file group: {e}");
+                    // we can't prove that it's ordered, so we have to reject it
+                    return true;
+                }
+            };
+
+            !statistics.is_sorted()
+        }) {
+            debug!(
+                "Skipping specified output ordering {:?}. \
+                Some file groups couldn't be determined to be sorted: {:?}",
+                base_config.output_ordering[0], base_config.file_groups
+            );
+            continue;
+        }
+
+        all_orderings.push(new_ordering);
     }
     all_orderings
 }
@@ -861,6 +891,7 @@ mod tests {
             object_meta,
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         }
     }

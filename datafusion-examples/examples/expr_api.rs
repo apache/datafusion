@@ -258,7 +258,7 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
         ExprSimplifier::new(SimplifyContext::new(&props).with_schema(df_schema.clone()));
 
     // apply type coercion here to ensure types match
-    let expr = simplifier.coerce(expr, df_schema.clone())?;
+    let expr = simplifier.coerce(expr, &df_schema)?;
 
     create_physical_expr(&expr, df_schema.as_ref(), &props)
 }

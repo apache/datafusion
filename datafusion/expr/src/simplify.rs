@@ -109,6 +109,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 }
 
 /// Was the expression simplified?
+#[derive(Debug)]
 pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),

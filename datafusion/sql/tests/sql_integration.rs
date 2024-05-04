@@ -3646,7 +3646,7 @@ fn test_select_distinct_order_by() {
     let sql = "SELECT distinct '1' from person order by id";
 
     let expected =
-        "Error during planning: For SELECT DISTINCT, ORDER BY expressions id must appear in select list";
+        "Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list";
 
     // It should return error.
     let result = logical_plan(sql);
