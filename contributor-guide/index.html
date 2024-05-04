@@ -398,6 +398,28 @@
   </ul>
  </li>
 </ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
 
     
   </div>
@@ -933,7 +955,7 @@ users to enable or disable the new module as desired.</p></li>
 rendered using <a class="reference external" href="https://www.graphviz.org/">Graphviz</a>.</p>
 <p>To do so, save the output of the <code class="docutils literal notranslate"><span class="pre">display_graphviz</span></code> function to a file.:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Create plan somehow...</span>
-<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">File</span>::<span class="n">create</span><span class="p">(</span><span class="s">&quot;/tmp/plan.dot&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">File</span><span class="p">::</span><span class="n">create</span><span class="p">(</span><span class="s">&quot;/tmp/plan.dot&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="fm">write!</span><span class="p">(</span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">display_graphviz</span><span class="p">());</span>
 </pre></div>
 </div>

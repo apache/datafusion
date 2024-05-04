@@ -116,3 +116,13 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    contributor-guide/quarterly_roadmap
    contributor-guide/governance
    contributor-guide/specification/index
+
+.. _toc.contributor-guide:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: DataFusion Subprojects
+
+   DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Python <https://datafusion.apache.org/python/>

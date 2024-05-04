@@ -398,6 +398,28 @@
   </ul>
  </li>
 </ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
 
     
   </div>
@@ -503,19 +525,19 @@ much easier to use the <a class="reference external" href="https://docs.rs/dataf
 <p>Here is an example of building a logical plan directly:</p>
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_1 -->
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create a logical table source</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span>::<span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
-<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
 <span class="p">]);</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span>::<span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span>::<span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
 
 <span class="c1">// create a TableScan plan</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">projection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span><span class="w"> </span><span class="c1">// optional projection</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">filters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span><span class="w"> </span><span class="c1">// optional filters to push down</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">fetch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span><span class="w"> </span><span class="c1">// optional LIMIT</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">table_scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span>::<span class="n">TableScan</span><span class="p">(</span><span class="n">TableScan</span>::<span class="n">try_new</span><span class="p">(</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">TableScan</span><span class="p">(</span><span class="n">TableScan</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
 <span class="w">    </span><span class="s">&quot;person&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span>
 <span class="w">    </span><span class="n">projection</span><span class="p">,</span>
 <span class="w">    </span><span class="n">filters</span><span class="p">,</span>
 <span class="w">    </span><span class="n">fetch</span><span class="p">,</span>
@@ -523,7 +545,7 @@ much easier to use the <a class="reference external" href="https://docs.rs/dataf
 
 <span class="c1">// create a Filter plan that evaluates `id &gt; 500` that wraps the TableScan</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">filter_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">500</span><span class="p">));</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span>::<span class="n">Filter</span><span class="p">(</span><span class="n">Filter</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">filter_expr</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_scan</span><span class="p">))</span><span class="o">?</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Filter</span><span class="p">(</span><span class="n">Filter</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">filter_expr</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table_scan</span><span class="p">))</span><span class="o">?</span><span class="p">);</span>
 
 <span class="c1">// print the plan</span>
 <span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">display_indent_schema</span><span class="p">());</span>
@@ -560,17 +582,17 @@ execution will be performed.</p>
 <p>The following example demonstrates building the same simple query plan as the previous example, with a table scan followed by a filter.</p>
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_builder_1 -->
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create a logical table source</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span>::<span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
-<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
 <span class="p">]);</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span>::<span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span>::<span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
 
 <span class="c1">// optional projection</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">projection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
 
 <span class="c1">// create a LogicalPlanBuilder for a table scan</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span>::<span class="n">scan</span><span class="p">(</span><span class="s">&quot;person&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span><span class="w"> </span><span class="n">projection</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">::</span><span class="n">scan</span><span class="p">(</span><span class="s">&quot;person&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span><span class="w"> </span><span class="n">projection</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 
 <span class="c1">// perform a filter operation and build the plan</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span>

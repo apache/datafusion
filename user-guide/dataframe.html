@@ -398,6 +398,28 @@
   </ul>
  </li>
 </ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
 
     
   </div>
@@ -497,12 +519,12 @@ by calling the transformation methods, such as <code class="docutils literal not
 to build up a query definition.</p>
 <p>The query can be executed by calling the <code class="docutils literal notranslate"><span class="pre">collect</span></code> method.</p>
 <p>The DataFrame struct is part of DataFusion’s prelude and can be imported with the following statement.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Here is a minimal example showing the execution of a query using the DataFrame API.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span>::<span class="n">new</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span>::<span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">)))</span><span class="o">?</span>
 <span class="w">           </span><span class="p">.</span><span class="n">aggregate</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">)],</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">min</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">))])</span><span class="o">?</span>
 <span class="w">           </span><span class="p">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">100</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
