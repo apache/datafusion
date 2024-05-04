@@ -1045,8 +1045,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
-            GetFieldAccess::ListRange { start, stop, stride } => {
-                if let Some(udf) = self.context_provider.get_function_meta("array_slice") {
+            GetFieldAccess::ListRange {
+                start,
+                stop,
+                stride,
+            } => {
+                if let Some(udf) = self.context_provider.get_function_meta("array_slice")
+                {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
                         udf,
                         vec![expr, *start, *stop, *stride],
