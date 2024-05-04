@@ -1901,6 +1901,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let ignore_nulls = null_treatment
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
+
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let physical_sort_exprs = match order_by {

@@ -30,7 +30,8 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    function::AccumulatorArgs, type_coercion::aggregates::NUMERICS, utils::format_state_name, Accumulator, AggregateUDFImpl, Signature, Volatility
+    function::AccumulatorArgs, type_coercion::aggregates::NUMERICS,
+    utils::format_state_name, Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::stats::StatsType;
 
@@ -100,21 +101,9 @@ impl AggregateUDFImpl for CovarianceSample {
         _ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
         Ok(vec![
-            Field::new(
-                format_state_name(name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(name, "mean1"),
-                DataType::Float64,
-                true,
-            ),
-            Field::new(
-                format_state_name(name, "mean2"),
-                DataType::Float64,
-                true,
-            ),
+            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+            Field::new(format_state_name(name, "mean1"), DataType::Float64, true),
+            Field::new(format_state_name(name, "mean2"), DataType::Float64, true),
             Field::new(
                 format_state_name(name, "algo_const"),
                 DataType::Float64,
