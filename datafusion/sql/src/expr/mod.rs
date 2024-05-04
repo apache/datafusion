@@ -1000,8 +1000,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             },
         };
 
-        println!("field: {:?}", field);
-
         Ok(field)
     }
 
@@ -1022,10 +1020,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr
         };
 
-        println!("expr: {:?}", expr);
-
         let field = self.plan_indices(indices, schema, planner_context)?;
-        println!("field: {:?}", field);
         match field {
             GetFieldAccess::NamedStructField { name} => {
                 if let Some(udf) = self.context_provider.get_function_meta("get_field") {

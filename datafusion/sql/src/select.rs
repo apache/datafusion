@@ -87,8 +87,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             planner_context,
         )?;
 
-        println!("select_exprs: {:?}", select_exprs);
-
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
         // Place the fields of the base plan at the front so that when there are references
