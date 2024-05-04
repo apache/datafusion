@@ -825,8 +825,6 @@ impl SMJStream {
                         self.streamed_state = StreamedState::Exhausted;
                     }
                     Poll::Ready(Some(batch)) => {
-                        //dbg!(&batch);
-                        //println!("{:#?}", &batch);
                         if batch.num_rows() > 0 {
                             self.freeze_streamed()?;
                             self.join_metrics.input_batches.add(1);
@@ -1073,7 +1071,6 @@ impl SMJStream {
                 Some(self.buffered_data.scanning_batch_idx)
             };
 
-            //dbg!(self.buffered_data.scanning_idx());
             self.streamed_batch
                 .append_output_pair(scanning_batch_idx, None);
             self.output_size += 1;
@@ -1145,12 +1142,8 @@ impl SMJStream {
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
     fn freeze_streamed(&mut self) -> Result<()> {
-        //dbg!(&self.streamed_batch.batch);
-
         for chunk in self.streamed_batch.output_indices.iter_mut() {
             let streamed_indices = chunk.streamed_indices.finish();
-            dbg!(&streamed_indices);
-            //let streamed_indices = PrimitiveArray::<UInt64Type>::try_new(vec![0, 1].into(), None)?;
 
             if streamed_indices.is_empty() {
                 continue;
@@ -1207,10 +1200,6 @@ impl SMJStream {
                 vec![]
             };
 
-            dbg!(&streamed_columns);
-            dbg!(&buffered_columns);
-            dbg!(&filter_columns);
-
             let columns = if matches!(self.join_type, JoinType::Right) {
                 buffered_columns.extend(streamed_columns.clone());
                 buffered_columns
@@ -1231,16 +1220,11 @@ impl SMJStream {
                         filter_columns,
                     )?;
 
-                    dbg!(&filter_batch);
-                    dbg!(&f.expression());
-
-
                     let filter_result = f
                         .expression()
                         .evaluate(&filter_batch)?
                         .into_array(filter_batch.num_rows())?;
 
-                    dbg!(&filter_result);
                     // The selection mask of the filter
                     let mut mask =
                         datafusion_common::cast::as_boolean_array(&filter_result)?;
@@ -1257,8 +1241,6 @@ impl SMJStream {
                     // Push the filtered batch to the output
                     let filtered_batch =
                         compute::filter_record_batch(&output_batch, mask)?;
-
-                    dbg!(&filtered_batch);
 
                     self.output_record_batches.push(filtered_batch);
 
@@ -1417,9 +1399,6 @@ fn get_filter_column(
             .filter(|col_index| col_index.side == JoinSide::Right)
             .map(|i| buffered_columns[i.index].clone())
             .collect::<Vec<_>>();
-
-//        dbg!(&left_columns);
-//        dbg!(&right_columns);
 
         filter_columns.extend(left_columns);
         filter_columns.extend(right_columns);
