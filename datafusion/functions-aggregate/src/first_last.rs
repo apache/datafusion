@@ -44,7 +44,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-make_udaf_function!(
+make_udaf_expr_and_func!(
     FirstValue,
     first_value,
     "Returns the first value in a group of values.",

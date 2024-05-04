@@ -19,15 +19,26 @@
 
 use std::fmt::Debug;
 
-use arrow::{array::{ArrayRef, Float64Array, UInt64Array}, compute::kernels::cast, datatypes::DataType};
+use arrow::{
+    array::{ArrayRef, Float64Array, UInt64Array},
+    compute::kernels::cast,
+    datatypes::DataType,
+};
 
-use datafusion_common::{downcast_value, plan_err, unwrap_or_internal_err, Result, ScalarValue, DataFusionError};
-use datafusion_expr::{function::AccumulatorArgs, type_coercion::aggregates::NUMERICS, Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::{
+    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
+    ScalarValue,
+};
+use datafusion_expr::{
+    function::AccumulatorArgs, type_coercion::aggregates::NUMERICS, Accumulator,
+    AggregateUDFImpl, Signature, Volatility,
+};
 use datafusion_physical_expr_common::aggregate::stats::StatsType;
 
-make_udaf_function!(
+make_udaf_expr_and_func!(
     CovarianceSample,
     covar_samp,
+    y x,
     "Computes the sample covariance.",
     covar_samp_udf
 );
@@ -57,7 +68,7 @@ impl CovarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("covar_samp")],
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
+            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
         }
     }
 }
