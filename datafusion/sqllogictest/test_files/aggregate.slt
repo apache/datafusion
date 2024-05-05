@@ -1625,7 +1625,53 @@ select mean(c1) from test
 ----
 1.75
 
+# aggregate sum distinct, coerced result from i32 to i64
+statement ok
+create table t (c int) as values (1), (2), (1), (3), (null), (null), (-3), (-3);
 
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from u32 to u64
+statement ok
+create table t (c int unsigned) as values (1), (2), (1), (3), (null), (null), (3);
+
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+6 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from f32 to f64
+statement ok
+create table t (c float) as values (1.0), (2.2), (1.0), (3.3), (null), (null), (3.3), (-2.0);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct with decimal
+statement ok
+create table t (c decimal(35, 0)) as values (1), (2), (1), (3), (null), (null), (3), (-2);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4 Decimal128(38, 0)
+
+statement ok
+drop table t;
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
 query RI
