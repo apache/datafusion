@@ -24,7 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -39,12 +39,11 @@ use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
-use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-make_udaf_function!(
+make_udaf_expr_and_func!(
     FirstValue,
     first_value,
     "Returns the first value in a group of values.",
@@ -149,16 +148,14 @@ impl AggregateUDFImpl for FirstValue {
 
     fn state_fields(
         &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
+        args: StateFieldsArgs,
     ) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
-            format_state_name(name, "first_value"),
-            value_type,
+            format_state_name(args.name, "first_value"),
+            args.input_type,
             true,
         )];
-        fields.extend(ordering_fields);
+        fields.extend(args.ordering_fields);
         fields.push(Field::new("is_set", DataType::Boolean, true));
         Ok(fields)
     }

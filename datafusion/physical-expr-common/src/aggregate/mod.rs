@@ -20,7 +20,9 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::function::{GroupsAccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
@@ -148,7 +150,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 }
 
 /// Physical aggregate expression of a UDAF.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
@@ -160,7 +162,9 @@ pub struct AggregateFunctionExpr {
     sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
+    // Whether to ignore null values
     ignore_nulls: bool,
+    // fields used for order sensitive aggregation functions
     ordering_fields: Vec<Field>,
 }
 
@@ -182,11 +186,14 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        self.fun.state_fields(
-            self.name(),
-            self.data_type.clone(),
-            self.ordering_fields.clone(),
-        )
+        let args = StateFieldsArgs {
+            name: self.name(),
+            input_type: self.data_type.clone(),
+            ordering_fields: self.ordering_fields.clone(),
+            nullable: true,
+        };
+
+        self.fun.state_fields(args)
     }
 
     fn field(&self) -> Result<Field> {
@@ -194,18 +201,27 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let acc_args = AccumulatorArgs::new(
+        let args = AccumulatorArgs::new(
             &self.data_type,
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
+            self.name(),
         );
 
-        self.fun.accumulator(acc_args)
+        self.fun.accumulator(args)
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulator = self.create_accumulator()?;
+        let args = AccumulatorArgs::new(
+            &self.data_type,
+            &self.schema,
+            self.ignore_nulls,
+            &self.sort_exprs,
+            self.name(),
+        );
+
+        let accumulator = self.fun().create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
@@ -268,11 +284,23 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        self.fun.create_groups_accumulator()
+        let args = GroupsAccumulatorArgs {
+            data_type: &self.data_type,
+            name: self.name(),
+        };
+        self.fun.create_groups_accumulator(args)
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        match self.fun.reverse_expr() {
+            ReversedUDAF::NotSupported => None,
+            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDAF::Reversed(fun) => todo!("Reverse UDAF: {:?}", fun),
+        }
     }
 }
 

@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod first_last;
+pub mod sum;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;

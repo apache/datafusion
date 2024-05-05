@@ -17,7 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::AccumulatorArgs;
+use crate::function::{AccumulatorArgs, GroupsAccumulatorArgs, StateFieldsArgs};
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
@@ -179,11 +179,9 @@ impl AggregateUDF {
     /// This is used to support multi-phase aggregations
     pub fn state_fields(
         &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
+        args: StateFieldsArgs,
     ) -> Result<Vec<Field>> {
-        self.inner.state_fields(name, value_type, ordering_fields)
+        self.inner.state_fields(args)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -192,8 +190,22 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
-    pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        self.inner.create_groups_accumulator()
+    pub fn create_groups_accumulator(
+        &self,
+        args: GroupsAccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+
+    pub fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.inner.create_sliding_accumulator(args)
+    }
+
+    pub fn reverse_expr(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
     }
 }
 
@@ -311,17 +323,15 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// to generate a unique name.
     fn state_fields(
         &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
+        args: StateFieldsArgs,
     ) -> Result<Vec<Field>> {
         let value_fields = vec![Field::new(
-            format_state_name(name, "value"),
-            value_type,
+            format_state_name(args.name, "value"),
+            args.input_type,
             true,
         )];
 
-        Ok(value_fields.into_iter().chain(ordering_fields).collect())
+        Ok(value_fields.into_iter().chain(args.ordering_fields).collect())
     }
 
     /// If the aggregate expression has a specialized
@@ -343,7 +353,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: GroupsAccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
@@ -354,6 +367,26 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::NotSupported
+    }
+}
+
+pub enum ReversedUDAF {
+    /// The expression is the same as the original expression, like SUM, COUNT
+    Identical,
+    /// The expression does not support reverse calculation, like ArrayAgg
+    NotSupported,
+    /// The expression is different from the original expression
+    Reversed(Arc<dyn AggregateUDFImpl>),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to
