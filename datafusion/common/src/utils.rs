@@ -947,26 +947,6 @@ mod tests {
     }
 
     #[test]
-    fn arc_data_ptr_eq() {
-        let x = Arc::new(());
-        let y = Arc::new(());
-        let y_clone = Arc::clone(&y);
-
-        assert!(
-            Arc::data_ptr_eq(&x, &x),
-            "same `Arc`s should point to same data"
-        );
-        assert!(
-            !Arc::data_ptr_eq(&x, &y),
-            "different `Arc`s should point to different data"
-        );
-        assert!(
-            Arc::data_ptr_eq(&y, &y_clone),
-            "cloned `Arc` should point to same data as the original"
-        );
-    }
-
-    #[test]
     fn test_merge_and_order_indices() {
         assert_eq!(
             merge_and_order_indices([0, 3, 4], [1, 3, 5]),
