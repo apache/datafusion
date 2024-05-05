@@ -443,7 +443,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             Some(optimized_plan) if optimized_plan.schema() != original_schema => {
                 // add an additional projection if the output schema changed.
                 Ok(Some(build_recover_project_plan(
-                    &original_schema,
+                    original_schema,
                     optimized_plan,
                 )?))
             }
