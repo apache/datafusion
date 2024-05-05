@@ -23,4 +23,6 @@ pub use accumulate::NullState;
 pub use adapter::GroupsAccumulatorAdapter;
 
 pub(crate) mod bool_op;
-pub(crate) mod prim_op;
+pub(crate) mod prim_op {
+    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::*;
+}
