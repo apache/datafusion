@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// TODO: Move this to functions-aggregate module
 /// Enum used for differentiating population and sample for statistical functions
 #[derive(Debug, Clone, Copy)]
 pub enum StatsType {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the covariance aggregations.
+//! [`CovarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
 
@@ -53,7 +53,6 @@ impl Debug for CovarianceSample {
         f.debug_struct("CovarianceSample")
             .field("name", &self.name())
             .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
             .finish()
     }
 }
@@ -67,7 +66,7 @@ impl Default for CovarianceSample {
 impl CovarianceSample {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("covar_samp")],
+            aliases: vec![String::from("covar")],
             signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
         }
     }
@@ -79,7 +78,7 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn name(&self) -> &str {
-        "covar"
+        "covar_samp"
     }
 
     fn signature(&self) -> &Signature {
@@ -122,7 +121,7 @@ impl AggregateUDFImpl for CovarianceSample {
 }
 
 /// An accumulator to compute covariance
-/// The algrithm used is an online implementation and numerically stable. It is derived from the following paper
+/// The algorithm used is an online implementation and numerically stable. It is derived from the following paper
 /// for calculating variance:
 /// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
 /// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
