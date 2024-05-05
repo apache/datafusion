@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod stats;
+pub mod count_distinct;
 pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};

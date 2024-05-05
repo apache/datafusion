@@ -18,7 +18,7 @@
 //! [`BytesDistinctCountAccumulator`] for Utf8/LargeUtf8/Binary/LargeBinary values
 
 use crate::binary_map::{ArrowBytesSet, OutputType};
-use arrow_array::{ArrayRef, OffsetSizeTrait};
+use arrow::array::{ArrayRef, OffsetSizeTrait};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::ScalarValue;

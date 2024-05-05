@@ -18,8 +18,9 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::{
+    array::ArrowNativeTypeOp,
     compute::SortOptions,
-    datatypes::{DataType, Field},
+    datatypes::{DataType, Field, ToByteSlice},
 };
 
 use crate::sort_expr::PhysicalSortExpr;
@@ -67,3 +68,21 @@ pub fn ordering_fields(
 pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
+
+/// A wrapper around a type to provide hash for floats
+#[derive(Copy, Clone, Debug)]
+pub struct Hashable<T>(pub T);
+
+impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.is_eq(other.0)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}

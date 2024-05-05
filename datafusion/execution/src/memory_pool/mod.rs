@@ -22,7 +22,9 @@ use datafusion_common::Result;
 use std::{cmp::Ordering, sync::Arc};
 
 mod pool;
-pub mod proxy;
+pub mod proxy {
+    pub use datafusion_common::memory_pool::proxy::*;
+}
 
 pub use pool::*;
 

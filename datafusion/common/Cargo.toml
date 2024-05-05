@@ -56,6 +56,7 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { workspace = true }
+hashbrown = { version = "0.14", features = ["raw"] }
 libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
