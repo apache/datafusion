@@ -53,16 +53,28 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast;
-use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, DescribeAlias, Expr as SQLExpr, Expr,
-    FromTable, Ident, ObjectName, ObjectType, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
-};
+use sqlparser::ast::{Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, Expr, FromTable, Ident, Insert, ObjectName, ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::DoubleQuotedString(_)
+        | Value::EscapedStringLiteral(_)
+        | Value::NationalStringLiteral(_)
+        | Value::SingleQuotedByteStringLiteral(_)
+        | Value::DoubleQuotedByteStringLiteral(_)
+        | Value::RawStringLiteral(_)
+        | Value::HexStringLiteral(_)
+        | Value::Null
+        | Value::Placeholder(_) => None,
+    }
 }
 
 fn object_name_to_string(object_name: &ObjectName) -> String {
@@ -463,7 +475,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
 
-            Statement::Insert {
+            Statement::Insert(Insert {
                 or,
                 into,
                 table_name,
@@ -480,7 +492,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 replace_into,
                 priority,
                 insert_alias,
-            } => {
+            }) => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
                 }
@@ -537,7 +549,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.update_to_plan(table, assignments, from, selection)
             }
 
-            Statement::Delete {
+            Statement::Delete(Delete {
                 tables,
                 using,
                 selection,
@@ -545,7 +557,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 from,
                 order_by,
                 limit,
-            } => {
+            }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
                 }
@@ -851,23 +863,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut options = HashMap::new();
         for (key, value) in statement.options {
-            let value_string = match value {
-                Value::SingleQuotedString(s) => s.to_string(),
-                Value::DollarQuotedString(s) => s.to_string(),
-                Value::UnQuotedString(s) => s.to_string(),
-                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
-                Value::DoubleQuotedString(_)
-                | Value::EscapedStringLiteral(_)
-                | Value::NationalStringLiteral(_)
-                | Value::SingleQuotedByteStringLiteral(_)
-                | Value::DoubleQuotedByteStringLiteral(_)
-                | Value::RawStringLiteral(_)
-                | Value::HexStringLiteral(_)
-                | Value::Null
-                | Value::Placeholder(_) => {
-                    return plan_err!("Unsupported Value in COPY statement {}", value);
-                }
-            };
+            let value_string = value_to_string(&value).ok_or_else(|| {
+                plan_err!("Unsupported Value in COPY statement {}", value)
+            })?;
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
@@ -1132,23 +1130,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => match v {
-                Value::SingleQuotedString(s) => s.to_string(),
-                Value::DollarQuotedString(s) => s.to_string(),
-                Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
-                Value::DoubleQuotedString(_)
-                | Value::UnQuotedString(_)
-                | Value::EscapedStringLiteral(_)
-                | Value::NationalStringLiteral(_)
-                | Value::SingleQuotedByteStringLiteral(_)
-                | Value::DoubleQuotedByteStringLiteral(_)
-                | Value::RawStringLiteral(_)
-                | Value::HexStringLiteral(_)
-                | Value::Null
-                | Value::Placeholder(_) => {
-                    return plan_err!("Unsupported Value {}", value[0]);
-                }
-            },
+            SQLExpr::Value(v) => value_to_string(v).ok_or_else(|| {
+                plan_err!("Unsupported Value {}", value[0])
+            })?,
             // for capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Plus => format!("+{expr}"),

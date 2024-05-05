@@ -103,7 +103,7 @@ parquet = { version = "51.0.0", default-features = false, features = ["arrow", "
 rand = "0.8"
 rstest = "0.19.0"
 serde_json = "1"
-sqlparser = { version = "0.45.0", features = ["visitor"] }
+sqlparser = { version = "0.46.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
