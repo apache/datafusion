@@ -20,8 +20,8 @@
 //! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 
 use arrow::datatypes::ArrowPrimitiveType;
-use arrow_array::{Array, BooleanArray, PrimitiveArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
+use arrow::array::{Array, BooleanArray, PrimitiveArray, BooleanBufferBuilder};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 
 use datafusion_expr::EmitTo;
 /// Track the accumulator null state per row: if any values for that
@@ -462,8 +462,8 @@ fn initialize_builder(
 mod test {
     use super::*;
 
-    use arrow_array::UInt32Array;
-    use hashbrown::HashSet;
+    use arrow::array::UInt32Array;
+    use std::collections::HashSet;
     use rand::{rngs::ThreadRng, Rng};
 
     #[test]
