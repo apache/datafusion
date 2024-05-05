@@ -28,7 +28,6 @@ use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -416,13 +415,12 @@ mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, lit};
 
-    use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-    use datafusion_common::{plan_err, ScalarValue};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
 
@@ -958,7 +956,7 @@ mod tests {
 
         let expr2 = expr
             .clone()
-            .transform(&|e| {
+            .transform(|e| {
                 let transformed =
                     match e.as_any().downcast_ref::<crate::expressions::Literal>() {
                         Some(lit_value) => match lit_value.value() {
@@ -980,7 +978,7 @@ mod tests {
 
         let expr3 = expr
             .clone()
-            .transform_down(&|e| {
+            .transform_down(|e| {
                 let transformed =
                     match e.as_any().downcast_ref::<crate::expressions::Literal>() {
                         Some(lit_value) => match lit_value.value() {

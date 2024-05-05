@@ -46,10 +46,10 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction, ColumnarValue, Expr,
-    ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, ScalarUDFImpl,
-    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    Accumulator, AggregateFunction, ColumnarValue, ExprSchemable, LogicalPlan, Operator,
+    PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -344,7 +344,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut parquet_format = table_options.parquet;
 
-    parquet_format.global.bloom_filter_enabled = true;
+    parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = "PARQUET_2_0".to_string();
     parquet_format.global.write_batch_size = 111;
@@ -613,7 +613,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
-        first_value(lit(1)),
+        first_value(vec![lit(1)], false, None, None, None),
     ];
 
     // ensure expressions created with the expr api can be round tripped

@@ -95,7 +95,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         if !expr_check_map.is_empty() {
                             rewrite_expr = rewrite_expr
                                 .clone()
-                                .transform_up(&|expr| {
+                                .transform_up(|expr| {
                                     if let Expr::Column(col) = &expr {
                                         if let Some(map_expr) =
                                             expr_check_map.get(&col.name)
@@ -152,7 +152,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 {
                                     let new_expr = rewrite_expr
                                         .clone()
-                                        .transform_up(&|expr| {
+                                        .transform_up(|expr| {
                                             if let Expr::Column(col) = &expr {
                                                 if let Some(map_expr) =
                                                     expr_check_map.get(&col.name)
@@ -385,8 +385,6 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::logical_plan::LogicalPlanBuilder;
     use datafusion_expr::{
         col, lit, max, min, out_ref_col, scalar_subquery, sum, Between,
     };
@@ -622,7 +620,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) != orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -649,7 +647,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) < orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -677,7 +675,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1)";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -698,7 +696,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -760,7 +758,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 

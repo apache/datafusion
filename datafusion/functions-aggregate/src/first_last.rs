@@ -27,7 +27,10 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    TypeSignature, Volatility,
+};
 use datafusion_physical_expr_common::aggregate::utils::{
     down_cast_any_ref, get_sort_options, ordering_fields,
 };
@@ -36,6 +39,7 @@ use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -43,7 +47,6 @@ use std::sync::Arc;
 make_udaf_function!(
     FirstValue,
     first_value,
-    value,
     "Returns the first value in a group of values.",
     first_value_udaf
 );
@@ -73,7 +76,14 @@ impl FirstValue {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("FIRST_VALUE")],
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -405,11 +415,9 @@ impl FirstValuePhysicalExpr {
     }
 
     pub fn convert_to_last(self) -> LastValuePhysicalExpr {
-        let name = if self.name.starts_with("FIRST") {
-            format!("LAST{}", &self.name[5..])
-        } else {
-            format!("LAST_VALUE({})", self.expr)
-        };
+        let mut name = format!("LAST{}", &self.name[5..]);
+        replace_order_by_clause(&mut name);
+
         let FirstValuePhysicalExpr {
             expr,
             input_data_type,
@@ -583,11 +591,9 @@ impl LastValuePhysicalExpr {
     }
 
     pub fn convert_to_first(self) -> FirstValuePhysicalExpr {
-        let name = if self.name.starts_with("LAST") {
-            format!("FIRST{}", &self.name[4..])
-        } else {
-            format!("FIRST_VALUE({})", self.expr)
-        };
+        let mut name = format!("FIRST{}", &self.name[4..]);
+        replace_order_by_clause(&mut name);
+
         let LastValuePhysicalExpr {
             expr,
             input_data_type,
@@ -893,6 +899,31 @@ fn convert_to_sort_cols(
             options: Some(sort_expr.options),
         })
         .collect::<Vec<_>>()
+}
+
+fn replace_order_by_clause(order_by: &mut String) {
+    let suffixes = [
+        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+    ];
+
+    if let Some(start) = order_by.find("ORDER BY [") {
+        if let Some(end) = order_by[start..].find(']') {
+            let order_by_start = start + 9;
+            let order_by_end = start + end;
+
+            let column_order = &order_by[order_by_start..=order_by_end];
+            for &(suffix, replacement) in &suffixes {
+                if column_order.ends_with(suffix) {
+                    let new_order = column_order.replace(suffix, replacement);
+                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

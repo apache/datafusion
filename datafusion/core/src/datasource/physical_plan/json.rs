@@ -44,7 +44,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
-use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
+use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
@@ -387,7 +387,6 @@ mod tests {
     use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::file_compression_type::FileTypeExt;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
-    use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::prelude::{
@@ -401,7 +400,6 @@ mod tests {
     use datafusion_common::FileType;
     use flate2::write::GzEncoder;
     use flate2::Compression;
-    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;

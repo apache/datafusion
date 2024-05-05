@@ -17,7 +17,6 @@
 
 use super::*;
 use datafusion_common::ScalarValue;
-use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {

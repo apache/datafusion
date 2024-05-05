@@ -152,9 +152,8 @@ impl FunctionRewrite for ArrayFunctionRewriter {
                 expr,
                 field: GetFieldAccess::NamedStructField { name },
             }) => {
-                let expr = *expr.clone();
                 let name = Expr::Literal(name);
-                Transformed::yes(get_field(expr, name.clone()))
+                Transformed::yes(get_field(*expr, name))
             }
 
             // expr[idx] ==> array_element(expr, idx)

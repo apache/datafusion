@@ -29,7 +29,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
-/// Resolves issue: <https://github.com/apache/arrow-datafusion/issues/5473>
+/// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
 #[derive(Default)]
 pub struct CountWildcardRule {}
 
@@ -41,8 +41,7 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down_with_subqueries(&analyze_internal)
-            .data()
+        plan.transform_down_with_subqueries(analyze_internal).data()
     }
 
     fn name(&self) -> &str {
@@ -78,7 +77,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr)?;
-        let transformed_expr = expr.transform_up(&|expr| match expr {
+        let transformed_expr = expr.transform_up(|expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
             {
@@ -104,16 +103,16 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        max, out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, Expr,
-        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
 
-    fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
             Arc::new(CountWildcardRule::new()),
             plan,
@@ -133,7 +132,7 @@ mod tests {
         \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [b:UInt32, COUNT(*):Int64;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -159,7 +158,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -182,7 +181,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -215,7 +214,7 @@ mod tests {
               \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
     #[test]
     fn test_count_wildcard_on_window() -> Result<()> {
@@ -240,7 +239,7 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  WindowAggr: windowExpr=[[COUNT(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -254,7 +253,7 @@ mod tests {
         let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -279,6 +278,6 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(Int64(1))) AS MAX(COUNT(*))]] [MAX(COUNT(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 }

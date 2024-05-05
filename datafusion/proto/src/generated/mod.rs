@@ -17,7 +17,6 @@
 
 #[allow(clippy::all)]
 #[rustfmt::skip]
-#[cfg(not(docsrs))]
 pub mod datafusion {
     include!("prost.rs");
 

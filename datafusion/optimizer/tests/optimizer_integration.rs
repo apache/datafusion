@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -58,7 +59,7 @@ fn case_when() -> Result<()> {
 
 #[test]
 fn subquery_filter_with_cast() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3760
+    // regression test for https://github.com/apache/datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
       SELECT AVG(col_int32) FROM test \
@@ -102,7 +103,7 @@ fn unsigned_target_type() -> Result<()> {
 
 #[test]
 fn distribute_by() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3234
+    // regression test for https://github.com/apache/datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
     let expected = "Repartition: DistributeBy(col_utf8)\
@@ -113,7 +114,7 @@ fn distribute_by() -> Result<()> {
 
 #[test]
 fn semi_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -130,7 +131,7 @@ fn semi_join_with_join_filter() -> Result<()> {
 
 #[test]
 fn anti_join_with_join_filter() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/2888
+    // regression test for https://github.com/apache/datafusion/issues/2888
     let sql = "SELECT col_utf8 FROM test WHERE NOT EXISTS (\
                SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
                AND test.col_uint32 != t2.col_uint32)";
@@ -262,7 +263,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
 }
 
 #[test]
-// issue: https://github.com/apache/arrow-datafusion/issues/5334
+// issue: https://github.com/apache/datafusion/issues/5334
 fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();
@@ -272,6 +273,47 @@ fn test_same_name_but_not_ambiguous() {
     \n      TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: t2\
     \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn eliminate_nested_filters() {
+    let sql = "\
+        SELECT col_int32 FROM test \
+        WHERE (1=1) AND (col_int32 > 0) \
+        AND (1=1) AND (1=0 OR 1=1)";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Filter: test.col_int32 > Int32(0)\
+        \n  TableScan: test projection=[col_int32]";
+
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn test_propagate_empty_relation_inner_join_and_unions() {
+    let sql = "\
+        SELECT A.col_int32 FROM test AS A \
+        INNER JOIN ( \
+          SELECT col_int32 FROM test WHERE 1 = 0 \
+        ) AS B ON A.col_int32 = B.col_int32 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 1 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 0 = 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE test.col_int32 < 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 0";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Union\
+        \n  TableScan: test projection=[col_int32]\
+        \n  TableScan: test projection=[col_int32]\
+        \n  Filter: test.col_int32 < Int32(0)\
+        \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
 
@@ -288,7 +330,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
     optimizer.optimize(plan, &config, observe)
 }
 

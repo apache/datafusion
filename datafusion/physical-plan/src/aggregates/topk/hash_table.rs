@@ -386,7 +386,6 @@ pub fn new_hash_table(limit: usize, kt: DataType) -> Result<Box<dyn ArrowHashTab
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::Result;
     use std::collections::BTreeMap;
 
     #[test]

@@ -34,6 +34,12 @@ pub struct LevenshteinFunc {
     signature: Signature,
 }
 
+impl Default for LevenshteinFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LevenshteinFunc {
     pub fn new() -> Self {
         use DataType::*;
@@ -122,7 +128,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::StringArray;
 
     use datafusion_common::cast::as_int32_array;
 

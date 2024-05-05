@@ -24,7 +24,6 @@ use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::row::Rows;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::i256;
 
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
@@ -450,7 +449,6 @@ pub fn create_row_hashes_v2<'a>(
 #[cfg(test)]
 mod tests {
     use arrow::{array::*, datatypes::*};
-    use std::sync::Arc;
 
     use super::*;
 

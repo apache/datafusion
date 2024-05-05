@@ -52,6 +52,7 @@ pub fn data_types(
             );
         }
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -467,12 +468,11 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use crate::Volatility;
 
     use super::*;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::Field;
 
     #[test]
     fn test_maybe_data_types() {

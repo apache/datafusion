@@ -48,7 +48,7 @@ pub trait SimplifyInfo {
 /// # Example
 /// See the `simplify_demo` in the [`expr_api` example]
 ///
-/// [`expr_api` example]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+/// [`expr_api` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 #[derive(Debug, Clone)]
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
@@ -109,6 +109,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 }
 
 /// Was the expression simplified?
+#[derive(Debug)]
 pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),

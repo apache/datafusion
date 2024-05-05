@@ -345,8 +345,6 @@ mod tests {
     use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use arrow_array::BooleanArray;
-    use datafusion_common::Result;
 
     #[test]
     fn test_bool_and() -> Result<()> {

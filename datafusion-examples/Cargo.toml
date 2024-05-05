@@ -29,6 +29,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [[example]]
 name = "flight_sql_server"
 path = "examples/flight/flight_sql_server.rs"

@@ -13809,9 +13809,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::Wildcard(v) => {
                     struct_ser.serialize_field("wildcard", v)?;
                 }
-                logical_expr_node::ExprType::ScalarFunction(v) => {
-                    struct_ser.serialize_field("scalarFunction", v)?;
-                }
                 logical_expr_node::ExprType::TryCast(v) => {
                     struct_ser.serialize_field("tryCast", v)?;
                 }
@@ -13903,8 +13900,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "in_list",
             "inList",
             "wildcard",
-            "scalar_function",
-            "scalarFunction",
             "try_cast",
             "tryCast",
             "window_expr",
@@ -13956,7 +13951,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             Negative,
             InList,
             Wildcard,
-            ScalarFunction,
             TryCast,
             WindowExpr,
             AggregateUdfExpr,
@@ -14012,7 +14006,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
                             "wildcard" => Ok(GeneratedField::Wildcard),
-                            "scalarFunction" | "scalar_function" => Ok(GeneratedField::ScalarFunction),
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "aggregateUdfExpr" | "aggregate_udf_expr" => Ok(GeneratedField::AggregateUdfExpr),
@@ -14157,13 +14150,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("wildcard"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Wildcard)
-;
-                        }
-                        GeneratedField::ScalarFunction => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("scalarFunction"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::ScalarFunction)
 ;
                         }
                         GeneratedField::TryCast => {
@@ -15990,9 +15976,6 @@ impl serde::Serialize for ParquetOptions {
         if !self.writer_version.is_empty() {
             len += 1;
         }
-        if self.bloom_filter_enabled {
-            len += 1;
-        }
         if self.allow_single_file_parallelism {
             len += 1;
         }
@@ -16000,6 +15983,12 @@ impl serde::Serialize for ParquetOptions {
             len += 1;
         }
         if self.maximum_buffered_record_batches_per_stream != 0 {
+            len += 1;
+        }
+        if self.bloom_filter_on_read {
+            len += 1;
+        }
+        if self.bloom_filter_on_write {
             len += 1;
         }
         if self.dictionary_page_size_limit != 0 {
@@ -16068,9 +16057,6 @@ impl serde::Serialize for ParquetOptions {
         if !self.writer_version.is_empty() {
             struct_ser.serialize_field("writerVersion", &self.writer_version)?;
         }
-        if self.bloom_filter_enabled {
-            struct_ser.serialize_field("bloomFilterEnabled", &self.bloom_filter_enabled)?;
-        }
         if self.allow_single_file_parallelism {
             struct_ser.serialize_field("allowSingleFileParallelism", &self.allow_single_file_parallelism)?;
         }
@@ -16081,6 +16067,12 @@ impl serde::Serialize for ParquetOptions {
         if self.maximum_buffered_record_batches_per_stream != 0 {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("maximumBufferedRecordBatchesPerStream", ToString::to_string(&self.maximum_buffered_record_batches_per_stream).as_str())?;
+        }
+        if self.bloom_filter_on_read {
+            struct_ser.serialize_field("bloomFilterOnRead", &self.bloom_filter_on_read)?;
+        }
+        if self.bloom_filter_on_write {
+            struct_ser.serialize_field("bloomFilterOnWrite", &self.bloom_filter_on_write)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -16189,14 +16181,16 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "writeBatchSize",
             "writer_version",
             "writerVersion",
-            "bloom_filter_enabled",
-            "bloomFilterEnabled",
             "allow_single_file_parallelism",
             "allowSingleFileParallelism",
             "maximum_parallel_row_group_writers",
             "maximumParallelRowGroupWriters",
             "maximum_buffered_record_batches_per_stream",
             "maximumBufferedRecordBatchesPerStream",
+            "bloom_filter_on_read",
+            "bloomFilterOnRead",
+            "bloom_filter_on_write",
+            "bloomFilterOnWrite",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -16233,10 +16227,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPagesizeLimit,
             WriteBatchSize,
             WriterVersion,
-            BloomFilterEnabled,
             AllowSingleFileParallelism,
             MaximumParallelRowGroupWriters,
             MaximumBufferedRecordBatchesPerStream,
+            BloomFilterOnRead,
+            BloomFilterOnWrite,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -16279,10 +16274,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
                             "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
-                            "bloomFilterEnabled" | "bloom_filter_enabled" => Ok(GeneratedField::BloomFilterEnabled),
                             "allowSingleFileParallelism" | "allow_single_file_parallelism" => Ok(GeneratedField::AllowSingleFileParallelism),
                             "maximumParallelRowGroupWriters" | "maximum_parallel_row_group_writers" => Ok(GeneratedField::MaximumParallelRowGroupWriters),
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
+                            "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
+                            "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -16323,10 +16319,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
                 let mut writer_version__ = None;
-                let mut bloom_filter_enabled__ = None;
                 let mut allow_single_file_parallelism__ = None;
                 let mut maximum_parallel_row_group_writers__ = None;
                 let mut maximum_buffered_record_batches_per_stream__ = None;
+                let mut bloom_filter_on_read__ = None;
+                let mut bloom_filter_on_write__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -16394,12 +16391,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             writer_version__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::BloomFilterEnabled => {
-                            if bloom_filter_enabled__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterEnabled"));
-                            }
-                            bloom_filter_enabled__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::AllowSingleFileParallelism => {
                             if allow_single_file_parallelism__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("allowSingleFileParallelism"));
@@ -16421,6 +16412,18 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             maximum_buffered_record_batches_per_stream__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
+                        }
+                        GeneratedField::BloomFilterOnRead => {
+                            if bloom_filter_on_read__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterOnRead"));
+                            }
+                            bloom_filter_on_read__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BloomFilterOnWrite => {
+                            if bloom_filter_on_write__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterOnWrite"));
+                            }
+                            bloom_filter_on_write__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
@@ -16517,10 +16520,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),
                     writer_version: writer_version__.unwrap_or_default(),
-                    bloom_filter_enabled: bloom_filter_enabled__.unwrap_or_default(),
                     allow_single_file_parallelism: allow_single_file_parallelism__.unwrap_or_default(),
                     maximum_parallel_row_group_writers: maximum_parallel_row_group_writers__.unwrap_or_default(),
                     maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
+                    bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
+                    bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
@@ -17465,6 +17469,9 @@ impl serde::Serialize for PartitionedFile {
         if self.range.is_some() {
             len += 1;
         }
+        if self.statistics.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PartitionedFile", len)?;
         if !self.path.is_empty() {
             struct_ser.serialize_field("path", &self.path)?;
@@ -17483,6 +17490,9 @@ impl serde::Serialize for PartitionedFile {
         if let Some(v) = self.range.as_ref() {
             struct_ser.serialize_field("range", v)?;
         }
+        if let Some(v) = self.statistics.as_ref() {
+            struct_ser.serialize_field("statistics", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -17500,6 +17510,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
             "partition_values",
             "partitionValues",
             "range",
+            "statistics",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17509,6 +17520,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
             LastModifiedNs,
             PartitionValues,
             Range,
+            Statistics,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17535,6 +17547,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                             "lastModifiedNs" | "last_modified_ns" => Ok(GeneratedField::LastModifiedNs),
                             "partitionValues" | "partition_values" => Ok(GeneratedField::PartitionValues),
                             "range" => Ok(GeneratedField::Range),
+                            "statistics" => Ok(GeneratedField::Statistics),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17559,6 +17572,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                 let mut last_modified_ns__ = None;
                 let mut partition_values__ = None;
                 let mut range__ = None;
+                let mut statistics__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Path => {
@@ -17595,6 +17609,12 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                             }
                             range__ = map_.next_value()?;
                         }
+                        GeneratedField::Statistics => {
+                            if statistics__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statistics"));
+                            }
+                            statistics__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PartitionedFile {
@@ -17603,6 +17623,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                     last_modified_ns: last_modified_ns__.unwrap_or_default(),
                     partition_values: partition_values__.unwrap_or_default(),
                     range: range__,
+                    statistics: statistics__,
                 })
             }
         }
@@ -18526,9 +18547,6 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::InList(v) => {
                     struct_ser.serialize_field("inList", v)?;
                 }
-                physical_expr_node::ExprType::ScalarFunction(v) => {
-                    struct_ser.serialize_field("scalarFunction", v)?;
-                }
                 physical_expr_node::ExprType::TryCast(v) => {
                     struct_ser.serialize_field("tryCast", v)?;
                 }
@@ -18572,8 +18590,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "negative",
             "in_list",
             "inList",
-            "scalar_function",
-            "scalarFunction",
             "try_cast",
             "tryCast",
             "window_expr",
@@ -18598,7 +18614,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             Sort,
             Negative,
             InList,
-            ScalarFunction,
             TryCast,
             WindowExpr,
             ScalarUdf,
@@ -18636,7 +18651,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "sort" => Ok(GeneratedField::Sort),
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
-                            "scalarFunction" | "scalar_function" => Ok(GeneratedField::ScalarFunction),
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "scalarUdf" | "scalar_udf" => Ok(GeneratedField::ScalarUdf),
@@ -18745,13 +18759,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("inList"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::InList)
-;
-                        }
-                        GeneratedField::ScalarFunction => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("scalarFunction"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::ScalarFunction)
 ;
                         }
                         GeneratedField::TryCast => {
@@ -20108,151 +20115,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalPlanNode", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for PhysicalScalarFunctionNode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if !self.name.is_empty() {
-            len += 1;
-        }
-        if self.fun != 0 {
-            len += 1;
-        }
-        if !self.args.is_empty() {
-            len += 1;
-        }
-        if self.return_type.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalScalarFunctionNode", len)?;
-        if !self.name.is_empty() {
-            struct_ser.serialize_field("name", &self.name)?;
-        }
-        if self.fun != 0 {
-            let v = ScalarFunction::try_from(self.fun)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.fun)))?;
-            struct_ser.serialize_field("fun", &v)?;
-        }
-        if !self.args.is_empty() {
-            struct_ser.serialize_field("args", &self.args)?;
-        }
-        if let Some(v) = self.return_type.as_ref() {
-            struct_ser.serialize_field("returnType", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for PhysicalScalarFunctionNode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "name",
-            "fun",
-            "args",
-            "return_type",
-            "returnType",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Name,
-            Fun,
-            Args,
-            ReturnType,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "name" => Ok(GeneratedField::Name),
-                            "fun" => Ok(GeneratedField::Fun),
-                            "args" => Ok(GeneratedField::Args),
-                            "returnType" | "return_type" => Ok(GeneratedField::ReturnType),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = PhysicalScalarFunctionNode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.PhysicalScalarFunctionNode")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalScalarFunctionNode, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut name__ = None;
-                let mut fun__ = None;
-                let mut args__ = None;
-                let mut return_type__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Name => {
-                            if name__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("name"));
-                            }
-                            name__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Fun => {
-                            if fun__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fun"));
-                            }
-                            fun__ = Some(map_.next_value::<ScalarFunction>()? as i32);
-                        }
-                        GeneratedField::Args => {
-                            if args__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("args"));
-                            }
-                            args__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::ReturnType => {
-                            if return_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("returnType"));
-                            }
-                            return_type__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(PhysicalScalarFunctionNode {
-                    name: name__.unwrap_or_default(),
-                    fun: fun__.unwrap_or_default(),
-                    args: args__.unwrap_or_default(),
-                    return_type: return_type__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.PhysicalScalarFunctionNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalScalarUdfNode {
@@ -22782,187 +22644,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFixedSizeBinary {
             }
         }
         deserializer.deserialize_struct("datafusion.ScalarFixedSizeBinary", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ScalarFunction {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Unknown => "unknown",
-            Self::Coalesce => "Coalesce",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for ScalarFunction {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "unknown",
-            "Coalesce",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ScalarFunction;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "unknown" => Ok(ScalarFunction::Unknown),
-                    "Coalesce" => Ok(ScalarFunction::Coalesce),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ScalarFunctionNode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.fun != 0 {
-            len += 1;
-        }
-        if !self.args.is_empty() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarFunctionNode", len)?;
-        if self.fun != 0 {
-            let v = ScalarFunction::try_from(self.fun)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.fun)))?;
-            struct_ser.serialize_field("fun", &v)?;
-        }
-        if !self.args.is_empty() {
-            struct_ser.serialize_field("args", &self.args)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ScalarFunctionNode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "fun",
-            "args",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Fun,
-            Args,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "fun" => Ok(GeneratedField::Fun),
-                            "args" => Ok(GeneratedField::Args),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ScalarFunctionNode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ScalarFunctionNode")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ScalarFunctionNode, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut fun__ = None;
-                let mut args__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Fun => {
-                            if fun__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fun"));
-                            }
-                            fun__ = Some(map_.next_value::<ScalarFunction>()? as i32);
-                        }
-                        GeneratedField::Args => {
-                            if args__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("args"));
-                            }
-                            args__ = Some(map_.next_value()?);
-                        }
-                    }
-                }
-                Ok(ScalarFunctionNode {
-                    fun: fun__.unwrap_or_default(),
-                    args: args__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.ScalarFunctionNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarNestedValue {

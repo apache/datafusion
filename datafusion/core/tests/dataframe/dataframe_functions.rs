@@ -25,19 +25,14 @@ use arrow_array::ListArray;
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
-use datafusion::dataframe::DataFrame;
-
 use datafusion::error::Result;
 
 use datafusion::prelude::*;
 
-use datafusion::execution::context::SessionContext;
-
 use datafusion::assert_batches_eq;
 use datafusion_common::DFSchema;
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{approx_median, cast, ExprSchemable};
-use datafusion_functions_array::expr_fn::array_to_string;
+use datafusion_expr::ExprSchemable;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![

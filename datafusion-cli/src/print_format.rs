@@ -22,6 +22,7 @@ use std::str::FromStr;
 use crate::print_options::MaxRows;
 
 use arrow::csv::writer::WriterBuilder;
+use arrow::datatypes::SchemaRef;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches_with_options;
@@ -157,6 +158,7 @@ impl PrintFormat {
     pub fn print_batches<W: std::io::Write>(
         &self,
         writer: &mut W,
+        schema: SchemaRef,
         batches: &[RecordBatch],
         maxrows: MaxRows,
         with_header: bool,
@@ -168,7 +170,7 @@ impl PrintFormat {
             .cloned()
             .collect();
         if batches.is_empty() {
-            return Ok(());
+            return self.print_empty(writer, schema);
         }
 
         match self {
@@ -186,6 +188,27 @@ impl PrintFormat {
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }
     }
+
+    /// Print when the result batches contain no rows
+    fn print_empty<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        schema: SchemaRef,
+    ) -> Result<()> {
+        match self {
+            // Print column headers for Table format
+            Self::Table if !schema.fields().is_empty() => {
+                let empty_batch = RecordBatch::new_empty(schema);
+                let formatted = pretty_format_batches_with_options(
+                    &[empty_batch],
+                    &DEFAULT_FORMAT_OPTIONS,
+                )?;
+                writeln!(writer, "{}", formatted)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -193,7 +216,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
@@ -201,7 +224,6 @@ mod tests {
         for format in [
             PrintFormat::Csv,
             PrintFormat::Tsv,
-            PrintFormat::Table,
             PrintFormat::Json,
             PrintFormat::NdJson,
             PrintFormat::Automatic,
@@ -209,10 +231,26 @@ mod tests {
             // no output for empty batches, even with header set
             PrintBatchesTest::new()
                 .with_format(format)
+                .with_schema(three_column_schema())
                 .with_batches(vec![])
                 .with_expected(&[""])
                 .run();
         }
+
+        // output column headers for empty batches when format is Table
+        #[rustfmt::skip]
+        let expected = &[
+            "+---+---+---+",
+            "| a | b | c |",
+            "+---+---+---+",
+            "+---+---+---+",
+        ];
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(three_column_schema())
+            .with_batches(vec![])
+            .with_expected(expected)
+            .run();
     }
 
     #[test]
@@ -385,6 +423,7 @@ mod tests {
         for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
             PrintBatchesTest::new()
                 .with_format(PrintFormat::Table)
+                .with_schema(one_column_schema())
                 .with_batches(vec![one_column_batch()])
                 .with_maxrows(max_rows)
                 .with_expected(expected)
@@ -450,15 +489,15 @@ mod tests {
         let empty_batch = RecordBatch::new_empty(batch.schema());
 
         #[rustfmt::skip]
-            let expected =&[
-                "+---+",
-                "| a |",
-                "+---+",
-                "| 1 |",
-                "| 2 |",
-                "| 3 |",
-                "+---+",
-            ];
+        let expected =&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "+---+",
+        ];
 
         PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
@@ -468,14 +507,32 @@ mod tests {
     }
 
     #[test]
-    fn test_print_batches_empty_batches_no_header() {
+    fn test_print_batches_empty_batch() {
         let empty_batch = RecordBatch::new_empty(one_column_batch().schema());
 
-        // empty batches should not print a header
-        let expected = &[""];
+        // Print column headers for empty batch when format is Table
+        #[rustfmt::skip]
+        let expected =&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "+---+",
+        ];
 
         PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
+            .with_schema(one_column_schema())
+            .with_batches(vec![empty_batch])
+            .with_header(WithHeader::Yes)
+            .with_expected(expected)
+            .run();
+
+        // No output for empty batch when schema contains no columns
+        let empty_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let expected = &[""];
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(Arc::new(Schema::empty()))
             .with_batches(vec![empty_batch])
             .with_header(WithHeader::Yes)
             .with_expected(expected)
@@ -485,6 +542,7 @@ mod tests {
     #[derive(Debug)]
     struct PrintBatchesTest {
         format: PrintFormat,
+        schema: SchemaRef,
         batches: Vec<RecordBatch>,
         maxrows: MaxRows,
         with_header: WithHeader,
@@ -504,6 +562,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 format: PrintFormat::Table,
+                schema: Arc::new(Schema::empty()),
                 batches: vec![],
                 maxrows: MaxRows::Unlimited,
                 with_header: WithHeader::Ignored,
@@ -514,6 +573,12 @@ mod tests {
         /// set the format
         fn with_format(mut self, format: PrintFormat) -> Self {
             self.format = format;
+            self
+        }
+
+        // set the schema
+        fn with_schema(mut self, schema: SchemaRef) -> Self {
+            self.schema = schema;
             self
         }
 
@@ -573,21 +638,31 @@ mod tests {
         fn output_with_header(&self, with_header: bool) -> String {
             let mut buffer: Vec<u8> = vec![];
             self.format
-                .print_batches(&mut buffer, &self.batches, self.maxrows, with_header)
+                .print_batches(
+                    &mut buffer,
+                    self.schema.clone(),
+                    &self.batches,
+                    self.maxrows,
+                    with_header,
+                )
                 .unwrap();
             String::from_utf8(buffer).unwrap()
         }
     }
 
-    /// Return a batch with three columns and three rows
-    fn three_column_batch() -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![
+    /// Return a schema with three columns
+    fn three_column_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
-        ]));
+        ]))
+    }
+
+    /// Return a batch with three columns and three rows
+    fn three_column_batch() -> RecordBatch {
         RecordBatch::try_new(
-            schema,
+            three_column_schema(),
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3])),
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
@@ -597,12 +672,17 @@ mod tests {
         .unwrap()
     }
 
+    /// Return a schema with one column
+    fn one_column_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
+    }
+
     /// return a batch with one column and three rows
     fn one_column_batch() -> RecordBatch {
-        RecordBatch::try_from_iter(vec![(
-            "a",
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
-        )])
+        RecordBatch::try_new(
+            one_column_schema(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
         .unwrap()
     }
 

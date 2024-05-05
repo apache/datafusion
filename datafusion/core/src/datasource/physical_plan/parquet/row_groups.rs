@@ -49,7 +49,7 @@ use super::ParquetFileMetrics;
 /// did not filter out that row group.
 ///
 /// Note: This method currently ignores ColumnOrder
-/// <https://github.com/apache/arrow-datafusion/issues/8335>
+/// <https://github.com/apache/datafusion/issues/8335>
 pub(crate) fn prune_row_groups_by_statistics(
     arrow_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
@@ -63,7 +63,7 @@ pub(crate) fn prune_row_groups_by_statistics(
         if let Some(range) = &range {
             // figure out where the first dictionary page (or first data page are)
             // note don't use the location of metadata
-            // <https://github.com/apache/arrow-datafusion/issues/5995>
+            // <https://github.com/apache/datafusion/issues/5995>
             let col = metadata.column(0);
             let offset = col
                 .dictionary_page_offset()
@@ -359,7 +359,6 @@ mod tests {
     use crate::datasource::physical_plan::parquet::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use arrow::datatypes::DataType::Decimal128;
-    use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Result, ToDFSchema};
     use datafusion_expr::execution_props::ExecutionProps;
@@ -370,8 +369,7 @@ mod tests {
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::{
-        basic::Type as PhysicalType,
-        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
+        basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
     };
     use std::ops::Rem;

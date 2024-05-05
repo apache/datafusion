@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SessionContext`] contains methods for registering data sources and executing queries
+//! [`SessionContext`] API for registering data sources and executing queries
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
-use std::string::String;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
@@ -217,17 +216,29 @@ where
 ///
 /// # `SessionContext`, `SessionState`, and `TaskContext`
 ///
-/// A [`SessionContext`] can be created from a [`SessionConfig`] and
-/// stores the state for a particular query session. A single
-/// [`SessionContext`] can run multiple queries.
+/// The state required to optimize, and evaluate queries is
+/// broken into three levels to allow tailoring
 ///
-/// [`SessionState`] contains information available during query
-/// planning (creating [`LogicalPlan`]s and [`ExecutionPlan`]s).
+/// The objects are:
 ///
-/// [`TaskContext`] contains the state available during query
-/// execution [`ExecutionPlan::execute`].  It contains a subset of the
-/// information in[`SessionState`] and is created from a
-/// [`SessionContext`] or a [`SessionState`].
+/// 1. [`SessionContext`]: Most users should use a `SessionContext`. It contains
+/// all information required to execute queries including  high level APIs such
+/// as [`SessionContext::sql`]. All queries run with the same `SessionContext`
+/// share the same configuration and resources (e.g. memory limits).
+///
+/// 2. [`SessionState`]: contains information required to plan and execute an
+/// individual query (e.g. creating a [`LogicalPlan`] or [`ExecutionPlan`]).
+/// Each query is planned and executed using its own `SessionState`, which can
+/// be created with [`SessionContext::state`]. `SessionState` allows finer
+/// grained control over query execution, for example disallowing DDL operations
+/// such as `CREATE TABLE`.
+///
+/// 3. [`TaskContext`] contains the state required for query execution (e.g.
+/// [`ExecutionPlan::execute`]). It contains a subset of information in
+/// [`SessionState`]. `TaskContext` allows executing [`ExecutionPlan`]s
+/// [`PhysicalExpr`]s without requiring a full [`SessionState`].
+///
+/// [`PhysicalExpr`]: crate::physical_expr::PhysicalExpr
 #[derive(Clone)]
 pub struct SessionContext {
     /// UUID for the session
@@ -471,24 +482,37 @@ impl SessionContext {
     /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Ddl(ddl) => match ddl {
-                DdlStatement::CreateExternalTable(cmd) => {
-                    self.create_external_table(&cmd).await
+            LogicalPlan::Ddl(ddl) => {
+                // Box::pin avoids allocating the stack space within this function's frame
+                // for every one of these individual async functions, decreasing the risk of
+                // stack overflows.
+                match ddl {
+                    DdlStatement::CreateExternalTable(cmd) => {
+                        Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    }
+                    DdlStatement::CreateMemoryTable(cmd) => {
+                        Box::pin(self.create_memory_table(cmd))
+                    }
+                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateCatalogSchema(cmd) => {
+                        Box::pin(self.create_catalog_schema(cmd))
+                    }
+                    DdlStatement::CreateCatalog(cmd) => {
+                        Box::pin(self.create_catalog(cmd))
+                    }
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropCatalogSchema(cmd) => {
+                        Box::pin(self.drop_schema(cmd))
+                    }
+                    DdlStatement::CreateFunction(cmd) => {
+                        Box::pin(self.create_function(cmd))
+                    }
+                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
                 }
-                DdlStatement::CreateMemoryTable(cmd) => {
-                    self.create_memory_table(cmd).await
-                }
-                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
-                DdlStatement::CreateCatalogSchema(cmd) => {
-                    self.create_catalog_schema(cmd).await
-                }
-                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
-                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
-                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
-                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
-                DdlStatement::CreateFunction(cmd) => self.create_function(cmd).await,
-                DdlStatement::DropFunction(cmd) => self.drop_function(cmd).await,
-            },
+                .await
+            }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
@@ -1308,6 +1332,7 @@ pub enum RegisterFunction {
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }
+
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
 ///
@@ -1852,7 +1877,7 @@ impl SessionState {
 
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
-                e.plan.as_ref(),
+                e.plan.as_ref().clone(),
                 self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
@@ -1911,9 +1936,11 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            let analyzed_plan =
-                self.analyzer
-                    .execute_and_check(plan, self.options(), |_, _| {})?;
+            let analyzed_plan = self.analyzer.execute_and_check(
+                plan.clone(),
+                self.options(),
+                |_, _| {},
+            )?;
             self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }
@@ -2346,19 +2373,15 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 mod tests {
     use std::env;
     use std::path::PathBuf;
-    use std::sync::Weak;
 
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
-    use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use crate::variable::VarType;
 
     use datafusion_common_runtime::SpawnedTask;
-    use datafusion_expr::Expr;
 
     use async_trait::async_trait;
     use tempfile::TempDir;

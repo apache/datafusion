@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [features]
 # enable core functions
 core_expressions = []
@@ -107,6 +110,11 @@ required-features = ["regex_expressions"]
 [[bench]]
 harness = false
 name = "make_date"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_bin"
 required-features = ["datetime_expressions"]
 
 [[bench]]

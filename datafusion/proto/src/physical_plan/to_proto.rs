@@ -16,15 +16,10 @@
 // under the License.language governing permissions and
 // limitations under the License.
 
-use std::{
-    convert::{TryFrom, TryInto},
-    str::FromStr,
-    sync::Arc,
-};
+use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
@@ -545,44 +540,25 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
-        if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
-            let fun: protobuf::ScalarFunction = (&fun).try_into()?;
 
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarFunction(
-                    protobuf::PhysicalScalarFunctionNode {
-                        name: expr.name().to_string(),
-                        fun: fun.into(),
-                        args,
-                        return_type: Some(expr.return_type().try_into()?),
-                    },
-                )),
-            })
-        } else {
-            let mut buf = Vec::new();
-            match expr.fun() {
-                ScalarFunctionDefinition::UDF(udf) => {
-                    codec.try_encode_udf(udf, &mut buf)?;
-                }
-                _ => {
-                    return not_impl_err!(
-                        "Proto serialization error: Trying to serialize a unresolved function"
-                    );
-                }
+        let mut buf = Vec::new();
+        match expr.fun() {
+            ScalarFunctionDefinition::UDF(udf) => {
+                codec.try_encode_udf(udf, &mut buf)?;
             }
-
-            let fun_definition = if buf.is_empty() { None } else { Some(buf) };
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                    protobuf::PhysicalScalarUdfNode {
-                        name: expr.name().to_string(),
-                        args,
-                        fun_definition,
-                        return_type: Some(expr.return_type().try_into()?),
-                    },
-                )),
-            })
         }
+
+        let fun_definition = if buf.is_empty() { None } else { Some(buf) };
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
+                protobuf::PhysicalScalarUdfNode {
+                    name: expr.name().to_string(),
+                    args,
+                    fun_definition,
+                    return_type: Some(expr.return_type().try_into()?),
+                },
+            )),
+        })
     } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
@@ -636,6 +612,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+            statistics: pf.statistics.as_ref().map(|s| s.into()),
         })
     }
 }
@@ -930,7 +907,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
-            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
             allow_single_file_parallelism: value.allow_single_file_parallelism,

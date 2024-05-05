@@ -69,7 +69,7 @@ physical_plan
 # doesn't invalidate lexicographical ordering.
 # Hence '[CAST(a AS BIGINT) AS a_big ASC, b ASC]'
 # is valid for the given ordering: '[a ASC, b ASC]'.
-# See discussion for rationale: https://github.com/apache/arrow-datafusion/issues/8838#issue-2077714891
+# See discussion for rationale: https://github.com/apache/datafusion/issues/8838#issue-2077714891
 query TT
 EXPLAIN
 SELECT a, CAST(a AS BIGINT) AS a_big, b
@@ -118,7 +118,7 @@ physical_plan
 
 # test for cast Utf8
 # (must actually sort as the sort order for a number cast to utf8 is different than for int)
-# See discussion: https://github.com/apache/arrow-datafusion/pull/9127#discussion_r1492336709
+# See discussion: https://github.com/apache/datafusion/pull/9127#discussion_r1492336709
 query TT
 EXPLAIN
 SELECT 
@@ -133,7 +133,7 @@ logical_plan
 03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
 01)SortPreservingMergeExec: [a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
-02)--SortExec: expr=[a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+02)--SortExec: expr=[a_str@0 ASC NULLS LAST,b@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[CAST(a@0 AS Utf8) as a_str, b@1 as b]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
@@ -151,7 +151,7 @@ logical_plan
 01)Sort: multiple_ordered_table.a + multiple_ordered_table.b ASC NULLS LAST
 02)--TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-01)SortExec: expr=[a@0 + b@1 ASC NULLS LAST]
+01)SortExec: expr=[a@0 + b@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # With similar reasoning above. It is not guaranteed sum_expr is ordered
@@ -168,7 +168,7 @@ logical_plan
 03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
 01)SortPreservingMergeExec: [sum_expr@0 ASC NULLS LAST]
-02)--SortExec: expr=[sum_expr@0 ASC NULLS LAST]
+02)--SortExec: expr=[sum_expr@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[CAST(a@0 + b@1 AS Int64) as sum_expr, a@0 as a, b@1 as b]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true

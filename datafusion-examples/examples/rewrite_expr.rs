@@ -51,7 +51,7 @@ pub fn main() -> Result<()> {
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
     let analyzed_plan =
-        analyzer.execute_and_check(&logical_plan, config.options(), |_, _| {})?;
+        analyzer.execute_and_check(logical_plan, config.options(), |_, _| {})?;
     println!(
         "Analyzed Logical Plan:\n\n{}\n",
         analyzed_plan.display_indent()
@@ -91,7 +91,7 @@ impl AnalyzerRule for MyAnalyzerRule {
 
 impl MyAnalyzerRule {
     fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
-        plan.transform(&|plan| {
+        plan.transform(|plan| {
             Ok(match plan {
                 LogicalPlan::Filter(filter) => {
                     let predicate = Self::analyze_expr(filter.predicate.clone())?;
@@ -107,7 +107,7 @@ impl MyAnalyzerRule {
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
-        expr.transform(&|expr| {
+        expr.transform(|expr| {
             // closure is invoked for all sub expressions
             Ok(match expr {
                 Expr::Literal(ScalarValue::Int64(i)) => {
@@ -163,7 +163,7 @@ impl OptimizerRule for MyOptimizerRule {
 
 /// use rewrite_expr to modify the expression tree.
 fn my_rewrite(expr: Expr) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         // closure is invoked for all sub expressions
         Ok(match expr {
             Expr::Between(Between {

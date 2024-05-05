@@ -381,7 +381,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     for e in agg_expr.iter() {
         let result_expr = e
             .clone()
-            .transform_up(&|expr| {
+            .transform_up(|expr| {
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction {
                         func_def, ..
@@ -429,7 +429,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
     for expr in proj_expr.iter() {
         let result_expr = expr
             .clone()
-            .transform_up(&|expr| {
+            .transform_up(|expr| {
                 if let Expr::Column(Column { name, .. }) = &expr {
                     if let Some(result_expr) =
                         input_expr_result_map_for_count_bug.get(name)
@@ -468,7 +468,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
 ) -> Result<Option<Expr>> {
     let result_expr = filter_expr
         .clone()
-        .transform_up(&|expr| {
+        .transform_up(|expr| {
             if let Expr::Column(Column { name, .. }) = &expr {
                 if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
                     Ok(Transformed::yes(result_expr.clone()))

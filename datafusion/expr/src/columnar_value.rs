@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Columnar value module contains a set of types that represent a columnar value.
+//! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
@@ -25,15 +25,65 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
-/// Represents the result of evaluating an expression: either a single
-/// [`ScalarValue`] or an [`ArrayRef`].
+/// The result of evaluating an expression.
 ///
-/// While a [`ColumnarValue`] can always be converted into an array
-/// for convenience, it is often much more performant to provide an
-/// optimized path for scalar values.
+/// [`ColumnarValue::Scalar`] represents a single value repeated any number of
+/// times. This is an important performance optimization for handling values
+/// that do not change across rows.
 ///
-/// See [`ColumnarValue::values_to_arrays`] for a function that converts
-/// multiple columnar values into arrays of the same length.
+/// [`ColumnarValue::Array`] represents a column of data, stored as an  Arrow
+/// [`ArrayRef`]
+///
+/// A slice of `ColumnarValue`s logically represents a table, with each column
+/// having the same number of rows. This means that all `Array`s are the same
+/// length.
+///
+/// # Example
+///
+/// A `ColumnarValue::Array` with an array of 5 elements and a
+/// `ColumnarValue::Scalar` with the value 100
+///
+/// ```text
+/// ┌──────────────┐
+/// │ ┌──────────┐ │
+/// │ │   "A"    │ │
+/// │ ├──────────┤ │
+/// │ │   "B"    │ │
+/// │ ├──────────┤ │
+/// │ │   "C"    │ │
+/// │ ├──────────┤ │
+/// │ │   "D"    │ │        ┌──────────────┐
+/// │ ├──────────┤ │        │ ┌──────────┐ │
+/// │ │   "E"    │ │        │ │   100    │ │
+/// │ └──────────┘ │        │ └──────────┘ │
+/// └──────────────┘        └──────────────┘
+///
+///  ColumnarValue::        ColumnarValue::
+///       Array                 Scalar
+/// ```
+///
+/// Logically represents the following table:
+///
+/// | Column 1| Column 2 |
+/// | ------- | -------- |
+/// | A | 100 |
+/// | B | 100 |
+/// | C | 100 |
+/// | D | 100 |
+/// | E | 100 |
+///
+/// # Performance Notes
+///
+/// When implementing functions or operators, it is important to consider the
+/// performance implications of handling scalar values.
+///
+/// Because all functions must handle [`ArrayRef`], it is
+/// convenient to convert [`ColumnarValue::Scalar`]s using
+/// [`Self::into_array`]. For example,  [`ColumnarValue::values_to_arrays`]
+/// converts multiple columnar values into arrays of the same length.
+///
+/// However, it is often much more performant to provide a different,
+/// implementation that handles scalar values differently
 #[derive(Clone, Debug)]
 pub enum ColumnarValue {
     /// Array of values

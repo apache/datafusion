@@ -24,6 +24,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::{col, create_udf, lit, ColumnarValue};
 use datafusion_expr::{Expr, Volatility};
+use datafusion_functions::string;
 use datafusion_proto::bytes::Serializeable;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
@@ -252,17 +253,15 @@ fn context_with_udf() -> SessionContext {
 fn test_expression_serialization_roundtrip() {
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::BuiltinScalarFunction;
     use datafusion_proto::logical_plan::from_proto::parse_expr;
-    use strum::IntoEnumIterator;
 
     let ctx = SessionContext::new();
     let lit = Expr::Literal(ScalarValue::Utf8(None));
-    for builtin_fun in BuiltinScalarFunction::iter() {
+    for function in string::functions() {
         // default to 4 args (though some exprs like substr have error checking)
         let num_args = 4;
         let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
-        let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(function, args));
 
         let extension_codec = DefaultLogicalExtensionCodec {};
         let proto = serialize_expr(&expr, &extension_codec).unwrap();

@@ -87,10 +87,11 @@ use datafusion_expr::expr::{
     WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery,
-    ScalarFunctionDefinition, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
+    WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
@@ -108,6 +109,7 @@ fn create_function_physical_name(
     fun: &str,
     distinct: bool,
     args: &[Expr],
+    order_by: Option<&Vec<Expr>>,
 ) -> Result<String> {
     let names: Vec<String> = args
         .iter()
@@ -118,7 +120,12 @@ fn create_function_physical_name(
         true => "DISTINCT ",
         false => "",
     };
-    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+
+    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
+
+    Ok(order_by
+        .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))
+        .unwrap_or(phys_name))
 }
 
 fn physical_name(e: &Expr) -> Result<String> {
@@ -233,27 +240,30 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             };
         }
         Expr::ScalarFunction(fun) => {
-            // function should be resolved during `AnalyzerRule`s
-            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
-                return internal_err!("Function `Expr` with name should be resolved.");
-            }
-
-            create_function_physical_name(fun.name(), false, &fun.args)
+            create_function_physical_name(fun.name(), false, &fun.args, None)
         }
-        Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
-            create_function_physical_name(&fun.to_string(), false, args)
+        Expr::WindowFunction(WindowFunction {
+            fun,
+            args,
+            order_by,
+            ..
+        }) => {
+            create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
         }
         Expr::AggregateFunction(AggregateFunction {
             func_def,
             distinct,
             args,
             filter,
-            order_by: _,
+            order_by,
             null_treatment: _,
         }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn(..) => {
-                create_function_physical_name(func_def.name(), *distinct, args)
-            }
+            AggregateFunctionDefinition::BuiltIn(..) => create_function_physical_name(
+                func_def.name(),
+                *distinct,
+                args,
+                order_by.as_ref(),
+            ),
             AggregateFunctionDefinition::UDF(fun) => {
                 // TODO: Add support for filter by in AggregateUDF
                 if filter.is_some() {
@@ -1246,15 +1256,8 @@ impl DefaultPhysicalPlanner {
 
                     // Remove temporary projected columns
                     if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .iter()
-                            .map(|(qualifier, field)| {
-                                Expr::Column(datafusion_common::Column::from((
-                                    qualifier,
-                                    field.as_ref(),
-                                )))
-                            })
-                            .collect::<Vec<_>>();
+                        let final_join_result =
+                            join_schema.iter().map(Expr::from).collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,
                             Arc::new(new_join),
@@ -2032,7 +2035,7 @@ impl DefaultPhysicalPlanner {
             let config = &session_state.config_options().explain;
 
             if !config.physical_plan_only {
-                stringified_plans = e.stringified_plans.clone();
+                stringified_plans.clone_from(&e.stringified_plans);
                 if e.logical_optimization_succeeded {
                     stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
                 }
@@ -2289,8 +2292,6 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
-    use std::collections::HashMap;
-    use std::convert::TryFrom;
     use std::fmt::{self, Debug};
     use std::ops::{BitAnd, Not};
 
@@ -2298,22 +2299,19 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::{
-        expressions, DisplayAs, DisplayFormatType, ExecutionMode, Partitioning,
-        PlanProperties, SendableRecordBatchStream,
+        expressions, DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
+        SendableRecordBatchStream,
     };
-    use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
 
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, TableReference};
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
-        col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
-        UserDefinedLogicalNodeCore,
+        col, lit, sum, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
     };
     use datafusion_physical_expr::EquivalenceProperties;
 
