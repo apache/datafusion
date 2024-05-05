@@ -113,8 +113,8 @@ type CommonExprs = IndexMap<Identifier, Expr>;
 /// refer to that new column.
 ///
 /// ```text
-/// ProjectionExec(exprs=[extract (day from new_col), extract (year from new_col)]) <-- reuse here
-///   ProjectionExec(exprs=[to_date(c1) as new_col]) <-- compute to_date once
+/// ProjectionExec(exprs=[extract (day from #{new_col}), extract (year from #{new_col})]) <-- reuse here
+///   ProjectionExec(exprs=[to_date(c1) as #{new_col}]) <-- compute to_date once
 /// ```
 pub struct CommonSubexprEliminate {}
 
@@ -615,20 +615,8 @@ impl ExprMask {
 
 /// Go through an expression tree and generate identifiers for each subexpression.
 ///
-/// An identifier contains information of the expression itself and its sub-expression.
-/// This visitor implementation use a stack `visit_stack` to track traversal, which
-/// lets us know when a sub-tree's visiting is finished. When `pre_visit` is called
-/// (traversing to a new node), an `EnterMark` and an `ExprItem` will be pushed into stack.
-/// And try to pop out a `EnterMark` on leaving a node (`f_up()`). All `ExprItem`
-/// before the first `EnterMark` is considered to be sub-tree of the leaving node.
-///
-/// This visitor also records identifier in `id_array`. Makes the following traverse
-/// pass can get the identifier of a node without recalculate it. We assign each node
-/// in the expr tree a series number, start from 1, maintained by `series_number`.
-/// Series number represents the order we left (`f_up()`) a node. Has the property
-/// that child node's series number always smaller than parent's. While `id_array` is
-/// organized in the order we enter (`f_down()`) a node. `node_count` helps us to
-/// get the index of `id_array` for each node.
+/// This visitor also assigns an alias symbol to each expression, to be used if the
+/// expression is getting eliminated, and tracks the frequency and datatype of each expression.
 ///
 /// `Expr` without sub-expr (column, literal etc.) will not have identifier
 /// because they should not be recognized as common sub-expr.
