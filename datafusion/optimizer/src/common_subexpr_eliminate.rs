@@ -438,9 +438,9 @@ impl OptimizerRule for CommonSubexprEliminate {
             }
         };
 
-        let original_schema = plan.schema().clone();
+        let original_schema = plan.schema();
         match optimized_plan {
-            Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
+            Some(optimized_plan) if optimized_plan.schema() != original_schema => {
                 // add an additional projection if the output schema changed.
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
