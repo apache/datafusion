@@ -84,7 +84,10 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true), Some(false)]))
+        Ok(Some(FuncMonotonicity::new_mixed(vec![
+            Some(true),
+            Some(false),
+        ])))
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)

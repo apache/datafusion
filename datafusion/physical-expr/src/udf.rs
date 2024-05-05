@@ -65,7 +65,7 @@ mod tests {
     use arrow_schema::Schema;
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::ScalarUDF;
+    use datafusion_expr::{FuncMonotonicity, ScalarUDF};
 
     use crate::utils::tests::TestScalarUDF;
     use crate::ScalarFunctionExpr;
@@ -87,7 +87,7 @@ mod tests {
                 .downcast_ref::<ScalarFunctionExpr>()
                 .unwrap()
                 .monotonicity(),
-            &Some(vec![Some(true)])
+            &Some(FuncMonotonicity::new_increasing())
         );
 
         Ok(())

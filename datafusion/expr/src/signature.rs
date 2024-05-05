@@ -346,13 +346,75 @@ impl Signature {
     }
 }
 
-/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
-/// Each element of this vector corresponds to an argument and indicates whether
-/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
-/// - `None` signifies unknown monotonicity or non-monotonicity.
-/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
-/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
-pub type FuncMonotonicity = Vec<Option<bool>>;
+#[derive(Debug, Clone, PartialEq)]
+enum FuncMonotonicityPartial {
+    /// not monotonic or unknown monotonicity
+    None,
+    /// Increasing with respect to all of its arguments
+    Increasing,
+    /// Decreasing with respect to all of its arguments
+    Decreasing,
+    /// Each element of this vector corresponds to an argument and indicates whether
+    /// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+    /// - `None` signifies unknown monotonicity or non-monotonicity.
+    /// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+    /// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+    Mixed(Vec<Option<bool>>),
+}
+
+/// Monotonicity of a function with respect to its arguments.
+///
+/// A function is [monotonic] if it preserves the relative order of its inputs.
+///
+/// [monotonic]: https://en.wikipedia.org/wiki/Monotonic_function
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncMonotonicity(FuncMonotonicityPartial);
+
+impl FuncMonotonicity {
+    pub fn new_none() -> Self {
+        Self(FuncMonotonicityPartial::None)
+    }
+    pub fn new_increasing() -> Self {
+        Self(FuncMonotonicityPartial::Increasing)
+    }
+    pub fn new_decreasing() -> Self {
+        Self(FuncMonotonicityPartial::Decreasing)
+    }
+    pub fn new_mixed(inner: Vec<Option<bool>>) -> Self {
+        Self(FuncMonotonicityPartial::Mixed(inner))
+    }
+
+    /// returns true if this function is monotonically increasing with respect to argument number arg
+    pub fn arg_increasing(&self, arg: usize) -> bool {
+        match &self.0 {
+            FuncMonotonicityPartial::None => false,
+            FuncMonotonicityPartial::Increasing => true,
+            FuncMonotonicityPartial::Decreasing => false,
+            FuncMonotonicityPartial::Mixed(inner) => inner[arg].unwrap_or(false),
+        }
+    }
+
+    /// returns true if this function is monotonically decreasing with respect to argument number arg
+    pub fn arg_decreasing(&self, arg: usize) -> bool {
+        match &self.0 {
+            FuncMonotonicityPartial::None => false,
+            FuncMonotonicityPartial::Increasing => false,
+            FuncMonotonicityPartial::Decreasing => true,
+            FuncMonotonicityPartial::Mixed(inner) => inner[arg].unwrap_or(false),
+        }
+    }
+}
+
+impl From<&FuncMonotonicity> for Vec<Option<bool>> {
+    fn from(val: &FuncMonotonicity) -> Self {
+        match &val.0 {
+            FuncMonotonicityPartial::None => vec![None],
+            FuncMonotonicityPartial::Increasing => vec![Some(true)],
+            FuncMonotonicityPartial::Decreasing => vec![Some(false)],
+            FuncMonotonicityPartial::Mixed(inner) => inner.to_vec(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

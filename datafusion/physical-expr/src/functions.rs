@@ -171,7 +171,8 @@ pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
 ) -> SortProperties {
-    func.iter().zip(arg_orderings).fold(
+    let monotonicity_vec: Vec<Option<bool>> = func.into();
+    monotonicity_vec.iter().zip(arg_orderings).fold(
         SortProperties::Singleton,
         |prev_sort, (item, arg)| {
             let current_sort = func_order_in_one_dimension(item, arg);
