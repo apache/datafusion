@@ -110,7 +110,7 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
 
 pub fn assert_analyzed_plan_eq(
     rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     expected: &str,
 ) -> Result<()> {
     let options = ConfigOptions::default();
@@ -123,7 +123,7 @@ pub fn assert_analyzed_plan_eq(
 }
 pub fn assert_analyzed_plan_eq_display_indent(
     rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     expected: &str,
 ) -> Result<()> {
     let options = ConfigOptions::default();
@@ -137,7 +137,7 @@ pub fn assert_analyzed_plan_eq_display_indent(
 
 pub fn assert_analyzer_check_err(
     rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     expected: &str,
 ) {
     let options = ConfigOptions::default();
