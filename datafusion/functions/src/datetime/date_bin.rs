@@ -147,7 +147,7 @@ impl ScalarUDFImpl for DateBinFunc {
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(FuncMonotonicity::Mixed(vec![None, Some(true)])))
+        Ok(Some(vec![None, Some(true)]))
     }
 }
 

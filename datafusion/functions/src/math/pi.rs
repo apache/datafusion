@@ -71,6 +71,6 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(FuncMonotonicity::Increasing))
+        Ok(Some(vec![Some(true)]))
     }
 }

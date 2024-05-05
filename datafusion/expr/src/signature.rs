@@ -346,26 +346,13 @@ impl Signature {
     }
 }
 
-/// Monotonicity of a function with respect to its arguments.
-///
-/// A function is [monotonic] if it preserves the relative order of its inputs.
-///
-/// [monotonic]: https://en.wikipedia.org/wiki/Monotonic_function
-#[derive(Debug, Clone, PartialEq)]
-pub enum FuncMonotonicity {
-    /// not monotonic or unknown monotonicity
-    None,
-    /// Increasing with respect to all of its arguments
-    Increasing,
-    /// Decreasing with respect to all of its arguments
-    Decreasing,
-    /// Each element of this vector corresponds to an argument and indicates whether
-    /// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
-    /// - `None` signifies unknown monotonicity or non-monotonicity.
-    /// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
-    /// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
-    Mixed(Vec<Option<bool>>),
-}
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;
 
 #[cfg(test)]
 mod tests {
