@@ -31,7 +31,8 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
+    DefaultSchemaAdapterFactory, FileGroupDisplay, FileSinkConfig, ParquetExec,
+    SchemaAdapterFactory,
 };
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -474,7 +475,8 @@ async fn fetch_statistics(
     let mut null_counts = vec![Precision::Exact(0); num_fields];
     let mut has_statistics = false;
 
-    let schema_adapter = SchemaAdapter::new(table_schema.clone());
+    let schema_adapter =
+        DefaultSchemaAdapterFactory::default().create(table_schema.clone());
 
     let (mut max_values, mut min_values) = create_max_min_accs(&table_schema);
 
