@@ -95,6 +95,10 @@ impl AggregateUDFImpl for CovarianceSample {
         Ok(DataType::Float64)
     }
 
+    fn field(&self, args: datafusion_expr::function::FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(

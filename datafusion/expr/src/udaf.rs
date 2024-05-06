@@ -17,8 +17,9 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::{AccumulatorArgs, StateFieldsArgs};
+use crate::function::{AccumulatorArgs, FieldArgs, StateFieldsArgs};
 use crate::groups_accumulator::GroupsAccumulator;
+use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
@@ -170,6 +171,11 @@ impl AggregateUDF {
         self.inner.accumulator(acc_args)
     }
 
+    /// See [`AggregateUDFImpl::field`] for more details.
+    pub fn field(&self, args: FieldArgs) -> Result<Field> {
+        self.inner.field(args)
+    }
+
     /// Return the fields used to store the intermediate state for this aggregator, given
     /// the name of the aggregate, value type and ordering fields. See [`AggregateUDFImpl::state_fields`]
     /// for more details.
@@ -280,6 +286,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// aggregate function was called.
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
+    /// Return the fields for the function
+    fn field(&self, _args: FieldArgs) -> Result<Field> {
+        not_impl_err!("field hasn't been implemented for {self:?} yet")
+    }
+
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
     /// # Arguments:
@@ -367,6 +378,18 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    fn field(&self, args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        Ok(vec![Field::new(
+            format_state_name(args.name, "aliased_aggregate_state"),
+            args.return_type.clone(),
+            true,
+        )])
     }
 
     fn signature(&self) -> &Signature {

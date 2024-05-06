@@ -89,6 +89,35 @@ impl<'a> AccumulatorArgs<'a> {
 /// - `name`: Name of the aggregate function.
 /// - `input_type`: Input type of the aggregate function.
 /// - `return_type`: Return type of the aggregate function. Defined by `fn return_type` in AggregateUDFImpl.
+/// - `nullable`: Indicates whether the field can be null.
+pub struct FieldArgs<'a> {
+    pub name: &'a str,
+    pub input_type: &'a DataType,
+    pub return_type: &'a DataType,
+    pub nullable: bool,
+}
+
+impl<'a> FieldArgs<'a> {
+    pub fn new(
+        name: &'a str,
+        input_type: &'a DataType,
+        return_type: &'a DataType,
+        nullable: bool,
+    ) -> Self {
+        Self {
+            name,
+            input_type,
+            return_type,
+            nullable,
+        }
+    }
+}
+
+/// `StateFieldsArgs` encapsulates details regarding the required state fields for an aggregate function.
+///
+/// - `name`: Name of the aggregate function.
+/// - `input_type`: Input type of the aggregate function.
+/// - `return_type`: Return type of the aggregate function. Defined by `fn return_type` in AggregateUDFImpl.
 /// - `ordering_fields`: Fields utilized for functions sensitive to ordering.
 /// - `order_by_data_types`: Data types for the ordering fields.
 /// - `nullable`: Indicates whether the state fields can be null.

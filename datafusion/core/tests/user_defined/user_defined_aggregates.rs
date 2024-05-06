@@ -45,8 +45,10 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
-    SimpleAggregateUDF,
+    create_udaf,
+    function::{AccumulatorArgs, FieldArgs, StateFieldsArgs},
+    utils::format_state_name,
+    AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
 };
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -714,6 +716,18 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn field(&self, args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        Ok(vec![Field::new(
+            format_state_name(args.name, "aliased_aggregate_state"),
+            args.return_type.clone(),
+            true,
+        )])
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

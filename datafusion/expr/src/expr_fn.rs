@@ -22,7 +22,7 @@ use crate::expr::{
     Placeholder, TryCast,
 };
 use crate::function::{
-    AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+    AccumulatorArgs, AccumulatorFactoryFunction, FieldArgs, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
 use crate::{
@@ -689,6 +689,10 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+
+    fn field(&self, args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {

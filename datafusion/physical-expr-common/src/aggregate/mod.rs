@@ -20,7 +20,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::function::{FieldArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -204,9 +204,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun.state_fields(args)
     }
 
-    // TODO: Add field function in AggregateUDFImpl
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.input_type.clone(), true))
+        let args = FieldArgs::new(
+            &self.name,
+            &self.input_type,
+            &self.return_type,
+            self.nullable,
+        );
+        self.fun.field(args)
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {

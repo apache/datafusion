@@ -24,7 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::function::{AccumulatorArgs, FieldArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -145,6 +145,10 @@ impl AggregateUDFImpl for FirstValue {
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+    }
+
+    fn field(&self, args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
