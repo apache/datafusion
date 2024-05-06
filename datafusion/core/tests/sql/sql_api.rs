@@ -59,6 +59,19 @@ async fn unsupported_dml_returns_error() {
 }
 
 #[tokio::test]
+async fn dml_output_schema() {
+    use arrow::datatypes::Schema;
+    use arrow::datatypes::{DataType, Field};
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+    let sql = "INSERT INTO test VALUES (1)";
+    let df = ctx.sql(sql).await.unwrap();
+    let count_schema = Schema::new(vec![Field::new("count", DataType::UInt64, false)]);
+    assert_eq!(Schema::from(df.schema()), count_schema);
+}
+
+#[tokio::test]
 async fn unsupported_copy_returns_error() {
     let tmpdir = TempDir::new().unwrap();
     let tmpfile = tmpdir.path().join("foo.parquet");
