@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod groups_accumulator;
+pub mod stats;
 pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
