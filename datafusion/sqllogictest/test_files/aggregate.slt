@@ -3260,7 +3260,7 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
-query ITT
+query I
 INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
 ----
 9

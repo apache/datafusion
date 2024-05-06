@@ -6475,7 +6475,7 @@ create table test_create_array_table(
   d int
 );
 
-query ???I
+query I
 insert into test_create_array_table values
   ([1, 2, 3], ['a', 'b', 'c'], [[4,6], [6,7,8]], 1);
 ----

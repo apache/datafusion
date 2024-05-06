@@ -130,7 +130,7 @@ PARTITIONED BY (p1 string, p2 string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
 
-query ITT
+query I
 INSERT INTO partitioned VALUES (1, 'x', 'y');
 ----
 1
@@ -186,13 +186,13 @@ PARTITIONED BY (month string, year string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
 
-query TTT
+query I
 -- creates year -> month partitions
 INSERT INTO test VALUES('name', '2024', '03');
 ----
 1
 
-query TTT
+query I
 -- creates month -> year partitions.
 -- now table have both partitions (year -> month and month -> year)
 INSERT INTO test2 VALUES('name', '2024', '03');
