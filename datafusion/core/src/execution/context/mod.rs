@@ -44,6 +44,7 @@ use crate::{
     error::{DataFusionError, Result},
     execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
     logical_expr::AggregateUDF,
+    logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
@@ -53,7 +54,7 @@ use crate::{
     optimizer::analyzer::{Analyzer, AnalyzerRule},
     optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-    physical_plan::{udf::ScalarUDF, ExecutionPlan},
+    physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
