@@ -1877,7 +1877,7 @@ impl SessionState {
 
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
-                e.plan.as_ref(),
+                e.plan.as_ref().clone(),
                 self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
@@ -1936,9 +1936,11 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            let analyzed_plan =
-                self.analyzer
-                    .execute_and_check(plan, self.options(), |_, _| {})?;
+            let analyzed_plan = self.analyzer.execute_and_check(
+                plan.clone(),
+                self.options(),
+                |_, _| {},
+            )?;
             self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }

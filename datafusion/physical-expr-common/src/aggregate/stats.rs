@@ -15,4 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use datafusion_physical_expr_common::aggregate::stats::StatsType;
+/// TODO: Move this to functions-aggregate module
+/// Enum used for differentiating population and sample for statistical functions
+#[derive(Debug, Clone, Copy)]
+pub enum StatsType {
+    /// Population
+    Population,
+    /// Sample
+    Sample,
+}
