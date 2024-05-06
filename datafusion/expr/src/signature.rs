@@ -346,7 +346,7 @@ impl Signature {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum FuncMonotonicityPartial {
     /// not monotonic or unknown monotonicity
     None,
@@ -367,7 +367,7 @@ enum FuncMonotonicityPartial {
 /// A function is [monotonic] if it preserves the relative order of its inputs.
 ///
 /// [monotonic]: https://en.wikipedia.org/wiki/Monotonic_function
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FuncMonotonicity(FuncMonotonicityPartial);
 
 impl FuncMonotonicity {
@@ -413,6 +413,12 @@ impl From<&FuncMonotonicity> for Vec<Option<bool>> {
             FuncMonotonicityPartial::Decreasing => vec![Some(false)],
             FuncMonotonicityPartial::Mixed(inner) => inner.to_vec(),
         }
+    }
+}
+
+impl PartialEq for FuncMonotonicity {
+    fn eq(&self, other: &Self) -> bool {
+        Into::<Vec<Option<bool>>>::into(self) == Into::<Vec<Option<bool>>>::into(other)
     }
 }
 
