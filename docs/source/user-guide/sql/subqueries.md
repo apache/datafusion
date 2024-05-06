@@ -181,7 +181,7 @@ FROM
 
 `WHERE` clause subqueries compare an expression to the result of the subquery
 and return _true_ or _false_.
-Rows that evaluate to _false_ are filtered from results.
+Rows that evaluate to _false_ or `_NULL_` are filtered from results.
 The `WHERE` clause supports correlated and non-correlated subqueries
 as well as scalar and non-scalar subqueries (depending on the the operator used
 in the predicate expression).
@@ -227,7 +227,7 @@ WHERE
 
 #### `WHERE` clause with non-scalar subquery
 
-Non-scalar subqueries must use the `[NOT] IN` operator and can only return a
+Non-scalar subqueries must use the `[NOT] IN` or `[NOT] EXISTS` operators and can only return a
 single column. The values in the returned column are evaluated as a list.
 
 The following query returns all rows with `column_2` values in table `x` that
@@ -341,7 +341,7 @@ HAVING
 
 #### `HAVING` clause with a non-scalar subquery
 
-Non-scalar subqueries must use the `[NOT] IN` operator and can only return a
+Non-scalar subqueries must use the `[NOT] IN` or `[NOT] EXISTS` operators and can only return a
 single column. The values in the returned column are evaluated as a list.
 
 The following query calculates the averages of even and odd numbers in table `y`
@@ -387,9 +387,7 @@ Correlated subqueries can return a maximum of one row, so
 [aggregations](/user-guide/sql/aggregate_functions.html) may be required in the
 inner query.
 
-**Note:** Because correlated subqueries depend on the outer query and typically
-must execute for each row returned by the outer query, correlated subqueries are
-**less performant** than non-correlated subqueries.
+**Note:** DataFusion internally rewrites correlated subqueries into JOINs to improve performance. In general correlated subqueries are **less performant** than non-correlated subqueries.
 
 ### Non-correlated subqueries
 
