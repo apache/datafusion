@@ -1079,6 +1079,34 @@ impl Expr {
         }
     }
 
+    /// Recursively potentially multiple aliases from an expression.
+    ///
+    /// If the expression is not an alias, the expression is returned unchanged.
+    /// This method removes directly nested aliases, but not other nested
+    /// aliases.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// // `foo as "bar"` is unaliased to `foo`
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    ///
+    /// // `foo as "bar" + baz` is not unaliased
+    /// let expr = col("foo").alias("bar") + col("baz");
+    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    ///
+    /// // `foo as "bar" as "baz" is unalaised to foo
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// ```
+    pub fn unalias_nested(self) -> Expr {
+        match self {
+            Expr::Alias(alias) => alias.expr.unalias_nested(),
+            _ => self,
+        }
+    }
+
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
