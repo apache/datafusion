@@ -431,7 +431,7 @@ impl ExecutionPlan for LocalLimitExec {
 }
 
 /// A Limit stream skips `skip` rows, and then fetch up to `fetch` rows.
-struct LimitStream {
+pub struct LimitStream {
     /// The remaining number of rows to skip
     skip: usize,
     /// The remaining number of rows to produce
@@ -446,7 +446,7 @@ struct LimitStream {
 }
 
 impl LimitStream {
-    fn new(
+    pub fn new(
         input: SendableRecordBatchStream,
         skip: usize,
         fetch: Option<usize>,
