@@ -17,9 +17,8 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::AccumulatorArgs;
+use crate::function::{AccumulatorArgs, StateFieldsArgs};
 use crate::groups_accumulator::GroupsAccumulator;
-use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
@@ -27,7 +26,6 @@ use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
-use std::vec;
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -177,13 +175,8 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        self.inner.state_fields(name, value_type, ordering_fields)
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.inner.state_fields(args)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -291,14 +284,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// # Arguments:
     /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `value_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
+    /// 2. `input_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
     /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
     ///     Empty if no ordering expression is provided.
     ///
     /// # Notes:
     ///
     /// The default implementation returns a single state field named `name`
-    /// with the same type as `value_type`. This is suitable for aggregates such
+    /// with the same type as `input_type`. This is suitable for aggregates such
     /// as `SUM` or `MIN` where partial state can be combined by applying the
     /// same aggregate.
     ///
@@ -309,19 +302,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        let value_fields = vec![Field::new(
-            format_state_name(name, "value"),
-            value_type,
-            true,
-        )];
-
-        Ok(value_fields.into_iter().chain(ordering_fields).collect())
+    ///
+    /// [`format_state_name`]: crate::utils::format_state_name
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("state_fields hasn't been implemented for {self:?} yet")
     }
 
     /// If the aggregate expression has a specialized

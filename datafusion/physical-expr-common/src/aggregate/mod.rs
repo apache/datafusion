@@ -20,6 +20,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -54,23 +55,27 @@ pub fn create_aggregate_expr(
         &fun.signature().type_signature,
     )?;
 
-    let ordering_types = ordering_req
+    let order_by_data_types = ordering_req
         .iter()
         .map(|e| e.expr.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let ordering_fields = ordering_fields(ordering_req, &ordering_types);
+    let ordering_fields = ordering_fields(ordering_req, &order_by_data_types);
+    let nullable = input_phy_exprs[0].nullable(schema)?;
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
-        data_type: fun.return_type(&input_exprs_types)?,
+        input_type: input_exprs_types[0].clone(),
+        return_type: fun.return_type(&input_exprs_types)?,
         name: name.into(),
         schema: schema.clone(),
         sort_exprs: sort_exprs.to_vec(),
+        order_by_data_types,
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
+        nullable,
     }))
 }
 
@@ -152,16 +157,21 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    /// input type
+    input_type: DataType,
     /// Output / return type of this aggregate
-    data_type: DataType,
+    return_type: DataType,
     name: String,
     schema: Schema,
     // The logical order by expressions
     sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
+    // The data types of the order by expressions
+    order_by_data_types: Vec<DataType>,
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
+    nullable: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -182,20 +192,26 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        self.fun.state_fields(
-            self.name(),
-            self.data_type.clone(),
-            self.ordering_fields.clone(),
-        )
+        let args = StateFieldsArgs::new(
+            &self.name,
+            &self.input_type,
+            &self.return_type,
+            &self.ordering_fields,
+            &self.order_by_data_types,
+            self.nullable,
+        );
+
+        self.fun.state_fields(args)
     }
 
+    // TODO: Add field function in AggregateUDFImpl
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, self.input_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs::new(
-            &self.data_type,
+            &self.input_type,
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
@@ -282,7 +298,7 @@ impl PartialEq<dyn Any> for AggregateFunctionExpr {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_type == x.data_type
+                    && self.input_type == x.input_type
                     && self.fun == x.fun
                     && self.args.len() == x.args.len()
                     && self
