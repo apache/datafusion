@@ -76,6 +76,7 @@ pub struct DmlStatement {
 }
 
 impl DmlStatement {
+    /// Creates a new DML statement with the output schema set to a single `count` column.
     pub fn new(
         table_name: TableReference,
         table_schema: DFSchemaRef,
