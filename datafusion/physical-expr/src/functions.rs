@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Declaration of built-in (scalar) functions.
+//! Deprecated module. Add new feature in scalar_function.rs
+//!
 //! This module contains built-in functions' enumeration and metadata.
 //!
 //! Generally, a function has:
@@ -30,19 +31,15 @@
 //! an argument i32 is passed to a function that supports f64, the
 //! argument is automatically is coerced to f64.
 
-use std::ops::Neg;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow_array::Array;
 
+pub use crate::scalar_function::create_physical_expr;
 use datafusion_common::{Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-// backward compatible
-pub use crate::udf::create_physical_expr;
-
-use crate::sort_properties::SortProperties;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
@@ -130,61 +127,4 @@ where
             result.map(ColumnarValue::Array)
         }
     })
-}
-
-/// Determines a [ScalarFunctionExpr]'s monotonicity for the given arguments
-/// and the function's behavior depending on its arguments.
-///
-/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
-pub fn out_ordering(
-    func: &FuncMonotonicity,
-    arg_orderings: &[SortProperties],
-) -> SortProperties {
-    func.iter().zip(arg_orderings).fold(
-        SortProperties::Singleton,
-        |prev_sort, (item, arg)| {
-            let current_sort = func_order_in_one_dimension(item, arg);
-
-            match (prev_sort, current_sort) {
-                (_, SortProperties::Unordered) => SortProperties::Unordered,
-                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
-                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
-                    if prev.descending != current.descending =>
-                {
-                    SortProperties::Unordered
-                }
-                _ => prev_sort,
-            }
-        },
-    )
-}
-
-/// This function decides the monotonicity property of a [ScalarFunctionExpr] for a single argument (i.e. across a single dimension), given that argument's sort properties.
-///
-/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
-fn func_order_in_one_dimension(
-    func_monotonicity: &Option<bool>,
-    arg: &SortProperties,
-) -> SortProperties {
-    if *arg == SortProperties::Singleton {
-        SortProperties::Singleton
-    } else {
-        match func_monotonicity {
-            None => SortProperties::Unordered,
-            Some(false) => {
-                if let SortProperties::Ordered(_) = arg {
-                    arg.neg()
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-            Some(true) => {
-                if let SortProperties::Ordered(_) = arg {
-                    *arg
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-        }
-    }
 }
