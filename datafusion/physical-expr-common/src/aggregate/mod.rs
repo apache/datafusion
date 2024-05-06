@@ -216,7 +216,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs::new(
-            &self.input_type,
+            &self.return_type,
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
@@ -304,6 +304,7 @@ impl PartialEq<dyn Any> for AggregateFunctionExpr {
             .map(|x| {
                 self.name == x.name
                     && self.input_type == x.input_type
+                    && self.return_type == x.return_type
                     && self.fun == x.fun
                     && self.args.len() == x.args.len()
                     && self
