@@ -33,49 +33,16 @@
 use std::ops::Neg;
 use std::sync::Arc;
 
-use arrow::{array::ArrayRef, datatypes::Schema};
+use arrow::array::ArrayRef;
 use arrow_array::Array;
 
-use datafusion_common::{DFSchema, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
-use datafusion_expr::{
-    type_coercion::functions::data_types, ColumnarValue, ScalarFunctionImplementation,
-};
-use datafusion_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
+use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+// backward compatible
+pub use crate::udf::create_physical_expr;
 
 use crate::sort_properties::SortProperties;
-use crate::{PhysicalExpr, ScalarFunctionExpr};
-
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
-pub fn create_physical_expr(
-    fun: &ScalarUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    args: &[Expr],
-    input_dfschema: &DFSchema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_expr_types = input_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    // verify that input data types is consistent with function's `TypeSignature`
-    data_types(&input_expr_types, fun.signature())?;
-
-    // Since we have arg_types, we don't need args and schema.
-    let return_type =
-        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
-
-    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        fun.name(),
-        fun_def,
-        input_phy_exprs.to_vec(),
-        return_type,
-        fun.monotonicity()?,
-    )))
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
@@ -165,8 +132,10 @@ where
     })
 }
 
-/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// Determines a [ScalarFunctionExpr]'s monotonicity for the given arguments
 /// and the function's behavior depending on its arguments.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
 pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
@@ -190,7 +159,9 @@ pub fn out_ordering(
     )
 }
 
-/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+/// This function decides the monotonicity property of a [ScalarFunctionExpr] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
 fn func_order_in_one_dimension(
     func_monotonicity: &Option<bool>,
     arg: &SortProperties,
@@ -215,258 +186,5 @@ fn func_order_in_one_dimension(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use arrow::{
-        array::UInt64Array,
-        datatypes::{DataType, Field},
-    };
-    use arrow_schema::DataType::Utf8;
-
-    use datafusion_common::cast::as_uint64_array;
-    use datafusion_common::DataFusionError;
-    use datafusion_common::{internal_err, plan_err};
-    use datafusion_expr::{Signature, Volatility};
-
-    use crate::expressions::try_cast;
-    use crate::utils::tests::TestScalarUDF;
-
-    use super::*;
-
-    #[test]
-    fn test_empty_arguments_error() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let udf = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
-        });
-        let expr = create_physical_expr_with_type_coercion(
-            &udf,
-            &[],
-            &schema,
-            &[],
-            &DFSchema::empty(),
-        );
-
-        match expr {
-            Ok(..) => {
-                return plan_err!(
-                    "ScalarUDF function {udf:?} does not support empty arguments"
-                );
-            }
-            Err(DataFusionError::Plan(_)) => {
-                // Continue the loop
-            }
-            Err(..) => {
-                return internal_err!(
-                    "ScalarUDF function {udf:?} didn't got the right error with empty arguments");
-            }
-        }
-
-        Ok(())
-    }
-
-    // Helper function just for testing.
-    // Returns `expressions` coerced to types compatible with
-    // `signature`, if possible.
-    pub fn coerce(
-        expressions: &[Arc<dyn PhysicalExpr>],
-        schema: &Schema,
-        signature: &Signature,
-    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-        if expressions.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let current_types = expressions
-            .iter()
-            .map(|e| e.data_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-
-        let new_types = data_types(&current_types, signature)?;
-
-        expressions
-            .iter()
-            .enumerate()
-            .map(|(i, expr)| try_cast(expr.clone(), schema, new_types[i].clone()))
-            .collect::<Result<Vec<_>>>()
-    }
-
-    // Helper function just for testing.
-    // The type coercion will be done in the logical phase, should do the type coercion for the test
-    fn create_physical_expr_with_type_coercion(
-        fun: &ScalarUDF,
-        input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-        input_schema: &Schema,
-        args: &[Expr],
-        input_dfschema: &DFSchema,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let type_coerced_phy_exprs =
-            coerce(input_phy_exprs, input_schema, fun.signature()).unwrap();
-        create_physical_expr(
-            fun,
-            &type_coerced_phy_exprs,
-            input_schema,
-            args,
-            input_dfschema,
-        )
-    }
-
-    fn dummy_function(args: &[ArrayRef]) -> Result<ArrayRef> {
-        let result: UInt64Array =
-            args.iter().map(|array| Some(array.len() as u64)).collect();
-        Ok(Arc::new(result) as ArrayRef)
-    }
-
-    fn unpack_uint64_array(col: Result<ColumnarValue>) -> Result<Vec<u64>> {
-        if let ColumnarValue::Array(array) = col? {
-            Ok(as_uint64_array(&array)?.values().to_vec())
-        } else {
-            internal_err!("Unexpected scalar created by a test function")
-        }
-    }
-
-    #[test]
-    fn test_make_scalar_function() -> Result<()> {
-        let adapter_func = make_scalar_function_inner(dummy_function);
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
-        assert_eq!(result, vec![5, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_no_hints() -> Result<()> {
-        let adapter_func = make_scalar_function_with_hints(dummy_function, vec![]);
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
-        assert_eq!(result, vec![5, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_hints() -> Result<()> {
-        let adapter_func = make_scalar_function_with_hints(
-            dummy_function,
-            vec![Hint::Pad, Hint::AcceptsSingular],
-        );
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
-        assert_eq!(result, vec![5, 1]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_hints_on_arrays() -> Result<()> {
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let adapter_func = make_scalar_function_with_hints(
-            dummy_function,
-            vec![Hint::Pad, Hint::AcceptsSingular],
-        );
-
-        let result = unpack_uint64_array(adapter_func(&[array_arg.clone(), array_arg]))?;
-        assert_eq!(result, vec![5, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_mixed_hints() -> Result<()> {
-        let adapter_func = make_scalar_function_with_hints(
-            dummy_function,
-            vec![Hint::Pad, Hint::AcceptsSingular, Hint::Pad],
-        );
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[
-            array_arg,
-            scalar_arg.clone(),
-            scalar_arg,
-        ]))?;
-        assert_eq!(result, vec![5, 1, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_more_arguments_than_hints() -> Result<()> {
-        let adapter_func = make_scalar_function_with_hints(
-            dummy_function,
-            vec![Hint::Pad, Hint::AcceptsSingular, Hint::Pad],
-        );
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[
-            array_arg.clone(),
-            scalar_arg.clone(),
-            scalar_arg,
-            array_arg,
-        ]))?;
-        assert_eq!(result, vec![5, 1, 5, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_make_scalar_function_with_hints_than_arguments() -> Result<()> {
-        let adapter_func = make_scalar_function_with_hints(
-            dummy_function,
-            vec![
-                Hint::Pad,
-                Hint::AcceptsSingular,
-                Hint::Pad,
-                Hint::Pad,
-                Hint::AcceptsSingular,
-                Hint::Pad,
-            ],
-        );
-
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg = ColumnarValue::Array(
-            ScalarValue::Int64(Some(1))
-                .to_array_of_size(5)
-                .expect("Failed to convert to array of size"),
-        );
-        let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
-        assert_eq!(result, vec![5, 1]);
-
-        Ok(())
     }
 }
