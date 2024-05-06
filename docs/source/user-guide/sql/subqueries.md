@@ -381,11 +381,8 @@ behavior of the subquery:
 
 ### Correlated subqueries
 
-In a **correlated** subquery, the inner query depends on the outer query, using
-values from the outer query for its results.
-Correlated subqueries can return a maximum of one row, so
-[aggregations](/user-guide/sql/aggregate_functions.html) may be required in the
-inner query.
+In a **correlated** subquery, the inner query depends on the values of the
+current row being processed.
 
 **Note:** Because correlated subqueries depend on the outer query and typically
 must execute for each row returned by the outer query, correlated subqueries are
