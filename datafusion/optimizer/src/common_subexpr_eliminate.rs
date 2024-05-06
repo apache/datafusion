@@ -615,8 +615,7 @@ impl ExprMask {
 
 /// Go through an expression tree and generate identifiers for each subexpression.
 ///
-/// This visitor also assigns an alias symbol to each expression, to be used if the
-/// expression is getting eliminated, and tracks the frequency and datatype of each expression.
+/// This visitor tracks the frequency and datatype of each expression.
 ///
 /// `Expr` without sub-expr (column, literal etc.) will not have identifier
 /// because they should not be recognized as common sub-expr.
