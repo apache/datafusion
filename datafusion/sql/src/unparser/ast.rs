@@ -258,6 +258,8 @@ impl SelectBuilder {
             named_window: self.named_window.clone(),
             qualify: self.qualify.clone(),
             value_table_mode: self.value_table_mode,
+            connect_by: None,
+            window_before_qualify: false,
         })
     }
     fn create_empty() -> Self {

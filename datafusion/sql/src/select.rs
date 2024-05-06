@@ -527,6 +527,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_except: _opt_except,
             opt_rename,
             opt_replace: _opt_replace,
+            opt_ilike: _opt_ilike,
         } = options;
 
         if opt_rename.is_some() {

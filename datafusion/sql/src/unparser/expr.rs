@@ -129,13 +129,15 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args,
+                        clauses: vec![],
+                    }),
                     filter: None,
                     null_treatment: None,
                     over: None,
-                    distinct: false,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::Between(Between {
@@ -200,6 +202,7 @@ impl Unparser<'_> {
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
                     format: None,
@@ -256,13 +259,15 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args,
+                        clauses: vec![],
+                    }),
                     filter: None,
                     null_treatment: None,
                     over,
-                    distinct: false,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::SimilarTo(Like {
@@ -282,7 +287,7 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql(expr)?),
                 pattern: Box::new(self.expr_to_sql(pattern)?),
-                escape_char: *escape_char,
+                escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func_def.name();
@@ -297,13 +302,17 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: agg
+                            .distinct
+                            .then_some(ast::DuplicateTreatment::Distinct),
+                        args,
+                        clauses: vec![],
+                    }),
                     filter,
                     null_treatment: None,
                     over: None,
-                    distinct: agg.distinct,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -643,6 +652,7 @@ impl Unparser<'_> {
                     ))?;
 
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         date.to_string(),
                     ))),
@@ -665,6 +675,7 @@ impl Unparser<'_> {
                     ))?;
 
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         datetime.to_string(),
                     ))),

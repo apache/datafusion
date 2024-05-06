@@ -17,7 +17,9 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
+use sqlparser::ast::{
+    ArrayAgg, CastKind, Expr as SQLExpr, JsonOperator, TrimWhereField, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
@@ -72,16 +74,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
                             let op = self.parse_sql_binary_op(op)?;
-                            stack.push(StackEntry::Operator(op));
-                            stack.push(StackEntry::SQLExpr(right));
-                            stack.push(StackEntry::SQLExpr(left));
-                        }
-                        SQLExpr::JsonAccess {
-                            left,
-                            operator,
-                            right,
-                        } => {
-                            let op = self.parse_sql_json_access(operator)?;
                             stack.push(StackEntry::Operator(op));
                             stack.push(StackEntry::SQLExpr(right));
                             stack.push(StackEntry::SQLExpr(left));
@@ -267,6 +259,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Cast {
+                kind: CastKind::Cast | CastKind::DoubleColon,
                 expr,
                 data_type,
                 format,
@@ -296,7 +289,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
             }
 
-            SQLExpr::TryCast {
+            SQLExpr::Cast {
+                kind: CastKind::TryCast | CastKind::SafeCast,
                 expr,
                 data_type,
                 format,
@@ -943,11 +937,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ) => GetFieldAccess::NamedStructField {
                 name: ScalarValue::from(s),
             },
-            SQLExpr::JsonAccess {
-                left,
-                operator: JsonOperator::Colon,
-                right,
-            } => {
+            SQLExpr::JsonAccess { value, path } => {
                 let (start, stop, stride) = if let SQLExpr::JsonAccess {
                     left: l,
                     operator: JsonOperator::Colon,
