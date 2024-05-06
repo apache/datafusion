@@ -31,7 +31,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    function::{AccumulatorArgs, StateFieldsArgs},
+    function::{AccumulatorArgs, FieldArgs, StateFieldsArgs},
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
@@ -79,6 +79,10 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     /// What is the type of value that will be returned by this function.
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
+    }
+
+    fn field(&self, args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
     }
 
     /// This is the accumulator factory; DataFusion uses it to create new accumulators.

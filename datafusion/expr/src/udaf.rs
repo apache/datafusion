@@ -221,7 +221,7 @@ where
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
-/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::AccumulatorArgs};
+/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::AccumulatorArgs, function::StateFieldsArgs};
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
 /// #[derive(Debug, Clone)]
@@ -250,9 +250,9 @@ where
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_fields(&self, _name: &str, value_type: DataType, _ordering_fields: Vec<Field>) -> Result<Vec<Field>> {
+///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
 ///        Ok(vec![
-///             Field::new("value", value_type, true),
+///             Field::new("value", args.return_type.clone(), true),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
