@@ -45,12 +45,15 @@ use datafusion_physical_expr::{
 };
 
 mod bounded_window_agg_exec;
+pub mod stream_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+pub use stream_window_agg_exec::FranzWindowExec;
+pub use stream_window_agg_exec::FranzWindowType;
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function

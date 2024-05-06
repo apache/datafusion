@@ -281,7 +281,7 @@ fn create_schema(
 }
 
 /// Compute the window aggregate columns
-fn compute_window_aggregates(
+pub fn compute_window_aggregates(
     window_expr: &[Arc<dyn WindowExpr>],
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {

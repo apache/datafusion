@@ -21,6 +21,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
@@ -95,6 +96,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::windows::{FranzWindowExec, FranzWindowType};
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -964,10 +966,11 @@ impl DefaultPhysicalPlanner {
                         InputOrderMode::Sorted,
                     )?)
                 } else {
-                    Arc::new(WindowAggExec::try_new(
+                    Arc::new(FranzWindowExec::try_new(
                         window_expr,
                         input_exec,
                         physical_partition_keys,
+                        FranzWindowType::Tumbling(Duration::from_millis(5000)),
                     )?)
                 }
             }
