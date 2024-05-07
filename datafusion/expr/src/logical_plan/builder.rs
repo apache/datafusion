@@ -296,12 +296,12 @@ impl LogicalPlanBuilder {
             WriteOp::InsertInto
         };
 
-        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
-            table_name: table_name.into(),
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement::new(
+            table_name.into(),
             table_schema,
             op,
-            input: Arc::new(input),
-        })))
+            Arc::new(input),
+        ))))
     }
 
     /// Convert a table provider into a builder with a TableScan

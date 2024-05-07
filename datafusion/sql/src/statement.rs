@@ -1206,12 +1206,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement {
-            table_name: table_ref,
-            table_schema: schema.into(),
-            op: WriteOp::Delete,
-            input: Arc::new(source),
-        });
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            table_ref,
+            schema.into(),
+            WriteOp::Delete,
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 
@@ -1318,12 +1318,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let source = project(source, exprs)?;
 
-        let plan = LogicalPlan::Dml(DmlStatement {
+        let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
             table_schema,
-            op: WriteOp::Update,
-            input: Arc::new(source),
-        });
+            WriteOp::Update,
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 
@@ -1441,12 +1441,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             WriteOp::InsertInto
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement {
+        let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
-            table_schema: Arc::new(table_schema),
+            Arc::new(table_schema),
             op,
-            input: Arc::new(source),
-        });
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 
