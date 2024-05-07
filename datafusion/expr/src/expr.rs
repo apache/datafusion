@@ -1087,6 +1087,25 @@ impl Expr {
     }
 
     /// Remove an alias from an expression if one exists.
+    ///
+    /// If the expression is not an alias, the expression is returned unchanged.
+    /// This method does not remove aliases from nested expressions.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// // `foo as "bar"` is unaliased to `foo`
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.unalias(), col("foo"));
+    ///
+    /// // `foo as "bar" + baz` is not unaliased
+    /// let expr = col("foo").alias("bar") + col("baz");
+    /// assert_eq!(expr.clone().unalias(), expr);
+    ///
+    /// // `foo as "bar" as "baz" is unalaised to foo as "bar"
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.unalias(), col("foo").alias("bar"));
+    /// ```
     pub fn unalias(self) -> Expr {
         match self {
             Expr::Alias(alias) => *alias.expr,
