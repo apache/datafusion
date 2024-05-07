@@ -22,9 +22,9 @@ c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('format.quote' '~')
-LOCATION '../core/tests/data/quote.csv';
+LOCATION '../core/tests/data/quote.csv'
+OPTIONS ('format.quote' '~',
+         'format.delimiter' ',');
 
 statement ok
 CREATE EXTERNAL TABLE csv_with_escape (
@@ -32,8 +32,8 @@ c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('format.escape' '\')
+OPTIONS ('format.escape' '\',
+         'format.delimiter' ',')
 LOCATION '../core/tests/data/escape.csv';
 
 query TT
@@ -70,8 +70,8 @@ c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('format.escape' '"')
+OPTIONS ('format.escape' '"',
+        'format.delimiter' ',')
 LOCATION '../core/tests/data/escape.csv';
 
 # TODO: Validate this with better data.
@@ -136,8 +136,8 @@ CREATE EXTERNAL TABLE partitioned_table (
   partition_col INT
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION 'test_files/scratch/csv_files/csv_partitions';
+LOCATION 'test_files/scratch/csv_files/csv_partitions'
+OPTIONS ('format.has_header' 'false');
 
 query ITII
 SELECT * FROM partitioned_table ORDER BY int_col;
@@ -160,4 +160,4 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=true
+03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=false

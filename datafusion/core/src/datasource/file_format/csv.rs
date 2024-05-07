@@ -136,13 +136,13 @@ impl CsvFormat {
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.options.has_header = has_header;
+        self.options.has_header = Some(has_header);
         self
     }
 
     /// True if the first line is a header.
     pub fn has_header(&self) -> bool {
-        self.options.has_header
+        self.options.has_header.unwrap_or(false)
     }
 
     /// The character separating values within a row.
@@ -200,7 +200,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -211,7 +211,7 @@ impl FileFormat for CsvFormat {
         for object in objects {
             let stream = self.read_to_delimited_chunks(store, object).await;
             let (schema, records_read) = self
-                .infer_schema_from_stream(records_to_read, stream)
+                .infer_schema_from_stream(state, records_to_read, stream)
                 .await?;
             records_to_read -= records_read;
             schemas.push(schema);
@@ -236,13 +236,15 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
-            self.options.has_header,
+            self.options
+                .has_header
+                .unwrap_or(state.config().options().catalog.has_header),
             self.options.delimiter,
             self.options.quote,
             self.options.escape,
@@ -286,6 +288,7 @@ impl CsvFormat {
     /// number of lines that were read
     async fn infer_schema_from_stream(
         &self,
+        state: &SessionState,
         mut records_to_read: usize,
         stream: impl Stream<Item = Result<Bytes>>,
     ) -> Result<(Schema, usize)> {
@@ -298,7 +301,12 @@ impl CsvFormat {
 
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
-                .with_header(self.options.has_header && first_chunk)
+                .with_header(
+                    self.options
+                        .has_header
+                        .unwrap_or(state.config_options().catalog.has_header)
+                        && first_chunk,
+                )
                 .with_delimiter(self.options.delimiter);
 
             let (Schema { fields, .. }, records_read) =
@@ -538,6 +546,7 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::stats::Precision;
     use datafusion_common::{internal_err, GetExt};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 
     use chrono::DateTime;
@@ -554,7 +563,8 @@ mod tests {
         let task_ctx = state.task_ctx();
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
-        let exec = get_exec(&state, "aggregate_test_100.csv", projection, None).await?;
+        let exec =
+            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches: i32 = stream
@@ -582,7 +592,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0, 1, 2, 3]);
         let exec =
-            get_exec(&state, "aggregate_test_100.csv", projection, Some(1)).await?;
+            get_exec(&state, "aggregate_test_100.csv", projection, Some(1), true).await?;
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
@@ -597,7 +607,8 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec = get_exec(&state, "aggregate_test_100.csv", projection, None).await?;
+        let exec =
+            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -633,7 +644,8 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec(&state, "aggregate_test_100.csv", projection, None).await?;
+        let exec =
+            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
 
         let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
@@ -716,6 +728,10 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
 
         let path = Path::from("csv/aggregate_test_100.csv");
@@ -757,7 +773,7 @@ mod tests {
             .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
             .await;
         let (schema, records_read) = compressed_csv
-            .infer_schema_from_stream(records_to_read, decoded_stream)
+            .infer_schema_from_stream(&session_state, records_to_read, decoded_stream)
             .await?;
 
         assert_eq!(expected, schema);
@@ -803,9 +819,11 @@ mod tests {
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
+        hash_header: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
-        let format = CsvFormat::default();
+        let mut format = CsvFormat::default();
+        format = format.with_has_header(hash_header);
         scan_format(state, &format, &root, file_name, projection, limit).await
     }
 

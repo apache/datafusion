@@ -539,37 +539,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
-                let file_compression_type = protobuf::CompressionTypeVariant::try_from(
-                    create_extern_table.file_compression_type,
-                )
-                .map_err(|_| {
-                    proto_error(format!(
-                        "Unknown file compression type {}",
-                        create_extern_table.file_compression_type
-                    ))
-                })?;
-
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
-                    schema: pb_schema.try_into()?,
-                    name: from_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
-                    location: create_extern_table.location.clone(),
-                    file_type: create_extern_table.file_type.clone(),
-                    has_header: create_extern_table.has_header,
-                    delimiter: create_extern_table.delimiter.chars().next().ok_or_else(|| {
-                        DataFusionError::Internal(String::from("Protobuf deserialization error, unable to parse CSV delimiter"))
-                    })?,
-                    table_partition_cols: create_extern_table
-                        .table_partition_cols
-                        .clone(),
-                    order_exprs,
-                    if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: file_compression_type.into(),
-                    definition,
-                    unbounded: create_extern_table.unbounded,
-                    options: create_extern_table.options.clone(),
-                    constraints: constraints.into(),
-                    column_defaults,
-                })))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                    CreateExternalTable {
+                        schema: pb_schema.try_into()?,
+                        name: from_table_reference(
+                            create_extern_table.name.as_ref(),
+                            "CreateExternalTable",
+                        )?,
+                        location: create_extern_table.location.clone(),
+                        file_type: create_extern_table.file_type.clone(),
+                        has_header: create_extern_table.has_header,
+                        table_partition_cols: create_extern_table
+                            .table_partition_cols
+                            .clone(),
+                        order_exprs,
+                        if_not_exists: create_extern_table.if_not_exists,
+                        definition,
+                        unbounded: create_extern_table.unbounded,
+                        options: create_extern_table.options.clone(),
+                        constraints: constraints.into(),
+                        column_defaults,
+                    },
+                )))
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
@@ -1328,12 +1319,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location,
                     file_type,
                     has_header,
-                    delimiter,
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
                     definition,
-                    file_compression_type,
                     order_exprs,
                     unbounded,
                     options,
@@ -1359,9 +1348,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
                 }
 
-                let file_compression_type =
-                    protobuf::CompressionTypeVariant::from(file_compression_type);
-
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                         protobuf::CreateExternalTableNode {
@@ -1372,10 +1358,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
-                            delimiter: String::from(*delimiter),
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
-                            file_compression_type: file_compression_type.into(),
                             unbounded: *unbounded,
                             options: options.clone(),
                             constraints: Some(constraints.clone().into()),

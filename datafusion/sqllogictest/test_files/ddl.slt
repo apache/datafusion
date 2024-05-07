@@ -535,7 +535,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION '../core/tests/data/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple_pipe.csv' OPTIONS ('format.delimiter' '|');
 
 
 query RRB

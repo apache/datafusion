@@ -34,7 +34,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -67,9 +67,13 @@ impl TableProviderFactory for ListingTableFactory {
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {
                 let mut csv_options = table_options.csv;
-                csv_options.has_header = cmd.has_header;
-                csv_options.delimiter = cmd.delimiter as u8;
-                csv_options.compression = cmd.file_compression_type;
+                if let Some(has_header) = csv_options.has_header {
+                    if cmd.has_header && !has_header {
+                        return plan_err!("Conflicting header options for CSV file");
+                    }
+                } else {
+                    csv_options.has_header = Some(cmd.has_header);
+                }
                 Arc::new(CsvFormat::default().with_options(csv_options))
             }
             #[cfg(feature = "parquet")]
@@ -78,9 +82,7 @@ impl TableProviderFactory for ListingTableFactory {
             }
             FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => {
-                let mut json_options = table_options.json;
-                json_options.compression = cmd.file_compression_type;
-                Arc::new(JsonFormat::default().with_options(json_options))
+                Arc::new(JsonFormat::default().with_options(table_options.json))
             }
             FileType::ARROW => Arc::new(ArrowFormat),
         };
@@ -172,7 +174,6 @@ mod tests {
     use super::*;
     use crate::execution::context::SessionContext;
 
-    use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{Constraints, DFSchema, TableReference};
 
     #[tokio::test]
@@ -192,11 +193,9 @@ mod tests {
             location: csv_file.path().to_str().unwrap().to_string(),
             file_type: "csv".to_string(),
             has_header: true,
-            delimiter: ',',
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
@@ -233,11 +232,9 @@ mod tests {
             location: csv_file.path().to_str().unwrap().to_string(),
             file_type: "csv".to_string(),
             has_header: true,
-            delimiter: ',',
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
             definition: None,
             order_exprs: vec![],
             unbounded: false,

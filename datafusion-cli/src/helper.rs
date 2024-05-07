@@ -259,52 +259,69 @@ mod tests {
 
         // shoule be valid
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter ',';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' ',');"
+                     .as_bytes(),
+             ),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\0';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\0');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\n';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\n');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\r';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\r');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\t';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\t');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\\';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\\');"
+                     .as_bytes()),
+             &validator,
+         )?;
+        assert!(matches!(result, ValidationResult::Valid(None)));
+
+        let result = readline_direct(
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' ',,');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         // should be invalid
         let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter ',,';".as_bytes()),
-            &validator,
-        )?;
-        assert!(matches!(result, ValidationResult::Invalid(Some(_))));
-
-        let result = readline_direct(
-            Cursor::new(r"create external table test stored as csv location 'data.csv' delimiter '\u{07}';".as_bytes()),
-            &validator,
-        )?;
+             Cursor::new(
+                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\u{07}');"
+                     .as_bytes()),
+             &validator,
+         )?;
         assert!(matches!(result, ValidationResult::Invalid(Some(_))));
 
         Ok(())

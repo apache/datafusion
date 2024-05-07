@@ -969,11 +969,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             columns,
             file_type,
             has_header,
-            delimiter,
             location,
             table_partition_cols,
             if_not_exists,
-            file_compression_type,
             order_exprs,
             unbounded,
             options,
@@ -985,8 +983,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
         all_constraints.extend(inline_constraints);
 
+        let compression = options
+            .get("format.compression")
+            .map(|comp| CompressionTypeVariant::from_str(comp))
+            .transpose()?;
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
-            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
+            && compression
+                .map(|comp| comp != CompressionTypeVariant::UNCOMPRESSED)
+                .unwrap_or(false)
         {
             plan_err!(
                 "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
@@ -1018,11 +1022,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 location,
                 file_type,
                 has_header,
-                delimiter,
                 table_partition_cols,
                 if_not_exists,
                 definition,
-                file_compression_type,
                 order_exprs: ordered_exprs,
                 unbounded,
                 options,

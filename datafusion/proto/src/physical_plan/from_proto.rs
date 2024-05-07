@@ -806,7 +806,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
 
     fn try_from(proto_opts: &protobuf::CsvOptions) -> Result<Self, Self::Error> {
         Ok(CsvOptions {
-            has_header: proto_opts.has_header,
+            has_header: proto_opts.has_header.first().map(|h| *h != 0),
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),

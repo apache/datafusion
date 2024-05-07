@@ -320,7 +320,7 @@ pub struct Constraints {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(message, optional, tag = "12")]
+    #[prost(message, optional, tag = "10")]
     pub name: ::core::option::Option<TableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
@@ -335,23 +335,19 @@ pub struct CreateExternalTableNode {
     #[prost(bool, tag = "7")]
     pub if_not_exists: bool,
     #[prost(string, tag = "8")]
-    pub delimiter: ::prost::alloc::string::String,
-    #[prost(string, tag = "9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
-    pub file_compression_type: i32,
-    #[prost(message, repeated, tag = "13")]
+    #[prost(message, repeated, tag = "11")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
-    #[prost(bool, tag = "14")]
+    #[prost(bool, tag = "12")]
     pub unbounded: bool,
-    #[prost(map = "string, string", tag = "11")]
+    #[prost(map = "string, string", tag = "9")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(message, optional, tag = "15")]
+    #[prost(message, optional, tag = "13")]
     pub constraints: ::core::option::Option<Constraints>,
-    #[prost(map = "string, message", tag = "16")]
+    #[prost(map = "string, message", tag = "14")]
     pub column_defaults: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         LogicalExprNode,
@@ -1684,8 +1680,8 @@ pub struct CsvWriterOptions {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvOptions {
     /// Indicates if the CSV has a header row
-    #[prost(bool, tag = "1")]
-    pub has_header: bool,
+    #[prost(bytes = "vec", tag = "1")]
+    pub has_header: ::prost::alloc::vec::Vec<u8>,
     /// Delimiter character as a byte
     #[prost(bytes = "vec", tag = "2")]
     pub delimiter: ::prost::alloc::vec::Vec<u8>,

@@ -27,7 +27,6 @@ use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, DFSchema, DataFusionError, TableReference};
 use datafusion_expr::CreateExternalTable;
 
@@ -140,11 +139,9 @@ impl ListingSchemaProvider {
                             location: table_url,
                             file_type: self.format.clone(),
                             has_header: self.has_header,
-                            delimiter: ',',
                             table_partition_cols: vec![],
                             if_not_exists: false,
                             definition: None,
-                            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
                             order_exprs: vec![],
                             unbounded: false,
                             options: Default::default(),

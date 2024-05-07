@@ -529,9 +529,8 @@ CREATE UNBOUNDED EXTERNAL TABLE data (
     "column1"  INTEGER,
     "column2" VARCHAR,
 ) STORED AS CSV
-WITH HEADER ROW
 WITH ORDER ("column1", "column2")
-LOCATION 'test_files/scratch/limit/data.csv';
+LOCATION 'test_files/scratch/limit/data.csv' OPTIONS ('format.has_header' 'false');
 
 query IT
 SELECT * from data LIMIT 3;

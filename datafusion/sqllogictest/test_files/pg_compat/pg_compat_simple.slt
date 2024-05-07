@@ -43,8 +43,7 @@ onlyif postgres
 statement ok
 COPY aggregate_test_100_by_sql
     FROM '../../testing/data/csv/aggregate_test_100.csv'
-    DELIMITER ','
-    CSV HEADER;
+    CSV HEADER OPTIONS ('format.delimiter' ',');
 
 ###
 ## Setup test for datafusion
