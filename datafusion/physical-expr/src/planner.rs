@@ -28,7 +28,7 @@ use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
-    Operator, ScalarFunctionDefinition, TryCast,
+    Operator, TryCast,
 };
 
 use crate::scalar_function;
@@ -305,21 +305,17 @@ pub fn create_physical_expr(
             }
         },
 
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    scalar_function::create_physical_expr(
-                        fun.clone().as_ref(),
-                        &physical_args,
-                        input_schema,
-                        args,
-                        input_dfschema,
-                    )
-                }
-            }
+            scalar_function::create_physical_expr(
+                func.clone().as_ref(),
+                &physical_args,
+                input_schema,
+                args,
+                input_dfschema,
+            )
         }
         Expr::Between(Between {
             expr,
