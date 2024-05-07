@@ -328,10 +328,9 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let expr_props = self.get_expr_properties(req.expr.clone());
         let ExprProperties {
             sort_properties, ..
-        } = expr_props;
+        } = self.get_expr_properties(req.expr.clone());
         match sort_properties {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr {
@@ -878,16 +877,13 @@ impl EquivalenceProperties {
     /// Returns an [`ExprProperties`] object containing the ordering information for
     /// the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        let mut node = ExprPropertiesNode::new_unknown(expr.clone());
-        node.data = node.data.with_range(
-            Interval::make_unbounded(&expr.data_type(self.schema()).unwrap()).unwrap(),
-        );
-
-        node.transform_up(|expr| update_ordering(expr, self))
+        let res = ExprPropertiesNode::new_unknown(expr.clone())
+            .transform_up(|expr| update_ordering(expr, self))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
-            .data
+            .data;
+        res
     }
 }
 
@@ -908,6 +904,18 @@ fn update_ordering(
     eq_properties: &EquivalenceProperties,
 ) -> Result<Transformed<ExprPropertiesNode>> {
     // We have a Column, which is one of the two possible leaf node types:
+
+    if !node.expr.children().is_empty() {
+        // We have an intermediate (non-leaf) node, account for its children:
+        let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
+        node.data = node.expr.get_properties(&children_props)?;
+    } else if node.expr.as_any().is::<Literal>() {
+        // We have a Literal, which is the other possible leaf node type:
+        node.data = node.expr.get_properties(&[])?;
+    } else if node.expr.as_any().is::<Column>() {
+        node.data.range =
+            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
+    }
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.data.sort_properties = SortProperties::Singleton;
@@ -916,16 +924,6 @@ fn update_ordering(
         .get_options(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Ordered(options);
-    } else if !node.expr.children().is_empty() {
-        // We have an intermediate (non-leaf) node, account for its children:
-        let children_orderings =
-            node.children.iter().map(|c| c.data.clone()).collect_vec();
-        node.data = node.expr.get_properties(&children_orderings)?;
-    } else if node.expr.as_any().is::<Literal>() {
-        // We have a Literal, which is the other possible leaf node type:
-        node.data = node.expr.get_properties(&[])?;
-    } else {
-        return Ok(Transformed::no(node));
     }
     Ok(Transformed::yes(node))
 }

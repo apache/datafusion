@@ -785,6 +785,19 @@ impl Interval {
         .map(|result| result + 1)
     }
 
+    /// Reflects an [`Interval`] around the point zero.
+    ///
+    /// This method computes the arithmetic negation of the interval, reflecting it about
+    /// the origin in a number line. This operation swaps and negates the lower and upper bounds
+    /// of the interval.
+    ///
+    /// # Examples
+    ///
+    /// arithmetic_negate((-1, 2)) = (-2, 1)
+    ///
+    /// arithmetic_negate((-4, -3)) = (3, 4)
+    ///
+    /// arithmetic_negate((5, 8)) = (-8, -5)
     pub fn arithmetic_negate(self) -> Result<Self> {
         Ok(Self {
             lower: self.upper().clone().arithmetic_negate()?,
