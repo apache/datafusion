@@ -211,7 +211,7 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
     }
 }
 
-/// Create a physical expression of the UDF.
+/// Create a physical expression for the UDF.
 ///
 /// Arguments:
 pub fn create_physical_expr(
