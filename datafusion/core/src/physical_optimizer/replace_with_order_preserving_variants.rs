@@ -1475,6 +1475,7 @@ mod tests {
                 Some(&projection),
                 vec![sort_exprs],
                 true,
+                None,
             )
             .unwrap(),
         )
