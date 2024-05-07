@@ -1006,11 +1006,6 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::Full) {
                     join_buffered = !self.buffered_joined;
                 };
-
-                if matches!(self.join_type, JoinType::LeftAnti) {
-                    join_streamed = !self.streamed_joined;
-                    join_buffered = true;
-                };
             }
         }
         if !join_streamed && !join_buffered {
@@ -1167,10 +1162,7 @@ impl SMJStream {
             let filter_columns = if chunk.buffered_batch_idx.is_some() {
                 if matches!(self.join_type, JoinType::Right) {
                     get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
-                } else if matches!(
-                    self.join_type,
-                    JoinType::LeftSemi | JoinType::LeftAnti
-                ) {
+                } else if matches!(self.join_type, JoinType::LeftSemi) {
                     let buffered_columns = self.buffered_data.batches
                         [chunk.buffered_batch_idx.unwrap()]
                     .batch
