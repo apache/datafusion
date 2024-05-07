@@ -651,6 +651,22 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
 }
 
+/// Transposes the given vector of vectors.
+pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    match original.as_slice() {
+        [] => vec![],
+        [first, ..] => {
+            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            for row in original {
+                for (item, transposed_row) in row.into_iter().zip(&mut result) {
+                    transposed_row.push(item);
+                }
+            }
+            result
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ScalarValue::Null;
@@ -988,6 +1004,15 @@ mod tests {
         assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
         assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
         assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_transpose() -> Result<()> {
+        let in_data = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let transposed = transpose(in_data);
+        let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
+        assert_eq!(expected, transposed);
         Ok(())
     }
 }
