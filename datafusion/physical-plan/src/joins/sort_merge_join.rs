@@ -46,7 +46,6 @@ use arrow::array::*;
 use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-//use arrow_array::types::UInt64Type;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
@@ -1142,7 +1141,6 @@ impl SMJStream {
                 .collect::<Result<Vec<_>, ArrowError>>()?;
 
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
-
             let mut buffered_columns =
                 if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                     vec![]
@@ -1215,7 +1213,40 @@ impl SMJStream {
                         .into_array(filter_batch.num_rows())?;
 
                     // The selection mask of the filter
-                    let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                    let mut mask =
+                        datafusion_common::cast::as_boolean_array(&filter_result)?;
+                    // for LeftSemi Join the filter mask should be calculated in its own way:
+                    // if we find at least one matching row for specific streaming key/filter we dont need to check others for the same key/filter
+                    let mut maybe_left_semi_mask: Option<BooleanArray> = None;
+                    if matches!(self.join_type, JoinType::LeftSemi) {
+                        // did we get a filter match for a streaming index
+                        let mut seen_as_true: bool = false;
+                        let streamed_indices_length = streamed_indices.len();
+                        let mut corrected_mask: Vec<bool> =
+                            vec![false; streamed_indices_length];
+
+                        #[allow(clippy::needless_range_loop)]
+                        for i in 0..streamed_indices_length {
+                            // if for a streaming index its a match first time, set it as true
+                            if mask.value(i) && !seen_as_true {
+                                seen_as_true = true;
+                                corrected_mask[i] = true;
+                            }
+
+                            // if switched to next streaming index(e.g from 0 to 1, or from 1 to 2), we reset seen_as_true flag
+                            if i < streamed_indices_length - 1
+                                && streamed_indices.value(i)
+                                    != streamed_indices.value(i + 1)
+                            {
+                                seen_as_true = false;
+                            }
+                        }
+                        maybe_left_semi_mask = Some(BooleanArray::from(corrected_mask))
+                    };
+
+                    if let Some(ref left_semi_mask) = maybe_left_semi_mask {
+                        mask = left_semi_mask;
+                    }
 
                     // Push the filtered batch to the output
                     let filtered_batch =
