@@ -449,29 +449,157 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#exists">
-   EXISTS
+  <a class="reference internal nav-link" href="#subquery-operators">
+   Subquery operators
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#not-exists">
+     [ NOT ] EXISTS
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#not-in">
+     [ NOT ] IN
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#examples">
+       Examples
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#not-exists">
-   NOT EXISTS
+  <a class="reference internal nav-link" href="#select-clause-subqueries">
+   SELECT clause subqueries
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example">
+     Example
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#in">
-   IN
+  <a class="reference internal nav-link" href="#from-clause-subqueries">
+   FROM clause subqueries
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id1">
+     Example
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#not-in">
-   NOT IN
+  <a class="reference internal nav-link" href="#where-clause-subqueries">
+   WHERE clause subqueries
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id2">
+     Examples
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#where-clause-with-scalar-subquery">
+       <code class="docutils literal notranslate">
+        <span class="pre">
+         WHERE
+        </span>
+       </code>
+       clause with scalar subquery
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#where-clause-with-non-scalar-subquery">
+       <code class="docutils literal notranslate">
+        <span class="pre">
+         WHERE
+        </span>
+       </code>
+       clause with non-scalar subquery
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#where-clause-with-correlated-subquery">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       WHERE
+      </span>
+     </code>
+     clause with correlated subquery
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#scalar-subquery">
-   Scalar Subquery
+  <a class="reference internal nav-link" href="#having-clause-subqueries">
+   HAVING clause subqueries
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id3">
+     Examples
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#having-clause-with-a-scalar-subquery">
+       <code class="docutils literal notranslate">
+        <span class="pre">
+         HAVING
+        </span>
+       </code>
+       clause with a scalar subquery
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#having-clause-with-a-non-scalar-subquery">
+       <code class="docutils literal notranslate">
+        <span class="pre">
+         HAVING
+        </span>
+       </code>
+       clause with a non-scalar subquery
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#subquery-categories">
+   Subquery categories
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#correlated-subqueries">
+     Correlated subqueries
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#non-correlated-subqueries">
+     Non-correlated subqueries
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#scalar-subqueries">
+     Scalar subqueries
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#non-scalar-subqueries">
+     Non-scalar subqueries
+    </a>
+   </li>
+  </ul>
  </li>
 </ul>
 
@@ -521,75 +649,377 @@
 -->
 <section id="subqueries">
 <h1>Subqueries<a class="headerlink" href="#subqueries" title="Link to this heading">¶</a></h1>
-<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">EXISTS</span></code>, <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">EXISTS</span></code>, <code class="docutils literal notranslate"><span class="pre">IN</span></code>, <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> and Scalar Subqueries.</p>
-<p>The examples below are based on the following table.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+<p>Subqueries (also known as inner queries or nested queries) are queries within
+a query.
+Subqueries can be used in <code class="docutils literal notranslate"><span class="pre">SELECT</span></code>, <code class="docutils literal notranslate"><span class="pre">FROM</span></code>, <code class="docutils literal notranslate"><span class="pre">WHERE</span></code>, and <code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clauses.</p>
+<p>The examples below are based on the following tables.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
 </pre></div>
 </div>
-<section id="exists">
-<h2>EXISTS<a class="headerlink" href="#exists" title="Link to this heading">¶</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">EXISTS</span></code> syntax can be used to find all rows in a relation where a correlated subquery produces one or more matches
-for that row. Only correlated subqueries are supported.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="k">exists</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">--------+--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="nb">number</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">string</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">one</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">two</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">three</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">four</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+--------+</span>
 </pre></div>
 </div>
-</section>
+<section id="subquery-operators">
+<h2>Subquery operators<a class="headerlink" href="#subquery-operators" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#not-exists">[ NOT ] EXISTS</a></p></li>
+<li><p><a class="reference internal" href="#not-in">[ NOT ] IN</a></p></li>
+</ul>
 <section id="not-exists">
-<h2>NOT EXISTS<a class="headerlink" href="#not-exists" title="Link to this heading">¶</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">EXISTS</span></code> syntax can be used to find all rows in a relation where a correlated subquery produces zero matches
-for that row. Only correlated subqueries are supported.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="k">not</span><span class="w"> </span><span class="k">exists</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">);</span>
-<span class="mi">0</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span>
-</pre></div>
-</div>
-</section>
-<section id="in">
-<h2>IN<a class="headerlink" href="#in" title="Link to this heading">¶</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">IN</span></code> syntax can be used to find all rows in a relation where a given expression’s value can be found in the
-results of a correlated subquery.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span>
+<h3>[ NOT ] EXISTS<a class="headerlink" href="#not-exists" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">EXISTS</span></code> operator returns all rows where a
+<em><a class="reference internal" href="#correlated-subqueries">correlated subquery</a></em> produces one or more matches for
+that row. <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">EXISTS</span></code> returns all rows where a <em>correlated subquery</em> produces
+zero matches for that row. Only <em>correlated subqueries</em> are supported.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="k">NOT</span><span class="p">]</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="n">subquery</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
 <section id="not-in">
-<h2>NOT IN<a class="headerlink" href="#not-in" title="Link to this heading">¶</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> syntax can be used to find all rows in a relation where a given expression’s value can not be found in the
-results of a correlated subquery.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">not</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">);</span>
-<span class="mi">0</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span>
+<h3>[ NOT ] IN<a class="headerlink" href="#not-in" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">IN</span></code> operator returns all rows where a given expression’s value can be found
+in the results of a <em><a class="reference internal" href="#correlated-subqueries">correlated subquery</a></em>.
+<code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> returns all rows where a given expression’s value cannot be found in
+the results of a subquery or list of values.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">NOT</span><span class="p">]</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="n">subquery</span><span class="o">|</span><span class="n">list</span><span class="o">-</span><span class="n">literal</span><span class="p">)</span>
 </pre></div>
 </div>
-</section>
-<section id="scalar-subquery">
-<h2>Scalar Subquery<a class="headerlink" href="#scalar-subquery" title="Link to this heading">¶</a></h2>
-<p>A scalar subquery can be used to produce a single value that can be used in many different contexts in a query. Here
-is an example of a filter using a scalar subquery. Only correlated subqueries are supported.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">column_2</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">);</span>
+<section id="examples">
+<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
-<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span>
 </pre></div>
 </div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="select-clause-subqueries">
+<h2>SELECT clause subqueries<a class="headerlink" href="#select-clause-subqueries" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause subqueries use values returned from the inner query as part
+of the outer query’s <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list.
+The <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause only supports <a class="reference internal" href="#scalar-subqueries">scalar subqueries</a> that
+return a single value per execution of the inner query.
+The returned value can be unique per row.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="n">expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expressionN</span><span class="p">],]</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">subquery</span><span class="o">&gt;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><strong>Note</strong>: <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause subqueries can be used as an alternative to <code class="docutils literal notranslate"><span class="pre">JOIN</span></code>
+operations.</p>
+<section id="example">
+<h3>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h3>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">column_1</span><span class="p">,</span>
+<span class="w">  </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="n">first_value</span><span class="p">(</span><span class="n">string</span><span class="p">)</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">y</span>
+<span class="w">    </span><span class="k">WHERE</span>
+<span class="w">      </span><span class="nb">number</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span>
+<span class="w">  </span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;numeric string&quot;</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">x</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">----------+----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nb">numeric</span><span class="w"> </span><span class="n">string</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------------+</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">one</span><span class="w">            </span><span class="o">|</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">two</span><span class="w">            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="from-clause-subqueries">
+<h2>FROM clause subqueries<a class="headerlink" href="#from-clause-subqueries" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause subqueries return a set of results that is then queried and
+operated on by the outer query.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expressionN</span><span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">subquery</span><span class="o">&gt;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id1">
+<h3>Example<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p>The following query returns the average of maximum values per room.
+The inner query returns the maximum value for each field from each room.
+The outer query uses the results of the inner query and returns the average
+maximum value for each field.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">column_2</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="o">*</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">x</span>
+<span class="w">    </span><span class="k">WHERE</span>
+<span class="w">      </span><span class="n">column_1</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="where-clause-subqueries">
+<h2>WHERE clause subqueries<a class="headerlink" href="#where-clause-subqueries" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause subqueries compare an expression to the result of the subquery
+and return <em>true</em> or <em>false</em>.
+Rows that evaluate to <em>false</em> or NULL are filtered from results.
+The <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause supports correlated and non-correlated subqueries
+as well as scalar and non-scalar subqueries (depending on the the operator used
+in the predicate expression).</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expressionN</span><span class="p">]</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="o">&lt;</span><span class="n">measurement</span><span class="o">&gt;</span>
+<span class="k">WHERE</span>
+<span class="w">  </span><span class="n">expression</span><span class="w"> </span><span class="k">operator</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">subquery</span><span class="o">&gt;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><strong>Note:</strong> <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause subqueries can be used as an alternative to <code class="docutils literal notranslate"><span class="pre">JOIN</span></code>
+operations.</p>
+<section id="id2">
+<h3>Examples<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="where-clause-with-scalar-subquery">
+<h4><code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause with scalar subquery<a class="headerlink" href="#where-clause-with-scalar-subquery" title="Link to this heading">¶</a></h4>
+<p>The following query returns all rows with <code class="docutils literal notranslate"><span class="pre">column_2</span></code> values above the average
+of all <code class="docutils literal notranslate"><span class="pre">number</span></code> values in <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="o">*</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">x</span>
+<span class="k">WHERE</span>
+<span class="w">  </span><span class="n">column_2</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="k">AVG</span><span class="p">(</span><span class="nb">number</span><span class="p">)</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">y</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w">        </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+<section id="where-clause-with-non-scalar-subquery">
+<h4><code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause with non-scalar subquery<a class="headerlink" href="#where-clause-with-non-scalar-subquery" title="Link to this heading">¶</a></h4>
+<p>Non-scalar subqueries must use the <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">IN</span></code> or <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">EXISTS</span></code> operators and
+can only return a single column.
+The values in the returned column are evaluated as a list.</p>
+<p>The following query returns all rows with <code class="docutils literal notranslate"><span class="pre">column_2</span></code> values in table <code class="docutils literal notranslate"><span class="pre">x</span></code> that
+are in the list of numbers with string lengths greater than three from table
+<code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="o">*</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">x</span>
+<span class="k">WHERE</span>
+<span class="w">  </span><span class="n">column_2</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="nb">number</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">y</span>
+<span class="w">    </span><span class="k">WHERE</span>
+<span class="w">      </span><span class="k">length</span><span class="p">(</span><span class="n">string</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w">        </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="where-clause-with-correlated-subquery">
+<h3><code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause with correlated subquery<a class="headerlink" href="#where-clause-with-correlated-subquery" title="Link to this heading">¶</a></h3>
+<p>The following query returns rows with <code class="docutils literal notranslate"><span class="pre">column_2</span></code> values from table <code class="docutils literal notranslate"><span class="pre">x</span></code> greater
+than the average <code class="docutils literal notranslate"><span class="pre">string</span></code> value length from table <code class="docutils literal notranslate"><span class="pre">y</span></code>.
+The subquery in the <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause uses the <code class="docutils literal notranslate"><span class="pre">column_1</span></code> value from the outer
+query to return the average <code class="docutils literal notranslate"><span class="pre">string</span></code> value length for that specific value.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="o">*</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">x</span>
+<span class="k">WHERE</span>
+<span class="w">  </span><span class="n">column_2</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="k">AVG</span><span class="p">(</span><span class="k">length</span><span class="p">(</span><span class="n">string</span><span class="p">))</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">y</span>
+<span class="w">    </span><span class="k">WHERE</span>
+<span class="w">      </span><span class="nb">number</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w">        </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w">        </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="having-clause-subqueries">
+<h2>HAVING clause subqueries<a class="headerlink" href="#having-clause-subqueries" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause subqueries compare an expression that uses aggregate values
+returned by aggregate functions in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause to the result of the
+subquery and return <em>true</em> or <em>false</em>.
+Rows that evaluate to <em>false</em> are filtered from results.
+The <code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause supports correlated and non-correlated subqueries
+as well as scalar and non-scalar subqueries (depending on the the operator used
+in the predicate expression).</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">aggregate_expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">aggregate_expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">aggregate_expressionN</span><span class="p">]</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="o">&lt;</span><span class="n">measurement</span><span class="o">&gt;</span>
+<span class="k">WHERE</span>
+<span class="w">  </span><span class="o">&lt;</span><span class="n">conditional_expression</span><span class="o">&gt;</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span>
+<span class="w">  </span><span class="n">column_expression1</span><span class="p">[,</span><span class="w"> </span><span class="n">column_expression2</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">column_expressionN</span><span class="p">]</span>
+<span class="k">HAVING</span>
+<span class="w">  </span><span class="n">expression</span><span class="w"> </span><span class="k">operator</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">subquery</span><span class="o">&gt;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id3">
+<h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<p>The following query calculates the averages of even and odd numbers in table <code class="docutils literal notranslate"><span class="pre">y</span></code>
+and returns the averages that are equal to the maximum value of <code class="docutils literal notranslate"><span class="pre">column_1</span></code>
+in table <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<section id="having-clause-with-a-scalar-subquery">
+<h4><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause with a scalar subquery<a class="headerlink" href="#having-clause-with-a-scalar-subquery" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="k">AVG</span><span class="p">(</span><span class="nb">number</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">avg</span><span class="p">,</span>
+<span class="w">  </span><span class="p">(</span><span class="nb">number</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">even</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">y</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span>
+<span class="w">  </span><span class="n">even</span>
+<span class="k">HAVING</span>
+<span class="w">  </span><span class="k">avg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="k">MAX</span><span class="p">(</span><span class="n">column_1</span><span class="p">)</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">x</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">-------+--------+</span>
+<span class="o">|</span><span class="w">   </span><span class="k">avg</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">even</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+--------+</span>
+<span class="o">|</span><span class="w">     </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+--------+</span>
+</pre></div>
+</div>
+</section>
+<section id="having-clause-with-a-non-scalar-subquery">
+<h4><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause with a non-scalar subquery<a class="headerlink" href="#having-clause-with-a-non-scalar-subquery" title="Link to this heading">¶</a></h4>
+<p>Non-scalar subqueries must use the <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">IN</span></code> or <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">EXISTS</span></code> operators and
+can only return a single column.
+The values in the returned column are evaluated as a list.</p>
+<p>The following query calculates the averages of even and odd numbers in table <code class="docutils literal notranslate"><span class="pre">y</span></code>
+and returns the averages that are in <code class="docutils literal notranslate"><span class="pre">column_1</span></code> of table <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="k">AVG</span><span class="p">(</span><span class="nb">number</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">avg</span><span class="p">,</span>
+<span class="w">  </span><span class="p">(</span><span class="nb">number</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">even</span>
+<span class="k">FROM</span>
+<span class="w">  </span><span class="n">y</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span>
+<span class="w">  </span><span class="n">even</span>
+<span class="k">HAVING</span>
+<span class="w">  </span><span class="k">avg</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">      </span><span class="n">column_1</span>
+<span class="w">    </span><span class="k">FROM</span>
+<span class="w">      </span><span class="n">x</span>
+<span class="w">  </span><span class="p">);</span>
+
+<span class="o">+</span><span class="c1">-------+--------+</span>
+<span class="o">|</span><span class="w">   </span><span class="k">avg</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">even</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+--------+</span>
+<span class="o">|</span><span class="w">     </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+--------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="subquery-categories">
+<h2>Subquery categories<a class="headerlink" href="#subquery-categories" title="Link to this heading">¶</a></h2>
+<p>Subqueries can be categorized as one or more of the following based on the
+behavior of the subquery:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#correlated-subqueries">correlated</a> or
+<a class="reference internal" href="#non-correlated-subqueries">non-correlated</a></p></li>
+<li><p><a class="reference internal" href="#scalar-subqueries">scalar</a> or <a class="reference internal" href="#non-scalar-subqueries">non-scalar</a></p></li>
+</ul>
+<section id="correlated-subqueries">
+<h3>Correlated subqueries<a class="headerlink" href="#correlated-subqueries" title="Link to this heading">¶</a></h3>
+<p>In a <strong>correlated</strong> subquery, the inner query depends on the values of the
+current row being processed.</p>
+<p><strong>Note:</strong> DataFusion internally rewrites correlated subqueries into JOINs to
+improve performance. In general correlated subqueries are <strong>less performant</strong>
+than non-correlated subqueries.</p>
+</section>
+<section id="non-correlated-subqueries">
+<h3>Non-correlated subqueries<a class="headerlink" href="#non-correlated-subqueries" title="Link to this heading">¶</a></h3>
+<p>In a <strong>non-correlated</strong> subquery, the inner query <em>doesn’t</em> depend on the outer
+query and executes independently.
+The inner query executes first, and then passes the results to the outer query.</p>
+</section>
+<section id="scalar-subqueries">
+<h3>Scalar subqueries<a class="headerlink" href="#scalar-subqueries" title="Link to this heading">¶</a></h3>
+<p>A <strong>scalar</strong> subquery returns a single value (one column of one row).
+If no rows are returned, the subquery returns NULL.</p>
+</section>
+<section id="non-scalar-subqueries">
+<h3>Non-scalar subqueries<a class="headerlink" href="#non-scalar-subqueries" title="Link to this heading">¶</a></h3>
+<p>A <strong>non-scalar</strong> subquery returns 0, 1, or multiple rows, each of which may
+contain 1 or multiple columns. For each column, if there is no value to return,
+the subquery returns NULL. If no rows qualify to be returned, the subquery
+returns 0 rows.</p>
+</section>
 </section>
 </section>
 
