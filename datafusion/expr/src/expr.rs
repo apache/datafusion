@@ -1637,7 +1637,7 @@ fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<Stri
 
 /// Returns a readable name of an expression based on the input schema.
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
-fn create_name(e: &Expr) -> Result<String> {
+pub(crate) fn create_name(e: &Expr) -> Result<String> {
     match e {
         Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
@@ -1793,7 +1793,7 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr_name = create_name(expr)?;
             Ok(format!("unnest({expr_name})"))
         }
-        Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
+        Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
