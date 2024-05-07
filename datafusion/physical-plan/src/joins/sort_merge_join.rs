@@ -1023,11 +1023,6 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::Full) {
                     join_buffered = !self.buffered_joined;
                 };
-
-                if matches!(self.join_type, JoinType::LeftAnti) {
-                    join_streamed = !self.streamed_joined;
-                    join_buffered = true;
-                };
             }
         }
         if !join_streamed && !join_buffered {
