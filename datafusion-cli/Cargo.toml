@@ -19,11 +19,11 @@
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
 version = "38.0.0"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
+authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
-homepage = "https://github.com/apache/datafusion"
+homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.73"
