@@ -26,11 +26,11 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
-use crate::window_frame;
 use crate::{
     aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
     Signature,
 };
+use crate::{window_frame, Volatility};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -399,18 +399,11 @@ impl Between {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Defines which implementation of a function for DataFusion to call.
-pub enum ScalarFunctionDefinition {
-    /// Resolved to a user defined function
-    UDF(Arc<crate::ScalarUDF>),
-}
-
 /// ScalarFunction expression invokes a built-in scalar function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
-    pub func_def: ScalarFunctionDefinition,
+    pub func: Arc<crate::ScalarUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
@@ -418,41 +411,14 @@ pub struct ScalarFunction {
 impl ScalarFunction {
     // return the Function's name
     pub fn name(&self) -> &str {
-        self.func_def.name()
-    }
-}
-
-impl ScalarFunctionDefinition {
-    /// Function's name for display
-    pub fn name(&self) -> &str {
-        match self {
-            ScalarFunctionDefinition::UDF(udf) => udf.name(),
-        }
-    }
-
-    /// Whether this function is volatile, i.e. whether it can return different results
-    /// when evaluated multiple times with the same input.
-    pub fn is_volatile(&self) -> Result<bool> {
-        match self {
-            ScalarFunctionDefinition::UDF(udf) => {
-                Ok(udf.signature().volatility == crate::Volatility::Volatile)
-            }
-        }
+        self.func.name()
     }
 }
 
 impl ScalarFunction {
     /// Create a new ScalarFunction expression with a user-defined function (UDF)
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self {
-            func_def: ScalarFunctionDefinition::UDF(udf),
-            args,
-        }
-    }
-
-    /// Create a new ScalarFunction expression with a user-defined function (UDF)
-    pub fn new_func_def(func_def: ScalarFunctionDefinition, args: Vec<Expr>) -> Self {
-        Self { func_def, args }
+        Self { func: udf, args }
     }
 }
 
@@ -1299,7 +1265,7 @@ impl Expr {
     /// results when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
         self.exists(|expr| {
-            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func_def.is_volatile()?))
+            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile ))
         })
     }
 
@@ -1334,9 +1300,7 @@ impl Expr {
     /// and thus any side effects (like divide by zero) may not be encountered
     pub fn short_circuits(&self) -> bool {
         match self {
-            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-                matches!(func_def, ScalarFunctionDefinition::UDF(fun) if fun.short_circuits())
-            }
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
             }
@@ -2071,7 +2035,7 @@ mod test {
     }
 
     #[test]
-    fn test_is_volatile_scalar_func_definition() {
+    fn test_is_volatile_scalar_func() {
         // UDF
         #[derive(Debug)]
         struct TestScalarUDF {
@@ -2100,7 +2064,7 @@ mod test {
         let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         }));
-        assert!(!ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+        assert_ne!(udf.signature().volatility, Volatility::Volatile);
 
         let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
             signature: Signature::uniform(
@@ -2109,7 +2073,7 @@ mod test {
                 Volatility::Volatile,
             ),
         }));
-        assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+        assert_eq!(udf.signature().volatility, Volatility::Volatile);
     }
 
     use super::*;

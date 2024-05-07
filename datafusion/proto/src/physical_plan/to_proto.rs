@@ -56,7 +56,6 @@ use datafusion_common::{
     stats::Precision,
     DataFusionError, JoinSide, Result,
 };
-use datafusion_expr::ScalarFunctionDefinition;
 
 use crate::logical_plan::csv_writer_options_to_proto;
 use crate::protobuf::{
@@ -540,11 +539,7 @@ pub fn serialize_physical_expr(
         let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
 
         let mut buf = Vec::new();
-        match expr.fun() {
-            ScalarFunctionDefinition::UDF(udf) => {
-                codec.try_encode_udf(udf, &mut buf)?;
-            }
-        }
+        codec.try_encode_udf(expr.fun(), &mut buf)?;
 
         let fun_definition = if buf.is_empty() { None } else { Some(buf) };
         Ok(protobuf::PhysicalExprNode {
