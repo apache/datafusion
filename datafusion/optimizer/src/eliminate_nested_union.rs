@@ -18,7 +18,8 @@
 //! [`EliminateNestedUnion`]: flattens nested `Union` to a single `Union`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::{Distinct, LogicalPlan, Union};
 use std::sync::Arc;
@@ -37,40 +38,10 @@ impl EliminateNestedUnion {
 impl OptimizerRule for EliminateNestedUnion {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Union(Union { inputs, schema }) => {
-                let inputs = inputs
-                    .iter()
-                    .flat_map(extract_plans_from_union)
-                    .collect::<Vec<_>>();
-
-                Ok(Some(LogicalPlan::Union(Union {
-                    inputs,
-                    schema: schema.clone(),
-                })))
-            }
-            LogicalPlan::Distinct(Distinct::All(plan)) => match plan.as_ref() {
-                LogicalPlan::Union(Union { inputs, schema }) => {
-                    let inputs = inputs
-                        .iter()
-                        .map(extract_plan_from_distinct)
-                        .flat_map(extract_plans_from_union)
-                        .collect::<Vec<_>>();
-
-                    Ok(Some(LogicalPlan::Distinct(Distinct::All(Arc::new(
-                        LogicalPlan::Union(Union {
-                            inputs,
-                            schema: schema.clone(),
-                        }),
-                    )))))
-                }
-                _ => Ok(None),
-            },
-            _ => Ok(None),
-        }
+        internal_err!("Should have called EliminateNestedUnion::rewrite")
     }
 
     fn name(&self) -> &str {
@@ -79,6 +50,50 @@ impl OptimizerRule for EliminateNestedUnion {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        match plan {
+            LogicalPlan::Union(Union { inputs, schema }) => {
+                let inputs = inputs
+                    .iter()
+                    .flat_map(extract_plans_from_union)
+                    .collect::<Vec<_>>();
+
+                Ok(Transformed::yes(LogicalPlan::Union(Union {
+                    inputs,
+                    schema,
+                })))
+            }
+            LogicalPlan::Distinct(Distinct::All(ref nested_plan)) => {
+                match nested_plan.as_ref() {
+                    LogicalPlan::Union(Union { inputs, schema }) => {
+                        let inputs = inputs
+                            .iter()
+                            .map(extract_plan_from_distinct)
+                            .flat_map(extract_plans_from_union)
+                            .collect::<Vec<_>>();
+
+                        Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
+                            Arc::new(LogicalPlan::Union(Union {
+                                inputs,
+                                schema: schema.clone(),
+                            })),
+                        ))))
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 }
 

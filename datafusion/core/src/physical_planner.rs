@@ -1901,6 +1901,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let ignore_nulls = null_treatment
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
+
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let physical_sort_exprs = match order_by {
@@ -2035,7 +2036,7 @@ impl DefaultPhysicalPlanner {
             let config = &session_state.config_options().explain;
 
             if !config.physical_plan_only {
-                stringified_plans = e.stringified_plans.clone();
+                stringified_plans.clone_from(&e.stringified_plans);
                 if e.logical_optimization_succeeded {
                     stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
                 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SessionContext`] contains methods for registering data sources and executing queries
+//! [`SessionContext`] API for registering data sources and executing queries
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fmt::Debug;
@@ -44,6 +44,7 @@ use crate::{
     error::{DataFusionError, Result},
     execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
     logical_expr::AggregateUDF,
+    logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
@@ -53,7 +54,7 @@ use crate::{
     optimizer::analyzer::{Analyzer, AnalyzerRule},
     optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-    physical_plan::{udf::ScalarUDF, ExecutionPlan},
+    physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
@@ -221,17 +222,29 @@ where
 ///
 /// # `SessionContext`, `SessionState`, and `TaskContext`
 ///
-/// A [`SessionContext`] can be created from a [`SessionConfig`] and
-/// stores the state for a particular query session. A single
-/// [`SessionContext`] can run multiple queries.
+/// The state required to optimize, and evaluate queries is
+/// broken into three levels to allow tailoring
 ///
-/// [`SessionState`] contains information available during query
-/// planning (creating [`LogicalPlan`]s and [`ExecutionPlan`]s).
+/// The objects are:
 ///
-/// [`TaskContext`] contains the state available during query
-/// execution [`ExecutionPlan::execute`].  It contains a subset of the
-/// information in[`SessionState`] and is created from a
-/// [`SessionContext`] or a [`SessionState`].
+/// 1. [`SessionContext`]: Most users should use a `SessionContext`. It contains
+/// all information required to execute queries including  high level APIs such
+/// as [`SessionContext::sql`]. All queries run with the same `SessionContext`
+/// share the same configuration and resources (e.g. memory limits).
+///
+/// 2. [`SessionState`]: contains information required to plan and execute an
+/// individual query (e.g. creating a [`LogicalPlan`] or [`ExecutionPlan`]).
+/// Each query is planned and executed using its own `SessionState`, which can
+/// be created with [`SessionContext::state`]. `SessionState` allows finer
+/// grained control over query execution, for example disallowing DDL operations
+/// such as `CREATE TABLE`.
+///
+/// 3. [`TaskContext`] contains the state required for query execution (e.g.
+/// [`ExecutionPlan::execute`]). It contains a subset of information in
+/// [`SessionState`]. `TaskContext` allows executing [`ExecutionPlan`]s
+/// [`PhysicalExpr`]s without requiring a full [`SessionState`].
+///
+/// [`PhysicalExpr`]: crate::physical_expr::PhysicalExpr
 #[derive(Clone)]
 pub struct SessionContext {
     /// UUID for the session
@@ -1905,7 +1918,7 @@ impl SessionState {
 
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
-                e.plan.as_ref(),
+                e.plan.as_ref().clone(),
                 self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
@@ -1964,9 +1977,11 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            let analyzed_plan =
-                self.analyzer
-                    .execute_and_check(plan, self.options(), |_, _| {})?;
+            let analyzed_plan = self.analyzer.execute_and_check(
+                plan.clone(),
+                self.options(),
+                |_, _| {},
+            )?;
             self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }

@@ -2961,54 +2961,6 @@ digraph {
             .unwrap()
     }
 
-    /// Extension plan that panic when trying to access its input plan
-    #[derive(Debug)]
-    struct NoChildExtension {
-        empty_schema: DFSchemaRef,
-    }
-
-    impl UserDefinedLogicalNode for NoChildExtension {
-        fn as_any(&self) -> &dyn std::any::Any {
-            unimplemented!()
-        }
-
-        fn name(&self) -> &str {
-            unimplemented!()
-        }
-
-        fn inputs(&self) -> Vec<&LogicalPlan> {
-            panic!("Should not be called")
-        }
-
-        fn schema(&self) -> &DFSchemaRef {
-            &self.empty_schema
-        }
-
-        fn expressions(&self) -> Vec<Expr> {
-            unimplemented!()
-        }
-
-        fn fmt_for_explain(&self, _: &mut fmt::Formatter) -> fmt::Result {
-            unimplemented!()
-        }
-
-        fn from_template(
-            &self,
-            _: &[Expr],
-            _: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
-            unimplemented!()
-        }
-
-        fn dyn_hash(&self, _: &mut dyn Hasher) {
-            unimplemented!()
-        }
-
-        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
-            unimplemented!()
-        }
-    }
-
     #[test]
     fn test_replace_invalid_placeholder() {
         // test empty placeholder

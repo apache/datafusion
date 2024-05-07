@@ -96,23 +96,22 @@ Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
-- [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
+- [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
-- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
-- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
+- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
+- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
 - [InfluxDB](https://github.com/influxdata/influxdb) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
-- [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
+- [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
-- [bdt](https://github.com/andygrove/bdt) Boring Data Tool
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
@@ -123,6 +122,7 @@ Here are some active projects using DataFusion:
 
 Here are some less active projects that used DataFusion:
 
+- [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
 - [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion

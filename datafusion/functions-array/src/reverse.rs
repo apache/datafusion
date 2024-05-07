@@ -99,13 +99,10 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn general_array_reverse<O: OffsetSizeTrait>(
+fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     array: &GenericListArray<O>,
     field: &FieldRef,
-) -> Result<ArrayRef>
-where
-    O: TryFrom<i64>,
-{
+) -> Result<ArrayRef> {
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());

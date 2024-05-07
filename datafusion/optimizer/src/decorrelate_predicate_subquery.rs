@@ -852,7 +852,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: InSubquery should only return one column, but found 4";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
 
         Ok(())
     }
@@ -947,7 +947,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: InSubquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
 
         Ok(())
     }

@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use core::fmt;
+use std::fmt::Display;
+
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
@@ -30,10 +34,38 @@ use sqlparser::ast::{
 
 use super::Unparser;
 
+/// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
+pub enum Unparsed {
+    // SQL Expression
+    Expr(ast::Expr),
+    // SQL ORDER BY expression (e.g. `col ASC NULLS FIRST`)
+    OrderByExpr(ast::OrderByExpr),
+}
+
+impl Unparsed {
+    pub fn into_order_by_expr(self) -> Result<ast::OrderByExpr> {
+        if let Unparsed::OrderByExpr(order_by_expr) = self {
+            Ok(order_by_expr)
+        } else {
+            internal_err!("Expected Sort expression to be converted an OrderByExpr")
+        }
+    }
+}
+
+impl Display for Unparsed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Unparsed::Expr(expr) => write!(f, "{}", expr),
+            Unparsed::OrderByExpr(order_by_expr) => write!(f, "{}", order_by_expr),
+        }
+    }
+}
+
 /// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
 ///
 /// This function is the opposite of `SqlToRel::sql_to_expr` and can
-/// be used to, among other things, convert `Expr`s to strings.
+/// be used to, among other things, convert [`Expr`]s to strings.
+/// Throws an error if [`Expr`] can not be represented by an `sqlparser::ast::Expr`
 ///
 /// # Example
 /// ```
@@ -47,6 +79,15 @@ use super::Unparser;
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
     unparser.expr_to_sql(expr)
+}
+
+/// Convert a DataFusion [`Expr`] to [`Unparsed`]
+///
+/// This function is similar to expr_to_sql, but it supports converting more [`Expr`] types like
+/// `Sort` expressions to `OrderByExpr` expressions.
+pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
+    let unparser = Unparser::default();
+    unparser.expr_to_unparsed(expr)
 }
 
 impl Unparser<'_> {
@@ -170,7 +211,7 @@ impl Unparser<'_> {
                 fun,
                 args,
                 partition_by,
-                order_by: _,
+                order_by,
                 window_frame,
                 null_treatment: _,
             }) => {
@@ -189,6 +230,11 @@ impl Unparser<'_> {
                         ast::WindowFrameUnits::Groups
                     }
                 };
+                let order_by: Vec<ast::OrderByExpr> = order_by
+                    .iter()
+                    .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
+                    .collect::<Result<Vec<_>>>()?;
+
                 let start_bound = self.convert_bound(&window_frame.start_bound);
                 let end_bound = self.convert_bound(&window_frame.end_bound);
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
@@ -197,13 +243,14 @@ impl Unparser<'_> {
                         .iter()
                         .map(|e| self.expr_to_sql(e))
                         .collect::<Result<Vec<_>>>()?,
-                    order_by: vec![],
+                    order_by,
                     window_frame: Some(ast::WindowFrame {
                         units,
                         start_bound,
                         end_bound: Option::from(end_bound),
                     }),
                 }));
+
                 Ok(ast::Expr::Function(Function {
                     name: ast::ObjectName(vec![Ident {
                         value: func_name.to_string(),
@@ -305,10 +352,10 @@ impl Unparser<'_> {
                 })
             }
             Expr::Sort(Sort {
-                expr,
+                expr: _,
                 asc: _,
                 nulls_first: _,
-            }) => self.expr_to_sql(expr),
+            }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -363,6 +410,29 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
             Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+        }
+    }
+
+    /// This function can convert more [`Expr`] types than `expr_to_sql`, returning an [`Unparsed`]
+    /// like `Sort` expressions to `OrderByExpr` expressions.
+    pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
+        match expr {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(Unparsed::OrderByExpr(ast::OrderByExpr {
+                    expr: sql_parser_expr,
+                    asc: Some(*asc),
+                    nulls_first: Some(*nulls_first),
+                }))
+            }
+            _ => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(Unparsed::Expr(sql_parser_expr))
+            }
         }
     }
 
@@ -992,7 +1062,11 @@ mod tests {
                     ),
                     args: vec![wildcard()],
                     partition_by: vec![],
-                    order_by: vec![],
+                    order_by: vec![Expr::Sort(Sort::new(
+                        Box::new(col("a")),
+                        false,
+                        true,
+                    ))],
                     window_frame: WindowFrame::new_bounds(
                         datafusion_expr::WindowFrameUnits::Range,
                         datafusion_expr::WindowFrameBound::Preceding(
@@ -1004,7 +1078,7 @@ mod tests {
                     ),
                     null_treatment: None,
                 }),
-                r#"COUNT(*) OVER (RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
             (
@@ -1041,7 +1115,6 @@ mod tests {
                 not_exists(Arc::new(dummy_logical_plan.clone())),
                 r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
             ),
-            (col("a").sort(true, true), r#""a""#),
         ];
 
         for (expr, expected) in tests {
@@ -1055,6 +1128,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn expr_to_unparsed_ok() -> Result<()> {
+        let tests: Vec<(Expr, &str)> = vec![
+            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
+            (col("a").sort(true, true), r#""a" ASC NULLS FIRST"#),
+        ];
+
+        for (expr, expected) in tests {
+            let ast = expr_to_unparsed(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
     #[test]
     fn custom_dialect() -> Result<()> {
         let dialect = CustomDialect::new(Some('\''));

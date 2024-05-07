@@ -181,7 +181,7 @@ mod tests {
         \n    Projection: y.a, y.b\
         \n      TableScan: y";
 
-        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), plan, expected)
     }
 
     #[test]
@@ -197,6 +197,6 @@ mod tests {
         \n  Projection: y.a\
         \n    TableScan: y";
 
-        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), plan, expected)
     }
 }

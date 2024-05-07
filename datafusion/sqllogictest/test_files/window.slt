@@ -4799,3 +4799,26 @@ NULL 4
 NULL 3
 NULL 2
 NULL 1
+
+
+### Test for window functions with arrays
+statement ok
+create table array_data
+as values
+  ('a',make_array(1, 2, 3)),
+  ('b', make_array(4, 5, 6)),
+  ('c', make_array(7, 8, 9));
+
+query T??
+SELECT
+  column1,
+  lag(column2) OVER (order by column1),
+  lead(column2) OVER (order by column1)
+FROM array_data;
+----
+a NULL [4, 5, 6]
+b [1, 2, 3] [7, 8, 9]
+c [4, 5, 6] NULL
+
+statement ok
+drop table array_data
