@@ -294,10 +294,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
     /// # Arguments:
-    /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `input_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
-    /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
+    /// - `name`: the name of the expression (e.g. AVG(args...), SUM(args...), etc)
+    /// - `input_type`: the input type of the aggregate function
+    /// - `return_type`: the return type of the aggregate function (returned by [`Self::return_type`])
+    /// - `ordering_fields`: the fields used to order the input arguments, if any.
     ///     Empty if no ordering expression is provided.
+    /// - `order_by_data_types`: the data types of the ordering fields.
+    /// - `nullable`: whether the field can be null.
     ///
     /// # Notes:
     ///
