@@ -80,7 +80,7 @@ echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
 To: dev@datafusion.apache.org
-Subject: [VOTE][RUST][DataFusion] Release Apache DataFusion ${version} RC${rc}
+Subject: [VOTE] Release Apache DataFusion ${version} RC${rc}
 Hi,
 
 I would like to propose a release of Apache DataFusion version ${version}.
