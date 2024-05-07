@@ -104,17 +104,17 @@ impl AggregateUDFImpl for CovarianceSample {
             Field::new(
                 format_state_name(args.name, "count"),
                 DataType::UInt64,
-                args.nullable,
+                true,
             ),
             Field::new(
                 format_state_name(args.name, "mean1"),
                 DataType::Float64,
-                args.nullable,
+                true,
             ),
             Field::new(
                 format_state_name(args.name, "mean2"),
                 DataType::Float64,
-                args.nullable,
+                true,
             ),
             Field::new(
                 format_state_name(args.name, "algo_const"),
