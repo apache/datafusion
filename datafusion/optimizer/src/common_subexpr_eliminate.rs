@@ -86,6 +86,10 @@ type IdArray = Vec<(usize, Identifier)>;
 /// of an expression.
 type ExprStats = HashMap<Identifier, (usize, DataType)>;
 
+/// A map that contains the common expressions extracted during the second, rewriting
+/// traversal.
+type CommonExprs = IndexMap<Identifier, Expr>;
+
 /// Performs Common Sub-expression Elimination optimization.
 ///
 /// This optimization improves query performance by computing expressions that
@@ -126,7 +130,7 @@ impl CommonSubexprEliminate {
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
         expr_stats: &ExprStats,
-        common_exprs: &mut IndexMap<Identifier, Expr>,
+        common_exprs: &mut CommonExprs,
     ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
             .iter()
@@ -505,7 +509,7 @@ fn to_arrays(
 /// expr_stats: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
-    common_exprs: IndexMap<Identifier, Expr>,
+    common_exprs: CommonExprs,
     expr_stats: &ExprStats,
 ) -> Result<LogicalPlan> {
     let mut fields_set = BTreeSet::new();
@@ -762,7 +766,7 @@ struct CommonSubexprRewriter<'a> {
     id_array: &'a IdArray,
     // common expression, that are replaced during the second traversal, are collected to
     // this map
-    common_exprs: &'a mut IndexMap<Identifier, Expr>,
+    common_exprs: &'a mut CommonExprs,
     // preorder index, starts from 0.
     down_index: usize,
 }
@@ -800,7 +804,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             // Alias this `Column` expr to it original "expr name",
             // `projection_push_down` optimizer use "expr name" to eliminate useless
             // projections.
-            // TODO: do we alias here?
+            // TODO: do we really need to alias here?
             Ok(Transformed::new(
                 col(expr_id).alias(expr_name),
                 true,
@@ -818,7 +822,7 @@ fn replace_common_expr(
     expr: Expr,
     id_array: &IdArray,
     expr_stats: &ExprStats,
-    common_exprs: &mut IndexMap<Identifier, Expr>,
+    common_exprs: &mut CommonExprs,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
         expr_stats,
