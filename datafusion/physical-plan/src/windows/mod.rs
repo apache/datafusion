@@ -624,6 +624,7 @@ mod tests {
             None,
             Some(sort_exprs),
             infinite_source,
+            None,
         )?))
     }
 

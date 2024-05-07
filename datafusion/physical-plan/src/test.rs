@@ -23,9 +23,12 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{Future, FutureExt};
 
 use crate::memory::MemoryExec;
+use crate::stream::RecordBatchStreamAdapter;
+use crate::streaming::PartitionStream;
 use crate::ExecutionPlan;
 
 pub mod exec;
@@ -120,4 +123,27 @@ pub fn mem_exec(partitions: usize) -> MemoryExec {
     let schema = data[0][0].schema();
     let projection = None;
     MemoryExec::try_new(&data, schema, projection).unwrap()
+}
+
+// construct a stream partition for test purposes
+pub struct TestPartitionStream {
+    pub schema: SchemaRef,
+    pub batches: Vec<RecordBatch>,
+}
+
+impl TestPartitionStream {
+    /// Create a new stream partition with the provided batches
+    pub fn new_with_batches(batches: Vec<RecordBatch>) -> Self {
+        let schema = batches[0].schema();
+        Self { schema, batches }
+    }
+}
+impl PartitionStream for TestPartitionStream {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let stream = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
+        Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream))
+    }
 }

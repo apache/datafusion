@@ -32,17 +32,19 @@
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Neg;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, DFSchema, Result};
+use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
+    expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarFunctionDefinition,
+    ScalarUDF,
 };
 
-use crate::functions::out_ordering;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -206,5 +208,96 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
                     && self.return_type == x.return_type
             })
             .unwrap_or(false)
+    }
+}
+
+/// Create a physical expression for the UDF.
+///
+/// Arguments:
+pub fn create_physical_expr(
+    fun: &ScalarUDF,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    args: &[Expr],
+    input_dfschema: &DFSchema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let input_expr_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, fun.signature())?;
+
+    // Since we have arg_types, we dont need args and schema.
+    let return_type =
+        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
+
+    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        fun.name(),
+        fun_def,
+        input_phy_exprs.to_vec(),
+        return_type,
+        fun.monotonicity()?,
+    )))
+}
+
+/// Determines a [ScalarFunctionExpr]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    let monotonicity_vec: Vec<Option<bool>> = func.into();
+
+    monotonicity_vec.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort,
+            }
+        },
+    )
+}
+
+/// This function decides the monotonicity property of a [ScalarFunctionExpr] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+        }
     }
 }
