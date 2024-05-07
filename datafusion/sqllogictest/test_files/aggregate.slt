@@ -1817,6 +1817,30 @@ SELECT ARRAY_AGG([1]);
 ----
 [[1]]
 
+# array_agg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query ?
+select array_agg(c1) from t;
+----
+[1, 2, 3, 4, 5]
+
+statement ok
+drop table t;
+
+# array_agg_nested
+statement ok
+create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
+
+query ?
+select array_agg(column1) from t;
+----
+[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
+
 # variance_single_value
 query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0)) as sq;
