@@ -331,6 +331,7 @@ pub fn stream_exec_ordered(
             None,
             vec![sort_exprs],
             true,
+            None,
         )
         .unwrap(),
     )

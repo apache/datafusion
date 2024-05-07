@@ -548,7 +548,7 @@ enum AggregateFunction {
   ARRAY_AGG = 6;
   VARIANCE = 7;
   VARIANCE_POP = 8;
-  COVARIANCE = 9;
+  // COVARIANCE = 9;
   COVARIANCE_POP = 10;
   STDDEV = 11;
   STDDEV_POP = 12;

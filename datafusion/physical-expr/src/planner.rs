@@ -31,9 +31,10 @@ use datafusion_expr::{
     Operator, TryCast,
 };
 
+use crate::scalar_function;
 use crate::{
     expressions::{self, binary, like, Column, Literal},
-    udf, PhysicalExpr,
+    PhysicalExpr,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -308,7 +309,7 @@ pub fn create_physical_expr(
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            udf::create_physical_expr(
+            scalar_function::create_physical_expr(
                 func.clone().as_ref(),
                 &physical_args,
                 input_schema,

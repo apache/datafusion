@@ -259,6 +259,7 @@ fn try_swapping_with_streaming_table(
         Some(new_projections.as_ref()),
         lex_orderings,
         streaming_table.is_infinite(),
+        streaming_table.limit(),
     )
     .map(|e| Some(Arc::new(e) as _))
 }
@@ -1851,6 +1852,7 @@ mod tests {
             ]
             .into_iter(),
             true,
+            None,
         )?;
         let projection = Arc::new(ProjectionExec::try_new(
             vec![
