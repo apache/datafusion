@@ -992,7 +992,9 @@ impl SMJStream {
             Ordering::Equal => {
                 if matches!(self.join_type, JoinType::LeftSemi) {
                     join_streamed = !self.streamed_joined;
-                    join_buffered = true;
+                    // if the join filter specified there can be references to buffered columns
+                    // so its needed to join them
+                    join_buffered = self.filter.is_some();
                 }
                 if matches!(
                     self.join_type,
