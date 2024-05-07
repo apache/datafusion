@@ -196,6 +196,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
         }
 
+        // Evaluating constants can enable new simplifications and
+        // simplifications can enable new constant evaluation
+        // see `Self::with_max_cycles`
         let mut num_cycles = 0;
         loop {
             let Transformed {
