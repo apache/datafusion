@@ -383,26 +383,6 @@ impl FuncMonotonicity {
     pub fn new_mixed(inner: Vec<Option<bool>>) -> Self {
         Self(FuncMonotonicityPartial::Mixed(inner))
     }
-
-    /// returns true if this function is monotonically increasing with respect to argument number arg
-    pub fn arg_increasing(&self, arg: usize) -> bool {
-        match &self.0 {
-            FuncMonotonicityPartial::None => false,
-            FuncMonotonicityPartial::Increasing => true,
-            FuncMonotonicityPartial::Decreasing => false,
-            FuncMonotonicityPartial::Mixed(inner) => inner[arg].unwrap_or(false),
-        }
-    }
-
-    /// returns true if this function is monotonically decreasing with respect to argument number arg
-    pub fn arg_decreasing(&self, arg: usize) -> bool {
-        match &self.0 {
-            FuncMonotonicityPartial::None => false,
-            FuncMonotonicityPartial::Increasing => false,
-            FuncMonotonicityPartial::Decreasing => true,
-            FuncMonotonicityPartial::Mixed(inner) => inner[arg].unwrap_or(false),
-        }
-    }
 }
 
 impl From<&FuncMonotonicity> for Vec<Option<bool>> {
