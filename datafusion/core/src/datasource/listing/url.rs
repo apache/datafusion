@@ -187,10 +187,7 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` refers to a collection of objects
     pub fn is_collection(&self) -> bool {
-        let mut url = self.url.clone();
-        url.set_query(None);
-        url.set_fragment(None);
-        url.as_str().ends_with(DELIMITER)
+        self.url.path().ends_with(DELIMITER)
     }
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
