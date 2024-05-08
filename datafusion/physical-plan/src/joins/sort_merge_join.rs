@@ -831,7 +831,6 @@ impl SMJStream {
                             self.join_metrics.input_rows.add(batch.num_rows());
                             self.streamed_batch =
                                 StreamedBatch::new(batch, &self.on_streamed);
-
                             self.streamed_state = StreamedState::Ready;
                         }
                     }
@@ -1010,7 +1009,7 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::LeftSemi) && self.filter.is_none() {
                     join_streamed = !self.streamed_joined;
                     // if the join filter specified there can be references to buffered columns
-                    // so its needed to join them
+                    // so buffered columns are needed to access them
                     join_buffered = self.filter.is_some();
                 }
                 if matches!(
@@ -1238,7 +1237,6 @@ impl SMJStream {
                     // Push the filtered batch to the output
                     let filtered_batch =
                         compute::filter_record_batch(&output_batch, mask)?;
-
                     self.output_record_batches.push(filtered_batch);
 
                     // For outer joins, we need to push the null joined rows to the output.
