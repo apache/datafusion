@@ -53,7 +53,12 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast;
-use sqlparser::ast::{Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, Expr, FromTable, Ident, Insert, ObjectName, ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value};
+use sqlparser::ast::{
+    Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
+    Expr, FromTable, Ident, Insert, ObjectName, ObjectType, Query, SchemaName, SetExpr,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -417,18 +422,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     ObjectType::Schema => {
                         let name = match name {
-                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table } ) ,
-                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table,catalog: schema }),
+                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table }),
+                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table, catalog: schema }),
                             TableReference::Full { catalog: _, schema: _, table: _ } => {
                                 Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
-                            },
+                            }
                         }?;
                         Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
                             name,
                             if_exists,
                             cascade,
                             schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))},
+                        })))
+                    }
                     _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
                     ),
@@ -863,9 +869,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut options = HashMap::new();
         for (key, value) in statement.options {
-            let value_string = value_to_string(&value).ok_or_else(|| {
-                plan_err!("Unsupported Value in COPY statement {}", value)
-            })?;
+            let value_string = match value_to_string(&value) {
+                None => {
+                    return plan_err!("Unsupported Value in COPY statement {}", value)
+                }
+                Some(v) => v,
+            };
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
@@ -885,9 +894,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let e = || {
                 DataFusionError::Configuration(
-                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                    .to_string(),
-            )
+                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                        .to_string(),
+                )
             };
             // try to infer file format from file extension
             let extension: &str = &Path::new(&statement.target)
@@ -1130,9 +1139,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => value_to_string(v).ok_or_else(|| {
-                plan_err!("Unsupported Value {}", value[0])
-            })?,
+            SQLExpr::Value(v) => match value_to_string(v) {
+                None => {
+                    return plan_err!("Unsupported Value {}", value[0]);
+                }
+                Some(v) => v,
+            },
             // for capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Plus => format!("+{expr}"),

@@ -39,8 +39,8 @@ use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, OrderByExpr, ReplaceSelectItem,
-    WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
+    ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -727,10 +727,17 @@ fn match_window_definitions(
         }
         | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
         {
-            for NamedWindowDefinition(window_ident, window_spec) in named_windows.iter() {
+            for NamedWindowDefinition(window_ident, window_expr) in named_windows.iter() {
                 if let Some(WindowType::NamedWindow(ident)) = &f.over {
                     if ident.eq(window_ident) {
-                        f.over = Some(WindowType::WindowSpec(window_spec.clone()))
+                        f.over = Some(match window_expr {
+                            NamedWindowExpr::NamedWindow(ident) => {
+                                WindowType::NamedWindow(ident.clone())
+                            }
+                            NamedWindowExpr::WindowSpec(spec) => {
+                                WindowType::WindowSpec(spec.clone())
+                            }
+                        })
                     }
                 }
             }

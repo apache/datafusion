@@ -17,9 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{
-    ArrayAgg, CastKind, Expr as SQLExpr, JsonOperator, TrimWhereField, Value,
-};
+use sqlparser::ast::{CastKind, Expr as SQLExpr, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
@@ -40,7 +38,6 @@ mod binary_op;
 mod function;
 mod grouping_set;
 mod identifier;
-mod json_access;
 mod order_by;
 mod subquery;
 mod substring;
@@ -748,7 +745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<char>,
+        escape_char: Option<String>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -758,6 +755,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in LIKE expression");
         }
+        let escape_char = if let Some(char) = escape_char {
+            if char.len() != 1 {
+                return plan_err!("Invalid escape character in LIKE expression");
+            }
+            Some(char.chars().next().unwrap())
+        } else {
+            None
+        };
         Ok(Expr::Like(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
@@ -772,7 +777,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<char>,
+        escape_char: Option<String>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -781,6 +786,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
+        let escape_char = if let Some(char) = escape_char {
+            if char.len() != 1 {
+                return plan_err!("Invalid escape character in SIMILAR TO expression");
+            }
+            Some(char.chars().next().unwrap())
+        } else {
+            None
+        };
         Ok(Expr::SimilarTo(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
