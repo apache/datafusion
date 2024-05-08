@@ -662,7 +662,7 @@ impl ExprIdentifierVisitor<'_> {
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
     fn pop_enter_mark(&mut self) -> Option<usize> {
-        while let Some(item) = self.visit_stack.pop() {
+        if let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(idx) => {
                     return Some(idx);
