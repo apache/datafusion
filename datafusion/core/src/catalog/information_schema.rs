@@ -213,7 +213,7 @@ impl InformationSchemaConfig {
 
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
-    fn as_any(&self) -> &(dyn Any + 'static) {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
