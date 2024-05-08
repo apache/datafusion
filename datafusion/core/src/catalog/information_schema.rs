@@ -218,13 +218,10 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        vec![
-            TABLES.to_string(),
-            VIEWS.to_string(),
-            COLUMNS.to_string(),
-            DF_SETTINGS.to_string(),
-            SCHEMATA.to_string(),
-        ]
+        INFORMATION_SCHEMA_TABLES
+            .iter()
+            .map(|t| t.to_string())
+            .collect()
     }
 
     async fn table(
@@ -232,15 +229,15 @@ impl SchemaProvider for InformationSchemaProvider {
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         let config = self.config.clone();
-        let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
+        let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case(TABLES) {
             Arc::new(InformationSchemaTables::new(config))
-        } else if name.eq_ignore_ascii_case("columns") {
+        } else if name.eq_ignore_ascii_case(COLUMNS) {
             Arc::new(InformationSchemaColumns::new(config))
-        } else if name.eq_ignore_ascii_case("views") {
+        } else if name.eq_ignore_ascii_case(VIEWS) {
             Arc::new(InformationSchemaViews::new(config))
-        } else if name.eq_ignore_ascii_case("df_settings") {
+        } else if name.eq_ignore_ascii_case(DF_SETTINGS) {
             Arc::new(InformationSchemaDfSettings::new(config))
-        } else if name.eq_ignore_ascii_case("schemata") {
+        } else if name.eq_ignore_ascii_case(SCHEMATA) {
             Arc::new(InformationSchemata::new(config))
         } else {
             return Ok(None);
@@ -252,10 +249,7 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        matches!(
-            name.to_ascii_lowercase().as_str(),
-            TABLES | VIEWS | COLUMNS | SCHEMATA
-        )
+        INFORMATION_SCHEMA_TABLES.contains(&name)
     }
 }
 
