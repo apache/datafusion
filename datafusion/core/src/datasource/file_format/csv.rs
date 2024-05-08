@@ -819,7 +819,7 @@ mod tests {
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
-        hash_header: bool,
+        has_header: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let mut format = CsvFormat::default();
