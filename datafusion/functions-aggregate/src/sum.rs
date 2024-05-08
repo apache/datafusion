@@ -40,6 +40,7 @@ use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::Pri
 make_udaf_expr_and_func!(
     Sum,
     sum,
+    expression,
     "Returns the first value in a group of values.",
     sum_udaf
 );
@@ -67,24 +68,22 @@ macro_rules! downcast_sum {
 
 #[derive(Debug)]
 pub struct Sum {
-    pub is_distinct: bool,
     signature: Signature,
     aliases: Vec<String>,
 }
 
 impl Sum {
-    pub fn new(is_distinct: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
-            aliases: vec![],
-            is_distinct,
+            aliases: vec!["sum".to_string()],
         }
     }
 }
 
 impl Default for Sum {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
@@ -94,7 +93,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn name(&self) -> &str {
-        "sum"
+        "SUM"
     }
 
     fn signature(&self) -> &Signature {

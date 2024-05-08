@@ -76,6 +76,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<AggregateUDF>> = vec![
         first_last::first_value_udaf(),
         covariance::covar_samp_udaf(),
+        sum::sum_udaf(),
     ];
 
     functions.into_iter().try_for_each(|udf| {
