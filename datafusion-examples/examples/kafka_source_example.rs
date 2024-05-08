@@ -189,9 +189,11 @@ async fn main() {
     );
     let canonical_schema = Arc::new(Schema::new(fields));
     let _config = KafkaStreamConfig {
+        bootstrap_servers: String::from("localhost:19092,localhost:29092,localhost:39092"),
+        topic: String::from("accounts"),
+        consumer_group_id: String::from("my_test_consumer"),
         original_schema: Arc::new(inferred_schema),
         schema: canonical_schema,
-        topic: String::from("accounts"),
         batch_size: 10,
         encoding: StreamEncoding::Json,
         order: vec![],
@@ -243,18 +245,19 @@ async fn main() {
 
     let df2 = windowed_df.clone().explain(true, true);
     println!("{:?}", df2);
+
     let physical_plan: Arc<dyn ExecutionPlan> =
         windowed_df.clone().create_physical_plan().await.unwrap();
+
+    let display_visitor = DisplayableExecutionPlan::new(physical_plan.as_ref());
+    let graph = display_visitor.indent(true);
+    print!("{}", graph);
+
     let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
         windowed_df.execute_stream().await.unwrap();
 
-    let display_visitor = DisplayableExecutionPlan::new(physical_plan.as_ref());
-    let graph = display_visitor.graphviz();
 
-    print!("{}", graph);
-    let mut polls = 0;
-
-    loop {
+    for _ in 1..5 {
         let rb = stream.next().await.transpose();
         println!("{:?}", rb);
         println!("<<<<< window end >>>>>>");

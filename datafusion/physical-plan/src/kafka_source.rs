@@ -57,6 +57,8 @@ pub struct KafkaStreamConfig {
     pub partitions: i32,
     pub timestamp_column: String,
     pub timestamp_unit: TimestampUnit,
+    pub bootstrap_servers: String,
+    pub consumer_group_id: String,
     //constraints: Constraints,
 }
 
@@ -93,8 +95,8 @@ impl PartitionStream for KafkaStreamRead {
         info!("Reading partition {:?}", assigned_partitions);
         // Create Kafka consumer with rebalance callback
         let consumer: StreamConsumer = ClientConfig::new()
-            .set("group.id", "my_consumer_group") // Replace with your group ID
-            .set("bootstrap.servers", "localhost:9092") // Replace with your Kafka bootstrap servers
+            .set("group.id", self.config.consumer_group_id.to_string()) // Replace with your group ID
+            .set("bootstrap.servers", self.config.bootstrap_servers.to_string()) // Replace with your Kafka bootstrap servers
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
             .create()
             .expect("Consumer creation failed");
