@@ -244,7 +244,7 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        INFORMATION_SCHEMA_TABLES.contains(&name)
+        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
     }
 }
 
