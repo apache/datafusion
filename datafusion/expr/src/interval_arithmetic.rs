@@ -791,7 +791,7 @@ impl Interval {
     /// the origin in a number line. This operation swaps and negates the lower and upper bounds
     /// of the interval.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// arithmetic_negate((-1, 2)) = (-2, 1)
     ///

@@ -137,6 +137,7 @@ impl Neg for SortProperties {
     }
 }
 
+/// Represents the properties of a [`PhysicalExpr`], including its sorting and range attributes.
 #[derive(Debug, Clone)]
 pub struct ExprProperties {
     pub sort_properties: SortProperties,
@@ -144,6 +145,7 @@ pub struct ExprProperties {
 }
 
 impl ExprProperties {
+    /// Creates a new `ExprProperties` instance with unknown sort properties and unknown range.
     pub fn new_unknown() -> Self {
         Self {
             sort_properties: SortProperties::default(),
@@ -151,20 +153,25 @@ impl ExprProperties {
         }
     }
 
+    /// Sets the sorting properties of the expression and returns the modified instance.
     pub fn with_order(mut self, order: SortProperties) -> Self {
         self.sort_properties = order;
         self
     }
 
+    /// Sets the range of the expression and returns the modified instance.
     pub fn with_range(mut self, range: Interval) -> Self {
         self.range = range;
         self
     }
 }
 
+/// Represents a [`PhysicalExpr`] node with associated properties in a context where properties are tracked.
 pub type ExprPropertiesNode = ExprContext<ExprProperties>;
 
 impl ExprPropertiesNode {
+    /// Constructs a new `ExprPropertiesNode` with unknown properties for a given physical expression.
+    /// This node initializes with default properties and recursively applies this to all child expressions.
     pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
         let children = expr.children().into_iter().map(Self::new_unknown).collect();
         Self {

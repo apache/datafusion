@@ -163,7 +163,7 @@ impl PhysicalExpr for CastExpr {
         self.cast_options.hash(&mut s);
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child.
+    /// A [`CastExpr`] preserves the ordering of its child if the cast is done under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let source_datatype = children[0].range.data_type();
         let target_type = &self.cast_type;
@@ -171,6 +171,7 @@ impl PhysicalExpr for CastExpr {
         let unbounded = Interval::make_unbounded(target_type)?;
         if source_datatype.is_numeric() && target_type.is_numeric()
             || source_datatype.is_temporal() && target_type.is_temporal()
+            || source_datatype.eq(target_type)
         {
             Ok(children[0].clone().with_range(unbounded))
         } else {

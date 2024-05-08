@@ -55,49 +55,45 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
 /// that are ordered if the next entry is.
 /// Used in `collapse_lex_req`
 fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
-    input
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| {
-            let item = item.clone();
-            // If it's the last entry, there is no next entry
-            if i == input.len() - 1 {
-                return Some(item);
-            }
+    let mut result = Vec::with_capacity(input.len());
+    let mut i = 0;
+
+    while i < input.len() {
+        let current_expr = &input[i];
+
+        // Determine if current and next expressions can be collapsed
+        if i + 1 < input.len() {
             let next_expr = &input[i + 1];
-
-            // Only handle expressions with exactly one child
-            // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
-            // if f is monotonic in all arguments
-            if !(item.expr.children().len() == 1
-                && item.expr.children()[0].eq(&next_expr.expr))
+            // Check for a single child that matches the next expression
+            if current_expr.expr.children().len() == 1
+                && current_expr.expr.children()[0].eq(&next_expr.expr)
             {
-                return Some(item);
-            }
+                if let Some(next_opts) = next_expr.options {
+                    // Compare the properties based on the ordering of the next options
+                    let properties = current_expr
+                        .expr
+                        .get_properties(&[ExprProperties::new_unknown()
+                            .with_order(SortProperties::Ordered(next_opts))]);
 
-            let opts = match next_expr.options {
-                None => return Some(item),
-                Some(opts) => opts,
-            };
-
-            match item
-                .expr
-                .get_properties(&[ExprProperties::new_unknown()
-                    .with_order(SortProperties::Ordered(opts))])
-            {
-                Ok(prop)
-                    if item.options.map(SortProperties::Ordered)
-                        == Some(prop.sort_properties) =>
-                {
-                    {
-                        // Remove the redundant sort
-                        None
+                    if let Ok(prop) = properties {
+                        if current_expr.options.map(SortProperties::Ordered)
+                            == Some(prop.sort_properties)
+                        {
+                            // If the properties match, skip adding the current item to result as it's redundant
+                            i += 1;
+                            continue;
+                        }
                     }
                 }
-                _ => Some(item),
             }
-        })
-        .collect::<Vec<_>>()
+        }
+
+        // Add the current item to the result
+        result.push(current_expr.clone());
+        i += 1;
+    }
+
+    result
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is

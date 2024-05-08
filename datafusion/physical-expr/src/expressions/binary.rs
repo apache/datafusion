@@ -442,8 +442,8 @@ impl PhysicalExpr for BinaryExpr {
         self.hash(&mut s);
     }
 
-    /// For each operator, [`BinaryExpr`] has distinct ordering rules.
-    /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
+    /// For each operator, [`BinaryExpr`] has distinct rules.
+    /// TODO: There may be rules specific to some data types and expression range.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);

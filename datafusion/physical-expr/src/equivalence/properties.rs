@@ -653,7 +653,7 @@ impl EquivalenceProperties {
                 .into_iter()
                 .filter_map(|relevant_deps| {
                     if let Ok(SortProperties::Ordered(options)) =
-                        get_expr_properties(source, &relevant_deps, self.schema.clone())
+                        get_expr_properties(source, &relevant_deps, &self.schema)
                             .map(|prop| prop.sort_properties)
                     {
                         Some((options, relevant_deps))
@@ -861,11 +861,11 @@ impl EquivalenceProperties {
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
 
-    /// Retrieves the ordering information for a given physical expression.
+    /// Retrieves the properties for a given physical expression.
     ///
     /// This function constructs an [`ExprPropertiesNode`] object for the provided
     /// expression, which encapsulates information about the expression's
-    /// ordering, including its [`SortProperties`].
+    /// properties, including its [`SortProperties`] and [`Interval`].
     ///
     /// # Arguments
     ///
@@ -874,48 +874,55 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns an [`ExprProperties`] object containing the ordering information for
-    /// the given expression.
+    /// Returns an [`ExprProperties`] object containing the ordering and range
+    /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        let res = ExprPropertiesNode::new_unknown(expr.clone())
+        ExprPropertiesNode::new_unknown(expr.clone())
             .transform_up(|expr| update_ordering(expr, self))
             .data()
-            // Guaranteed to always return `Ok`.
-            .unwrap()
-            .data;
-        res
+            .map(|node| node.data)
+            .unwrap_or(ExprProperties::new_unknown())
     }
 }
 
-/// Calculates the [`ExprPropertiesNode`] of a given [`ExprPropertiesNode`].
-/// The node can either be a leaf node, or an intermediate node:
-/// - If it is a leaf node, we directly find the order of the node by looking
+/// Calculates the properties of a given [`ExprPropertiesNode`].
+///
+/// Order information can be retrieved as:
+/// 1) If it is a leaf node, we directly find the order of the node by looking
 /// at the given sort expression and equivalence properties if it is a `Column`
 /// leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
 /// it as singleton so that it can cooperate with all ordered columns.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+/// 2) If it is an intermediate node, the children states matter. Each `PhysicalExpr`
 /// and operator has its own rules on how to propagate the children orderings.
 /// However, before we engage in recursion, we check whether this intermediate
 /// node directly matches with the sort expression. If there is a match, the
 /// sort expression emerges at that node immediately, discarding the recursive
 /// result coming from its children.
+///
+/// Range information is calculated as:
+/// 1) If it is a `Literal` node, we set the range as a point value.
+/// If it is a `Column` node, we set the datatype of the range, but
+/// cannot limit an interval for the range, yet.
+/// 2) If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+/// and operator has its own rules on how to propagate the children range.
 fn update_ordering(
     mut node: ExprPropertiesNode,
     eq_properties: &EquivalenceProperties,
 ) -> Result<Transformed<ExprPropertiesNode>> {
-    // We have a Column, which is one of the two possible leaf node types:
-
+    // First, try to gather the information from the children:
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
         node.data = node.expr.get_properties(&children_props)?;
     } else if node.expr.as_any().is::<Literal>() {
-        // We have a Literal, which is the other possible leaf node type:
+        // We have a Literal, which is one of the two possible leaf node types:
         node.data = node.expr.get_properties(&[])?;
     } else if node.expr.as_any().is::<Column>() {
+        // We have a Column, which is the other possible leaf node type:
         node.data.range =
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
     }
+    // Now, check what we know about orderings:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.data.sort_properties = SortProperties::Singleton;
@@ -1095,8 +1102,9 @@ fn generate_dependency_orderings(
         .collect()
 }
 
-/// This function examines the given expression and the sort expressions it
-/// refers to determine the ordering properties of the expression.
+/// This function examines the given expression and its properties to determine
+/// the ordering properties of the expression. The range knowledge is not utilized
+/// yet in the scope of this function.
 ///
 /// # Parameters
 ///
@@ -1104,6 +1112,7 @@ fn generate_dependency_orderings(
 ///   which ordering properties need to be determined.
 /// - `dependencies`: A reference to `Dependencies`, containing sort expressions
 ///   referred to by `expr`.
+/// - `schema``: A reference to the schema which the `expr` columns refer.
 ///
 /// # Returns
 ///
@@ -1111,18 +1120,18 @@ fn generate_dependency_orderings(
 fn get_expr_properties(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
-    schema: SchemaRef,
+    schema: &SchemaRef,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
-            range: Interval::make_unbounded(&expr.data_type(&schema)?)?,
+            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
         })
     } else if expr.as_any().downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
-            range: Interval::make_unbounded(&expr.data_type(&schema)?)?,
+            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
         })
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
@@ -1134,7 +1143,7 @@ fn get_expr_properties(
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_properties(child, dependencies, schema.clone()))
+            .map(|child| get_expr_properties(child, dependencies, schema))
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)
