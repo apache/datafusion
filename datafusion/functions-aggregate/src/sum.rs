@@ -19,22 +19,23 @@
 
 use std::any::Any;
 
-use arrow::array::{ArrowNumericType, AsArray};
-use arrow::array::ArrowNativeTypeOp;
 use arrow::array::Array;
-use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use arrow::datatypes::{DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
+use arrow::array::ArrowNativeTypeOp;
+use arrow::array::{ArrowNumericType, AsArray};
 use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::{
+    DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::function::{
-    AccumulatorArgs, GroupsAccumulatorArgs, StateFieldsArgs,
-};
+use datafusion_expr::function::{AccumulatorArgs, GroupsAccumulatorArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility
+    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
+use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -57,7 +58,9 @@ macro_rules! downcast_sum {
             DataType::Float64 => $helper!(Float64Type, $args.data_type),
             DataType::Decimal128(_, _) => $helper!(Decimal128Type, $args.data_type),
             DataType::Decimal256(_, _) => $helper!(Decimal256Type, $args.data_type),
-            _ => not_impl_err!("Sum not supported for {}: {}", $args.name, $args.data_type),
+            _ => {
+                not_impl_err!("Sum not supported for {}: {}", $args.name, $args.data_type)
+            }
         }
     };
 }
@@ -134,11 +137,16 @@ impl AggregateUDFImpl for Sum {
         downcast_sum!(args, helper)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(
+        &self,
+        name: &str,
+        value_type: DataType,
+        _ordering_fields: Vec<Field>,
+    ) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(args.name, "sum"),
-            args.input_type,
-            args.nullable,
+            format_state_name(name, "sum"),
+            value_type,
+            true,
         )])
     }
 

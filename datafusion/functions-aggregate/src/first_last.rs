@@ -24,7 +24,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -148,14 +148,16 @@ impl AggregateUDFImpl for FirstValue {
 
     fn state_fields(
         &self,
-        args: StateFieldsArgs,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
-            format_state_name(args.name, "first_value"),
-            args.input_type,
+            format_state_name(name, "first_value"),
+            value_type,
             true,
         )];
-        fields.extend(args.ordering_fields);
+        fields.extend(ordering_fields);
         fields.push(Field::new("is_set", DataType::Boolean, true));
         Ok(fields)
     }

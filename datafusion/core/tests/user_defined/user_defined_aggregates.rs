@@ -45,8 +45,9 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
-    SimpleAggregateUDF,
+    create_udaf,
+    function::{AccumulatorArgs, GroupsAccumulatorArgs},
+    AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
 };
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -729,7 +730,10 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: GroupsAccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
     }
 }

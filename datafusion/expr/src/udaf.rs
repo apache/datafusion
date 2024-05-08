@@ -17,7 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::{AccumulatorArgs, GroupsAccumulatorArgs, StateFieldsArgs};
+use crate::function::{AccumulatorArgs, GroupsAccumulatorArgs};
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
@@ -179,9 +179,11 @@ impl AggregateUDF {
     /// This is used to support multi-phase aggregations
     pub fn state_fields(
         &self,
-        args: StateFieldsArgs,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
-        self.inner.state_fields(args)
+        self.inner.state_fields(name, value_type, ordering_fields)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -303,7 +305,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// # Arguments:
     /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `value_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
+    /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
+    /// it is equivalent to the data type of the first arguments
     /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
     ///     Empty if no ordering expression is provided.
     ///
@@ -323,15 +326,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// to generate a unique name.
     fn state_fields(
         &self,
-        args: StateFieldsArgs,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
-        let value_fields = vec![Field::new(
-            format_state_name(args.name, "value"),
-            args.input_type,
+        let mut fields = vec![Field::new(
+            format_state_name(name, "first_value"),
+            value_type,
             true,
         )];
-
-        Ok(value_fields.into_iter().chain(args.ordering_fields).collect())
+        fields.extend(ordering_fields);
+        fields.push(Field::new("is_set", DataType::Boolean, true));
+        Ok(fields)
     }
 
     /// If the aggregate expression has a specialized

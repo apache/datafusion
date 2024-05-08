@@ -19,7 +19,7 @@
 
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -37,36 +37,6 @@ pub type ScalarFunctionImplementation =
 /// Factory that returns the functions's return type given the input argument types
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
-
-
-/// `StateFieldsArgs` encapsulates details regarding the required state fields for an aggregate function.
-/// 
-/// - `name`: Name of the aggregate function.
-/// - `input_type`: Input type of the state fields.
-/// - `ordering_fields`: Fields utilized for functions sensitive to ordering.
-/// - `nullable`: Indicates whether the state fields can be null.
-pub struct StateFieldsArgs<'a> {
-    pub name: &'a str,
-    pub input_type: DataType,
-    pub ordering_fields: Vec<Field>,
-    pub nullable: bool,
-}
-
-impl<'a> StateFieldsArgs<'a> {
-    pub fn new(
-        name: &'a str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-        nullable: bool,
-    ) -> Self {
-        Self {
-            name,
-            input_type: value_type,
-            ordering_fields,
-            nullable,
-        }
-    }
-}
 
 pub struct GroupsAccumulatorArgs<'a> {
     /// The return type of the aggregate function.

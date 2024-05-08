@@ -19,9 +19,9 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::array::{Array, BooleanArray, PrimitiveArray, BooleanBufferBuilder};
+use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr::EmitTo;
 /// Track the accumulator null state per row: if any values for that
@@ -463,8 +463,8 @@ mod test {
     use super::*;
 
     use arrow::array::UInt32Array;
-    use std::collections::HashSet;
     use rand::{rngs::ThreadRng, Rng};
+    use std::collections::HashSet;
 
     #[test]
     fn accumulate() {

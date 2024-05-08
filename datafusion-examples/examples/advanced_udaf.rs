@@ -31,8 +31,8 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, AggregateUDFImpl,
-    GroupsAccumulator, Signature,
+    function::{AccumulatorArgs, GroupsAccumulatorArgs},
+    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
@@ -110,7 +110,10 @@ impl AggregateUDFImpl for GeoMeanUdaf {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: GroupsAccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(GeometricMeanGroupsAccumulator::new()))
     }
 }

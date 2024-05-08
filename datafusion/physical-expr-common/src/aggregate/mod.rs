@@ -21,7 +21,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::function::{GroupsAccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::function::GroupsAccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
@@ -187,14 +187,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        let args = StateFieldsArgs {
-            name: self.name(),
-            input_type: self.data_type.clone(),
-            ordering_fields: self.ordering_fields.clone(),
-            nullable: true,
-        };
-
-        self.fun.state_fields(args)
+        self.fun.state_fields(
+            &self.name,
+            self.data_type.clone(),
+            self.ordering_fields.to_vec(),
+        )
     }
 
     fn field(&self) -> Result<Field> {
@@ -207,7 +204,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
-            self.name(),
+            &self.name,
         );
 
         self.fun.accumulator(args)
@@ -219,7 +216,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
-            self.name(),
+            &self.name,
         );
 
         let accumulator = self.fun().create_sliding_accumulator(args)?;
