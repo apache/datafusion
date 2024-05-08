@@ -242,7 +242,7 @@ impl TableProvider for StreamTable {
         _state: &SessionState,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let projected_schema = match projection {
             Some(p) => {
@@ -258,6 +258,7 @@ impl TableProvider for StreamTable {
             projection,
             projected_schema,
             true,
+            limit,
         )?))
     }
 

@@ -191,7 +191,7 @@ impl LogicalPlan {
             LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
                 output_schema
             }
-            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
@@ -509,12 +509,12 @@ impl LogicalPlan {
                 table_schema,
                 op,
                 ..
-            }) => Ok(LogicalPlan::Dml(DmlStatement {
-                table_name: table_name.clone(),
-                table_schema: table_schema.clone(),
-                op: op.clone(),
-                input: Arc::new(inputs.swap_remove(0)),
-            })),
+            }) => Ok(LogicalPlan::Dml(DmlStatement::new(
+                table_name.clone(),
+                table_schema.clone(),
+                op.clone(),
+                Arc::new(inputs.swap_remove(0)),
+            ))),
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,

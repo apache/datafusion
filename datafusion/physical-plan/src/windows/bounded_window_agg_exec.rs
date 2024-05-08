@@ -1512,6 +1512,7 @@ mod tests {
             None,
             orderings,
             is_infinite,
+            None,
         )?) as _;
         Ok(source)
     }
