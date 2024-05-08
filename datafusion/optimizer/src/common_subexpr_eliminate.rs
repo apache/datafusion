@@ -347,7 +347,7 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
-                        let id = expr_identifier(&expr_rewritten, "".to_string());
+                        let id = expr_identifier(&expr_rewritten);
                         let (qualifier, field) =
                             expr_rewritten.to_field(&new_input_schema)?;
                         let out_name = qualified_name(qualifier.as_ref(), field.name());
@@ -643,24 +643,16 @@ enum VisitRecord {
     EnterMark(usize),
     /// the node's children were skipped => jump to f_up on same node
     JumpMark,
-    /// Accumulated identifier of sub expression.
-    ExprItem(Identifier),
 }
 
 impl ExprIdentifierVisitor<'_> {
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier)> {
-        let mut desc = String::new();
-
+    fn pop_enter_mark(&mut self) -> Option<usize> {
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(idx) => {
-                    return Some((idx, desc));
-                }
-                VisitRecord::ExprItem(id) => {
-                    desc.push('|');
-                    desc.push_str(&id);
+                    return Some(idx);
                 }
                 VisitRecord::JumpMark => return None,
             }
@@ -692,11 +684,11 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
-        let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
+        let Some(down_index) = self.pop_enter_mark() else {
             return Ok(TreeNodeRecursion::Continue);
         };
 
-        let expr_id = expr_identifier(expr, sub_expr_id);
+        let expr_id = expr_identifier(expr);
 
         self.id_array[down_index].0 = self.up_index;
         if !self.expr_mask.ignores(expr) {
@@ -711,15 +703,14 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
                 .or_insert((0, data_type));
             *count += 1;
         }
-        self.visit_stack.push(VisitRecord::ExprItem(expr_id));
         self.up_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
     }
 }
 
-fn expr_identifier(expr: &Expr, sub_expr_identifier: Identifier) -> Identifier {
-    format!("{{{expr}{sub_expr_identifier}}}")
+fn expr_identifier(expr: &Expr) -> Identifier {
+    format!("#{{{expr}}}")
 }
 
 /// Go through an expression tree and generate identifier for every node in this tree.
@@ -872,15 +863,15 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+            (8, "#{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)}"),
+            (6, "#{SUM(a + Int32(1)) - AVG(c)}"),
             (3, ""),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+            (2, "#{a + Int32(1)}"),
             (0, ""),
             (1, ""),
             (5, ""),
             (4, ""),
-            (7, "")
+            (7, ""),
         ]
         .into_iter()
         .map(|(number, id)| (number, id.into()))
@@ -898,15 +889,15 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
-            (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}"),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+            (8, "#{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)}"),
+            (6, "#{SUM(a + Int32(1)) - AVG(c)}"),
+            (3, "#{SUM(a + Int32(1))}"),
+            (2, "#{a + Int32(1)}"),
             (0, ""),
             (1, ""),
-            (5, "{AVG(c)|{c}}"),
+            (5, "#{AVG(c)}"),
             (4, ""),
-            (7, "")
+            (7, ""),
         ]
         .into_iter()
         .map(|(number, id)| (number, id.into()))
@@ -991,8 +982,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: #{AVG(test.a)} AS AVG(test.a) AS col1, #{AVG(test.a)} AS AVG(test.a) AS col2, col3, AVG(test.c) AS AVG(test.c), #{my_agg(test.a)} AS my_agg(test.a) AS col4, #{my_agg(test.a)} AS my_agg(test.a) AS col5, col6, my_agg(test.c) AS my_agg(test.c)\
-        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS #{AVG(test.a)}, my_agg(test.a) AS #{my_agg(test.a)}, AVG(test.b) AS col3, AVG(test.c) AS AVG(test.c), my_agg(test.b) AS col6, my_agg(test.c) AS my_agg(test.c)]]\
+        let expected = "Projection: #{AVG(test.a)} AS AVG(test.a) AS col1, #{AVG(test.a)} AS AVG(test.a) AS col2, col3, #{AVG(test.c)} AS AVG(test.c), #{my_agg(test.a)} AS my_agg(test.a) AS col4, #{my_agg(test.a)} AS my_agg(test.a) AS col5, col6, #{my_agg(test.c)} AS my_agg(test.c)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS #{AVG(test.a)}, my_agg(test.a) AS #{my_agg(test.a)}, AVG(test.b) AS col3, AVG(test.c) AS #{AVG(test.c)}, my_agg(test.b) AS col6, my_agg(test.c) AS #{my_agg(test.c)}]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
