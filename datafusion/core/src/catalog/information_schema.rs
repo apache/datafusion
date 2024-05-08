@@ -229,18 +229,13 @@ impl SchemaProvider for InformationSchemaProvider {
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         let config = self.config.clone();
-        let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case(TABLES) {
-            Arc::new(InformationSchemaTables::new(config))
-        } else if name.eq_ignore_ascii_case(COLUMNS) {
-            Arc::new(InformationSchemaColumns::new(config))
-        } else if name.eq_ignore_ascii_case(VIEWS) {
-            Arc::new(InformationSchemaViews::new(config))
-        } else if name.eq_ignore_ascii_case(DF_SETTINGS) {
-            Arc::new(InformationSchemaDfSettings::new(config))
-        } else if name.eq_ignore_ascii_case(SCHEMATA) {
-            Arc::new(InformationSchemata::new(config))
-        } else {
-            return Ok(None);
+        let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str() {
+            TABLES => Arc::new(InformationSchemaTables::new(config)),
+            COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
+            VIEWS => Arc::new(InformationSchemaViews::new(config)),
+            DF_SETTINGS => Arc::new(InformationSchemaDfSettings::new(config)),
+            SCHEMATA => Arc::new(InformationSchemata::new(config)),
+            _ => return Ok(None),
         };
 
         Ok(Some(Arc::new(
