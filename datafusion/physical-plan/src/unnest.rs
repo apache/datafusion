@@ -36,28 +36,34 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Int64Array, Scalar};
+use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, UnnestOptions};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, Result, UnnestListOptions, UnnestOptions,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
 use log::trace;
 
 /// Unnest the given columns by joining the row with each value in the
 /// nested type.
 ///
 /// See [`UnnestOptions`] for more details and an example.
+/// TODO: rename into UnnestListExec
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
     /// The schema once the unnest is applied
     schema: SchemaRef,
-    /// The unnest columns
-    columns: Vec<Column>,
+    /// The unnest list type columns
+    list_type_columns: Vec<Column>,
+    ///
+    struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
     /// Execution metrics
@@ -70,15 +76,20 @@ impl UnnestExec {
     /// Create a new [UnnestExec].
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        columns: Vec<Column>,
+        list_type_columns: Vec<Column>,
+        struct_type_columns: Vec<Column>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
         let cache = Self::compute_properties(&input, schema.clone());
+        let struct_column_indices: HashSet<_> =
+            struct_type_columns.iter().map(|column| column.index()).collect();
+
         UnnestExec {
             input,
             schema,
-            columns,
+            list_type_columns,
+            struct_column_indices,
             options,
             metrics: Default::default(),
             cache,
@@ -137,7 +148,8 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(UnnestExec::new(
             children[0].clone(),
-            self.columns.clone(),
+            self.list_type_columns.clone(),
+            self.struct_column_indices.clone(),
             self.schema.clone(),
             self.options.clone(),
         )))
@@ -158,7 +170,8 @@ impl ExecutionPlan for UnnestExec {
         Ok(Box::pin(UnnestStream {
             input,
             schema: self.schema.clone(),
-            columns: self.columns.clone(),
+            list_type_columns: self.list_type_columns.clone(),
+            struct_column_indices: self.struct_column_indices.clone(),
             options: self.options.clone(),
             metrics,
         }))
@@ -214,7 +227,9 @@ struct UnnestStream {
     /// Unnested schema
     schema: Arc<Schema>,
     /// The unnest columns
-    columns: Vec<Column>,
+    list_type_columns: Vec<Column>,
+    ///
+    struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
     /// Metrics
@@ -251,8 +266,13 @@ impl UnnestStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
-                    let result =
-                        build_batch(&batch, &self.schema, &self.columns, &self.options);
+                    let result = build_batch(
+                        &batch,
+                        &self.schema,
+                        &self.list_type_columns,
+                        &self.struct_column_indices,
+                        &self.options,
+                    );
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     if let Ok(ref batch) = result {
@@ -287,10 +307,12 @@ impl UnnestStream {
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    columns: &[Column],
+    // list type column only
+    list_type_columns: &[Column],
+    struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
-    let list_arrays: Vec<ArrayRef> = columns
+    let list_arrays: Vec<ArrayRef> = list_type_columns
         .iter()
         .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
         .collect::<Result<_>>()?;
@@ -311,16 +333,61 @@ fn build_batch(
     // Unnest all the list arrays
     let unnested_arrays =
         unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
+
     let unnested_array_map: HashMap<_, _> = unnested_arrays
         .into_iter()
-        .zip(columns.iter())
+        .zip(list_type_columns.iter())
         .map(|(array, column)| (column.index(), array))
         .collect();
 
     // Create the take indices array for other columns
     let take_indicies = create_take_indicies(unnested_length, total_length);
 
-    batch_from_indices(batch, schema, &unnested_array_map, &take_indicies)
+    // vertical expansion because of list unnest
+    let rows_expanded = batch_from_indices(batch, &unnested_array_map, &take_indicies)?;
+    // horizontal expansion because of struct unnest
+    let columns_expanded = rows_expanded
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, column_data)| match struct_column_indices.get(&idx) {
+            Some(_) => match column_data.data_type() {
+                DataType::Struct(fields) => {
+                    let struct_arr =
+                        column_data.as_any().downcast_ref::<StructArray>().unwrap();
+                    struct_arr.columns().to_vec()
+                }
+                other => exec_err!("Invalid unnest datatype {other}"),
+            },
+            None => {
+                vec![column_data.clone()]
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RecordBatch::try_new(schema.clone(), columns_expanded))
+}
+
+fn unnest_struct_arrays(
+    unnested_indices: HashSet<usize>,
+    input: &[ArrayRef],
+) -> Result<Vec<ArrayRef>> {
+    let unnested_arrays = input
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, column_data)| match unnested_indices.get(&idx) {
+            Some(_) => match column_data.data_type() {
+                DataType::Struct(fields) => {
+                    let struct_arr =
+                        column_data.as_any().downcast_ref::<StructArray>().unwrap();
+                    struct_arr.columns().to_vec()
+                }
+                other => exec_err!("Invalid unnest datatype {other }"),
+            },
+            None => {
+                vec![column_data.clone()]
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(unnested_arrays)
 }
 
 /// Find the longest list length among the given list arrays for each row.
@@ -570,10 +637,9 @@ fn create_take_indicies(
 ///
 fn batch_from_indices(
     batch: &RecordBatch,
-    schema: &SchemaRef,
     unnested_list_arrays: &HashMap<usize, ArrayRef>,
     indices: &PrimitiveArray<Int64Type>,
-) -> Result<RecordBatch> {
+) -> Result<Vec<Arc<dyn Array>>> {
     let arrays = batch
         .columns()
         .iter()
@@ -583,8 +649,7 @@ fn batch_from_indices(
             None => Ok(kernels::take::take(arr, indices, None)?),
         })
         .collect::<Result<Vec<_>>>()?;
-
-    Ok(RecordBatch::try_new(schema.clone(), arrays.to_vec())?)
+    return Ok(arrays);
 }
 
 #[cfg(test)]

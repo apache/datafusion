@@ -66,14 +66,6 @@ pub struct UnnestOptions {
     pub preserve_nulls: bool,
 }
 
-impl Default for UnnestOptions {
-    fn default() -> Self {
-        Self {
-            // default to true to maintain backwards compatible behavior
-            preserve_nulls: true,
-        }
-    }
-}
 
 impl UnnestOptions {
     /// Create a new [`UnnestOptions`] with default values

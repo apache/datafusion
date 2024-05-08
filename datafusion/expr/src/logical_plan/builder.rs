@@ -1545,7 +1545,7 @@ impl TableSource for LogicalTableSource {
 
 /// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
-    unnest_with_options(input, columns, UnnestOptions::new())
+    unnest_with_options(input, columns, UnnestOptions::default())
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
@@ -1555,39 +1555,59 @@ pub fn unnest_with_options(
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
     // Extract the type of the nested field in the list.
-    let mut unnested_fields: HashMap<usize, _> = HashMap::with_capacity(columns.len());
+    let mut unnested_fields_map: HashMap<usize, _> =
+        HashMap::with_capacity(columns.len());
     // Add qualifiers to the columns.
-    let mut qualified_columns = Vec::with_capacity(columns.len());
+    let mut qualified_list_columns = Vec::with_capacity(columns.len());
+    let mut qualified_struct_columns = Vec::with_capacity(columns.len());
     for c in &columns {
         let index = input.schema().index_of_column(c)?;
         let (unnest_qualifier, unnest_field) = input.schema().qualified_field(index);
-        let unnested_field = match unnest_field.data_type() {
+        match unnest_field.data_type() {
             DataType::List(field)
             | DataType::FixedSizeList(field, _)
-            | DataType::LargeList(field) => Arc::new(Field::new(
-                unnest_field.name(),
-                field.data_type().clone(),
-                // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnset([1], []) -> 1, null
-                true,
-            )),
+            | DataType::LargeList(field) => {
+                let unnest_field = Arc::new(Field::new(
+                    unnest_field.name(),
+                    field.data_type().clone(),
+                    // Unnesting may produce NULLs even if the list is not null.
+                    // For example: unnset([1], []) -> 1, null
+                    true,
+                ));
+                unnested_fields_map.insert(index, unnested_fields);
+                qualified_columns.extend(
+                    unnested_fields
+                        .iter()
+                        .map(|f| Column::from((unnest_qualifier, f))),
+                );
+            }
+            DataType::Struct(fields) => {
+                let unnested_fields = fields.tovec();
+                unnested_fields_map.insert(index, unnested_fields);
+                qualified_columns.extend(
+                    unnested_fields
+                        .iter()
+                        .map(|f| Column::from((unnest_qualifier, f))),
+                );
+            },
             _ => {
                 // If the unnest field is not a list type return the input plan.
                 return Ok(input);
             }
-        };
-        qualified_columns.push(Column::from((unnest_qualifier, &unnested_field)));
-        unnested_fields.insert(index, unnested_field);
+        }
     }
 
-    // Update the schema with the unnest column types changed to contain the nested types.
     let input_schema = input.schema();
+
     let fields = input_schema
         .iter()
         .enumerate()
-        .map(|(index, (q, f))| match unnested_fields.get(&index) {
-            Some(unnested_field) => (q.cloned(), unnested_field.clone()),
-            None => (q.cloned(), f.clone()),
+        .flat_map(|(index, (q, f))| match unnested_fields_map.get(&index) {
+            Some(unnested_fields) => unnested_fields
+                .iter()
+                .map(move |f| (q.cloned(), f.clone()))
+                .collect(),
+            None => vec![(q.cloned(), f.clone())],
         })
         .collect::<Vec<_>>();
 
@@ -1598,7 +1618,8 @@ pub fn unnest_with_options(
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
-        columns: qualified_columns,
+        list_type_columns: qualified_list_columns,
+        struct_type_columns: qualified_struct_columns,
         schema,
         options,
     }))

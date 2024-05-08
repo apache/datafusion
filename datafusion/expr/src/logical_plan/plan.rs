@@ -339,6 +339,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
+            // TODO: add here
             LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 static_term,
@@ -807,11 +808,15 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                columns, options, ..
+                list_type_columns,
+                struct_type_columns,
+                options,
+                ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                unnest_with_options(input, columns.clone(), options.clone())
+                list_type_columns.extend_from_slice(struct_type_columns);
+                unnest_with_options(input, list_type_columns.clone(), options.clone())
             }
         }
     }
@@ -1541,8 +1546,10 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { columns, .. }) => {
-                        write!(f, "Unnest: {}", expr_vec_fmt!(columns))
+                    LogicalPlan::Unnest(Unnest { 
+                        list_type_columns,
+                        struct_type_columns, .. }) => {
+                        write!(f, "Unnest: {}{}", expr_vec_fmt!(list_type_columns),expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }
@@ -2516,8 +2523,10 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The columns to unnest
-    pub columns: Vec<Column>,
+    /// The list columns to unnest
+    pub list_type_columns: Vec<Column>,
+    /// The struct columns to unnest
+    pub struct_type_columns: Vec<Column>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options
