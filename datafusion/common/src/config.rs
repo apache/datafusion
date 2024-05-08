@@ -1564,6 +1564,8 @@ config_namespace_with_hashmap! {
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
+        /// If the first line of the CSV is column names. 
+        /// If not specified, uses default from `CREATE TABLE` command, if any. 
         pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
