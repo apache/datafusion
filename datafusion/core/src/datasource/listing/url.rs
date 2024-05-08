@@ -472,9 +472,25 @@ mod tests {
         }
 
         test("https://a.b.c/path/", true, "path ends with / - collection");
-        test("https://a.b.c/path/?a=b", true, "path ends with / - with query args - collection");
-        test("https://a.b.c/path?a=b/", false, "path not ends with / - query ends with / - not collection");
-        test("https://a.b.c/path/#a=b", true, "path ends with / - with fragment - collection" );
-        test("https://a.b.c/path#a=b/", false, "path not ends with / - fragment ends with / - not collection");
+        test(
+            "https://a.b.c/path/?a=b",
+            true,
+            "path ends with / - with query args - collection",
+        );
+        test(
+            "https://a.b.c/path?a=b/",
+            false,
+            "path not ends with / - query ends with / - not collection",
+        );
+        test(
+            "https://a.b.c/path/#a=b",
+            true,
+            "path ends with / - with fragment - collection",
+        );
+        test(
+            "https://a.b.c/path#a=b/",
+            false,
+            "path not ends with / - fragment ends with / - not collection",
+        );
     }
 }
