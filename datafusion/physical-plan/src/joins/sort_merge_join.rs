@@ -824,7 +824,6 @@ impl SMJStream {
                             self.join_metrics.input_rows.add(batch.num_rows());
                             self.streamed_batch =
                                 StreamedBatch::new(batch, &self.on_streamed);
-
                             self.streamed_state = StreamedState::Ready;
                         }
                     }
@@ -993,7 +992,7 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::LeftSemi) {
                     join_streamed = !self.streamed_joined;
                     // if the join filter specified there can be references to buffered columns
-                    // so its needed to join them
+                    // so buffered columns are needed to access them
                     join_buffered = self.filter.is_some();
                 }
                 if matches!(
@@ -1142,12 +1141,11 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                     vec![]
                 } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                    self.buffered_data.batches[buffered_idx]
-                        .batch
-                        .columns()
-                        .iter()
-                        .map(|column| take(column, &buffered_indices, None))
-                        .collect::<Result<Vec<_>, ArrowError>>()?
+                    get_buffered_columns(
+                        &self.buffered_data,
+                        buffered_idx,
+                        &buffered_indices,
+                    )?
                 } else {
                     self.buffered_schema
                         .fields()
@@ -1165,13 +1163,13 @@ impl SMJStream {
                 if matches!(self.join_type, JoinType::Right) {
                     get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
                 } else if matches!(self.join_type, JoinType::LeftSemi) {
-                    let buffered_columns = self.buffered_data.batches
-                        [chunk.buffered_batch_idx.unwrap()]
-                    .batch
-                    .columns()
-                    .iter()
-                    .map(|column| take(column, &buffered_indices, None))
-                    .collect::<Result<Vec<_>, ArrowError>>()?;
+                    // unwrap is safe here as we check is_some on top of if statement
+                    let buffered_columns = get_buffered_columns(
+                        &self.buffered_data,
+                        chunk.buffered_batch_idx.unwrap(),
+                        &buffered_indices,
+                    )?;
+
                     get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
                 } else {
                     get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
@@ -1245,7 +1243,6 @@ impl SMJStream {
                     // Push the filtered batch to the output
                     let filtered_batch =
                         compute::filter_record_batch(&output_batch, mask)?;
-
                     self.output_record_batches.push(filtered_batch);
 
                     // For outer joins, we need to push the null joined rows to the output.
@@ -1409,6 +1406,21 @@ fn get_filter_column(
     }
 
     filter_columns
+}
+
+// Get buffered data sliece by specific batch index and for specified column indices only
+#[inline(always)]
+fn get_buffered_columns(
+    buffered_data: &BufferedData,
+    buffered_batch_idx: usize,
+    buffered_indices: &UInt64Array,
+) -> Result<Vec<ArrayRef>, ArrowError> {
+    buffered_data.batches[buffered_batch_idx]
+        .batch
+        .columns()
+        .iter()
+        .map(|column| take(column, &buffered_indices, None))
+        .collect::<Result<Vec<_>, ArrowError>>()
 }
 
 /// Buffered data contains all buffered batches with one unique join key

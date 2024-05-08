@@ -363,7 +363,6 @@ t1 as (
     select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
 ) order by 1, 2;
 
-# This gives a wrong result for now
 query II
 select * from (
 with
@@ -371,6 +370,23 @@ t1 as (
     select 11 a, 12 b union all
     select 11 a, 13 b),
 t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    )
+select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
     select 11 a, 12 b union all
     select 11 a, 14 b
     )
