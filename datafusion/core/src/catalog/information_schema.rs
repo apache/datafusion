@@ -107,26 +107,14 @@ impl InformationSchemaConfig {
             }
 
             // Add a final list for the information schema tables themselves
-            builder.add_table(&catalog_name, INFORMATION_SCHEMA, TABLES, TableType::View);
-            builder.add_table(&catalog_name, INFORMATION_SCHEMA, VIEWS, TableType::View);
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                COLUMNS,
-                TableType::View,
-            );
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                DF_SETTINGS,
-                TableType::View,
-            );
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                SCHEMATA,
-                TableType::View,
-            );
+            for table_name in INFORMATION_SCHEMA_TABLES {
+                builder.add_table(
+                    &catalog_name,
+                    INFORMATION_SCHEMA,
+                    table_name,
+                    TableType::View,
+                );
+            }
         }
 
         Ok(())
