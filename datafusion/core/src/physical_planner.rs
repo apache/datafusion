@@ -239,9 +239,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 }
             };
         }
-        Expr::ScalarFunction(fun) => {
-            create_function_physical_name(fun.name(), false, &fun.args, None)
-        }
+        Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -491,6 +489,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                 let plan = self
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
+
                 self.optimize_internal(plan, session_state, |_, _| {})
             }
         }
