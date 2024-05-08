@@ -70,11 +70,11 @@ impl OptimizerRule for FilterNullJoinKeys {
 
                 for (l, r) in &join.on {
                     if l.nullable(left_schema)? {
-                        left_filters.push(l.clone());
+                        left_filters.push(l);
                     }
 
                     if r.nullable(right_schema)? {
-                        right_filters.push(r.clone());
+                        right_filters.push(r);
                     }
                 }
 
@@ -100,10 +100,10 @@ impl OptimizerRule for FilterNullJoinKeys {
     }
 }
 
-fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
+fn create_not_null_predicate(filters: Vec<&Expr>) -> Expr {
     let not_null_exprs: Vec<Expr> = filters
         .into_iter()
-        .map(|c| Expr::IsNotNull(Box::new(c)))
+        .map(|c| c.clone().is_not_null())
         .collect();
 
     // directly unwrap since it should always have a value
