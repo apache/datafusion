@@ -236,10 +236,10 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';";
+            LOCATION '../core/tests/data/window_2.csv';
+            OPTIONS ('format.has_header' 'true')";
 
     let plan = ctx.state().create_logical_plan(query).await?;
 
@@ -266,10 +266,10 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';",
+            LOCATION '../core/tests/data/window_2.csv';
+            OPTIONS ('format.has_header' 'true')",
     )
     .await?;
 

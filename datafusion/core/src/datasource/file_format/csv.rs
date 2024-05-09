@@ -39,7 +39,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use datafusion_common::config::CsvOptions;
+use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
@@ -141,8 +141,8 @@ impl CsvFormat {
     }
 
     /// True if the first line is a header.
-    pub fn has_header(&self) -> bool {
-        self.options.has_header.unwrap_or(false)
+    pub fn has_header(&self, config_opt: &ConfigOptions) -> bool {
+        self.options.has_header(config_opt)
     }
 
     /// The character separating values within a row.
@@ -242,9 +242,9 @@ impl FileFormat for CsvFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
-            self.options
-                .has_header
-                .unwrap_or(state.config().options().catalog.has_header),
+            // If the condition of having header is not set by
+            // the format options, session state decides it.
+            self.options.has_header(state.config_options()),
             self.options.delimiter,
             self.options.quote,
             self.options.escape,
@@ -302,10 +302,7 @@ impl CsvFormat {
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
                 .with_header(
-                    self.options
-                        .has_header
-                        .unwrap_or(state.config_options().catalog.has_header)
-                        && first_chunk,
+                    self.options.has_header(state.config_options()) && first_chunk,
                 )
                 .with_delimiter(self.options.delimiter);
 
@@ -823,7 +820,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let mut format = CsvFormat::default();
-        format = format.with_has_header(hash_header);
+        format = format.with_has_header(has_header);
         scan_format(state, &format, &root, file_name, projection, limit).await
     }
 

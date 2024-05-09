@@ -35,8 +35,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE TABLE d_table (c1 decimal(10,3), c2 varchar)
@@ -116,8 +116,8 @@ c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test array_agg with order by multiple columns
 query ?
@@ -3846,11 +3846,11 @@ c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
 WITH ORDER (c2 DESC)
 WITH ORDER (c3 ASC)
-LOCATION '../core/tests/data/convert_first_last.csv';
+LOCATION '../core/tests/data/convert_first_last.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test first to last, the result does not show difference, we need to check the conversion by `explain`
 query TT

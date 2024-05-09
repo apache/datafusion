@@ -66,8 +66,8 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION 'test_files/scratch/parquet/test_table';
+LOCATION 'test_files/scratch/parquet/test_table'
+OPTIONS ('format.has_header' 'true');
 
 # Basic query:
 query ITID
@@ -107,9 +107,9 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
 WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
-LOCATION 'test_files/scratch/parquet/test_table';
+LOCATION 'test_files/scratch/parquet/test_table'
+OPTIONS ('format.has_header' 'true');
 
 # Check output plan, expect an "output_ordering" clause in the physical_plan -> ParquetExec:
 query TT
@@ -189,8 +189,8 @@ CREATE EXTERNAL TABLE alltypes_plain (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
+OPTIONS ('format.has_header' 'true')
 
 # Test a basic query with a CAST:
 query IT
@@ -214,8 +214,8 @@ DROP TABLE alltypes_plain;
 statement ok
 CREATE EXTERNAL TABLE test_binary
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../core/tests/data/test_binary.parquet';
+LOCATION '../core/tests/data/test_binary.parquet'
+OPTIONS ('format.has_header' 'true');
 
 # Check size of table:
 query I
@@ -247,8 +247,8 @@ DROP TABLE test_binary;
 statement ok
 CREATE EXTERNAL TABLE timestamp_with_tz
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../core/tests/data/timestamp_with_tz.parquet';
+LOCATION '../core/tests/data/timestamp_with_tz.parquet'
+OPTIONS ('format.has_header' 'true');
 
 # Check size of table:
 query I
@@ -288,8 +288,8 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE listing_table
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
+LOCATION 'test_files/scratch/parquet/test_table/*.parquet'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 set datafusion.execution.listing_table_ignore_subdirectory = true;
@@ -317,8 +317,8 @@ DROP TABLE timestamp_with_tz;
 statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/single_nan.parquet';
+LOCATION '../../parquet-testing/data/single_nan.parquet'
+OPTIONS ('format.has_header' 'true');
 
 # Check table size:
 query I
@@ -339,8 +339,8 @@ DROP TABLE single_nan;
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/list_columns.parquet';
+LOCATION '../../parquet-testing/data/list_columns.parquet'
+OPTIONS ('format.has_header' 'true');
 
 query ??
 SELECT int64_list, utf8_list FROM list_columns

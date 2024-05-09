@@ -21,19 +21,19 @@ CREATE EXTERNAL TABLE csv_with_quote (
 c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/quote.csv'
 OPTIONS ('format.quote' '~',
-         'format.delimiter' ',');
+         'format.delimiter' ',',
+         'format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE csv_with_escape (
 c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
-WITH HEADER ROW
 OPTIONS ('format.escape' '\',
-         'format.delimiter' ',')
+         'format.delimiter' ',',
+         'format.has_header' 'true')
 LOCATION '../core/tests/data/escape.csv';
 
 query TT
@@ -69,9 +69,9 @@ CREATE EXTERNAL TABLE csv_with_escape_2 (
 c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
-WITH HEADER ROW
 OPTIONS ('format.escape' '"',
-        'format.delimiter' ',')
+        'format.delimiter' ',',
+        'format.has_header' 'true')
 LOCATION '../core/tests/data/escape.csv';
 
 # TODO: Validate this with better data.

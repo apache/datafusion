@@ -189,8 +189,6 @@ pub struct CreateExternalTable {
     pub location: String,
     /// The file type of physical file
     pub file_type: String,
-    /// Whether the CSV file contains a header
-    pub has_header: bool,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
@@ -216,7 +214,6 @@ impl Hash for CreateExternalTable {
         self.name.hash(state);
         self.location.hash(state);
         self.file_type.hash(state);
-        self.has_header.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
         self.definition.hash(state);

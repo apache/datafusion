@@ -1564,9 +1564,9 @@ config_namespace_with_hashmap! {
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
-        /// If the first line of the CSV is column names. 
-        /// If not specified, uses default from `CREATE TABLE` command, if any. 
-        pub has_header: Option<bool>, default = None
+        /// If the first line of the CSV is column names.
+        /// If not specified, uses default from `CREATE TABLE` command, if any.
+        pub has_header: Option<bool>, default =None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
@@ -1606,9 +1606,10 @@ impl CsvOptions {
         self
     }
 
-    /// True if the first line is a header.
-    pub fn has_header(&self) -> bool {
-        self.has_header.unwrap_or(false)
+    /// True if the first line is a header. If the condition of having header
+    /// is not set by the format options, session state decides it.
+    pub fn has_header(&self, config_opt: &ConfigOptions) -> bool {
+        self.has_header.unwrap_or(config_opt.catalog.has_header)
     }
 
     /// The character separating values within a row.

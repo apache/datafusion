@@ -1560,7 +1560,6 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options().catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1578,14 +1577,8 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema = ListingSchemaProvider::new(
-            authority,
-            path,
-            factory.clone(),
-            store,
-            format,
-            has_header,
-        );
+        let schema =
+            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");

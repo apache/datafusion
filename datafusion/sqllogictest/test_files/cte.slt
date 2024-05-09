@@ -126,11 +126,11 @@ physical_plan
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE balance STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/balance.csv'
+CREATE EXTERNAL TABLE balance STORED as CSV LOCATION '../core/tests/data/recursive_cte/balance.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE growth STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/growth.csv'
+CREATE EXTERNAL TABLE growth STORED as CSV LOCATION '../core/tests/data/recursive_cte/growth.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
@@ -407,7 +407,7 @@ FROM
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE prices STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/prices.csv'
+CREATE EXTERNAL TABLE prices STORED as CSV LOCATION '../core/tests/data/recursive_cte/prices.csv' OPTIONS ('format.has_header' 'true');
 
 # CTE within window function inside nested CTE works. This test demonstrates using a nested window function to recursively iterate over a column.
 query RRII
@@ -598,11 +598,11 @@ ORDER BY
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE sales STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/sales.csv'
+CREATE EXTERNAL TABLE sales STORED as CSV LOCATION '../core/tests/data/recursive_cte/sales.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE salespersons STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/salespersons.csv'
+CREATE EXTERNAL TABLE salespersons STORED as CSV LOCATION '../core/tests/data/recursive_cte/salespersons.csv' OPTIONS ('format.has_header' 'true');
 
 
 # group by works within recursive cte. This test case demonstrates rolling up a hierarchy of salespeople to their managers.

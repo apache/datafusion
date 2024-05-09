@@ -31,8 +31,8 @@ CREATE EXTERNAL TABLE alltypes_plain (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_snappy (
@@ -49,8 +49,8 @@ CREATE EXTERNAL TABLE alltypes_plain_snappy (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.snappy.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
@@ -67,8 +67,8 @@ CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.bzip2.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_xz (
@@ -85,8 +85,8 @@ CREATE EXTERNAL TABLE alltypes_plain_xz (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.xz.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_zstandard (
@@ -103,34 +103,34 @@ CREATE EXTERNAL TABLE alltypes_plain_zstandard (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE single_nan (
   mycol FLOAT
 )
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/single_nan.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE nested_records
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/nested_records.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE simple_enum
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/simple_enum.avro'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE simple_fixed
 STORED AS AVRO
-WITH HEADER ROW
 LOCATION '../../testing/data/avro/simple_fixed.avro'
+OPTIONS ('format.has_header' 'true');
 
 # test avro query
 query IT

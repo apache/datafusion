@@ -57,7 +57,6 @@ pub struct ListingSchemaProvider {
     store: Arc<dyn ObjectStore>,
     tables: Arc<Mutex<HashMap<String, Arc<dyn TableProvider>>>>,
     format: String,
-    has_header: bool,
 }
 
 impl ListingSchemaProvider {
@@ -76,7 +75,6 @@ impl ListingSchemaProvider {
         factory: Arc<dyn TableProviderFactory>,
         store: Arc<dyn ObjectStore>,
         format: String,
-        has_header: bool,
     ) -> Self {
         Self {
             authority,
@@ -85,7 +83,6 @@ impl ListingSchemaProvider {
             store,
             tables: Arc::new(Mutex::new(HashMap::new())),
             format,
-            has_header,
         }
     }
 
@@ -138,7 +135,6 @@ impl ListingSchemaProvider {
                             name,
                             location: table_url,
                             file_type: self.format.clone(),
-                            has_header: self.has_header,
                             table_partition_cols: vec![],
                             if_not_exists: false,
                             definition: None,

@@ -201,19 +201,18 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  TableReference name = 10;
+  TableReference name = 9;
   string location = 2;
   string file_type = 3;
-  bool has_header = 4;
-  DfSchema schema = 5;
-  repeated string table_partition_cols = 6;
-  bool if_not_exists = 7;
-  string definition = 8;
-  repeated LogicalExprNodeCollection order_exprs = 11;
-  bool unbounded = 12;
-  map<string, string> options = 9;
-  Constraints constraints = 13;
-  map<string, LogicalExprNode> column_defaults = 14;
+  DfSchema schema = 4;
+  repeated string table_partition_cols = 5;
+  bool if_not_exists = 6;
+  string definition = 7;
+  repeated LogicalExprNodeCollection order_exprs = 10;
+  bool unbounded = 11;
+  map<string, string> options = 8;
+  Constraints constraints = 12;
+  map<string, LogicalExprNode> column_defaults = 13;
  }
 
 message PrepareNode {

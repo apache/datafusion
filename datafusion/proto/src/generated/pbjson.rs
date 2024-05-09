@@ -4676,9 +4676,6 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_type.is_empty() {
             len += 1;
         }
-        if self.has_header {
-            len += 1;
-        }
         if self.schema.is_some() {
             len += 1;
         }
@@ -4715,9 +4712,6 @@ impl serde::Serialize for CreateExternalTableNode {
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
-        }
-        if self.has_header {
-            struct_ser.serialize_field("hasHeader", &self.has_header)?;
         }
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
@@ -4760,8 +4754,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "location",
             "file_type",
             "fileType",
-            "has_header",
-            "hasHeader",
             "schema",
             "table_partition_cols",
             "tablePartitionCols",
@@ -4782,7 +4774,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Name,
             Location,
             FileType,
-            HasHeader,
             Schema,
             TablePartitionCols,
             IfNotExists,
@@ -4816,7 +4807,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "name" => Ok(GeneratedField::Name),
                             "location" => Ok(GeneratedField::Location),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
-                            "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
@@ -4848,7 +4838,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut name__ = None;
                 let mut location__ = None;
                 let mut file_type__ = None;
-                let mut has_header__ = None;
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut if_not_exists__ = None;
@@ -4877,12 +4866,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("fileType"));
                             }
                             file_type__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::HasHeader => {
-                            if has_header__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("hasHeader"));
-                            }
-                            has_header__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
@@ -4948,7 +4931,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     name: name__,
                     location: location__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
-                    has_header: has_header__.unwrap_or_default(),
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     if_not_exists: if_not_exists__.unwrap_or_default(),

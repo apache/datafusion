@@ -548,7 +548,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )?,
                         location: create_extern_table.location.clone(),
                         file_type: create_extern_table.file_type.clone(),
-                        has_header: create_extern_table.has_header,
                         table_partition_cols: create_extern_table
                             .table_partition_cols
                             .clone(),
@@ -1318,7 +1317,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     name,
                     location,
                     file_type,
-                    has_header,
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
@@ -1354,7 +1352,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: Some(name.clone().into()),
                             location: location.clone(),
                             file_type: file_type.clone(),
-                            has_header: *has_header,
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,

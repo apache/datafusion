@@ -34,7 +34,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -66,15 +66,7 @@ impl TableProviderFactory for ListingTableFactory {
         let file_extension = get_extension(cmd.location.as_str());
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {
-                let mut csv_options = table_options.csv;
-                if let Some(has_header) = csv_options.has_header {
-                    if cmd.has_header && !has_header {
-                        return plan_err!("Conflicting header options for CSV file");
-                    }
-                } else {
-                    csv_options.has_header = Some(cmd.has_header);
-                }
-                Arc::new(CsvFormat::default().with_options(csv_options))
+                Arc::new(CsvFormat::default().with_options(table_options.csv))
             }
             #[cfg(feature = "parquet")]
             FileType::PARQUET => {
@@ -192,14 +184,13 @@ mod tests {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),
             file_type: "csv".to_string(),
-            has_header: true,
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
-            options: HashMap::new(),
+            options: HashMap::from([("format.has_header".into(), "true".into())]),
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
         };
@@ -231,14 +222,13 @@ mod tests {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),
             file_type: "csv".to_string(),
-            has_header: true,
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
-            options,
+            options: HashMap::from([("format.has_header".into(), "true".into())]),
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
         };

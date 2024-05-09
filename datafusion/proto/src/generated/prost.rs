@@ -320,34 +320,32 @@ pub struct Constraints {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
-    #[prost(bool, tag = "4")]
-    pub has_header: bool,
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<DfSchema>,
-    #[prost(string, repeated, tag = "6")]
+    #[prost(string, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
-    #[prost(string, tag = "8")]
+    #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "11")]
+    #[prost(message, repeated, tag = "10")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
-    #[prost(bool, tag = "12")]
+    #[prost(bool, tag = "11")]
     pub unbounded: bool,
-    #[prost(map = "string, string", tag = "9")]
+    #[prost(map = "string, string", tag = "8")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(message, optional, tag = "13")]
+    #[prost(message, optional, tag = "12")]
     pub constraints: ::core::option::Option<Constraints>,
-    #[prost(map = "string, message", tag = "14")]
+    #[prost(map = "string, message", tag = "13")]
     pub column_defaults: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         LogicalExprNode,

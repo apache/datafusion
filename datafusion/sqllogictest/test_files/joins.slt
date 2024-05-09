@@ -3162,9 +3162,9 @@ CREATE EXTERNAL TABLE annotated_data (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC NULLS FIRST, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # sort merge join should propagate ordering equivalence of the left side
 # for inner join. Hence final requirement rn1 ASC is already satisfied at
@@ -3379,10 +3379,10 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT LAST_VALUE(l.d ORDER BY l.a) AS amount_usd

@@ -62,7 +62,6 @@ impl TableProviderFactory for StreamTableFactory {
         let config = StreamConfig::new_file(schema, location.into())
             .with_encoding(encoding)
             .with_order(cmd.order_exprs.clone())
-            .with_header(cmd.has_header)
             .with_batch_size(state.config().batch_size())
             .with_constraints(cmd.constraints.clone());
 

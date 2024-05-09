@@ -68,18 +68,6 @@ CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
 statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
 
-# Duplicate `WITH HEADER ROW` clause
-statement error DataFusion error: SQL error: ParserError\("WITH HEADER ROW specified more than once"\)
-CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER ROW WITH HEADER ROW LOCATION 'foo.csv'
-
-# Duplicate `DELIMITER` clause
-statement error DataFusion error: SQL error: ParserError\("DELIMITER specified more than once"\)
-CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '-' DELIMITER '+' LOCATION 'foo.csv'
-
-# Duplicate `COMPRESSION TYPE` clause
-statement error DataFusion error: SQL error: ParserError\("COMPRESSION TYPE specified more than once"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE BZIP2 COMPRESSION TYPE XZ COMPRESSION TYPE ZSTD COMPRESSION TYPE GZIP LOCATION 'foo.csv'
-
 # Duplicate `PARTITIONED BY` clause
 statement error DataFusion error: SQL error: ParserError\("PARTITIONED BY specified more than once"\)
 create EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV PARTITIONED BY (c1) partitioned by (c2) LOCATION 'foo.csv'
