@@ -1426,12 +1426,12 @@ query TT
 EXPLAIN SELECT x/2, x/2+1 FROM t;
 ----
 logical_plan
-01)Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
-02)--Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
+01)Projection: #{t.x / Int64(2)} AS t.x / Int64(2), #{t.x / Int64(2)} AS t.x / Int64(2) + Int64(1)
+02)--Projection: t.x / Int64(2) AS #{t.x / Int64(2)}
 03)----TableScan: t projection=[x]
 physical_plan
-01)ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
-02)--ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
+01)ProjectionExec: expr=[#{t.x / Int64(2)}@0 as t.x / Int64(2), #{t.x / Int64(2)}@0 + 1 as t.x / Int64(2) + Int64(1)]
+02)--ProjectionExec: expr=[x@0 / 2 as #{t.x / Int64(2)}]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1444,12 +1444,12 @@ query TT
 EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
 ----
 logical_plan
-01)Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
-02)--Projection: abs(t.x) AS abs(t.x)t.x, t.y
+01)Projection: #{abs(t.x)} AS abs(t.x), #{abs(t.x)} AS abs(t.x) + abs(t.y)
+02)--Projection: abs(t.x) AS #{abs(t.x)}, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
-02)--ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
+01)ProjectionExec: expr=[#{abs(t.x)}@0 as abs(t.x), #{abs(t.x)}@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+02)--ProjectionExec: expr=[abs(x@0) as #{abs(t.x)}, y@1 as y]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1610,6 +1610,14 @@ select * from v;
 
 query I
 select count(1) from v;
+----
+1
+
+# Ensure CSE resolves columns correctly
+# should be 3, not 1
+# https://github.com/apache/datafusion/issues/10413
+query I
+select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 ----
 1
 

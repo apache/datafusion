@@ -49,6 +49,12 @@ SELECT * from information_schema.schemata;
 ----
 datafusion public NULL NULL NULL NULL NULL
 
+# Table name case insensitive
+query T rowsort
+SELECT catalog_name from information_schema.SchEmaTa;
+----
+datafusion
+
 # Disable information_schema and verify it now errors again
 statement ok
 set datafusion.catalog.information_schema = false
