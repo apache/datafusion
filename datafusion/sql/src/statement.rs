@@ -849,7 +849,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let options = statement.options;
+        let mut options = HashMap::new();
+        for (key, value) in statement.options {
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!("Unsupported Value in COPY statement {}", value);
+                }
+            };
+            if !(&key.contains('.')) {
+                // If config does not belong to any namespace, assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+
+                let renamed_key = format!("format.{}", key);
+                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+            } else {
+                options.insert(key.to_lowercase(), value_string.to_lowercase());
+            }
+        }
 
         let file_type = if let Some(file_type) = statement.stored_as {
             FileType::from_str(&file_type).map_err(|_| {

@@ -40,7 +40,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use datafusion_common::config::CsvOptions;
+use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
@@ -142,8 +142,8 @@ impl CsvFormat {
     }
 
     /// True if the first line is a header.
-    pub fn has_header(&self) -> Option<bool> {
-        self.options.has_header
+    pub fn has_header(&self, config_opt: &ConfigOptions) -> bool {
+        self.options.has_header(config_opt)
     }
 
     /// The character separating values within a row.
@@ -245,9 +245,7 @@ impl FileFormat for CsvFormat {
             conf,
             // If format options does not specify whether there is a header,
             // we consult configuration options.
-            self.options
-                .has_header
-                .unwrap_or(state.config_options().catalog.has_header),
+            self.options.has_header(state.config_options()),
             self.options.delimiter,
             self.options.quote,
             self.options.escape,
@@ -305,10 +303,7 @@ impl CsvFormat {
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
                 .with_header(
-                    self.options
-                        .has_header
-                        .unwrap_or(state.config_options().catalog.has_header)
-                        && first_chunk,
+                    self.options.has_header(state.config_options()) && first_chunk,
                 )
                 .with_delimiter(self.options.delimiter);
 
