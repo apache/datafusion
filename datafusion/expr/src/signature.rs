@@ -386,7 +386,7 @@ impl FuncMonotonicity {
         match (self, other) {
             (FuncMonotonicity::None, FuncMonotonicity::Mixed(inner_vec))
             | (FuncMonotonicity::Mixed(inner_vec), FuncMonotonicity::None) => {
-                inner_vec.iter().all(|&x| x == None)
+                inner_vec.iter().all(|&x| x.is_none())
             }
             (FuncMonotonicity::Increasing, FuncMonotonicity::Mixed(inner_vec))
             | (FuncMonotonicity::Mixed(inner_vec), FuncMonotonicity::Increasing) => {
