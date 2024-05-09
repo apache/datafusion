@@ -39,8 +39,6 @@ use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::expressions;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-use sqlparser::ast::NullTreatment;
-
 make_udaf_expr_and_func!(
     FirstValue,
     first_value,
@@ -87,8 +85,7 @@ impl FirstValue {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        // self.requirement_satisfied = requirement_satisfied;
-        self.requirement_satisfied = false;
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 }
@@ -749,7 +746,7 @@ impl Accumulator for FirstValueAccumulator {
 //     }
 // }
 
-make_udaf_function!(
+make_udaf_expr_and_func!(
     LastValue,
     last_value,
     "Returns the last value in a group of values.",
@@ -795,8 +792,7 @@ impl LastValue {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        // self.requirement_satisfied = requirement_satisfied;
-        self.requirement_satisfied = false;
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 }
@@ -1104,30 +1100,30 @@ fn convert_to_sort_cols(
         .collect::<Vec<_>>()
 }
 
-fn replace_order_by_clause(order_by: &mut String) {
-    let suffixes = [
-        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
-        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
-        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
-        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
-    ];
-
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
-
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for &(suffix, replacement) in &suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
-            }
-        }
-    }
-}
+// fn replace_order_by_clause(order_by: &mut String) {
+//     let suffixes = [
+//         (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+//         (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+//         (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+//         (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+//     ];
+//
+//     if let Some(start) = order_by.find("ORDER BY [") {
+//         if let Some(end) = order_by[start..].find(']') {
+//             let order_by_start = start + 9;
+//             let order_by_end = start + end;
+//
+//             let column_order = &order_by[order_by_start..=order_by_end];
+//             for &(suffix, replacement) in &suffixes {
+//                 if column_order.ends_with(suffix) {
+//                     let new_order = column_order.replace(suffix, replacement);
+//                     order_by.replace_range(order_by_start..=order_by_end, &new_order);
+//                     break;
+//                 }
+//             }
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

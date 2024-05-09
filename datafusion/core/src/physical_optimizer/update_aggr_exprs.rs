@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 let input = aggr_exec.input();
                 let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
 
-                let groupby_exprs = aggr_exec.group_by().input_exprs();
+                let groupby_exprs = aggr_exec.group_expr().input_exprs();
                 // If the existing ordering satisfies a prefix of the GROUP BY
                 // expressions, prefix requirements with this section. In this
                 // case, aggregation will work more efficiently.

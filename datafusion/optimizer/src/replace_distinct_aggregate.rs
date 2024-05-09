@@ -23,7 +23,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{col, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
-use datafusion_functions_aggregate::expr_fn::first_value;
+use datafusion_functions_aggregate::first_last::first_value;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
