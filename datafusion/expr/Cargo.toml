@@ -33,6 +33,8 @@ name = "datafusion_expr"
 path = "src/lib.rs"
 
 [features]
+default = ["franz"]
+franz = []
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = [

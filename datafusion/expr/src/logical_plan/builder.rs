@@ -99,7 +99,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// ```
 #[derive(Debug, Clone)]
 pub struct LogicalPlanBuilder {
-    plan: LogicalPlan,
+    pub plan: LogicalPlan,
 }
 
 impl LogicalPlanBuilder {
@@ -924,18 +924,20 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply franz window functions to extend the schema
-    pub fn franz_window(
-        self,
-        window_expr: impl IntoIterator<Item = impl Into<Expr>>,
-        window_length: Duration,
-    ) -> Result<Self> {
-        let window_expr = normalize_cols(window_expr, &self.plan)?;
-        validate_unique_names("Windows", &window_expr)?;
-        Ok(Self::from(LogicalPlan::Window(Window::try_new(
-            window_expr,
-            Arc::new(self.plan),
-        )?)))
-    }
+    // #[cfg(feature = "franz")]
+    // pub fn franz_window(
+    //     self,
+    //     window_expr: impl IntoIterator<Item = impl Into<Expr>>,
+    //     window_length: Duration,
+    // ) -> Result<Self> {
+    //     let window_expr = normalize_cols(window_expr, &self.plan)?;
+    //     validate_unique_names("Windows", &window_expr)?;
+    //     Ok(Self::from(LogicalPlan::Window(Window::try_new(
+    //         window_expr,
+    //         Arc::new(self.plan),
+    //     )?)))
+    // }
+
     /// Apply an aggregate: grouping on the `group_expr` expressions
     /// and calculating `aggr_expr` aggregates for each distinct
     /// value of the `group_expr`;

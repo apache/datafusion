@@ -28,6 +28,10 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[features]
+default = ["franz"]
+franz = []
+
 [lib]
 name = "datafusion_physical_plan"
 path = "src/lib.rs"
