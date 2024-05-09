@@ -198,6 +198,61 @@ impl EquivalenceProperties {
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
     ) {
+        // Discover new constants in the light of new ordering
+        if self.is_expr_constant(left) {
+            // Left expression is constant, add right as constant
+            if !physical_exprs_contains(&self.constants, right) {
+                self.constants.push(right.clone());
+            }
+        } else if self.is_expr_constant(right) {
+            // Right expression is constant, add left as constant
+            if !physical_exprs_contains(&self.constants, left) {
+                self.constants.push(left.clone());
+            }
+        }
+
+        // Discover new valid orderings in the light of new equality
+        // See issue: https://github.com/apache/datafusion/issues/9812 for rationale
+        let mut new_orderings = vec![];
+        for ordering in self.normalized_oeq_class().iter() {
+            let expressions = if left.eq(&ordering[0].expr) {
+                // left expression is leading ordering
+                Some((ordering[0].options, right))
+            } else if right.eq(&ordering[0].expr) {
+                // right expression is leading ordering
+                Some((ordering[0].options, left))
+            } else {
+                None
+            };
+            if let Some((leading_ordering, other_expr)) = expressions {
+                // Only handle expressions with exactly one child
+                // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
+                // if f is monotonic in all arguments
+                // First Expression after leading ordering
+                if let Some(next_expr) = ordering.get(1) {
+                    let children = other_expr.children();
+                    if children.len() == 1
+                        && children[0].eq(&next_expr.expr)
+                        && SortProperties::Ordered(leading_ordering)
+                            == other_expr.get_ordering(&[SortProperties::Ordered(
+                                next_expr.options,
+                            )])
+                    {
+                        // Assume existing ordering is [a ASC, b ASC]
+                        // When equality a = f(b) is given, If we know that given ordering `[b ASC]`, ordering `[f(b) ASC]` is valid,
+                        // then we can deduce that ordering `[b ASC]` is also valid.
+                        // Hence, ordering `[b ASC]` can be added to the state as valid ordering.
+                        // (e.g. existing ordering where leading ordering is removed)
+                        new_orderings.push(ordering[1..].to_vec());
+                    }
+                }
+            }
+        }
+        if !new_orderings.is_empty() {
+            self.oeq_class.add_new_orderings(new_orderings);
+        }
+
+        // Add equal expressions to the state
         self.eq_group.add_equal_conditions(left, right);
     }
 
