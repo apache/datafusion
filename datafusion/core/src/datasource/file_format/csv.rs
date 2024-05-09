@@ -32,8 +32,9 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
-use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use crate::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream, Statistics,
+};
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
@@ -242,8 +243,8 @@ impl FileFormat for CsvFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
-            // If the condition of having header is not set by
-            // the format options, session state decides it.
+            // If format options does not specify whether there is a header,
+            // we consult configuration options.
             self.options.has_header(state.config_options()),
             self.options.delimiter,
             self.options.quote,
@@ -819,8 +820,7 @@ mod tests {
         has_header: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
-        let mut format = CsvFormat::default();
-        format = format.with_has_header(has_header);
+        let format = CsvFormat::default().with_has_header(has_header);
         scan_format(state, &format, &root, file_name, projection, limit).await
     }
 

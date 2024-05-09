@@ -20,25 +20,20 @@
 
 use std::borrow::Cow;
 
+use crate::highlighter::{NoSyntaxHighlighter, SyntaxHighlighter};
+
 use datafusion::common::sql_datafusion_err;
 use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
-use rustyline::completion::Completer;
-use rustyline::completion::FilenameCompleter;
-use rustyline::completion::Pair;
+
+use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::validate::ValidationContext;
-use rustyline::validate::ValidationResult;
-use rustyline::validate::Validator;
-use rustyline::Context;
-use rustyline::Helper;
-use rustyline::Result;
-
-use crate::highlighter::{NoSyntaxHighlighter, SyntaxHighlighter};
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::{Context, Helper, Result};
 
 pub struct CliHelper {
     completer: FilenameCompleter,

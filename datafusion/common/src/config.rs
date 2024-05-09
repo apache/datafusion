@@ -1564,20 +1564,21 @@ config_namespace_with_hashmap! {
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
-        /// If the first line of the CSV is column names.
-        /// If not specified, uses default from `CREATE TABLE` command, if any.
-        pub has_header: Option<bool>, default =None
+        /// Specifies whether there is a CSV header (i.e. the first line
+        /// consists of is column names). If not specified, uses default from
+        /// the `CREATE TABLE` command, if any.
+        pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
-        pub date_format: Option<String>,  default = None
-        pub datetime_format: Option<String>,  default = None
-        pub timestamp_format: Option<String>,  default = None
-        pub timestamp_tz_format: Option<String>,  default = None
-        pub time_format: Option<String>,  default = None
-        pub null_value: Option<String>,  default = None
+        pub date_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = None
+        pub timestamp_format: Option<String>, default = None
+        pub timestamp_tz_format: Option<String>, default = None
+        pub time_format: Option<String>, default = None
+        pub null_value: Option<String>, default = None
     }
 }
 
@@ -1606,8 +1607,8 @@ impl CsvOptions {
         self
     }
 
-    /// True if the first line is a header. If the condition of having header
-    /// is not set by the format options, session state decides it.
+    /// Returns true if the first line is a header. If format options does not
+    /// specify whether there is a header, consults the configuration.
     pub fn has_header(&self, config_opt: &ConfigOptions) -> bool {
         self.has_header.unwrap_or(config_opt.catalog.has_header)
     }
