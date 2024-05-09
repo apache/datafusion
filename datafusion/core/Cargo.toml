@@ -57,10 +57,12 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
+    "franz",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
+franz = ["datafusion-expr/franz", "datafusion-physical-plan/franz"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]

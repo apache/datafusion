@@ -31,6 +31,10 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+default = ["franz"]
+franz = []
+
 [lib]
 name = "datafusion_physical_plan"
 path = "src/lib.rs"
