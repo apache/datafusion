@@ -37,8 +37,8 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, Column, DFSchema, DataFusionError};
-use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
+use datafusion_common::{Column, DFSchema, DataFusionError};
+use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
@@ -89,19 +89,12 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
-                match &scalar_function.func_def {
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        match fun.signature().volatility {
-                            Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
-                            // TODO: Stable functions could be `applicable`, but that would require access to the context
-                            Volatility::Stable | Volatility::Volatile => {
-                                is_applicable = false;
-                                Ok(TreeNodeRecursion::Stop)
-                            }
-                        }
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
+                match scalar_function.func.signature().volatility {
+                    Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                    // TODO: Stable functions could be `applicable`, but that would require access to the context
+                    Volatility::Stable | Volatility::Volatile => {
+                        is_applicable = false;
+                        Ok(TreeNodeRecursion::Stop)
                     }
                 }
             }
@@ -376,6 +369,7 @@ pub async fn pruned_partition_list<'a>(
                     object_meta,
                     partition_values: partition_values.clone(),
                     range: None,
+                    statistics: None,
                     extensions: None,
                 })
             }));

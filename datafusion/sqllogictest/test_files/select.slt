@@ -488,7 +488,7 @@ select '1' from foo order by column1;
 1
 
 # foo distinct order by
-statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions foo\.column1 must appear in select list
 select distinct '1' from foo order by column1;
 
 # distincts for float nan
@@ -1211,7 +1211,7 @@ logical_plan
 01)Sort: table1.a ASC NULLS LAST
 02)--TableScan: table1 projection=[a]
 physical_plan
-01)SortExec: expr=[a@0 ASC NULLS LAST]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
@@ -1357,7 +1357,7 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
 physical_plan
 01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
-02)--SortExec: expr=[c@3 ASC NULLS LAST]
+02)--SortExec: expr=[c@3 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: a@1 = 0 OR b@2 = 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1426,12 +1426,12 @@ query TT
 EXPLAIN SELECT x/2, x/2+1 FROM t;
 ----
 logical_plan
-01)Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
-02)--Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
+01)Projection: #{t.x / Int64(2)} AS t.x / Int64(2), #{t.x / Int64(2)} AS t.x / Int64(2) + Int64(1)
+02)--Projection: t.x / Int64(2) AS #{t.x / Int64(2)}
 03)----TableScan: t projection=[x]
 physical_plan
-01)ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
-02)--ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
+01)ProjectionExec: expr=[#{t.x / Int64(2)}@0 as t.x / Int64(2), #{t.x / Int64(2)}@0 + 1 as t.x / Int64(2) + Int64(1)]
+02)--ProjectionExec: expr=[x@0 / 2 as #{t.x / Int64(2)}]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1444,12 +1444,12 @@ query TT
 EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
 ----
 logical_plan
-01)Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
-02)--Projection: abs(t.x) AS abs(t.x)t.x, t.y
+01)Projection: #{abs(t.x)} AS abs(t.x), #{abs(t.x)} AS abs(t.x) + abs(t.y)
+02)--Projection: abs(t.x) AS #{abs(t.x)}, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
-02)--ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
+01)ProjectionExec: expr=[#{abs(t.x)}@0 as abs(t.x), #{abs(t.x)}@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+02)--ProjectionExec: expr=[abs(x@0) as #{abs(t.x)}, y@1 as y]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1610,6 +1610,14 @@ select * from v;
 
 query I
 select count(1) from v;
+----
+1
+
+# Ensure CSE resolves columns correctly
+# should be 3, not 1
+# https://github.com/apache/datafusion/issues/10413
+query I
+select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 ----
 1
 

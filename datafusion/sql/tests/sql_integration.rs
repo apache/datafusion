@@ -3646,7 +3646,7 @@ fn test_select_distinct_order_by() {
     let sql = "SELECT distinct '1' from person order by id";
 
     let expected =
-        "Error during planning: For SELECT DISTINCT, ORDER BY expressions id must appear in select list";
+        "Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list";
 
     // It should return error.
     let result = logical_plan(sql);
@@ -4670,6 +4670,39 @@ fn roundtrip_statement() -> Result<()> {
 
         assert_eq!(plan, plan_roundtrip);
     }
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_crossjoin() -> Result<()> {
+    let query = "select j1.j1_id, j2.j2_string from j1, j2";
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+
+    let actual = format!("{}", &roundtrip_statement);
+    println!("roundtrip sql: {actual}");
+    println!("plan {}", plan.display_indent());
+
+    let plan_roundtrip = sql_to_rel
+        .sql_statement_to_plan(roundtrip_statement.clone())
+        .unwrap();
+
+    let expected = "Projection: j1.j1_id, j2.j2_string\
+        \n  Inner Join:  Filter: Boolean(true)\
+        \n    TableScan: j1\
+        \n    TableScan: j2";
+
+    assert_eq!(format!("{plan_roundtrip:?}"), expected);
 
     Ok(())
 }

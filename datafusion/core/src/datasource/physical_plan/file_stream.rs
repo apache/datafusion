@@ -519,15 +519,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::prelude::SessionContext;
     use crate::test::{make_partition, object_store::register_test_store};
 
     use arrow_schema::Schema;
     use datafusion_common::{internal_err, Statistics};
-
-    use bytes::Bytes;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -973,15 +970,5 @@ mod tests {
         ], &batches);
 
         Ok(())
-    }
-
-    struct TestSerializer {
-        bytes: Bytes,
-    }
-
-    impl BatchSerializer for TestSerializer {
-        fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
-            Ok(self.bytes.clone())
-        }
     }
 }

@@ -36,7 +36,7 @@ use datafusion::common::{substrait_err, DFSchemaRef};
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, ScalarFunctionDefinition, Sort, WindowFunction,
+    InSubquery, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -939,11 +939,6 @@ pub fn to_substrait_rex(
                         extension_info,
                     )?)),
                 });
-            }
-
-            // function should be resolved during `AnalyzerRule`
-            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
-                return internal_err!("Function `Expr` with name should be resolved.");
             }
 
             let function_anchor =

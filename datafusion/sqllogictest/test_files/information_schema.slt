@@ -49,6 +49,12 @@ SELECT * from information_schema.schemata;
 ----
 datafusion public NULL NULL NULL NULL NULL
 
+# Table name case insensitive
+query T rowsort
+SELECT catalog_name from information_schema.SchEmaTa;
+----
+datafusion
+
 # Disable information_schema and verify it now errors again
 statement ok
 set datafusion.catalog.information_schema = false
@@ -172,9 +178,10 @@ datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.minimum_parallel_output_files 4
 datafusion.execution.parquet.allow_single_file_parallelism true
-datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
+datafusion.execution.parquet.bloom_filter_on_read true
+datafusion.execution.parquet.bloom_filter_on_write false
 datafusion.execution.parquet.column_index_truncate_length NULL
 datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
@@ -200,6 +207,7 @@ datafusion.execution.planning_concurrency 13
 datafusion.execution.soft_max_rows_per_output_file 50000000
 datafusion.execution.sort_in_place_threshold_bytes 1048576
 datafusion.execution.sort_spill_reservation_bytes 10485760
+datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
@@ -216,6 +224,7 @@ datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072
 datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_existing_sort false
+datafusion.optimizer.prefer_existing_union false
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.repartition_aggregations true
 datafusion.optimizer.repartition_file_min_size 10485760
@@ -250,9 +259,10 @@ datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum 
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
 datafusion.execution.minimum_parallel_output_files 4 Guarantees a minimum level of output files running in parallel. RecordBatches will be distributed in round robin fashion to each parallel writer. Each writer is closed and a new file opened once soft_max_rows_per_output_file is reached.
 datafusion.execution.parquet.allow_single_file_parallelism true Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
-datafusion.execution.parquet.bloom_filter_enabled false Sets if bloom filter is enabled for any column
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.bloom_filter_on_read true Use any available bloom filters when reading parquet files
+datafusion.execution.parquet.bloom_filter_on_write false Write bloom filters for all columns when creating parquet files
 datafusion.execution.parquet.column_index_truncate_length NULL Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) Sets default parquet compression codec Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.created_by datafusion Sets "created by" property
@@ -278,6 +288,7 @@ datafusion.execution.planning_concurrency 13 Fan-out during initial physical pla
 datafusion.execution.soft_max_rows_per_output_file 50000000 Target number of rows in output files when writing multiple. This is a soft max, so it can be exceeded slightly. There also will be one file smaller than the limit if the total number of rows written is not roughly divisible by the soft max
 datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.
 datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there's no `DiskManager` configured).
+datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
@@ -294,6 +305,7 @@ datafusion.optimizer.hash_join_single_partition_threshold 1048576 The maximum es
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072 The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.max_passes 3 Number of times that the optimizer will attempt to optimize the plan
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
+datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_file_min_size 10485760 Minimum total files size in bytes to perform file scan repartitioning.

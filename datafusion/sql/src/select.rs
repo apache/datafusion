@@ -29,7 +29,7 @@ use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{Column, UnnestOptions};
 use datafusion_expr::expr::{Alias, Unnest};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check,
+    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
@@ -39,8 +39,8 @@ use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, ReplaceSelectItem, WildcardAdditionalOptions,
-    WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, OrderByExpr, ReplaceSelectItem,
+    WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -49,6 +49,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
+        order_by: Vec<OrderByExpr>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -93,6 +94,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // See https://github.com/apache/datafusion/issues/9162
         let mut combined_schema = base_plan.schema().as_ref().clone();
         combined_schema.merge(projected_plan.schema());
+
+        // Order-by expressions prioritize referencing columns from the select list,
+        // then from the FROM clause.
+        let order_by_rex = self.order_by_to_sort_expr(
+            &order_by,
+            projected_plan.schema().as_ref(),
+            planner_context,
+            true,
+            Some(base_plan.schema().as_ref()),
+        )?;
+        let order_by_rex = normalize_cols(order_by_rex, &projected_plan)?;
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -248,9 +260,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
 
                 // Build the final plan
-                return LogicalPlanBuilder::from(base_plan)
+                LogicalPlanBuilder::from(base_plan)
                     .distinct_on(on_expr, select_exprs, None)?
-                    .build();
+                    .build()
             }
         }?;
 
@@ -273,6 +285,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             plan
         };
+
+        let plan = self.order_by(plan, order_by_rex)?;
 
         Ok(plan)
     }

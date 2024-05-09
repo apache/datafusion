@@ -30,6 +30,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::functions_aggregate::covariance::covar_samp;
 use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -344,7 +345,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut parquet_format = table_options.parquet;
 
-    parquet_format.global.bloom_filter_enabled = true;
+    parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = "PARQUET_2_0".to_string();
     parquet_format.global.write_batch_size = 111;
@@ -614,6 +615,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
+        covar_samp(lit(1.5), lit(2.2), false, None, None, None),
     ];
 
     // ensure expressions created with the expr api can be round tripped

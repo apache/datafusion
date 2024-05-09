@@ -107,26 +107,14 @@ impl InformationSchemaConfig {
             }
 
             // Add a final list for the information schema tables themselves
-            builder.add_table(&catalog_name, INFORMATION_SCHEMA, TABLES, TableType::View);
-            builder.add_table(&catalog_name, INFORMATION_SCHEMA, VIEWS, TableType::View);
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                COLUMNS,
-                TableType::View,
-            );
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                DF_SETTINGS,
-                TableType::View,
-            );
-            builder.add_table(
-                &catalog_name,
-                INFORMATION_SCHEMA,
-                SCHEMATA,
-                TableType::View,
-            );
+            for table_name in INFORMATION_SCHEMA_TABLES {
+                builder.add_table(
+                    &catalog_name,
+                    INFORMATION_SCHEMA,
+                    table_name,
+                    TableType::View,
+                );
+            }
         }
 
         Ok(())
@@ -225,18 +213,15 @@ impl InformationSchemaConfig {
 
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
-    fn as_any(&self) -> &(dyn Any + 'static) {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn table_names(&self) -> Vec<String> {
-        vec![
-            TABLES.to_string(),
-            VIEWS.to_string(),
-            COLUMNS.to_string(),
-            DF_SETTINGS.to_string(),
-            SCHEMATA.to_string(),
-        ]
+        INFORMATION_SCHEMA_TABLES
+            .iter()
+            .map(|t| t.to_string())
+            .collect()
     }
 
     async fn table(
@@ -244,18 +229,13 @@ impl SchemaProvider for InformationSchemaProvider {
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         let config = self.config.clone();
-        let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
-            Arc::new(InformationSchemaTables::new(config))
-        } else if name.eq_ignore_ascii_case("columns") {
-            Arc::new(InformationSchemaColumns::new(config))
-        } else if name.eq_ignore_ascii_case("views") {
-            Arc::new(InformationSchemaViews::new(config))
-        } else if name.eq_ignore_ascii_case("df_settings") {
-            Arc::new(InformationSchemaDfSettings::new(config))
-        } else if name.eq_ignore_ascii_case("schemata") {
-            Arc::new(InformationSchemata::new(config))
-        } else {
-            return Ok(None);
+        let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str() {
+            TABLES => Arc::new(InformationSchemaTables::new(config)),
+            COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
+            VIEWS => Arc::new(InformationSchemaViews::new(config)),
+            DF_SETTINGS => Arc::new(InformationSchemaDfSettings::new(config)),
+            SCHEMATA => Arc::new(InformationSchemata::new(config)),
+            _ => return Ok(None),
         };
 
         Ok(Some(Arc::new(
@@ -264,10 +244,7 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        matches!(
-            name.to_ascii_lowercase().as_str(),
-            TABLES | VIEWS | COLUMNS | SCHEMATA
-        )
+        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
     }
 }
 

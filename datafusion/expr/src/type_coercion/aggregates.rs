@@ -183,7 +183,7 @@ pub fn coerce_types(
             }
             Ok(vec![Float64, Float64])
         }
-        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
+        AggregateFunction::CovariancePop => {
             if !is_covariance_support_arg_type(&input_types[0]) {
                 return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",

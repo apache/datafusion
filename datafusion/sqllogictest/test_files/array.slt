@@ -5169,8 +5169,9 @@ false false false true
 true false true false
 true false false true
 false true false false
-false false false false
-false false false false
+NULL NULL false false
+false false NULL false
+false false false NULL
 
 query BBBB
 select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(5, 6)),
@@ -5183,8 +5184,9 @@ false false false true
 true false true false
 true false false true
 false true false false
-false false false false
-false false false false
+NULL NULL false false
+false false NULL false
+false false false NULL
 
 query BBBB
 select array_has(column1, make_array(5, 6)),
@@ -5197,8 +5199,9 @@ false false false true
 true false true false
 true false false true
 false true false false
-false false false false
-false false false false
+NULL NULL false false
+false false NULL false
+false false false NULL
 
 query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
@@ -5631,15 +5634,26 @@ select range(NULL)
 ----
 NULL
 
-## should throw error
-query error
+## should return NULL
+query ?
 select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
+----
+NULL
 
-query error
+query ?
 select range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+----
+NULL
 
-query error
+query ?
 select range(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
+----
+NULL
+
+query ?
+select range(NULL, NULL, NULL);
+----
+NULL
 
 query ?
 select range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
@@ -5665,16 +5679,26 @@ select generate_series(5),
 ----
 [0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1] [10, 7, 4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01, 1993-03-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02, 1993-01-01] [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
-## should throw error
-query error
+## should return NULL
+query ?
 select generate_series(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
+----
+NULL
 
-query error
+query ?
 select generate_series(DATE '1992-09-01', DATE '1993-03-01', NULL);
+----
+NULL
 
-query error
+query ?
 select generate_series(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
+----
+NULL
 
+query ?
+select generate_series(NULL, NULL, NULL);
+----
+NULL
 
 query ?
 select generate_series(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
@@ -6451,7 +6475,7 @@ create table test_create_array_table(
   d int
 );
 
-query ???I
+query I
 insert into test_create_array_table values
   ([1, 2, 3], ['a', 'b', 'c'], [[4,6], [6,7,8]], 1);
 ----

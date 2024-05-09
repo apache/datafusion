@@ -219,7 +219,7 @@ impl BatchSerializer for JsonSerializer {
 pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    ///
+    /// Writer options for underlying Json writer
     writer_options: JsonWriterOptions,
 }
 

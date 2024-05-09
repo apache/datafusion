@@ -474,7 +474,7 @@ type SharedGate = Arc<Gate>;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
 
     use futures::{task::ArcWake, FutureExt};
 

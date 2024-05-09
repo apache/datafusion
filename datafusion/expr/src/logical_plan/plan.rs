@@ -191,7 +191,7 @@ impl LogicalPlan {
             LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
                 output_schema
             }
-            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
@@ -509,12 +509,12 @@ impl LogicalPlan {
                 table_schema,
                 op,
                 ..
-            }) => Ok(LogicalPlan::Dml(DmlStatement {
-                table_name: table_name.clone(),
-                table_schema: table_schema.clone(),
-                op: op.clone(),
-                input: Arc::new(inputs.swap_remove(0)),
-            })),
+            }) => Ok(LogicalPlan::Dml(DmlStatement::new(
+                table_name.clone(),
+                table_schema.clone(),
+                op.clone(),
+                Arc::new(inputs.swap_remove(0)),
+            ))),
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
@@ -2245,7 +2245,7 @@ impl DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
@@ -2959,54 +2959,6 @@ digraph {
             .unwrap()
             .build()
             .unwrap()
-    }
-
-    /// Extension plan that panic when trying to access its input plan
-    #[derive(Debug)]
-    struct NoChildExtension {
-        empty_schema: DFSchemaRef,
-    }
-
-    impl UserDefinedLogicalNode for NoChildExtension {
-        fn as_any(&self) -> &dyn std::any::Any {
-            unimplemented!()
-        }
-
-        fn name(&self) -> &str {
-            unimplemented!()
-        }
-
-        fn inputs(&self) -> Vec<&LogicalPlan> {
-            panic!("Should not be called")
-        }
-
-        fn schema(&self) -> &DFSchemaRef {
-            &self.empty_schema
-        }
-
-        fn expressions(&self) -> Vec<Expr> {
-            unimplemented!()
-        }
-
-        fn fmt_for_explain(&self, _: &mut fmt::Formatter) -> fmt::Result {
-            unimplemented!()
-        }
-
-        fn from_template(
-            &self,
-            _: &[Expr],
-            _: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
-            unimplemented!()
-        }
-
-        fn dyn_hash(&self, _: &mut dyn Hasher) {
-            unimplemented!()
-        }
-
-        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
-            unimplemented!()
-        }
     }
 
     #[test]

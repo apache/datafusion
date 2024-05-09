@@ -56,7 +56,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=10
 02)--SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
-03)----SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC]
+03)----SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[c_count@0 as c_count, COUNT(*)@1 as custdist]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
 06)----------CoalesceBatchesExec: target_batch_size=8192

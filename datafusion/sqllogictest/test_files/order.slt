@@ -164,7 +164,7 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
@@ -374,11 +374,11 @@ select * from t SORT BY time;
 
 
 # distinct on a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT value FROM t ORDER BY time;
 
 # distinct on an expression of a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
 
 # distinct on a column that is in the select list but aliasted should work
@@ -680,7 +680,7 @@ logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -699,7 +699,7 @@ logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -766,7 +766,7 @@ logical_plan
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
 04)------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
@@ -888,6 +888,69 @@ select column2, column1 from foo ORDER BY column2 desc, column1 desc;
 [1] 4
 [0] 2
 
+# Test issue: https://github.com/apache/datafusion/issues/10013
+# There is both a HAVING clause and an ORDER BY clause in the query.
+query I
+SELECT
+   SUM(column1)
+FROM foo
+HAVING SUM(column1) > 0
+ORDER BY SUM(column1)
+----
+16
+
+# ORDER BY with a GROUP BY clause
+query I
+SELECT SUM(column1) 
+  FROM foo 
+GROUP BY column2 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+3
+3
+4
+
+# ORDER BY with a GROUP BY clause and a HAVING clause
+query I
+SELECT 
+  SUM(column1) 
+FROM foo 
+GROUP BY column2 
+HAVING SUM(column1) < 3 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+
+# ORDER BY without a HAVING clause
+query I
+SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
+----
+16
+
+# Order by unprojected aggregate expressions is not supported
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+SELECT column2 FROM foo ORDER BY SUM(column1)
+
+statement ok
+create table ambiguity_test(a int, b int) as values (1,20), (2,10);
+
+# Order-by expressions prioritize referencing columns from the select list.
+query II
+select a as b, b as c2 from ambiguity_test order by b
+----
+1 20
+2 10
+
 # Cleanup
 statement ok
 drop table foo;
+
+statement ok
+drop table ambiguity_test;

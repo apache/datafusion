@@ -68,7 +68,7 @@ logical_plan
 23)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("ASIA")]
 physical_plan
 01)SortPreservingMergeExec: [revenue@1 DESC]
-02)--SortExec: expr=[revenue@1 DESC]
+02)--SortExec: expr=[revenue@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[n_name@0 as n_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as revenue]
 04)------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 05)--------CoalesceBatchesExec: target_batch_size=8192

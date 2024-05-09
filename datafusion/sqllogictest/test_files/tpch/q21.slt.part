@@ -91,7 +91,7 @@ logical_plan
 31)------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
 physical_plan
 01)SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
-02)--SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST]
+02)--SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[s_name@0 as s_name, COUNT(*)@1 as numwait]
 04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
 05)--------CoalesceBatchesExec: target_batch_size=8192

@@ -620,7 +620,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) != orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -647,7 +647,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) < orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -675,7 +675,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1)";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -696,7 +696,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -758,7 +758,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 

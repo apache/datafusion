@@ -17,6 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::expr::create_name;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
@@ -131,6 +132,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns this function's display_name.
+    ///
+    /// See [`ScalarUDFImpl::display_name`] for more details
+    pub fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.display_name(args)
     }
 
     /// Returns the aliases for this function.
@@ -273,6 +281,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns the user-defined display name of the UDF given the arguments
+    ///
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        Ok(format!("{}({})", self.name(), names.join(",")))
+    }
 
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.

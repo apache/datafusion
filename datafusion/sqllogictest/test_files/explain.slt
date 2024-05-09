@@ -169,7 +169,7 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
 physical_plan
 01)DataSinkExec: sink=StreamWrite { location: "../../testing/data/csv/aggregate_test_100.csv", batch_size: 8192, encoding: Csv, header: true, .. }
-02)--SortExec: expr=[c1@0 ASC NULLS LAST]
+02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
 
 # test EXPLAIN VERBOSE

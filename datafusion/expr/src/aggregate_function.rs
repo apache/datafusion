@@ -59,8 +59,6 @@ pub enum AggregateFunction {
     Stddev,
     /// Standard Deviation (Population)
     StddevPop,
-    /// Covariance (Sample)
-    Covariance,
     /// Covariance (Population)
     CovariancePop,
     /// Correlation
@@ -122,7 +120,6 @@ impl AggregateFunction {
             VariancePop => "VAR_POP",
             Stddev => "STDDEV",
             StddevPop => "STDDEV_POP",
-            Covariance => "COVAR",
             CovariancePop => "COVAR_POP",
             Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
@@ -176,9 +173,7 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "covar" => AggregateFunction::Covariance,
             "covar_pop" => AggregateFunction::CovariancePop,
-            "covar_samp" => AggregateFunction::Covariance,
             "stddev" => AggregateFunction::Stddev,
             "stddev_pop" => AggregateFunction::StddevPop,
             "stddev_samp" => AggregateFunction::Stddev,
@@ -251,9 +246,6 @@ impl AggregateFunction {
             AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
             AggregateFunction::VariancePop => {
                 variance_return_type(&coerced_data_types[0])
-            }
-            AggregateFunction::Covariance => {
-                covariance_return_type(&coerced_data_types[0])
             }
             AggregateFunction::CovariancePop => {
                 covariance_return_type(&coerced_data_types[0])
@@ -345,8 +337,7 @@ impl AggregateFunction {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
-            AggregateFunction::Covariance
-            | AggregateFunction::CovariancePop
+            AggregateFunction::CovariancePop
             | AggregateFunction::Correlation
             | AggregateFunction::RegrSlope
             | AggregateFunction::RegrIntercept

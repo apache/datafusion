@@ -508,6 +508,29 @@ fn test_simplify(input_expr: Expr, expected_expr: Expr) {
         "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
     );
 }
+fn test_simplify_with_cycle_count(
+    input_expr: Expr,
+    expected_expr: Expr,
+    expected_count: u32,
+) {
+    let info: MyInfo = MyInfo {
+        schema: expr_test_schema(),
+        execution_props: ExecutionProps::new(),
+    };
+    let simplifier = ExprSimplifier::new(info);
+    let (simplified_expr, count) = simplifier
+        .simplify_with_cycle_count(input_expr.clone())
+        .expect("successfully evaluated");
+
+    assert_eq!(
+        simplified_expr, expected_expr,
+        "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
+    );
+    assert_eq!(
+        count, expected_count,
+        "Mismatch simplifier cycle count\n Expected: {expected_count}\n Got:{count}"
+    );
+}
 
 #[test]
 fn test_simplify_log() {
@@ -657,4 +680,12 @@ fn test_simplify_concat() {
     ]);
     let expected = concat(vec![col("c0"), lit("hello rust"), col("c1")]);
     test_simplify(expr, expected)
+}
+#[test]
+fn test_simplify_cycles() {
+    // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
+    let expr = cast(now(), DataType::Int64)
+        .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
+    let expected = lit(true);
+    test_simplify_with_cycle_count(expr, expected, 3);
 }

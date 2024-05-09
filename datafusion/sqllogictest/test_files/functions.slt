@@ -495,7 +495,7 @@ statement error Did you mean 'STDDEV'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
-statement error Did you mean 'COVAR'?
+statement error DataFusion error: Error during planning: Invalid function 'covaria'.\nDid you mean 'covar'?
 SELECT COVARIA(1,1);
 
 # Window function
@@ -1158,4 +1158,3 @@ drop table uuid_table
 
 statement ok
 drop table t
-

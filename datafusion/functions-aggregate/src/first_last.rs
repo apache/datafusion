@@ -41,7 +41,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 use sqlparser::ast::NullTreatment;
 
-make_udaf_function!(
+make_udaf_expr_and_func!(
     FirstValue,
     first_value,
     "Returns the first value in a group of values.",

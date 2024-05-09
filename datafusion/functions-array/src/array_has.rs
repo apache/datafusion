@@ -288,36 +288,40 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
     } else {
         array
     };
-
     for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = if comparison_type != ComparisonType::Single {
-                converter.convert_columns(&[sub_arr])?
-            } else {
-                converter.convert_columns(&[element.clone()])?
-            };
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let arr_values = converter.convert_columns(&[arr])?;
+                let sub_arr_values = if comparison_type != ComparisonType::Single {
+                    converter.convert_columns(&[sub_arr])?
+                } else {
+                    converter.convert_columns(&[element.clone()])?
+                };
 
-            let mut res = match comparison_type {
-                ComparisonType::All => sub_arr_values
-                    .iter()
-                    .dedup()
-                    .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                ComparisonType::Any => sub_arr_values
-                    .iter()
-                    .dedup()
-                    .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                ComparisonType::Single => arr_values
-                    .iter()
-                    .dedup()
-                    .any(|x| x == sub_arr_values.row(row_idx)),
-            };
+                let mut res = match comparison_type {
+                    ComparisonType::All => sub_arr_values
+                        .iter()
+                        .dedup()
+                        .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                    ComparisonType::Any => sub_arr_values
+                        .iter()
+                        .dedup()
+                        .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                    ComparisonType::Single => arr_values
+                        .iter()
+                        .dedup()
+                        .any(|x| x == sub_arr_values.row(row_idx)),
+                };
 
-            if comparison_type == ComparisonType::Any {
-                res |= res;
+                if comparison_type == ComparisonType::Any {
+                    res |= res;
+                }
+                boolean_builder.append_value(res);
             }
-
-            boolean_builder.append_value(res);
+            // respect null input
+            (_, _) => {
+                boolean_builder.append_null();
+            }
         }
     }
     Ok(Arc::new(boolean_builder.finish()))

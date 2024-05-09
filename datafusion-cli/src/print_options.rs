@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::instant::Instant;
 use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::pin::Pin;
@@ -23,7 +22,9 @@ use std::str::FromStr;
 
 use crate::print_format::PrintFormat;
 
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion::common::instant::Instant;
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
@@ -98,6 +99,7 @@ impl PrintOptions {
     /// Print the batches to stdout using the specified format
     pub fn print_batches(
         &self,
+        schema: SchemaRef,
         batches: &[RecordBatch],
         query_start_time: Instant,
     ) -> Result<()> {
@@ -105,7 +107,7 @@ impl PrintOptions {
         let mut writer = stdout.lock();
 
         self.format
-            .print_batches(&mut writer, batches, self.maxrows, true)?;
+            .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
 
         let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
         let formatted_exec_details = get_execution_details_formatted(
@@ -148,6 +150,7 @@ impl PrintOptions {
             row_count += batch.num_rows();
             self.format.print_batches(
                 &mut writer,
+                batch.schema(),
                 &[batch],
                 MaxRows::Unlimited,
                 with_header,
