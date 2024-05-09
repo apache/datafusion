@@ -59,6 +59,7 @@ pub struct KafkaStreamConfig {
     pub timestamp_unit: TimestampUnit,
     pub bootstrap_servers: String,
     pub consumer_group_id: String,
+    pub offset_reset: String,
     //constraints: Constraints,
 }
 
@@ -98,6 +99,7 @@ impl PartitionStream for KafkaStreamRead {
             .set("group.id", self.config.consumer_group_id.to_string()) // Replace with your group ID
             .set("bootstrap.servers", self.config.bootstrap_servers.to_string()) // Replace with your Kafka bootstrap servers
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
+            .set("auto.offset.reset", self.config.offset_reset.to_string())
             .create()
             .expect("Consumer creation failed");
 
