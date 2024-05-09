@@ -479,6 +479,11 @@ impl LogicalPlan {
     /// expressions. For example [`LogicalPlan::Filter`] schema is always the
     /// same as its input schema.
     ///
+    /// This is useful after modifying a plans `Expr`s (or input plans) via
+    /// methods such as [Self::map_children] and [Self::map_expressions]. Unlike
+    /// [Self::with_new_exprs], this method does not require a new set of
+    /// expressions or inputs plans.
+    ///
     /// # Return value
     /// Returns an error if there is some issue recomputing the schema.
     ///
