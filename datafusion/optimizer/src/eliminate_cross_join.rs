@@ -107,7 +107,7 @@ impl OptimizerRule for EliminateCrossJoin {
             left = find_inner_join(
                 &left,
                 &mut all_inputs,
-                &mut possible_join_keys,
+                &possible_join_keys,
                 &mut all_join_keys,
             )?;
         }
@@ -144,7 +144,9 @@ impl OptimizerRule for EliminateCrossJoin {
     }
 }
 
-/// Recursively accumulate possible_join_keys and inputs from inner joins (including cross joins).
+/// Recursively accumulate possible_join_keys and inputs from inner joins
+/// (including cross joins).
+///
 /// Returns a boolean indicating whether the flattening was successful.
 fn try_flatten_join_inputs(
     plan: &LogicalPlan,
@@ -159,14 +161,10 @@ fn try_flatten_join_inputs(
                 return Ok(false);
             }
             possible_join_keys.extend(join.on.clone());
-            let left = &*(join.left);
-            let right = &*(join.right);
-            vec![left, right]
+            vec![&join.left, &join.right]
         }
         LogicalPlan::CrossJoin(join) => {
-            let left = &*(join.left);
-            let right = &*(join.right);
-            vec![left, right]
+            vec![&join.left, &join.right]
         }
         _ => {
             return plan_err!("flatten_join_inputs just can call join/cross_join");
@@ -174,7 +172,8 @@ fn try_flatten_join_inputs(
     };
 
     for child in children.iter() {
-        match *child {
+        let child = child.as_ref();
+        match child {
             LogicalPlan::Join(Join {
                 join_type: JoinType::Inner,
                 ..
@@ -184,27 +183,39 @@ fn try_flatten_join_inputs(
                     return Ok(false);
                 }
             }
-            _ => all_inputs.push((*child).clone()),
+            _ => all_inputs.push(child.clone()),
         }
     }
     Ok(true)
 }
 
+/// Finds the next to join with the left input plan,
+///
+/// Finds the next `right` from `rights` that can be joined with `left_input`
+/// plan based on the join keys in `possible_join_keys`.
+///
+/// If such a matching `right` is found:
+/// 1. Adds the matching join keys to `all_join_keys`.
+/// 2. Returns `left_input JOIN right ON (all join keys)`.
+///
+/// If no matching `right` is found:
+/// 1. Removes the first plan from `rights`
+/// 2. Returns `left_input CROSS JOIN right`.
 fn find_inner_join(
     left_input: &LogicalPlan,
     rights: &mut Vec<LogicalPlan>,
-    possible_join_keys: &mut Vec<(Expr, Expr)>,
+    possible_join_keys: &[(Expr, Expr)],
     all_join_keys: &mut HashSet<(Expr, Expr)>,
 ) -> Result<LogicalPlan> {
     for (i, right_input) in rights.iter().enumerate() {
         let mut join_keys = vec![];
 
-        for (l, r) in &mut *possible_join_keys {
+        for (l, r) in possible_join_keys.iter() {
             let key_pair = find_valid_equijoin_key_pair(
                 l,
                 r,
-                left_input.schema().clone(),
-                right_input.schema().clone(),
+                left_input.schema(),
+                right_input.schema(),
             )?;
 
             // Save join keys
@@ -215,6 +226,7 @@ fn find_inner_join(
             }
         }
 
+        // Found one or more matching join keys
         if !join_keys.is_empty() {
             all_join_keys.extend(join_keys.clone());
             let right_input = rights.remove(i);
@@ -236,6 +248,9 @@ fn find_inner_join(
             }));
         }
     }
+
+    // no matching right plan had any join keys, cross join with the first right
+    // plan
     let right = rights.remove(0);
     let join_schema = Arc::new(build_join_schema(
         left_input.schema(),

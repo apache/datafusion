@@ -885,7 +885,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
     columns: &HashSet<Column>,
-    schema: DFSchemaRef,
+    schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
         let exist = schema.is_column_from_schema(col);
@@ -909,8 +909,8 @@ pub fn check_all_columns_from_schema(
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
-    left_schema: DFSchemaRef,
-    right_schema: DFSchemaRef,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
     let left_using_columns = left_key.to_columns()?;
     let right_using_columns = right_key.to_columns()?;
@@ -920,8 +920,8 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    if check_all_columns_from_schema(&left_using_columns, left_schema.clone())?
-        && check_all_columns_from_schema(&right_using_columns, right_schema.clone())?
+    if check_all_columns_from_schema(&left_using_columns, left_schema)?
+        && check_all_columns_from_schema(&right_using_columns, right_schema)?
     {
         return Ok(Some((left_key.clone(), right_key.clone())));
     } else if check_all_columns_from_schema(&right_using_columns, left_schema)?

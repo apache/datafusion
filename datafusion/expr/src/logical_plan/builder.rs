@@ -1085,8 +1085,8 @@ impl LogicalPlanBuilder {
                 find_valid_equijoin_key_pair(
                         &normalized_left_key,
                         &normalized_right_key,
-                        self.plan.schema().clone(),
-                        right.schema().clone(),
+                        self.plan.schema(),
+                        right.schema(),
                     )?.ok_or_else(||
                         plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
