@@ -24,7 +24,6 @@ use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
-use std::sync::Arc;
 // equijoin predicate
 type EquijoinPredicate = (Expr, Expr);
 
@@ -122,8 +121,8 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 
 fn split_eq_and_noneq_join_predicate(
     filter: Expr,
-    left_schema: &Arc<DFSchema>,
-    right_schema: &Arc<DFSchema>,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
     let exprs = split_conjunction_owned(filter);
 
@@ -136,12 +135,8 @@ fn split_eq_and_noneq_join_predicate(
                 op: Operator::Eq,
                 ref right,
             }) => {
-                let join_key_pair = find_valid_equijoin_key_pair(
-                    left,
-                    right,
-                    left_schema.clone(),
-                    right_schema.clone(),
-                )?;
+                let join_key_pair =
+                    find_valid_equijoin_key_pair(left, right, left_schema, right_schema)?;
 
                 if let Some((left_expr, right_expr)) = join_key_pair {
                     let left_expr_type = left_expr.get_type(left_schema)?;
@@ -172,6 +167,7 @@ mod tests {
     use datafusion_expr::{
         col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
     };
+    use std::sync::Arc;
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
