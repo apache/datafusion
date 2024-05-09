@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
-use crate::{Signature, TypeSignature};
+use crate::{ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -37,6 +37,54 @@ use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
+pub fn data_types_with_scalar_udf(
+    current_types: &[DataType],
+    signature: &Signature,
+    // TODO: extend for UDAF and UDWF
+    func: &ScalarUDF,
+) -> Result<Vec<DataType>> {
+    if current_types.is_empty() {
+        if signature.type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else {
+            return plan_err!(
+                "Coercion from {:?} to the signature {:?} failed.",
+                current_types,
+                &signature.type_signature
+            );
+        }
+    }
+
+    let valid_types =
+        if matches!(signature.type_signature, TypeSignature::VariadicCoercion) {
+            vec![func.coerce_types(current_types)?]
+        } else {
+            get_valid_types(&signature.type_signature, current_types)?
+        };
+
+    if valid_types
+        .iter()
+        .any(|data_type| data_type == current_types)
+    {
+        return Ok(current_types.to_vec());
+    }
+
+    // Try and coerce the argument types to match the signature, returning the
+    // coerced types from the first matching signature.
+    for valid_types in valid_types {
+        if let Some(types) = maybe_data_types(&valid_types, current_types) {
+            return Ok(types);
+        }
+    }
+
+    // none possible -> Error
+    plan_err!(
+        "Coercion from {:?} to the signature {:?} failed.",
+        current_types,
+        &signature.type_signature
+    )
+}
+
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
@@ -184,6 +232,11 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::VariadicCoercion => {
+            return internal_err!(
+                "VariadicCoercion should be handled outside of get_valid_types."
+            )
+        }
         TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),

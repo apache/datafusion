@@ -213,6 +213,11 @@ impl ScalarUDF {
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
+
+    /// See [`ScalarUDFImpl::coerce_types`] for more details.
+    pub fn coerce_types(&self, data_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(data_types)
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -419,6 +424,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Coerce the types of the arguments to the types that the function expects
+    fn coerce_types(&self, _data_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 }
 

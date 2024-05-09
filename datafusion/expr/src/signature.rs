@@ -100,6 +100,7 @@ pub enum TypeSignature {
     ///
     /// `make_array(i32, i64) -> make_array(i64, i64)`
     VariadicEqual,
+    VariadicCoercion,
     /// One or more arguments with arbitrary types
     VariadicAny,
     /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
@@ -190,6 +191,9 @@ impl TypeSignature {
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }
+            TypeSignature::VariadicCoercion => {
+                vec!["CoercibleT, .., CoercibleT".to_string()]
+            }
             TypeSignature::VariadicEqual => {
                 vec!["CoercibleT, .., CoercibleT".to_string()]
             }
@@ -223,6 +227,7 @@ impl TypeSignature {
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
+            TypeSignature::VariadicCoercion => true,
             _ => false,
         }
     }
@@ -259,6 +264,13 @@ impl Signature {
     pub fn variadic_equal(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicEqual,
+            volatility,
+        }
+    }
+    /// An arbitrary number of arguments with user-defined coercion rules.
+    pub fn variadic_coercion(volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::VariadicCoercion,
             volatility,
         }
     }
