@@ -251,12 +251,23 @@ pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
 ) -> SortProperties {
-    let monotonicity_vec: Vec<Option<bool>> = func.into();
-
-    monotonicity_vec.iter().zip(arg_orderings).fold(
+    arg_orderings.iter().enumerate().fold(
         SortProperties::Singleton,
-        |prev_sort, (item, arg)| {
-            let current_sort = func_order_in_one_dimension(item, arg);
+        |prev_sort, (index, arg)| {
+            let arg_monotonicity: Option<bool> = match func {
+                FuncMonotonicity::None => None,
+                FuncMonotonicity::Increasing => Some(true),
+                FuncMonotonicity::Decreasing => Some(false),
+                FuncMonotonicity::Mixed(inner_vec) => {
+                    if inner_vec.len() > index {
+                        inner_vec[index]
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            let current_sort = func_order_in_one_dimension(&arg_monotonicity, arg);
 
             match (prev_sort, current_sort) {
                 (_, SortProperties::Unordered) => SortProperties::Unordered,
@@ -299,5 +310,41 @@ fn func_order_in_one_dimension(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::Schema;
+
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{FuncMonotonicity, ScalarUDF};
+
+    use crate::utils::tests::TestScalarUDF;
+    use crate::ScalarFunctionExpr;
+
+    use super::create_physical_expr;
+
+    #[test]
+    fn test_function_expr() -> Result<()> {
+        let udf = ScalarUDF::from(TestScalarUDF::new());
+
+        let e = crate::expressions::lit(1.1);
+        let p_expr =
+            create_physical_expr(&udf, &[e], &Schema::empty(), &[], &DFSchema::empty())?;
+        let expr_monotonicity = p_expr
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .unwrap()
+            .monotonicity();
+
+        assert_eq!(expr_monotonicity, &Some(FuncMonotonicity::Increasing));
+
+        assert!(expr_monotonicity
+            .as_ref()
+            .unwrap()
+            .matches(&FuncMonotonicity::Mixed(vec![Some(true)])));
+
+        Ok(())
     }
 }

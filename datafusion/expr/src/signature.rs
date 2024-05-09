@@ -346,8 +346,13 @@ impl Signature {
     }
 }
 
+/// Monotonicity of a function with respect to its arguments.
+///
+/// A function is [monotonic] if it preserves the relative order of its inputs.
+///
+/// [monotonic]: https://en.wikipedia.org/wiki/Monotonic_function
 #[derive(Debug, Clone)]
-enum FuncMonotonicityPartial {
+pub enum FuncMonotonicity {
     /// not monotonic or unknown monotonicity
     None,
     /// Increasing with respect to all of its arguments
@@ -362,43 +367,37 @@ enum FuncMonotonicityPartial {
     Mixed(Vec<Option<bool>>),
 }
 
-/// Monotonicity of a function with respect to its arguments.
-///
-/// A function is [monotonic] if it preserves the relative order of its inputs.
-///
-/// [monotonic]: https://en.wikipedia.org/wiki/Monotonic_function
-#[derive(Debug, Clone)]
-pub struct FuncMonotonicity(FuncMonotonicityPartial);
-
-impl FuncMonotonicity {
-    pub fn new_none() -> Self {
-        Self(FuncMonotonicityPartial::None)
-    }
-    pub fn new_increasing() -> Self {
-        Self(FuncMonotonicityPartial::Increasing)
-    }
-    pub fn new_decreasing() -> Self {
-        Self(FuncMonotonicityPartial::Decreasing)
-    }
-    pub fn new_mixed(inner: Vec<Option<bool>>) -> Self {
-        Self(FuncMonotonicityPartial::Mixed(inner))
-    }
-}
-
-impl From<&FuncMonotonicity> for Vec<Option<bool>> {
-    fn from(val: &FuncMonotonicity) -> Self {
-        match &val.0 {
-            FuncMonotonicityPartial::None => vec![None],
-            FuncMonotonicityPartial::Increasing => vec![Some(true)],
-            FuncMonotonicityPartial::Decreasing => vec![Some(false)],
-            FuncMonotonicityPartial::Mixed(inner) => inner.to_vec(),
+impl PartialEq for FuncMonotonicity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FuncMonotonicity::None, FuncMonotonicity::None) => true,
+            (FuncMonotonicity::Increasing, FuncMonotonicity::Increasing) => true,
+            (FuncMonotonicity::Decreasing, FuncMonotonicity::Decreasing) => true,
+            (FuncMonotonicity::Mixed(vec1), FuncMonotonicity::Mixed(vec2)) => {
+                vec1 == vec2
+            }
+            _ => false,
         }
     }
 }
 
-impl PartialEq for FuncMonotonicity {
-    fn eq(&self, other: &Self) -> bool {
-        Into::<Vec<Option<bool>>>::into(self) == Into::<Vec<Option<bool>>>::into(other)
+impl FuncMonotonicity {
+    pub fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FuncMonotonicity::None, FuncMonotonicity::Mixed(inner_vec))
+            | (FuncMonotonicity::Mixed(inner_vec), FuncMonotonicity::None) => {
+                inner_vec.iter().all(|&x| x == None)
+            }
+            (FuncMonotonicity::Increasing, FuncMonotonicity::Mixed(inner_vec))
+            | (FuncMonotonicity::Mixed(inner_vec), FuncMonotonicity::Increasing) => {
+                inner_vec.iter().all(|&x| x == Some(true))
+            }
+            (FuncMonotonicity::Decreasing, FuncMonotonicity::Mixed(inner_vec))
+            | (FuncMonotonicity::Mixed(inner_vec), FuncMonotonicity::Decreasing) => {
+                inner_vec.iter().all(|&x| x == Some(false))
+            }
+            _ => self == other,
+        }
     }
 }
 

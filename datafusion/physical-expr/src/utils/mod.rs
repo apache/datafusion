@@ -310,7 +310,7 @@ pub(crate) mod tests {
         }
 
         fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-            Ok(Some(FuncMonotonicity::new_increasing()))
+            Ok(Some(FuncMonotonicity::Increasing))
         }
 
         fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

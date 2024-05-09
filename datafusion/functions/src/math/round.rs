@@ -81,7 +81,7 @@ impl ScalarUDFImpl for RoundFunc {
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(FuncMonotonicity::new_increasing()))
+        Ok(Some(FuncMonotonicity::Increasing))
     }
 }
 
