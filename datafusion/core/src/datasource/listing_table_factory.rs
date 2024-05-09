@@ -218,6 +218,7 @@ mod tests {
 
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
+        options.insert("format.has_header".into(), "true".into());
         let cmd = CreateExternalTable {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),
@@ -228,7 +229,7 @@ mod tests {
             definition: None,
             order_exprs: vec![],
             unbounded: false,
-            options: HashMap::from([("format.has_header".into(), "true".into())]),
+            options,
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
         };

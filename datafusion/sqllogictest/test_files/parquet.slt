@@ -66,8 +66,7 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet/test_table'
-OPTIONS ('format.has_header' 'true');
+LOCATION 'test_files/scratch/parquet/test_table';
 
 # Basic query:
 query ITID
