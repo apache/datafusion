@@ -68,7 +68,6 @@ pub mod streaming;
 pub mod tree_node;
 pub mod union;
 pub mod unnest;
-pub mod unnest_struct;
 pub mod values;
 pub mod windows;
 pub mod work_table;

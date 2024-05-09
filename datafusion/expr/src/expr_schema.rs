@@ -123,7 +123,7 @@ impl ExprSchemable for Expr {
                         Ok(field.data_type().clone())
                     }
                     DataType::Struct(_) => {
-                        not_impl_err!("unnest() does not support struct yet")
+                        Ok(arg_data_type.clone())
                     }
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")

@@ -100,6 +100,7 @@ use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashSet;
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
@@ -1156,6 +1157,7 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
+                columns,
                 list_type_columns,
                 struct_type_columns,
                 schema,
@@ -1163,27 +1165,25 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                let list_column_execs = list_type_columns
+                let list_column_exec = list_type_columns
                     .iter()
-                    .map(|column| {
-                        schema
-                            .index_of_column(column)
-                            .map(|idx| Column::new(&column.name, idx))
+                    .map(|idx| {
+                        let column = &columns[*idx];
+                        let schema_idx = schema.index_of_column(column)?;
+                        Ok(Column::new(&column.name,schema_idx))
                     })
                     .collect::<Result<_>>()?;
-                let struct_column_execs = struct_type_columns
+
+                let struct_columns_set: HashSet<usize> = struct_type_columns
                     .iter()
-                    .map(|column| {
-                        schema
-                            .index_of_column(column)
-                            .map(|idx| Column::new(&column.name, idx))
-                    })
+                    .map(|idx| schema.index_of_column(&columns[*idx]))
                     .collect::<Result<_>>()?;
+
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(
                     input,
-                    list_type_columns,
-                    struct_column_execs,
+                    list_column_exec,
+                    struct_columns_set,
                     schema,
                     options.clone(),
                 ))

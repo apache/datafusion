@@ -357,7 +357,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _) => Ok(()),
             DataType::Struct(_) => {
-                not_impl_err!("unnest() does not support struct yet")
+                Ok(())
             }
             DataType::Null => {
                 not_impl_err!("unnest() does not support null yet")

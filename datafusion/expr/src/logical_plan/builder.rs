@@ -1558,44 +1558,45 @@ pub fn unnest_with_options(
     let mut unnested_fields_map: HashMap<usize, _> =
         HashMap::with_capacity(columns.len());
     // Add qualifiers to the columns.
-    let mut qualified_list_columns = Vec::with_capacity(columns.len());
-    let mut qualified_struct_columns = Vec::with_capacity(columns.len());
-    for c in &columns {
-        let index = input.schema().index_of_column(c)?;
-        let (unnest_qualifier, unnest_field) = input.schema().qualified_field(index);
+    let mut qualified_columns = Vec::with_capacity(columns.len());
+    let mut list_columns = Vec::with_capacity(columns.len());
+    let mut struct_columns = Vec::with_capacity(columns.len());
+    for (idx,c) in columns.iter().enumerate() {
+        let schema_idx = input.schema().index_of_column(c)?;
+        println!("unnesting column {} {}",schema_idx,c.name);
+        let (unnest_qualifier, unnest_field) = input.schema().qualified_field(schema_idx);
         match unnest_field.data_type() {
             DataType::List(field)
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field) => {
-                let unnest_field = Arc::new(Field::new(
+                let new_field = Arc::new(Field::new(
                     unnest_field.name(),
                     field.data_type().clone(),
                     // Unnesting may produce NULLs even if the list is not null.
                     // For example: unnset([1], []) -> 1, null
                     true,
                 ));
-                unnested_fields_map.insert(index, unnested_fields);
-                qualified_columns.extend(
-                    unnested_fields
-                        .iter()
-                        .map(|f| Column::from((unnest_qualifier, f))),
-                );
+                qualified_columns.push(Column::from((unnest_qualifier, &new_field)));
+                unnested_fields_map.insert(schema_idx, vec![new_field]);
+                list_columns.push(idx);
             }
             DataType::Struct(fields) => {
-                let unnested_fields = fields.tovec();
-                unnested_fields_map.insert(index, unnested_fields);
+                let new_fields = fields.to_vec();
                 qualified_columns.extend(
-                    unnested_fields
+                    new_fields
                         .iter()
                         .map(|f| Column::from((unnest_qualifier, f))),
                 );
-            },
+                unnested_fields_map.insert(schema_idx, new_fields);
+                struct_columns.push(idx);
+            }
             _ => {
                 // If the unnest field is not a list type return the input plan.
                 return Ok(input);
             }
         }
     }
+    println!("---");
 
     let input_schema = input.schema();
 
@@ -1618,8 +1619,9 @@ pub fn unnest_with_options(
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
-        list_type_columns: qualified_list_columns,
-        struct_type_columns: qualified_struct_columns,
+        columns: qualified_columns,
+        list_type_columns: list_columns,
+        struct_type_columns: struct_columns,
         schema,
         options,
     }))

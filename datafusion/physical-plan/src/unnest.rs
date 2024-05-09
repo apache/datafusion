@@ -38,9 +38,7 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
-use datafusion_common::{
-    exec_datafusion_err, exec_err, Result, UnnestListOptions, UnnestOptions,
-};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -77,13 +75,11 @@ impl UnnestExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         list_type_columns: Vec<Column>,
-        struct_type_columns: Vec<Column>,
+        struct_column_indices: HashSet<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
         let cache = Self::compute_properties(&input, schema.clone());
-        let struct_column_indices: HashSet<_> =
-            struct_type_columns.iter().map(|column| column.index()).collect();
 
         UnnestExec {
             input,
@@ -356,38 +352,14 @@ fn build_batch(
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
                     struct_arr.columns().to_vec()
                 }
-                other => exec_err!("Invalid unnest datatype {other}"),
+                other => vec![column_data.clone()],
             },
             None => {
                 vec![column_data.clone()]
             }
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(RecordBatch::try_new(schema.clone(), columns_expanded))
-}
-
-fn unnest_struct_arrays(
-    unnested_indices: HashSet<usize>,
-    input: &[ArrayRef],
-) -> Result<Vec<ArrayRef>> {
-    let unnested_arrays = input
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, column_data)| match unnested_indices.get(&idx) {
-            Some(_) => match column_data.data_type() {
-                DataType::Struct(fields) => {
-                    let struct_arr =
-                        column_data.as_any().downcast_ref::<StructArray>().unwrap();
-                    struct_arr.columns().to_vec()
-                }
-                other => exec_err!("Invalid unnest datatype {other }"),
-            },
-            None => {
-                vec![column_data.clone()]
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(unnested_arrays)
+        .collect::<Vec<_>>();
+    Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
 }
 
 /// Find the longest list length among the given list arrays for each row.

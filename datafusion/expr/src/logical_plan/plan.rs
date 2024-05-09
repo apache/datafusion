@@ -808,15 +808,13 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                list_type_columns,
-                struct_type_columns,
+                columns,
                 options,
                 ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                list_type_columns.extend_from_slice(struct_type_columns);
-                unnest_with_options(input, list_type_columns.clone(), options.clone())
+                unnest_with_options(input, columns.clone(), options.clone())
             }
         }
     }
@@ -2523,10 +2521,11 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The list columns to unnest
-    pub list_type_columns: Vec<Column>,
-    /// The struct columns to unnest
-    pub struct_type_columns: Vec<Column>,
+    pub columns: Vec<Column>,
+    /// refer to the indices of field columns that have type list 
+    pub list_type_columns: Vec<usize>,
+    /// refer to the indices of field columns that have type struct 
+    pub struct_type_columns: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options
