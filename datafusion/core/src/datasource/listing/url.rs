@@ -187,7 +187,7 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` refers to a collection of objects
     pub fn is_collection(&self) -> bool {
-        self.url.as_str().ends_with(DELIMITER)
+        self.url.path().ends_with(DELIMITER)
     }
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
@@ -461,6 +461,36 @@ mod tests {
         test(
             "/a/b/c//alltypes_plain*.parquet",
             Some(("/a/b/c//", "alltypes_plain*.parquet")),
+        );
+    }
+
+    #[test]
+    fn test_is_collection() {
+        fn test(input: &str, expected: bool, message: &str) {
+            let url = ListingTableUrl::parse(input).unwrap();
+            assert_eq!(url.is_collection(), expected, "{message}");
+        }
+
+        test("https://a.b.c/path/", true, "path ends with / - collection");
+        test(
+            "https://a.b.c/path/?a=b",
+            true,
+            "path ends with / - with query args - collection",
+        );
+        test(
+            "https://a.b.c/path?a=b/",
+            false,
+            "path not ends with / - query ends with / - not collection",
+        );
+        test(
+            "https://a.b.c/path/#a=b",
+            true,
+            "path ends with / - with fragment - collection",
+        );
+        test(
+            "https://a.b.c/path#a=b/",
+            false,
+            "path not ends with / - fragment ends with / - not collection",
         );
     }
 }
