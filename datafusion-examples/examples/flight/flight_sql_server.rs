@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, StringArray};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -39,7 +40,7 @@ use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Field, Schema};
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};
@@ -163,6 +164,43 @@ impl FlightSqlServiceImpl {
                 "Request handle not found: {handle}"
             )))?
         }
+    }
+
+    async fn tables(&self, ctx: Arc<SessionContext>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("catalog_name", DataType::Utf8, true),
+            Field::new("db_schema_name", DataType::Utf8, true),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("table_type", DataType::Utf8, false),
+        ]));
+
+        let mut catalogs = vec![];
+        let mut schemas = vec![];
+        let mut names = vec![];
+        let mut types = vec![];
+        for catalog in ctx.catalog_names() {
+            let catalog_provider = ctx.catalog(&catalog).unwrap();
+            for schema in catalog_provider.schema_names() {
+                let schema_provider = catalog_provider.schema(&schema).unwrap();
+                for table in schema_provider.table_names() {
+                    let table_provider =
+                        schema_provider.table(&table).await.unwrap().unwrap();
+                    catalogs.push(catalog.clone());
+                    schemas.push(schema.clone());
+                    names.push(table.clone());
+                    types.push(table_provider.table_type().to_string())
+                }
+            }
+        }
+
+        RecordBatch::try_new(
+            schema,
+            [catalogs, schemas, names, types]
+                .into_iter()
+                .map(|i| Arc::new(StringArray::from(i)) as ArrayRef)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
     }
 
     fn remove_plan(&self, handle: &str) -> Result<(), Status> {
@@ -358,10 +396,50 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_tables(
         &self,
         _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         info!("get_flight_info_tables");
-        Err(Status::unimplemented("Implement get_flight_info_tables"))
+        let ctx = self.get_ctx(&request)?;
+        let data = self.tables(ctx).await;
+        let schema = data.schema();
+
+        let uuid = Uuid::new_v4().hyphenated().to_string();
+        self.results.insert(uuid.clone(), vec![data]);
+
+        let fetch = FetchResults { handle: uuid };
+        let buf = fetch.as_any().encode_to_vec().into();
+        let ticket = Ticket { ticket: buf };
+        let endpoint = FlightEndpoint {
+            ticket: Some(ticket),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+        let endpoints = vec![endpoint];
+
+        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
+            .try_into()
+            .map_err(|e| status!("Unable to serialize schema", e))?;
+        let IpcMessage(schema_bytes) = message;
+
+        let flight_desc = FlightDescriptor {
+            r#type: DescriptorType::Cmd.into(),
+            cmd: Default::default(),
+            path: vec![],
+        };
+        // send -1 for total_records and total_bytes instead of iterating over all the
+        // batches to get num_rows() and total byte size.
+        let info = FlightInfo {
+            schema: schema_bytes,
+            flight_descriptor: Some(flight_desc),
+            endpoint: endpoints,
+            total_records: -1_i64,
+            total_bytes: -1_i64,
+            ordered: false,
+            app_metadata: Default::default(),
+        };
+        let resp = Response::new(info);
+        Ok(resp)
     }
 
     async fn get_flight_info_table_types(
