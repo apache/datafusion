@@ -46,7 +46,6 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    // collapse_monotonic_lex_req(output)
     output
 }
 

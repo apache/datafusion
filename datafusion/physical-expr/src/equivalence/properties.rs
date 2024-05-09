@@ -198,7 +198,7 @@ impl EquivalenceProperties {
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
     ) {
-        // Discover new constants in the light of new ordering
+        // Discover new constants in light of new the equality:
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !physical_exprs_contains(&self.constants, right) {
@@ -211,8 +211,8 @@ impl EquivalenceProperties {
             }
         }
 
-        // Discover new valid orderings in the light of new equality
-        // See issue: https://github.com/apache/datafusion/issues/9812 for rationale
+        // Discover new valid orderings in light of the new equality. For a discussion, see:
+        // https://github.com/apache/datafusion/issues/9812
         let mut new_orderings = vec![];
         for ordering in self.normalized_oeq_class().iter() {
             let expressions = if left.eq(&ordering[0].expr) {
