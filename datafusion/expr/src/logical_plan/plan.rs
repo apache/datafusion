@@ -2368,6 +2368,16 @@ pub enum Distinct {
     On(DistinctOn),
 }
 
+impl Distinct {
+    /// return a reference to the nodes input
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        match self {
+            Distinct::All(input) => input,
+            Distinct::On(DistinctOn { input, .. }) => input,
+        }
+    }
+}
+
 /// Removes duplicate rows from the input
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DistinctOn {
