@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+
 use std::{any::Any, sync::Arc, time::Duration};
 
 use arrow::{
@@ -26,7 +30,7 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };
 use datafusion_expr::{
-    col, create_udwf, Expr, LogicalPlanBuilder, PartitionEvaluator, TableType,
+    col, create_udwf, ident, Expr, LogicalPlanBuilder, PartitionEvaluator, TableType,
     Volatility, WindowFrame,
 };
 
@@ -34,9 +38,154 @@ use datafusion_common::Result;
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use tonic::async_trait;
-use tracing::info;
 use tracing_subscriber::{fmt::format::FmtSpan, FmtSubscriber};
-pub struct StreamTable(pub Arc<KafkaStreamConfig>);
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::TRACE)
+        .with_span_events(FmtSpan::CLOSE | FmtSpan::ENTER)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
+
+    let sample_event = r#"
+        {
+            "driver_id": "690c119e-63c9-479b-b822-872ee7d89165",
+            "occurred_at_ms": 1715201766763,
+            "imu_measurement": {
+                "timestamp": "2024-05-08T20:56:06.763260Z",
+                "accelerometer": {
+                    "x": 1.4187794,
+                    "y": -0.13967037,
+                    "z": 0.5483732
+                },
+                "gyroscope": {
+                    "x": 0.005840948,
+                    "y": 0.0035944171,
+                    "z": 0.0041645765
+                },
+                "gps": {
+                    "latitude": 72.3492587464122,
+                    "longitude": 144.85596244550095,
+                    "altitude": 2.9088259,
+                    "speed": 57.96137
+                }
+            },
+            "meta": {
+                "nonsense": "MMMMMMMMMM"
+            }
+        }"#;
+
+    // register the window function with DataFusion so we can call it
+    let sample_value: serde_json::Value = serde_json::from_str(sample_event).unwrap();
+    let inferred_schema = infer_arrow_schema_from_json_value(&sample_value).unwrap();
+
+    // println!("{:?}", inferred_schema);
+    let mut fields = inferred_schema.fields().to_vec();
+    // println!("{:?}", fields);
+
+    // Add a new column to the dataset that should mirror the occured_at_ms field
+    fields.insert(
+        fields.len(),
+        Arc::new(Field::new(
+            String::from("franz_canonical_timestamp"),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        )),
+    );
+    let canonical_schema = Arc::new(Schema::new(fields));
+    let _config = KafkaStreamConfig {
+        bootstrap_servers: String::from(
+            "localhost:19092,localhost:29092,localhost:39092",
+        ),
+        topic: String::from("driver-imu-data"),
+        consumer_group_id: String::from("my_test_consumer"),
+        original_schema: Arc::new(inferred_schema),
+        schema: canonical_schema,
+        batch_size: 10,
+        encoding: StreamEncoding::Json,
+        order: vec![],
+        partitions: 1_i32,
+        timestamp_column: String::from("occurred_at_ms"),
+        timestamp_unit: TimestampUnit::Int64_Millis,
+        offset_reset: String::from("earliest"),
+    };
+
+    // Create a new streaming table
+    let db = StreamTable(Arc::new(_config));
+    let mut config = ConfigOptions::default();
+    let _ = config.set("datafusion.execution.batch_size", "32");
+
+    let ctx = SessionContext::new_with_config(config.into());
+
+    // here is where we define the UDWF. We also declare its signature:
+    let smooth_it = create_udwf(
+        "smooth_it",
+        DataType::Float64,
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+
+    ctx.register_udwf(smooth_it.clone());
+
+    // create logical plan composed of a single TableScan
+    let logical_plan = LogicalPlanBuilder::scan_with_filters(
+        "kafka_imu_data",
+        provider_as_source(Arc::new(db)),
+        None,
+        vec![],
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+
+    let df = DataFrame::new(ctx.state(), logical_plan);
+
+    println!("");
+    println!(
+        "{:?}",
+        vec![col("imu_measurement").field("gps").field("speed")]
+    );
+    println!("{:?}", vec![col("driver_id")]);
+    println!("");
+
+    let window_expr = smooth_it.call(
+        vec![col("imu_measurement").field("gps").field("speed")], // Column to average
+        vec![col("driver_id")],                                   // PARTITION BY car
+        vec![col("franz_canonical_timestamp").sort(true, true)],  // ORDER BY time ASC
+        WindowFrame::new(None),
+    );
+
+    let windowed_df = df
+        .clone()
+        .franz_window(vec![window_expr], Duration::from_millis(5000))
+        .unwrap();
+
+    // let df2 = windowed_df.clone().explain(true, true);
+    // println!("{:?}", df2);
+
+    let physical_plan: Arc<dyn ExecutionPlan> =
+        windowed_df.clone().create_physical_plan().await.unwrap();
+
+    let display_visitor = DisplayableExecutionPlan::new(physical_plan.as_ref());
+    let graph = display_visitor.indent(true);
+    print!("{}", graph);
+
+    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
+        windowed_df.execute_stream().await.unwrap();
+
+    // for _ in 1..100 {
+    loop {
+        let rb = stream.next().await.transpose();
+        // println!("{:?}", rb);
+        if let Ok(Some(batch)) = rb {
+            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch]).unwrap());
+        }
+        println!("<<<<< window end >>>>>>");
+    }
+}
 
 fn create_ordering(
     schema: &Schema,
@@ -79,6 +228,9 @@ fn create_ordering(
     }
     Ok(all_sort_orders)
 }
+
+// Used to createa kafka source
+pub struct StreamTable(pub Arc<KafkaStreamConfig>);
 
 impl StreamTable {
     /// Create a new [`StreamTable`] for the given [`StreamConfig`]
@@ -139,129 +291,6 @@ impl TableProvider for StreamTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         return self.create_physical_plan(projection).await;
-    }
-}
-
-#[tokio::main(flavor = "multi_thread")]
-async fn main() {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
-        .with_span_events(FmtSpan::CLOSE | FmtSpan::ENTER) // uncomment for detailed span stats
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
-    // create our custom datasource and adding some users
-    let sample_event = r#"
-        {
-        "id": "6872fd27-38a3-4e65-8858-03d51f40a718",
-        "sequence_id": 121,
-        "bank_account": "GB79PFYP54653078323522",
-        "name": "Donald Blevins",
-        "email": "henryhoward@example.com",
-        "address": "059 Lawrence Crescent Apt. 494\nMortonborough, MS 26500",
-        "balance": 328647.45878,
-        "timestamp": "2024-04-12T13:08:49.000498",
-        "kafka_timestamp": 1713310471,
-        "kafka_key": ""
-    }"#;
-
-    // here is where we define the UDWF. We also declare its signature:
-    let smooth_it = create_udwf(
-        "smooth_it",
-        DataType::Float64,
-        Arc::new(DataType::Float64),
-        Volatility::Immutable,
-        Arc::new(make_partition_evaluator),
-    );
-
-    // register the window function with DataFusion so we can call it
-
-    let sample_value: serde_json::Value = serde_json::from_str(sample_event).unwrap();
-    let inferred_schema = infer_arrow_schema_from_json_value(&sample_value).unwrap();
-    let mut fields = inferred_schema.fields().to_vec();
-    fields.insert(
-        fields.len(),
-        Arc::new(Field::new(
-            String::from("franz_canonical_timestamp"),
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        )),
-    );
-    let canonical_schema = Arc::new(Schema::new(fields));
-    let _config = KafkaStreamConfig {
-        bootstrap_servers: String::from("localhost:19092,localhost:29092,localhost:39092"),
-        topic: String::from("accounts"),
-        consumer_group_id: String::from("my_test_consumer"),
-        original_schema: Arc::new(inferred_schema),
-        schema: canonical_schema,
-        batch_size: 10,
-        encoding: StreamEncoding::Json,
-        order: vec![],
-        partitions: 4_i32,
-        timestamp_column: String::from("timestamp"),
-        timestamp_unit: TimestampUnit::String_ISO_8601(String::from(
-            "%Y-%m-%dT%H:%M:%S%.f",
-        )),
-        offset_reset: String::from("latest"),
-    };
-
-    let db = StreamTable(Arc::new(_config));
-    let mut config = ConfigOptions::default();
-    let _ = config.set("datafusion.execution.batch_size", "32");
-    let ctx = SessionContext::new_with_config(config.into());
-
-    ctx.register_udwf(smooth_it.clone());
-    // create logical plan composed of a single TableScan
-    let logical_plan = LogicalPlanBuilder::scan_with_filters(
-        "accounts",
-        provider_as_source(Arc::new(db)),
-        None,
-        vec![],
-    )
-    .unwrap()
-    .build()
-    .unwrap();
-
-    let df = DataFrame::new(ctx.state(), logical_plan);
-    //.select_columns(&[
-    //    "id",
-    //    "bank_account",
-    //    "balance",
-    //    "timestamp",
-    //    "franz_canonical_timestamp",
-    //])
-    //.unwrap();
-
-    let window_expr = smooth_it.call(
-        vec![col("balance")],      // smooth_it(speed)
-        vec![col("bank_account")], // PARTITION BY car
-        vec![col("franz_canonical_timestamp").sort(true, true)], // ORDER BY time ASC
-        WindowFrame::new(None),
-    );
-
-    let windowed_df = df
-        .clone()
-        .franz_window(vec![window_expr], Duration::from_millis(5000))
-        .unwrap();
-
-    let df2 = windowed_df.clone().explain(true, true);
-    println!("{:?}", df2);
-
-    let physical_plan: Arc<dyn ExecutionPlan> =
-        windowed_df.clone().create_physical_plan().await.unwrap();
-
-    let display_visitor = DisplayableExecutionPlan::new(physical_plan.as_ref());
-    let graph = display_visitor.indent(true);
-    print!("{}", graph);
-
-    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
-        windowed_df.execute_stream().await.unwrap();
-
-
-    for _ in 1..5 {
-        let rb = stream.next().await.transpose();
-        println!("{:?}", rb);
-        println!("<<<<< window end >>>>>>");
     }
 }
 
