@@ -163,28 +163,31 @@ async fn main() {
         .franz_window(vec![window_expr], Duration::from_millis(5000))
         .unwrap();
 
-    print_plan(&windowed_df).await;
+    // let df2 = windowed_df.clone().explain(true, true);
+    // println!("{:?}", df2);
 
-
-    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
-        windowed_df.execute_stream().await.unwrap();
-
-    loop {
-        let rb = stream.next().await.transpose();
-        if let Ok(Some(batch)) = rb {
-            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch]).unwrap());
-        }
-        println!("<<<<< window end >>>>>>");
-    }
-}
-
-async fn print_plan(windowed_df: &DataFrame) {
     let physical_plan: Arc<dyn ExecutionPlan> =
         windowed_df.clone().create_physical_plan().await.unwrap();
 
     let display_visitor = DisplayableExecutionPlan::new(physical_plan.as_ref());
     let graph = display_visitor.indent(true);
     print!("{}", graph);
+
+    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
+        windowed_df.execute_stream().await.unwrap();
+
+    // for _ in 1..100 {
+    loop {
+        let rb = stream.next().await.transpose();
+        // println!("{:?}", rb);
+        if let Ok(Some(batch)) = rb {
+            println!(
+                "{}",
+                arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
+            );
+        }
+        println!("<<<<< window end >>>>>>");
+    }
 }
 
 fn create_ordering(
