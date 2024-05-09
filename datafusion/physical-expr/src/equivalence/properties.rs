@@ -2310,6 +2310,16 @@ mod tests {
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
+            // Same test with above test, where equality order is swapped.
+            // Algorithm shouldn't depend on this order.
+            TestCase {
+                name: "(a, b, c) -> (c)",
+                // b is constant, so it should be removed from the sort order
+                constants: vec![col_b],
+                equal_conditions: vec![[col_a.clone(), cast_c.clone()]],
+                sort_columns: &["c"],
+                should_satisfy_ordering: true,
+            },
             TestCase {
                 name: "not ordered because (b) is not constant",
                 // b is not constant anymore
