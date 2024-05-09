@@ -2305,7 +2305,7 @@ mod tests {
             TestCase {
                 name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
-                constants: vec![col_b],
+                constants: vec![col_b.clone()],
                 equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
