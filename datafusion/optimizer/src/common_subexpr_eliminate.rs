@@ -113,8 +113,8 @@ type CommonExprs = IndexMap<Identifier, Expr>;
 /// refer to that new column.
 ///
 /// ```text
-/// ProjectionExec(exprs=[extract (day from #{new_col}), extract (year from #{new_col})]) <-- reuse here
-///   ProjectionExec(exprs=[to_date(c1) as #{new_col}]) <-- compute to_date once
+/// ProjectionExec(exprs=[extract (day from new_col), extract (year from new_col)]) <-- reuse here
+///   ProjectionExec(exprs=[to_date(c1) as new_col]) <-- compute to_date once
 /// ```
 pub struct CommonSubexprEliminate {}
 
@@ -347,7 +347,7 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
-                        let id = expr_identifier(&expr_rewritten);
+                        let id = expr_identifier(&expr_rewritten, "".to_string());
                         let (qualifier, field) =
                             expr_rewritten.to_field(&new_input_schema)?;
                         let out_name = qualified_name(qualifier.as_ref(), field.name());
@@ -443,7 +443,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             Some(optimized_plan) if optimized_plan.schema() != original_schema => {
                 // add an additional projection if the output schema changed.
                 Ok(Some(build_recover_project_plan(
-                    original_schema,
+                    &original_schema,
                     optimized_plan,
                 )?))
             }
@@ -656,16 +656,24 @@ enum VisitRecord {
     EnterMark(usize),
     /// the node's children were skipped => jump to f_up on same node
     JumpMark,
+    /// Accumulated identifier of sub expression.
+    ExprItem(Identifier),
 }
 
 impl ExprIdentifierVisitor<'_> {
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> Option<usize> {
-        if let Some(item) = self.visit_stack.pop() {
+    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier)> {
+        let mut desc = String::new();
+
+        while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(idx) => {
-                    return Some(idx);
+                    return Some((idx, desc));
+                }
+                VisitRecord::ExprItem(id) => {
+                    desc.push('|');
+                    desc.push_str(&id);
                 }
                 VisitRecord::JumpMark => return None,
             }
@@ -697,11 +705,11 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
-        let Some(down_index) = self.pop_enter_mark() else {
+        let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
             return Ok(TreeNodeRecursion::Continue);
         };
 
-        let expr_id = expr_identifier(expr);
+        let expr_id = expr_identifier(expr, sub_expr_id);
 
         self.id_array[down_index].0 = self.up_index;
         if !self.expr_mask.ignores(expr) {
@@ -716,14 +724,15 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
                 .or_insert((0, data_type));
             *count += 1;
         }
+        self.visit_stack.push(VisitRecord::ExprItem(expr_id));
         self.up_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
     }
 }
 
-fn expr_identifier(expr: &Expr) -> Identifier {
-    format!("#{{{expr}}}")
+fn expr_identifier(expr: &Expr, sub_expr_identifier: Identifier) -> Identifier {
+    format!("{{{expr}{sub_expr_identifier}}}")
 }
 
 /// Go through an expression tree and generate identifier for every node in this tree.
@@ -876,15 +885,15 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "#{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)}"),
-            (6, "#{SUM(a + Int32(1)) - AVG(c)}"),
+            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
             (3, ""),
-            (2, "#{a + Int32(1)}"),
+            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
             (0, ""),
             (1, ""),
             (5, ""),
             (4, ""),
-            (7, ""),
+            (7, "")
         ]
         .into_iter()
         .map(|(number, id)| (number, id.into()))
@@ -902,15 +911,15 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "#{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)}"),
-            (6, "#{SUM(a + Int32(1)) - AVG(c)}"),
-            (3, "#{SUM(a + Int32(1))}"),
-            (2, "#{a + Int32(1)}"),
+            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+            (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}"),
+            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
             (0, ""),
             (1, ""),
-            (5, "#{AVG(c)}"),
+            (5, "{AVG(c)|{c}}"),
             (4, ""),
-            (7, ""),
+            (7, "")
         ]
         .into_iter()
         .map(|(number, id)| (number, id.into()))
@@ -942,8 +951,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(#{test.a * (Int32(1) - test.b)} AS test.a * Int32(1) - test.b), SUM(#{test.a * (Int32(1) - test.b)} AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
-        \n  Projection: test.a * (Int32(1) - test.b) AS #{test.a * (Int32(1) - test.b)}, test.a, test.b, test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b), SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
+        \n  Projection: test.a * (Int32(1) - test.b) AS {test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}}, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -995,8 +1004,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: #{AVG(test.a)} AS AVG(test.a) AS col1, #{AVG(test.a)} AS AVG(test.a) AS col2, col3, #{AVG(test.c)} AS AVG(test.c), #{my_agg(test.a)} AS my_agg(test.a) AS col4, #{my_agg(test.a)} AS my_agg(test.a) AS col5, col6, #{my_agg(test.c)} AS my_agg(test.c)\
-        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS #{AVG(test.a)}, my_agg(test.a) AS #{my_agg(test.a)}, AVG(test.b) AS col3, AVG(test.c) AS #{AVG(test.c)}, my_agg(test.b) AS col6, my_agg(test.c) AS #{my_agg(test.c)}]]\
+        let expected = "Projection: {AVG(test.a)|{test.a}} AS AVG(test.a) AS col1, {AVG(test.a)|{test.a}} AS AVG(test.a) AS col2, col3, {AVG(test.c)} AS AVG(test.c), {my_agg(test.a)|{test.a}} AS my_agg(test.a) AS col4, {my_agg(test.a)|{test.a}} AS my_agg(test.a) AS col5, col6, {my_agg(test.c)} AS my_agg(test.c)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS {AVG(test.a)|{test.a}}, my_agg(test.a) AS {my_agg(test.a)|{test.a}}, AVG(test.b) AS col3, AVG(test.c) AS {AVG(test.c)}, my_agg(test.b) AS col6, my_agg(test.c) AS {my_agg(test.c)}]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1014,8 +1023,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: Int32(1) + #{AVG(test.a)} AS AVG(test.a), Int32(1) - #{AVG(test.a)} AS AVG(test.a), Int32(1) + #{my_agg(test.a)} AS my_agg(test.a), Int32(1) - #{my_agg(test.a)} AS my_agg(test.a)\
-        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS #{AVG(test.a)}, my_agg(test.a) AS #{my_agg(test.a)}]]\
+        let expected = "Projection: Int32(1) + {AVG(test.a)|{test.a}} AS AVG(test.a), Int32(1) - {AVG(test.a)|{test.a}} AS AVG(test.a), Int32(1) + {my_agg(test.a)|{test.a}} AS my_agg(test.a), Int32(1) - {my_agg(test.a)|{test.a}} AS my_agg(test.a)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS {AVG(test.a)|{test.a}}, my_agg(test.a) AS {my_agg(test.a)|{test.a}}]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1031,9 +1040,7 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS col1, my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS #{UInt32(1) + test.a}, test.a, test.b, test.c\
-        \n    TableScan: test";
+        let expected = "Aggregate: groupBy=[[]], aggr=[[AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS col1, my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS col2]]\n  Projection: UInt32(1) + test.a AS {UInt32(1) + test.a|{test.a}|{UInt32(1)}}, test.a, test.b, test.c\n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
 
@@ -1048,8 +1055,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[#{UInt32(1) + test.a} AS UInt32(1) + test.a]], aggr=[[AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS col1, my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS #{UInt32(1) + test.a}, test.a, test.b, test.c\
+        let expected = "Aggregate: groupBy=[[{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a]], aggr=[[AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS col1, my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS col2]]\
+        \n  Projection: UInt32(1) + test.a AS {UInt32(1) + test.a|{test.a}|{UInt32(1)}}, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1069,9 +1076,9 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + #{AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS AVG(UInt32(1) + test.a) AS col1, UInt32(1) - #{AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS AVG(UInt32(1) + test.a) AS col2, #{AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS AVG(UInt32(1) + test.a), UInt32(1) + #{my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS my_agg(UInt32(1) + test.a) AS col3, UInt32(1) - #{my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS my_agg(UInt32(1) + test.a) AS col4, #{my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a)} AS my_agg(UInt32(1) + test.a)\
-        \n  Aggregate: groupBy=[[#{UInt32(1) + test.a} AS UInt32(1) + test.a]], aggr=[[AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS #{AVG(#{UInt32(1) + test.a} AS UInt32(1) + test.a)}, my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a) AS #{my_agg(#{UInt32(1) + test.a} AS UInt32(1) + test.a)}]]\
-        \n    Projection: UInt32(1) + test.a AS #{UInt32(1) + test.a}, test.a, test.b, test.c\
+        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + {AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS AVG(UInt32(1) + test.a) AS col1, UInt32(1) - {AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS AVG(UInt32(1) + test.a) AS col2, {AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS AVG(UInt32(1) + test.a), UInt32(1) + {my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS my_agg(UInt32(1) + test.a) AS col3, UInt32(1) - {my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS my_agg(UInt32(1) + test.a) AS col4, {my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}} AS my_agg(UInt32(1) + test.a)\
+        \n  Aggregate: groupBy=[[{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a]], aggr=[[AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS {AVG({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}}, my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a) AS {my_agg({UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a)|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}} AS UInt32(1) + test.a|{{UInt32(1) + test.a|{test.a}|{UInt32(1)}}}}}]]\
+        \n    Projection: UInt32(1) + test.a AS {UInt32(1) + test.a|{test.a}|{UInt32(1)}}, test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1096,9 +1103,9 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: table.test.col.a, UInt32(1) + #{AVG(#{UInt32(1) + table.test.col.a} AS UInt32(1) + table.test.col.a)} AS AVG(UInt32(1) + table.test.col.a), #{AVG(#{UInt32(1) + table.test.col.a} AS UInt32(1) + table.test.col.a)} AS AVG(UInt32(1) + table.test.col.a)\
-        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG(#{UInt32(1) + table.test.col.a} AS UInt32(1) + table.test.col.a) AS #{AVG(#{UInt32(1) + table.test.col.a} AS UInt32(1) + table.test.col.a)}]]\
-        \n    Projection: UInt32(1) + table.test.col.a AS #{UInt32(1) + table.test.col.a}, table.test.col.a\
+        let expected = "Projection: table.test.col.a, UInt32(1) + {AVG({UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a)|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}}}}} AS AVG(UInt32(1) + table.test.col.a), {AVG({UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a)|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}}}}} AS AVG(UInt32(1) + table.test.col.a)\
+        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG({UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a) AS {AVG({UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a)|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}} AS UInt32(1) + table.test.col.a|{{UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}}}}}]]\
+        \n    Projection: UInt32(1) + table.test.col.a AS {UInt32(1) + table.test.col.a|{table.test.col.a}|{UInt32(1)}}, table.test.col.a\
         \n      TableScan: table.test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1117,8 +1124,8 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: #{Int32(1) + test.a} AS Int32(1) + test.a AS first, #{Int32(1) + test.a} AS Int32(1) + test.a AS second\
-        \n  Projection: Int32(1) + test.a AS #{Int32(1) + test.a}, test.a, test.b, test.c\
+        let expected = "Projection: {Int32(1) + test.a|{test.a}|{Int32(1)}} AS Int32(1) + test.a AS first, {Int32(1) + test.a|{test.a}|{Int32(1)}} AS Int32(1) + test.a AS second\
+        \n  Projection: Int32(1) + test.a AS {Int32(1) + test.a|{test.a}|{Int32(1)}}, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -1293,8 +1300,8 @@ mod test {
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: #{Int32(1) + test.a} - Int32(10) > #{Int32(1) + test.a}\
-        \n    Projection: Int32(1) + test.a AS #{Int32(1) + test.a}, test.a, test.b, test.c\
+        \n  Filter: {Int32(1) + test.a|{test.a}|{Int32(1)}} - Int32(10) > {Int32(1) + test.a|{test.a}|{Int32(1)}}\
+        \n    Projection: Int32(1) + test.a AS {Int32(1) + test.a|{test.a}|{Int32(1)}}, test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
