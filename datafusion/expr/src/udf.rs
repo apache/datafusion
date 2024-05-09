@@ -31,6 +31,13 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+trait UDFImpl {
+    fn name(&self) -> &str;
+    fn coerce_types(&self, _data_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -131,7 +138,8 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
-        self.inner.name()
+        // self.inner.name()
+        ScalarUDFImpl::name(self.inner.as_ref())
     }
 
     /// Returns this function's display_name.
@@ -216,7 +224,9 @@ impl ScalarUDF {
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
     pub fn coerce_types(&self, data_types: &[DataType]) -> Result<Vec<DataType>> {
-        self.inner.coerce_types(data_types)
+        // self.inner.coerce_types(data_types)
+        ScalarUDFImpl::coerce_types(self.inner.as_ref(), data_types)
+        // self.inner.coerce_types(data_types)
     }
 }
 
@@ -280,7 +290,7 @@ where
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + Send + Sync {
+pub trait ScalarUDFImpl: Debug + Send + Sync + UDFImpl {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -291,7 +301,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
-        Ok(format!("{}({})", self.name(), names.join(",")))
+        Ok(format!("{}({})", ScalarUDFImpl::name(self), names.join(",")))
     }
 
     /// Returns the function's [`Signature`] for information about what input
@@ -370,7 +380,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         not_impl_err!(
             "Function {} does not implement invoke_no_args but called",
-            self.name()
+            ScalarUDFImpl::name(self)
         )
     }
 
@@ -428,7 +438,17 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Coerce the types of the arguments to the types that the function expects
     fn coerce_types(&self, _data_types: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("Function {} does not implement coerce_types", self.name())
+        not_impl_err!("Function {} does not implement coerce_types", ScalarUDFImpl::name(self))
+    }
+}
+
+impl <T: ScalarUDFImpl> UDFImpl for T {
+    fn name(&self) -> &str {
+        ScalarUDFImpl::name(self)
+    }
+
+    fn coerce_types(&self, data_types: &[DataType]) -> Result<Vec<DataType>> {
+        ScalarUDFImpl::coerce_types(self, data_types)
     }
 }
 
@@ -456,8 +476,9 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
-        self.inner.name()
+        ScalarUDFImpl::name(self.inner.as_ref())
     }
 
     fn signature(&self) -> &Signature {
