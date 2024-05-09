@@ -1385,14 +1385,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
                 func_def: AggregateFunctionDefinition::UDF(ref udaf),
                 ..
-            }) => {
-                let udaf = udaf.clone();
-                if let Expr::AggregateFunction(aggregate_function) = expr {
-                    udaf.simplify(aggregate_function, info)?
-                } else {
-                    unreachable!("this branch should be unreachable")
+            }) => match (udaf.simplify(), expr) {
+                (Some(simplify_function), Expr::AggregateFunction(af)) => {
+                    Transformed::yes(simplify_function(af, info)?)
                 }
-            }
+                (_, expr) => Transformed::no(expr),
+            },
 
             //
             // Rules for Between
@@ -1760,7 +1758,9 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
-    use datafusion_expr::{interval_arithmetic::Interval, *};
+    use datafusion_expr::{
+        function::AggregateFunctionSimplification, interval_arithmetic::Interval, *,
+    };
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3791,15 +3791,11 @@ mod tests {
             unimplemented!("not needed for testing")
         }
 
-        fn simplify(
-            &self,
-            aggregate_function: datafusion_expr::expr::AggregateFunction,
-            _info: &dyn SimplifyInfo,
-        ) -> Result<Transformed<Expr>> {
+        fn simplify(&self) -> Option<AggregateFunctionSimplification> {
             if self.simplify {
-                Ok(Transformed::yes(col("result_column")))
+                Some(Box::new(|_, _| Ok(col("result_column"))))
             } else {
-                Ok(Transformed::no(Expr::AggregateFunction(aggregate_function)))
+                None
             }
         }
     }

@@ -17,15 +17,12 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::expr::AggregateFunction;
-use crate::function::AccumulatorArgs;
+use crate::function::{AccumulatorArgs, AggregateFunctionSimplification};
 use crate::groups_accumulator::GroupsAccumulator;
-use crate::simplify::SimplifyInfo;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
@@ -205,12 +202,8 @@ impl AggregateUDF {
     /// Do the function rewrite
     ///
     /// See [`AggregateUDFImpl::simplify`] for more details.
-    pub fn simplify(
-        &self,
-        aggregate_function: AggregateFunction,
-        info: &dyn SimplifyInfo,
-    ) -> Result<Transformed<Expr>> {
-        self.inner.simplify(aggregate_function, info)
+    pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        self.inner.simplify()
     }
 }
 
@@ -372,7 +365,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &[]
     }
 
-    /// Optionally apply per-UDF simplification / rewrite rules.
+    /// Optionally apply per-UDaF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
     /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
@@ -383,22 +376,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
     /// optimizations manually for specific UDFs.
     ///
-    /// # Arguments
-    /// * 'aggregate_function': Aggregate function to be simplified
-    /// * 'info': Simplification information
-    ///
     /// # Returns
-    /// [`Transformed`] indicating the result of the simplification NOTE
-    /// if the function cannot be simplified, [Expr::AggregateFunction] with unmodified [AggregateFunction]
-    /// should be returned
-    fn simplify(
-        &self,
-        aggregate_function: AggregateFunction,
-        _info: &dyn SimplifyInfo,
-    ) -> Result<Transformed<Expr>> {
-        Ok(Transformed::yes(Expr::AggregateFunction(
-            aggregate_function,
-        )))
+    ///
+    /// [None] if simplify is not defined or,
+    ///
+    /// Or, a closure with two arguments:
+    /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// closure returns simplified [Expr] or an error.
+    ///
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        None
     }
 }
 

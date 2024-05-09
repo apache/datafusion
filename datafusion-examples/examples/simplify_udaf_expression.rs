@@ -17,7 +17,7 @@
 
 use arrow_schema::{Field, Schema};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use datafusion_common::tree_node::Transformed;
+use datafusion_expr::function::AggregateFunctionSimplification;
 use datafusion_expr::simplify::SimplifyInfo;
 
 use std::{any::Any, sync::Arc};
@@ -88,27 +88,26 @@ impl AggregateUDFImpl for BetterAvgUdaf {
     }
     // we override method, to return new expression which would substitute
     // user defined function call
-    fn simplify(
-        &self,
-        aggregate_function: AggregateFunction,
-        _info: &dyn SimplifyInfo,
-    ) -> Result<Transformed<Expr>> {
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         // as an example for this functionality we replace UDF function
         // with build-in aggregate function to illustrate the use
-        let expr = Expr::AggregateFunction(AggregateFunction {
-            func_def: AggregateFunctionDefinition::BuiltIn(
-                // yes it is the same Avg, `BetterAvgUdaf` was just a
-                // marketing pitch :)
-                datafusion_expr::aggregate_function::AggregateFunction::Avg,
-            ),
-            args: aggregate_function.args,
-            distinct: aggregate_function.distinct,
-            filter: aggregate_function.filter,
-            order_by: aggregate_function.order_by,
-            null_treatment: aggregate_function.null_treatment,
-        });
+        let simplify = |aggregate_function: datafusion_expr::expr::AggregateFunction,
+                        _: &dyn SimplifyInfo| {
+            Ok(Expr::AggregateFunction(AggregateFunction {
+                func_def: AggregateFunctionDefinition::BuiltIn(
+                    // yes it is the same Avg, `BetterAvgUdaf` was just a
+                    // marketing pitch :)
+                    datafusion_expr::aggregate_function::AggregateFunction::Avg,
+                ),
+                args: aggregate_function.args,
+                distinct: aggregate_function.distinct,
+                filter: aggregate_function.filter,
+                order_by: aggregate_function.order_by,
+                null_treatment: aggregate_function.null_treatment,
+            }))
+        };
 
-        Ok(Transformed::yes(expr))
+        Some(Box::new(simplify))
     }
 }
 
