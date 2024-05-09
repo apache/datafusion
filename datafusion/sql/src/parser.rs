@@ -101,12 +101,10 @@ pub struct CopyToStatement {
     pub target: String,
     /// Partition keys
     pub partitioned_by: Vec<String>,
-    /// Indicates whether there is a header row (e.g. CSV)
-    pub has_header: bool,
     /// File type (Parquet, NDJSON, CSV etc.)
     pub stored_as: Option<String>,
     /// Target specific options
-    pub options: Vec<(String, Value)>,
+    pub options: HashMap<String, String>,
 }
 
 impl fmt::Display for CopyToStatement {
@@ -129,7 +127,10 @@ impl fmt::Display for CopyToStatement {
         }
 
         if !options.is_empty() {
-            let opts: Vec<_> = options.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            let opts: Vec<_> = options
+                .iter()
+                .map(|(k, v)| format!("'{k}' '{v}'"))
+                .collect();
             write!(f, " OPTIONS ({})", opts.join(", "))?;
         }
 
@@ -386,8 +387,7 @@ impl<'a> DFParser<'a> {
             stored_as: Option<String>,
             target: Option<String>,
             partitioned_by: Option<Vec<String>>,
-            has_header: Option<bool>,
-            options: Option<Vec<(String, Value)>>,
+            options: Option<HashMap<String, String>>,
         }
 
         let mut builder = Builder::default();
@@ -423,7 +423,7 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::OPTIONS => {
                         ensure_not_set(&builder.options, "OPTIONS")?;
-                        builder.options = Some(self.parse_value_options()?);
+                        builder.options = Some(self.parse_string_options()?);
                     }
                     _ => {
                         unreachable!()
@@ -451,9 +451,8 @@ impl<'a> DFParser<'a> {
             source,
             target,
             partitioned_by: builder.partitioned_by.unwrap_or(vec![]),
-            has_header: builder.has_header.unwrap_or(false),
             stored_as: builder.stored_as,
-            options: builder.options.unwrap_or(vec![]),
+            options: builder.options.unwrap_or(HashMap::new()),
         }))
     }
 
@@ -835,33 +834,6 @@ impl<'a> DFParser<'a> {
         }
         Ok(options)
     }
-
-    /// Parses (key value) style options into a map of String --> [`Value`].
-    ///
-    /// Unlike [`Self::parse_string_options`], this method supports
-    /// keywords as key names as well as multiple value types such as
-    /// Numbers as well as Strings.
-    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
-        let mut options = vec![];
-        self.parser.expect_token(&Token::LParen)?;
-
-        loop {
-            let key = self.parse_option_key()?;
-            let value = self.parse_option_value()?;
-            options.push((key, value));
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after option definition",
-                    self.parser.peek_token(),
-                );
-            }
-        }
-        Ok(options)
-    }
 }
 
 #[cfg(test)]
@@ -996,27 +968,6 @@ mod tests {
             constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
-
-        // positive case: it is ok for case insensitive sql stmt with has_header option tokens
-        let sqls = vec![
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS ('FORMAT.HAS_HEADER' 'TRUE')",
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS ('format.has_header' 'true')",
-        ];
-        for sql in sqls {
-            let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: "t".into(),
-                columns: vec![make_column_def("c1", DataType::Int(display))],
-                file_type: "CSV".to_string(),
-                location: "foo.csv".into(),
-                table_partition_cols: vec![],
-                order_exprs: vec![],
-                if_not_exists: false,
-                unbounded: false,
-                options: HashMap::from([("format.has_header".into(), "true".into())]),
-                constraints: vec![],
-            });
-            expect_parse_ok(sql, expected)?;
-        }
 
         // positive case: it is ok for sql stmt with `COMPRESSION TYPE GZIP` tokens
         let sqls = vec![
@@ -1357,9 +1308,8 @@ mod tests {
             source: object_name("foo"),
             target: "bar".to_string(),
             partitioned_by: vec![],
-            has_header: false,
             stored_as: Some("CSV".to_owned()),
-            options: vec![],
+            options: HashMap::new(),
         });
 
         assert_eq!(verified_stmt(sql), expected);
@@ -1393,9 +1343,8 @@ mod tests {
                 source: object_name("foo"),
                 target: "bar".to_string(),
                 partitioned_by: vec![],
-                has_header: false,
                 stored_as: Some("PARQUET".to_owned()),
-                options: vec![],
+                options: HashMap::new(),
             });
             let expected = Statement::Explain(ExplainStatement {
                 analyze,
@@ -1430,9 +1379,8 @@ mod tests {
             source: CopyToSource::Query(query),
             target: "bar".to_string(),
             partitioned_by: vec![],
-            has_header: true,
             stored_as: Some("CSV".to_owned()),
-            options: vec![],
+            options: HashMap::from([("format.has_header".into(), "true".into())]),
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1445,12 +1393,8 @@ mod tests {
             source: object_name("foo"),
             target: "bar".to_string(),
             partitioned_by: vec![],
-            has_header: false,
             stored_as: Some("CSV".to_owned()),
-            options: vec![(
-                "row_group_size".to_string(),
-                Value::Number("55".to_string(), false),
-            )],
+            options: HashMap::from([("row_group_size".into(), "55".into())]),
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1458,17 +1402,13 @@ mod tests {
 
     #[test]
     fn copy_to_partitioned_by() -> Result<(), ParserError> {
-        let sql = "COPY foo TO bar STORED AS CSV PARTITIONED BY (a) OPTIONS (row_group_size 55)";
+        let sql = "COPY foo TO bar STORED AS CSV PARTITIONED BY (a) OPTIONS ('row_group_size' '55')";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
             partitioned_by: vec!["a".to_string()],
-            has_header: false,
             stored_as: Some("CSV".to_owned()),
-            options: vec![(
-                "row_group_size".to_string(),
-                Value::Number("55".to_string(), false),
-            )],
+            options: HashMap::from([("row_group_size".to_string(), "55".into())]),
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1478,18 +1418,12 @@ mod tests {
     fn copy_to_multi_options() -> Result<(), ParserError> {
         // order of options is preserved
         let sql =
-            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy)";
+            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' '55', 'format.compression' 'snappy')";
 
-        let expected_options = vec![
-            (
-                "format.row_group_size".to_string(),
-                Value::Number("55".to_string(), false),
-            ),
-            (
-                "format.compression".to_string(),
-                Value::UnQuotedString("snappy".to_string()),
-            ),
-        ];
+        let expected_options = HashMap::from([
+            ("format.row_group_size".to_string(), "55".into()),
+            ("format.compression".to_string(), "snappy".into()),
+        ]);
 
         let mut statements = DFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
@@ -1527,6 +1461,7 @@ mod tests {
     /// `canonical` sql string
     fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
         let mut statements = DFParser::parse_sql(sql).unwrap();
+        println!("{:?}", statements[0]);
         assert_eq!(statements.len(), 1);
 
         if sql != canonical {

@@ -52,14 +52,6 @@ CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
 statement error DataFusion error: SQL error: ParserError\("Expected BY, found: LOCATION"\)
 CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
 
-# Missing `TYPE` in COMPRESSION clause
-statement error DataFusion error: SQL error: ParserError\("Expected TYPE, found: LOCATION"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'
-
-# Invalid compression type
-statement error DataFusion error: SQL error: ParserError\("Unsupported file compression type ZZZ"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'
-
 # Duplicate `STORED AS` clause
 statement error DataFusion error: SQL error: ParserError\("STORED AS specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'

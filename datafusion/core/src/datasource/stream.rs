@@ -30,7 +30,7 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
@@ -58,11 +58,22 @@ impl TableProviderFactory for StreamTableFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
+        let header = if let Ok(opt) = cmd
+            .options
+            .get("format.has_header")
+            .map(|has_header| bool::from_str(has_header))
+            .transpose()
+        {
+            opt.unwrap_or(false)
+        } else {
+            return config_err!("format.has_header can either be true or false");
+        };
 
         let config = StreamConfig::new_file(schema, location.into())
             .with_encoding(encoding)
             .with_order(cmd.order_exprs.clone())
             .with_batch_size(state.config().batch_size())
+            .with_header(header)
             .with_constraints(cmd.constraints.clone());
 
         Ok(Arc::new(StreamTable(Arc::new(config))))
