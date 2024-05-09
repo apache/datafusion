@@ -481,7 +481,7 @@ impl LogicalPlan {
     ///
     /// This is useful after modifying a plans `Expr`s (or input plans) via
     /// methods such as [Self::map_children] and [Self::map_expressions]. Unlike
-    /// [Self::new_with_exprs], this method does not require a new set of
+    /// [Self::with_new_exprs], this method does not require a new set of
     /// expressions or inputs plans.
     ///
     /// # Return value
