@@ -872,7 +872,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-
                 let renamed_key = format!("format.{}", key);
                 options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
             } else {
@@ -982,7 +981,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
         all_constraints.extend(inline_constraints);
 
-        let compression = options
+        let mut options_map = HashMap::<String, String>::new();
+        for (key, value) in options {
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!(
+                        "Unsupported Value in CREATE EXTERNAL TABLE statement {}",
+                        value
+                    );
+                }
+            };
+            if !(&key.contains('.')) {
+                // If config does not belong to any namespace, assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+                let renamed_key = format!("format.{}", key);
+                options_map
+                    .insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+            } else {
+                options_map.insert(key.to_lowercase(), value_string.to_lowercase());
+            }
+        }
+
+        let compression = options_map
             .get("format.compression")
             .map(|comp| CompressionTypeVariant::from_str(comp))
             .transpose()?;
@@ -1025,7 +1058,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 definition,
                 order_exprs: ordered_exprs,
                 unbounded,
-                options,
+                options: options_map,
                 constraints,
                 column_defaults,
             },

@@ -277,8 +277,7 @@ DROP TABLE arrow_table;
 statement ok
 CREATE EXTERNAL TABLE avro_table
 STORED AS AVRO
-LOCATION '../../testing/data/avro/simple_enum.avro'
-OPTIONS ('format.has_header' 'true');
+LOCATION '../../testing/data/avro/simple_enum.avro';
 
 
 # It would be great to see the file read as "4" groups with even sizes (offsets) eventually
