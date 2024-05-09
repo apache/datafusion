@@ -983,6 +983,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut options_map = HashMap::<String, String>::new();
         for (key, value) in options {
+            if options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+
             let value_string = match value {
                 Value::SingleQuotedString(s) => s.to_string(),
                 Value::DollarQuotedString(s) => s.to_string(),
@@ -1003,6 +1007,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     );
                 }
             };
+
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards

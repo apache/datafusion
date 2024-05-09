@@ -894,7 +894,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             unbounded: false,
-            options: Vec::new(),
+            options: vec![],
             constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
@@ -910,7 +910,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             unbounded: false,
-            options: Vec::new(),
+            options: vec![],
             constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;

@@ -1562,6 +1562,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_insert_into_sql_csv_defaults_header_row() -> Result<()> {
+        helper_test_insert_into_sql(
+            "csv",
+            FileCompressionType::UNCOMPRESSED,
+            "",
+            Some(HashMap::from([("has_header".into(), "true".into())])),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_insert_into_sql_json_defaults() -> Result<()> {
         helper_test_insert_into_sql("json", FileCompressionType::UNCOMPRESSED, "", None)
             .await?;
