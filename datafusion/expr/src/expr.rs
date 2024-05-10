@@ -1268,10 +1268,33 @@ impl Expr {
         })
     }
 
+    #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
             _ => plan_err!("Could not coerce '{self}' into Column!"),
+        }
+    }
+
+    /// Return a reference to the inner `Column` if any
+    ///
+    /// returns `None` if the expression is not a `Column`
+    ///
+    /// Example
+    /// ```
+    /// # use datafusion_common::Column;
+    /// use datafusion_expr::{col, Expr};
+    /// let expr = col("foo");
+    /// assert_eq!(expr.try_as_col(), Some(&Column::from("foo")));
+    ///
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.try_as_col(), None);
+    /// ```
+    pub fn try_as_col(&self) -> Option<&Column> {
+        if let Expr::Column(it) = self {
+            Some(it)
+        } else {
+            None
         }
     }
 

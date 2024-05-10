@@ -45,8 +45,9 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
-    plan_datafusion_err, DataFusionError, Result, TableReference,
+    context, internal_datafusion_err, internal_err, not_impl_err,
+    parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::{
     dml,
@@ -705,7 +706,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         // The equijoin keys in using-join must be column.
                         let using_keys = left_keys
                             .into_iter()
-                            .map(|key| key.try_into_col())
+                            .map(|key| {
+                                key.try_as_col().cloned()
+                                    .ok_or_else(|| internal_datafusion_err!(
+                                        "Using join keys must be column references, got: {key:?}"
+                                    ))
+                            })
                             .collect::<Result<Vec<_>, _>>()?;
                         builder.join_using(
                             into_logical_plan!(join.right, ctx, extension_codec)?,
