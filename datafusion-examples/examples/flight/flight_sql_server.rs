@@ -313,35 +313,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
         let buf = fetch.as_any().encode_to_vec().into();
         let ticket = Ticket { ticket: buf };
-        let endpoint = FlightEndpoint {
-            ticket: Some(ticket),
-            location: vec![],
-            expiration_time: None,
-            app_metadata: Default::default(),
-        };
-        let endpoints = vec![endpoint];
 
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
-            .try_into()
-            .map_err(|e| status!("Unable to serialize schema", e))?;
-        let IpcMessage(schema_bytes) = message;
-
-        let flight_desc = FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: Default::default(),
-            path: vec![],
-        };
-        // send -1 for total_records and total_bytes instead of iterating over all the
-        // batches to get num_rows() and total byte size.
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: Some(flight_desc),
-            endpoint: endpoints,
-            total_records: -1_i64,
-            total_bytes: -1_i64,
-            ordered: false,
-            app_metadata: Default::default(),
-        };
+        let info = FlightInfo::new()
+            // Encode the Arrow schema
+            .try_with_schema(&schema)
+            .expect("encoding failed")
+            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
+            .with_descriptor(FlightDescriptor {
+                r#type: DescriptorType::Cmd.into(),
+                cmd: Default::default(),
+                path: vec![],
+            });
         let resp = Response::new(info);
         Ok(resp)
     }
@@ -362,34 +344,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let fetch = FetchResults { handle: uuid };
         let buf = fetch.as_any().encode_to_vec().into();
         let ticket = Ticket { ticket: buf };
-        let endpoint = FlightEndpoint {
-            ticket: Some(ticket),
-            location: vec![],
-            expiration_time: None,
-            app_metadata: Default::default(),
-        };
 
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
-            .try_into()
-            .map_err(|e| status!("Unable to serialize schema", e))?;
-        let IpcMessage(schema_bytes) = message;
-
-        let flight_desc = FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: Default::default(),
-            path: vec![],
-        };
-        // send -1 for total_records and total_bytes instead of iterating over all the
-        // batches to get num_rows() and total byte size.
-        let info = FlightInfo {
-            schema: schema_bytes,
-            flight_descriptor: Some(flight_desc),
-            endpoint: vec![endpoint],
-            total_records: -1_i64,
-            total_bytes: -1_i64,
-            ordered: false,
-            app_metadata: Default::default(),
-        };
+        let info = FlightInfo::new()
+            // Encode the Arrow schema
+            .try_with_schema(&schema)
+            .expect("encoding failed")
+            .with_endpoint(FlightEndpoint::new().with_ticket(ticket))
+            .with_descriptor(FlightDescriptor {
+                r#type: DescriptorType::Cmd.into(),
+                cmd: Default::default(),
+                path: vec![],
+            });
         let resp = Response::new(info);
         Ok(resp)
     }
