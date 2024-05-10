@@ -46,7 +46,7 @@ impl JoinKeySet {
         }
     }
 
-    /// Return true if the set contains a join pair 
+    /// Return true if the set contains a join pair
     /// where left = right or right = left
     pub fn contains(&self, left: &Expr, right: &Expr) -> bool {
         self.inner.contains(&ExprPair::new(left, right))
@@ -221,7 +221,7 @@ mod test {
         let mut set = JoinKeySet::new();
 
         // insert (a=b), (b=c), (b=a)
-        set.insert_many(
+        set.insert_all(
             vec![
                 &(col("a"), col("b")),
                 &(col("b"), col("c")),

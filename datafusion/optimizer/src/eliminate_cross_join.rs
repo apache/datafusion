@@ -160,7 +160,7 @@ fn try_flatten_join_inputs(
                 // issue: https://github.com/apache/datafusion/issues/4844
                 return Ok(false);
             }
-            possible_join_keys.insert_many(join.on.iter());
+            possible_join_keys.insert_all(join.on.iter());
             vec![&join.left, &join.right]
         }
         LogicalPlan::CrossJoin(join) => {
@@ -228,7 +228,7 @@ fn find_inner_join(
 
         // Found one or more matching join keys
         if !join_keys.is_empty() {
-            all_join_keys.insert_many(join_keys.iter());
+            all_join_keys.insert_all(join_keys.iter());
             let right_input = rights.remove(i);
             let join_schema = Arc::new(build_join_schema(
                 left_input.schema(),
