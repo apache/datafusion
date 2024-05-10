@@ -131,8 +131,7 @@ impl ScalarUDF {
     ///
     /// See [`ScalarUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
-        // self.inner.name()
-        ScalarUDFImpl::name(self.inner.as_ref())
+        self.inner.name()
     }
 
     /// Returns this function's display_name.
