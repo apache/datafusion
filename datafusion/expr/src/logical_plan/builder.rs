@@ -24,7 +24,7 @@ use std::iter::zip;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::Alias;
+use crate::expr::{Alias, Cast};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
@@ -172,13 +172,6 @@ impl LogicalPlanBuilder {
         if n_cols == 0 {
             return plan_err!("Values list cannot be zero length");
         }
-        let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<Option<DataType>> = Vec::with_capacity(n_cols);
-        for _ in 0..n_cols {
-            field_types.push(None);
-        }
-        // hold all the null holes so that we can correct their data types later
-        let mut nulls: Vec<(usize, usize)> = Vec::new();
         for (i, row) in values.iter().enumerate() {
             if row.len() != n_cols {
                 return plan_err!(
@@ -188,24 +181,51 @@ impl LogicalPlanBuilder {
                     n_cols
                 );
             }
-            field_types = row
-                .iter()
-                .enumerate()
-                .map(|(j, expr)| {
-                    if let Expr::Literal(ScalarValue::Null) = expr {
-                        nulls.push((i, j));
-                        Ok(field_types[j].clone())
-                    } else {
-                        let data_type = expr.get_type(&empty_schema)?;
-                        if let Some(prev_data_type) = &field_types[j] {
-                            if prev_data_type != &data_type {
-                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_data_type} but found {data_type}")
+        }
+
+        let empty_schema = DFSchema::empty();
+        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        for j in 0..n_cols {
+            let mut common_type: Option<DataType> = None;
+            for (i, row) in values.iter().enumerate() {
+                let value = &row[j];
+                if let Expr::Literal(ScalarValue::Null) = value {
+                    continue;
+                } else {
+                    let data_type = value.get_type(&empty_schema)?;
+                    if let Some(prev_type) = common_type {
+                        // get common type of each row values.
+                        match comparison_coercion(&data_type, &prev_type) {
+                            Some(new_type) => {
+                                common_type = Some(new_type.clone());
+                            }
+                            None => {
+                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}")
                             }
                         }
-                        Ok(Some(data_type))
+                    } else {
+                        common_type = Some(data_type.clone());
                     }
-                })
-                .collect::<Result<Vec<Option<DataType>>>>()?;
+                }
+            }
+            field_types.push(common_type.unwrap_or(DataType::Utf8));
+        }
+        for j in 0..n_cols {
+            for i in 0..values.len() {
+                let value = &values[i][j];
+                if let Expr::Literal(ScalarValue::Null) = value {
+                    values[i][j] =
+                        Expr::Literal(ScalarValue::try_from(field_types[j].clone())?);
+                } else {
+                    let data_type = value.get_type(&empty_schema)?;
+                    if data_type != field_types[j] {
+                        values[i][j] = Expr::Cast(Cast {
+                            expr: Box::new(value.clone()),
+                            data_type: field_types[j].clone(),
+                        });
+                    }
+                }
+            }
         }
         let fields = field_types
             .iter()
@@ -213,12 +233,9 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone().unwrap_or(DataType::Utf8), true)
+                Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        for (i, j) in nulls {
-            values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
-        }
         let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))

@@ -473,6 +473,13 @@ CREATE TABLE foo AS VALUES
 (3, 4),
 (5, 6);
 
+# multiple rows and columns need type coercion
+statement ok
+CREATE TABLE foo2(c1 double, c2 double) AS VALUES
+(1.1, 4.1),
+(2, 5),
+(3, 6);
+
 # foo distinct
 query T
 select distinct '1' from foo;
