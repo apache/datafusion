@@ -46,14 +46,14 @@ impl JoinKeySet {
         }
     }
 
-    /// Return true of this set contains (left = right)
-    /// or (right = left)
+    /// Return true if the set contains a join pair 
+    /// where left = right or right = left
     pub fn contains(&self, left: &Expr, right: &Expr) -> bool {
         self.inner.contains(&ExprPair::new(left, right))
             || self.inner.contains(&ExprPair::new(right, left))
     }
 
-    /// Insert the join key `(left = right)` into the set  it or `(right =
+    /// Insert the join key `(left = right)` into the set  if join pair `(right =
     /// left)` is not already in the set
     ///
     /// returns true if the pair was inserted
@@ -69,7 +69,7 @@ impl JoinKeySet {
     /// Inserts potentially many join keys into the set, copying only when necessary
     ///
     /// returns true if any of the pairs were inserted
-    pub fn insert_many<'a>(
+    pub fn insert_all<'a>(
         &mut self,
         iter: impl Iterator<Item = &'a (Expr, Expr)>,
     ) -> bool {
