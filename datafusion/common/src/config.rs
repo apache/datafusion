@@ -181,7 +181,8 @@ config_namespace! {
         /// Type of `TableProvider` to use when loading `default` schema
         pub format: Option<String>, default = None
 
-        /// If the file has a header
+        /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
         pub has_header: bool, default = false
     }
 }
