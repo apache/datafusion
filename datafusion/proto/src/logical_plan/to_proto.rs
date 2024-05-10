@@ -369,7 +369,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Variance => Self::Variance,
             AggregateFunction::VariancePop => Self::VariancePop,
-            AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
@@ -672,9 +671,6 @@ pub fn serialize_expr(
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
                     AggregateFunction::VariancePop => {
                         protobuf::AggregateFunction::VariancePop
-                    }
-                    AggregateFunction::CovariancePop => {
-                        protobuf::AggregateFunction::CovariancePop
                     }
                     AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                     AggregateFunction::StddevPop => {

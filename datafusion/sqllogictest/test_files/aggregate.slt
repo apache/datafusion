@@ -1812,6 +1812,186 @@ select avg(c1), arrow_typeof(avg(c1)) from t;
 statement ok
 drop table t;
 
+# covariance_f64_1
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_2
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_4
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_5
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.602222222222 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_6
+statement ok
+create table t (c1 double, c2 double) as values (1.0, 4.0), (2.0, 5.0), (3.0, 6.0), (1.1, 4.4), (2.2, 5.5), (3.3, 6.6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.761666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_u32
+statement ok
+create table t (c1 int unsigned, c2 int unsigned) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f32
+statement ok
+create table t (c1 float, c2 float) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_1
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, null), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_2
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_3
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
 # simple_mean
 query R
 select mean(c1) from test
