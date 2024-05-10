@@ -1982,7 +1982,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
-            create_aggregate_expr()
+            // create_aggregate_expr()
             vec![Arc::new(FirstValue::new(
                 col("b", &schema)?,
                 "FIRST_VALUE(b)".to_string(),
