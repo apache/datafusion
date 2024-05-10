@@ -38,8 +38,13 @@ WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 # csv_query_error
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'sin\(Utf8\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsin\(Float64/Float32\)
+statement error
 SELECT sin(c1) FROM aggregate_test_100
+----
+DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64, Float32]) failed. and No function matches the given name and argument types 'sin(Utf8)'. You might need to add explicit type casts.
+	Candidate functions:
+	sin(Float64/Float32)
+
 
 # cast_expressions_error
 statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Int32 type
@@ -80,24 +85,50 @@ SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_10
 #
 
 # error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
-statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+statement error
 SELECT concat();
+----
+DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] signature Variadic([Utf8]) does not support zero arguments. and No function matches the given name and argument types 'concat()'. You might need to add explicit type casts.
+	Candidate functions:
+	concat(Utf8, ..)
+
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.
+statement error
 SELECT nullif(1);
+----
+DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Int64] to the signature Uniform(2, [Boolean, UInt8, UInt16, UInt32, UInt64, Int8, Int16, Int32, Int64, Float32, Float64, Utf8, LargeUtf8]) failed. and No function matches the given name and argument types 'nullif(Int64)'. You might need to add explicit type casts.
+	Candidate functions:
+	nullif(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8)
+
 
 # error message for wrong function signature (Exact: exact number of args of an exact type)
-statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+statement error
 SELECT pi(3.14);
+----
+DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Float64] to the signature Exact([]) failed. and No function matches the given name and argument types 'pi(Float64)'. You might need to add explicit type casts.
+	Candidate functions:
+	pi()
+
 
 # error message for wrong function signature (Any: fixed number of args of arbitrary types)
-statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+statement error
 SELECT arrow_typeof(1, 1);
+----
+DataFusion error: Error during planning: Error during planning: The function expected 1 arguments but received 2 and No function matches the given name and argument types 'arrow_typeof(Int64, Int64)'. You might need to add explicit type casts.
+	Candidate functions:
+	arrow_typeof(Any)
+
 
 # error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
-statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+statement error
 SELECT power(1, 2, 3);
+----
+DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Int64, Int64, Int64] to the signature OneOf([Exact([Int64, Int64]), Exact([Float64, Float64])]) failed. and No function matches the given name and argument types 'power(Int64, Int64, Int64)'. You might need to add explicit type casts.
+	Candidate functions:
+	power(Int64, Int64)
+	power(Float64, Float64)
+
 
 #
 # Wrong window/aggregate function signature

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD
 };
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
@@ -48,19 +48,16 @@ pub fn data_types_with_scalar_udf(
             return Ok(vec![]);
         } else {
             return plan_err!(
-                "Coercion from {:?} to the signature {:?} failed.",
-                current_types,
+                "[data_types_with_scalar_udf] signature {:?} does not support zero arguments.",
                 &signature.type_signature
             );
         }
     }
 
-    let valid_types =
-        if matches!(signature.type_signature, TypeSignature::VariadicCoercion) {
-            vec![func.coerce_types(current_types)?]
-        } else {
-            get_valid_types(&signature.type_signature, current_types)?
-        };
+    let valid_types = get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
+    println!("current_types: {:?}", current_types);
+    println!("valid_types: {:?}", valid_types);
+    println!("signature: {:?}", signature.type_signature);
 
     if valid_types
         .iter()
@@ -68,6 +65,8 @@ pub fn data_types_with_scalar_udf(
     {
         return Ok(current_types.to_vec());
     }
+
+    println!("valid_types: {:?}", valid_types);
 
     // Try and coerce the argument types to match the signature, returning the
     // coerced types from the first matching signature.
@@ -79,7 +78,7 @@ pub fn data_types_with_scalar_udf(
 
     // none possible -> Error
     plan_err!(
-        "Coercion from {:?} to the signature {:?} failed.",
+        "[data_types_with_scalar_udf] Coercion from {:?} to the signature {:?} failed.",
         current_types,
         &signature.type_signature
     )
@@ -96,20 +95,14 @@ pub fn data_types_with_aggregate_udf(
             return Ok(vec![]);
         } else {
             return plan_err!(
-                "Coercion from {:?} to the signature {:?} failed.",
+                "[data_types_with_aggregate_udf] Coercion from {:?} to the signature {:?} failed.",
                 current_types,
                 &signature.type_signature
             );
         }
     }
 
-    let valid_types =
-        if matches!(signature.type_signature, TypeSignature::VariadicCoercion) {
-            vec![func.coerce_types(current_types)?]
-        } else {
-            get_valid_types(&signature.type_signature, current_types)?
-        };
-
+    let valid_types = get_valid_types_with_aggregate_udf(&signature.type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -127,7 +120,7 @@ pub fn data_types_with_aggregate_udf(
 
     // none possible -> Error
     plan_err!(
-        "Coercion from {:?} to the signature {:?} failed.",
+        "[data_types_with_aggregate_udf] Coercion from {:?} to the signature {:?} failed.",
         current_types,
         &signature.type_signature
     )
@@ -152,7 +145,7 @@ pub fn data_types(
             return Ok(vec![]);
         } else {
             return plan_err!(
-                "Coercion from {:?} to the signature {:?} failed.",
+                "[data_types] Coercion from {:?} to the signature {:?} failed.",
                 current_types,
                 &signature.type_signature
             );
@@ -178,10 +171,51 @@ pub fn data_types(
 
     // none possible -> Error
     plan_err!(
-        "Coercion from {:?} to the signature {:?} failed.",
+        "[data_types] Coercion from {:?} to the signature {:?} failed.",
         current_types,
         &signature.type_signature
     )
+}
+
+
+fn get_valid_types_with_scalar_udf(
+    signature: &TypeSignature,
+    current_types: &[DataType],
+    func: &ScalarUDF,
+) -> Result<Vec<Vec<DataType>>> {
+    let valid_types = match signature {
+        TypeSignature::VariadicCoercion => {
+            vec![func.coerce_types(current_types)?]
+        }
+        TypeSignature::OneOf(signatures) => signatures
+            .iter()
+            .filter_map(|t| get_valid_types_with_scalar_udf(t, current_types, func).ok())
+            .flatten()
+            .collect::<Vec<_>>(),
+        _ => get_valid_types(signature, current_types)?,
+    };
+
+    Ok(valid_types)
+}
+
+fn get_valid_types_with_aggregate_udf(
+    signature: &TypeSignature,
+    current_types: &[DataType],
+    func: &AggregateUDF,
+) -> Result<Vec<Vec<DataType>>> {
+    let valid_types = match signature {
+        TypeSignature::VariadicCoercion => {
+            vec![func.coerce_types(current_types)?]
+        }
+        TypeSignature::OneOf(signatures) => signatures
+            .iter()
+            .filter_map(|t| get_valid_types_with_aggregate_udf(t, current_types, func).ok())
+            .flatten()
+            .collect::<Vec<_>>(),
+        _ => get_valid_types(signature, current_types)?,
+    };
+
+    Ok(valid_types)
 }
 
 /// Returns a Vec of all possible valid argument types for the given signature.

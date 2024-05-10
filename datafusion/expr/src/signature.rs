@@ -227,7 +227,6 @@ impl TypeSignature {
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
-            TypeSignature::VariadicCoercion => true,
             _ => false,
         }
     }

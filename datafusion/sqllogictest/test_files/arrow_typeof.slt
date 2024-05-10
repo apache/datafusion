@@ -92,8 +92,13 @@ SELECT arrow_cast('1', 'Int16')
 1
 
 # Basic error test
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'arrow_cast\(Utf8\)'. You might need to add explicit type casts.
+query error
 SELECT arrow_cast('1')
+----
+DataFusion error: Error during planning: Error during planning: The function expected 2 arguments but received 1 and No function matches the given name and argument types 'arrow_cast(Utf8)'. You might need to add explicit type casts.
+	Candidate functions:
+	arrow_cast(Any, Any)
+
 
 
 query error DataFusion error: Error during planning: arrow_cast requires its second argument to be a constant string, got Literal\(Int64\(43\)\)

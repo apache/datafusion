@@ -30,7 +30,7 @@ use datafusion_common::internal_err;
 use datafusion_common::{plan_err, utils::array_into_list_array, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, Volatility,
 };
@@ -59,7 +59,10 @@ impl Default for MakeArray {
 impl MakeArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_coercion(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::VariadicCoercion, TypeSignature::Any(0)],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("make_list")],
         }
     }
