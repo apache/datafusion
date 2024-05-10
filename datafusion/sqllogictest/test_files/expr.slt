@@ -2361,10 +2361,6 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
-----
-DataFusion error: Internal error: Input field name SUM(CASE WHEN get_field(t2.server, Utf8("c3")) IS NOT NULL THEN get_field(t2.server, Utf8("c2")) END) does not match with the projection expression SUM(CASE WHEN get_field(t2.server,Utf8("c3")) IS NOT NULL THEN get_field(t2.server,Utf8("c2")) END).
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
@@ -2391,7 +2387,7 @@ host2 2.2 202
 host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
-query error DataFusion error: Schema error: No field named time\.
+query error
 select 
     t2.server['c3'] as host, 
     sum(coalesce(server['c1'])),
@@ -2456,10 +2452,6 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
-----
-DataFusion error: Internal error: Input field name SUM(CASE WHEN get_field(t2.server, Utf8("c3")) IS NOT NULL THEN get_field(t2.server, Utf8("c1")) END) does not match with the projection expression SUM(CASE WHEN get_field(t2.server,Utf8("c3")) IS NOT NULL THEN get_field(t2.server,Utf8("c1")) END).
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 # can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. coalesce)
 query TRR
