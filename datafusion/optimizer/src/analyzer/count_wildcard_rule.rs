@@ -112,7 +112,7 @@ mod tests {
     };
     use std::sync::Arc;
 
-    fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
             Arc::new(CountWildcardRule::new()),
             plan,
@@ -132,7 +132,7 @@ mod tests {
         \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [b:UInt32, COUNT(*):Int64;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
               \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
     #[test]
     fn test_count_wildcard_on_window() -> Result<()> {
@@ -239,7 +239,7 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  WindowAggr: windowExpr=[[COUNT(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
         let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -278,6 +278,6 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(Int64(1))) AS MAX(COUNT(*))]] [MAX(COUNT(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 }

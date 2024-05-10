@@ -29,13 +29,16 @@ import tomlkit
 
 crates = {
     'datafusion-common': 'datafusion/common/Cargo.toml',
+    'datafusion-common-runtime': 'datafusion/common-runtime/Cargo.toml',
     'datafusion': 'datafusion/core/Cargo.toml',
     'datafusion-execution': 'datafusion/execution/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
     'datafusion-functions': 'datafusion/functions/Cargo.toml',
+    'datafusion-functions-aggregate': 'datafusion/functions-aggregate/Cargo.toml',
     'datafusion-functions-array': 'datafusion/functions-array/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
+    'datafusion-physical-expr-common': 'datafusion/physical-expr-common/Cargo.toml',
     'datafusion-physical-plan': 'datafusion/physical-plan/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',

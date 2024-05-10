@@ -1587,8 +1587,9 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        cast, count_distinct, create_udf, expr, lit, sum, BuiltInWindowFunction,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
+        array_agg, cast, count_distinct, create_udf, expr, lit, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
@@ -2040,6 +2041,24 @@ mod tests {
             ],
             &df_results
         );
+
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/10346
+    #[tokio::test]
+    async fn test_select_over_aggregate_schema() -> Result<()> {
+        let df = test_table()
+            .await?
+            .with_column("c", col("c1"))?
+            .aggregate(vec![], vec![array_agg(col("c")).alias("c")])?
+            .select(vec![col("c")])?;
+
+        assert_eq!(df.schema().fields().len(), 1);
+        let field = df.schema().field(0);
+        // There are two columns named 'c', one from the input of the aggregate and the other from the output.
+        // Select should return the column from the output of the aggregate, which is a list.
+        assert!(matches!(field.data_type(), DataType::List(_)));
 
         Ok(())
     }

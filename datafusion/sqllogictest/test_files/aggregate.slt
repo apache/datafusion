@@ -1562,6 +1562,91 @@ SELECT max(c1) FROM test;
 
 
 # count_basic
+statement ok
+create table t (c int) as values (1), (2), (null), (3), (null), (4), (5);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with all nulls
+statement ok
+create table t (c int) as values (null), (null), (null), (null), (null);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test with empty
+statement ok
+create table t (c int);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test count with string
+statement ok
+create table t (c string) as values ('a'), ('b'), (null), ('c'), (null), ('d'), ('e');
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with largeutf8
+statement ok
+create table t (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast(null, 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+select arrow_typeof(c) from t;
+----
+Utf8
+Utf8
+Utf8
+Utf8
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# test count with multiple columns
+statement ok
+create table t (c1 int, c2 int) as values (1, 1), (2, null), (null, 2), (null, null), (3, 3), (null, 4);
+
+query IT
+select count(c1, c2), arrow_typeof(count(c1, c2)) from t;
+----
+2 Int64
+
+statement ok
+drop table t;
+
+
 query II
 SELECT COUNT(c1), COUNT(c2) FROM test
 ----
@@ -1619,13 +1704,167 @@ select avg(c1) from test
 ----
 1.75
 
+# avg_decimal
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.5 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_with_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_all_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_with_nulls
+statement ok
+create table t (c1 int) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_all_nulls
+statement ok
+create table t (c1 int) as values (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# avg_u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f64
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
 # simple_mean
 query R
 select mean(c1) from test
 ----
 1.75
 
+# aggregate sum distinct, coerced result from i32 to i64
+statement ok
+create table t (c int) as values (1), (2), (1), (3), (null), (null), (-3), (-3);
 
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from u32 to u64
+statement ok
+create table t (c int unsigned) as values (1), (2), (1), (3), (null), (null), (3);
+
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+6 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from f32 to f64
+statement ok
+create table t (c float) as values (1.0), (2.2), (1.0), (3.3), (null), (null), (3.3), (-2.0);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct with decimal
+statement ok
+create table t (c decimal(35, 0)) as values (1), (2), (1), (3), (null), (null), (3), (-2);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4 Decimal128(38, 0)
+
+statement ok
+drop table t;
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
 query RI
@@ -1685,6 +1924,30 @@ query ?
 SELECT ARRAY_AGG([1]);
 ----
 [[1]]
+
+# array_agg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query ?
+select array_agg(c1) from t;
+----
+[1, 2, 3, 4, 5]
+
+statement ok
+drop table t;
+
+# array_agg_nested
+statement ok
+create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
+
+query ?
+select array_agg(column1) from t;
+----
+[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
 
 # variance_single_value
 query RRRR
@@ -2315,6 +2578,81 @@ query RT
 select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
 100 Decimal128(20, 3)
+
+# aggregate sum with deciaml
+statement ok
+create table t (c decimal(35, 3)) as values (10), (null), (20);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+30 Decimal128(38, 3)
+
+statement ok
+drop table t;
+
+# aggregate sum with i32, sum coerced result to i64
+statement ok
+create table t (c int) as values (1), (-1), (10), (null), (-11);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-1 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with all nulls
+statement ok
+create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
+
+query RTIT
+select 
+  sum(c1), arrow_typeof(sum(c1)),
+  sum(c2), arrow_typeof(sum(c2))
+from t;
+----
+NULL Decimal128(20, 0) NULL Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with u32, sum coerced result to u64
+statement ok
+create table t (c int unsigned) as values (1), (0), (10), (null), (4);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+15 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum with f32, sum coerced result to f64
+statement ok
+create table t (c float) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.79999999702 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum with f64
+statement ok
+create table t (c double) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.8 Float64
+
+statement ok
+drop table t;
 
 query TRT
 select c2, sum(c1), arrow_typeof(sum(c1)) from d_table GROUP BY c2 ORDER BY c2;
@@ -3139,7 +3477,7 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
-query ITT
+query I
 INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
 ----
 9
