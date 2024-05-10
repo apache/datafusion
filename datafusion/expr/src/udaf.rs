@@ -187,13 +187,18 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
-    pub fn groups_accumulator_supported(&self) -> bool {
-        self.inner.groups_accumulator_supported()
+    pub fn groups_accumulator_supported(&self, args_num: usize) -> bool {
+        self.inner.groups_accumulator_supported(args_num)
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
+    }
+
+    /// See [`AggregateUDFImpl::reverse_expr`] for more details.
+    pub fn reverse_expr(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
     }
 }
 
@@ -334,7 +339,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args_num: usize) -> bool {
         false
     }
 
@@ -354,6 +359,19 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::NotSupported
+    }
+}
+
+pub enum ReversedUDAF {
+    /// The expression is the same as the original expression, like SUM, COUNT
+    Identical,
+    /// The expression does not support reverse calculation, like ArrayAgg
+    NotSupported,
+    /// The expression is different from the original expression
+    Reversed(Arc<dyn AggregateUDFImpl>),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to
