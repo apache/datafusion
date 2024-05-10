@@ -1009,12 +1009,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             };
 
             if !(&key.contains('.')) {
-                // If config does not belong to any namespace, assume it is
+                // If a config does not belong to any namespace, we assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-                let renamed_key = format!("format.{}", key);
-                options_map
-                    .insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+                let renamed_key = format!("format.{}", key.to_lowercase());
+                options_map.insert(renamed_key, value_string.to_lowercase());
             } else {
                 options_map.insert(key.to_lowercase(), value_string.to_lowercase());
             }
@@ -1022,11 +1021,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let compression = options_map
             .get("format.compression")
-            .map(|comp| CompressionTypeVariant::from_str(comp))
+            .map(|c| CompressionTypeVariant::from_str(c))
             .transpose()?;
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && compression
-                .map(|comp| comp != CompressionTypeVariant::UNCOMPRESSED)
+                .map(|c| c != CompressionTypeVariant::UNCOMPRESSED)
                 .unwrap_or(false)
         {
             plan_err!(

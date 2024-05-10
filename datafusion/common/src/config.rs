@@ -1565,8 +1565,8 @@ config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
         /// Specifies whether there is a CSV header (i.e. the first line
-        /// consists of is column names). If not specified, uses default from
-        /// the session state.
+        /// consists of is column names). The value `None` indicates that
+        /// the configuration should be consulted.
         pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
@@ -1608,7 +1608,8 @@ impl CsvOptions {
     }
 
     /// Returns true if the first line is a header. If format options does not
-    /// specify whether there is a header, consults the configuration.
+    /// specify whether there is a header, returns `None` (indicating that the
+    /// configuration should be consulted).
     pub fn has_header(&self) -> Option<bool> {
         self.has_header
     }

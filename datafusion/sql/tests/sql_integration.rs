@@ -32,13 +32,13 @@ use datafusion_expr::{
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
+use datafusion_functions::{string, unicode};
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
-use datafusion_functions::{string, unicode};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;

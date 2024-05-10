@@ -1033,7 +1033,6 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     #[cfg(feature = "parquet")]
     use crate::datasource::{provider_as_source, MemTable};

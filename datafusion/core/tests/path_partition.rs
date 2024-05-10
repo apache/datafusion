@@ -38,13 +38,12 @@ use datafusion::{
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use datafusion_execution::config::SessionConfig;
-use futures::stream;
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult,

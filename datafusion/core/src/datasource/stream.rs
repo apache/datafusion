@@ -25,11 +25,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::{create_ordering, TableProvider};
+use crate::execution::context::SessionState;
+
 use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
-use futures::StreamExt;
-
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -40,9 +41,8 @@ use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::{create_ordering, TableProvider};
-use crate::execution::context::SessionState;
+use async_trait::async_trait;
+use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Debug, Default)]

@@ -141,7 +141,8 @@ impl CsvFormat {
         self
     }
 
-    /// True if the first line is a header.
+    /// Returns `Some(true)` if the first line is a header, `Some(false)` if
+    /// it is not, and `None` if it is not specified.
     pub fn has_header(&self) -> Option<bool> {
         self.options.has_header
     }
@@ -305,10 +306,11 @@ impl CsvFormat {
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
                 .with_header(
-                    self.options
-                        .has_header
-                        .unwrap_or(state.config_options().catalog.has_header)
-                        && first_chunk,
+                    first_chunk
+                        && self
+                            .options
+                            .has_header
+                            .unwrap_or(state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter);
 

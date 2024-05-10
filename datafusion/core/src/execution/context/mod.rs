@@ -23,6 +23,8 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
 use crate::{
     catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
     catalog::listing_schema::ListingSchemaProvider,
@@ -53,14 +55,12 @@ use crate::{
     },
     optimizer::analyzer::{Analyzer, AnalyzerRule},
     optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
+    physical_expr::{create_physical_expr, PhysicalExpr},
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
     physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
-
-#[cfg(feature = "array_expressions")]
-use crate::functions_array;
 use crate::{functions, functions_aggregate};
 
 use arrow::datatypes::{DataType, SchemaRef};
@@ -75,10 +75,13 @@ use datafusion_common::{
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
+    expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
+    simplify::SimplifyInfo,
     var_provider::is_system_variables,
     Expr, ExprSchemable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::{
     parser::{CopyToSource, CopyToStatement, DFParser},
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
@@ -93,14 +96,9 @@ use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
 
-use crate::physical_expr::PhysicalExpr;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_physical_expr::create_physical_expr;
 
 mod avro;
 mod csv;
