@@ -35,7 +35,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    ScalarFunctionDefinition, TableProviderFilterPushDown,
+    TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -228,10 +228,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::Unnest(_)
-        | Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
-            func_def: ScalarFunctionDefinition::UDF(_),
-            ..
-        }) => {
+        | Expr::ScalarFunction(_) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         }

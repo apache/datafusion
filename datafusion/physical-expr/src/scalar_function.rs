@@ -40,10 +40,7 @@ use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{internal_err, DFSchema, Result};
 use datafusion_expr::type_coercion::functions::data_types;
-use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarFunctionDefinition,
-    ScalarUDF,
-};
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarUDF};
 
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
@@ -51,7 +48,7 @@ use crate::PhysicalExpr;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionDefinition,
+    fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -78,7 +75,7 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionDefinition,
+        fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
@@ -93,7 +90,7 @@ impl ScalarFunctionExpr {
     }
 
     /// Get the scalar function implementation
-    pub fn fun(&self) -> &ScalarFunctionDefinition {
+    pub fn fun(&self) -> &ScalarUDF {
         &self.fun
     }
 
@@ -146,22 +143,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
-        match self.fun {
-            ScalarFunctionDefinition::UDF(ref fun) => {
-                let output = match self.args.is_empty() {
-                    true => fun.invoke_no_args(batch.num_rows()),
-                    false => fun.invoke(&inputs),
-                }?;
+        let output = match self.args.is_empty() {
+            true => self.fun.invoke_no_args(batch.num_rows()),
+            false => self.fun.invoke(&inputs),
+        }?;
 
-                if let ColumnarValue::Array(array) = &output {
-                    if array.len() != batch.num_rows() {
-                        return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
+        if let ColumnarValue::Array(array) = &output {
+            if array.len() != batch.num_rows() {
+                return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
                         batch.num_rows(), array.len());
-                    }
-                }
-                Ok(output)
             }
         }
+        Ok(output)
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -233,10 +226,9 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
-    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
-        fun_def,
+        Arc::new(fun.clone()),
         input_phy_exprs.to_vec(),
         return_type,
         fun.monotonicity()?,

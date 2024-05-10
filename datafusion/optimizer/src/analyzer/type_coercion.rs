@@ -46,8 +46,7 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
     type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -354,19 +353,14 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 let case = coerce_case_expression(case, self.schema)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
-                        args,
-                        self.schema,
-                        fun.signature(),
-                    )?;
-                    let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &fun)?;
-                    Ok(Transformed::yes(Expr::ScalarFunction(
-                        ScalarFunction::new_udf(fun, new_expr),
-                    )))
-                }
-            },
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                let new_expr =
+                    coerce_arguments_for_signature(args, self.schema, func.signature())?;
+                let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
+                Ok(Transformed::yes(Expr::ScalarFunction(
+                    ScalarFunction::new_udf(func, new_expr),
+                )))
+            }
             Expr::AggregateFunction(expr::AggregateFunction {
                 func_def,
                 args,
