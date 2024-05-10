@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
@@ -54,10 +54,8 @@ pub fn data_types_with_scalar_udf(
         }
     }
 
-    let valid_types = get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
-    println!("current_types: {:?}", current_types);
-    println!("valid_types: {:?}", valid_types);
-    println!("signature: {:?}", signature.type_signature);
+    let valid_types =
+        get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
 
     if valid_types
         .iter()
@@ -65,8 +63,6 @@ pub fn data_types_with_scalar_udf(
     {
         return Ok(current_types.to_vec());
     }
-
-    println!("valid_types: {:?}", valid_types);
 
     // Try and coerce the argument types to match the signature, returning the
     // coerced types from the first matching signature.
@@ -102,7 +98,11 @@ pub fn data_types_with_aggregate_udf(
         }
     }
 
-    let valid_types = get_valid_types_with_aggregate_udf(&signature.type_signature, current_types, func)?;
+    let valid_types = get_valid_types_with_aggregate_udf(
+        &signature.type_signature,
+        current_types,
+        func,
+    )?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -135,7 +135,7 @@ pub fn data_types_with_aggregate_udf(
 /// [`type_coercion`](crate::type_coercion) module.
 ///
 /// This function will be replaced with [data_types_with_scalar_udf],
-/// [data_types_with_aggregate_udf], and [data_types_with_window_udf] gradually.
+/// [data_types_with_aggregate_udf], and data_types_with_window_udf gradually.
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
@@ -177,7 +177,6 @@ pub fn data_types(
     )
 }
 
-
 fn get_valid_types_with_scalar_udf(
     signature: &TypeSignature,
     current_types: &[DataType],
@@ -185,6 +184,16 @@ fn get_valid_types_with_scalar_udf(
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
         TypeSignature::VariadicCoercion => {
+            vec![func.coerce_types(current_types)?]
+        }
+        TypeSignature::UniformCoercion(num) => {
+            if *num != current_types.len() {
+                return plan_err!(
+                    "The function expected {} arguments but received {}",
+                    num,
+                    current_types.len()
+                );
+            }
             vec![func.coerce_types(current_types)?]
         }
         TypeSignature::OneOf(signatures) => signatures
@@ -207,9 +216,21 @@ fn get_valid_types_with_aggregate_udf(
         TypeSignature::VariadicCoercion => {
             vec![func.coerce_types(current_types)?]
         }
+        TypeSignature::UniformCoercion(num) => {
+            if *num != current_types.len() {
+                return plan_err!(
+                    "The function expected {} arguments but received {}",
+                    num,
+                    current_types.len()
+                );
+            }
+            vec![func.coerce_types(current_types)?]
+        }
         TypeSignature::OneOf(signatures) => signatures
             .iter()
-            .filter_map(|t| get_valid_types_with_aggregate_udf(t, current_types, func).ok())
+            .filter_map(|t| {
+                get_valid_types_with_aggregate_udf(t, current_types, func).ok()
+            })
             .flatten()
             .collect::<Vec<_>>(),
         _ => get_valid_types(signature, current_types)?,
@@ -324,9 +345,9 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::VariadicCoercion => {
+        TypeSignature::VariadicCoercion | TypeSignature::UniformCoercion(_) => {
             return internal_err!(
-                "VariadicCoercion should be handled outside of get_valid_types."
+                "Coercion signature is handled in function-specific get_valid_types."
             )
         }
         TypeSignature::VariadicEqual => {

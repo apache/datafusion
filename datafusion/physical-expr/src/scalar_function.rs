@@ -220,11 +220,11 @@ pub fn create_physical_expr(
         .collect::<Result<Vec<_>>>()?;
 
     // verify that input data types is consistent with function's `TypeSignature`
-    let new_types = data_types_with_scalar_udf(&input_expr_types, fun)?;
+    data_types_with_scalar_udf(&input_expr_types, fun)?;
 
     // Since we have arg_types, we dont need args and schema.
     let return_type =
-        fun.return_type_from_exprs(args, input_dfschema, &new_types)?;
+        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),

@@ -30,10 +30,8 @@ use datafusion_common::internal_err;
 use datafusion_common::{plan_err, utils::array_into_list_array, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::{Expr, TypeSignature};
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility,
-};
 
 use crate::utils::make_scalar_function;
 

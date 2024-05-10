@@ -60,10 +60,6 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // COALESCE has multiple args and they might get coerced, get a preview of this
-        // let coerced_types = data_types(arg_types, self.signature());
-        // coerced_types.map(|types| types[0].clone())
-        println!("arg_types: {:?}", arg_types);
         Ok(arg_types[0].clone())
     }
 
