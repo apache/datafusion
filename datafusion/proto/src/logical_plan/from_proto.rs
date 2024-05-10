@@ -428,7 +428,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
             protobuf::AggregateFunction::Variance => Self::Variance,
             protobuf::AggregateFunction::VariancePop => Self::VariancePop,
-            protobuf::AggregateFunction::CovariancePop => Self::CovariancePop,
             protobuf::AggregateFunction::Stddev => Self::Stddev,
             protobuf::AggregateFunction::StddevPop => Self::StddevPop,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
