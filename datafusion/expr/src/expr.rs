@@ -515,9 +515,6 @@ pub enum AggregateFunctionDefinition {
     BuiltIn(aggregate_function::AggregateFunction),
     /// Resolved to a user defined aggregate function
     UDF(Arc<crate::AggregateUDF>),
-    /// A aggregation function constructed with name. This variant can not be executed directly
-    /// and instead must be resolved to one of the other variants prior to physical planning.
-    Name(Arc<str>),
 }
 
 impl AggregateFunctionDefinition {
@@ -526,7 +523,6 @@ impl AggregateFunctionDefinition {
         match self {
             AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
             AggregateFunctionDefinition::UDF(udf) => udf.name(),
-            AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
 }
@@ -1829,8 +1825,7 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             null_treatment,
         }) => {
             let name = match func_def {
-                AggregateFunctionDefinition::BuiltIn(..)
-                | AggregateFunctionDefinition::Name(..) => {
+                AggregateFunctionDefinition::BuiltIn(..) => {
                     create_function_name(func_def.name(), *distinct, args)?
                 }
                 AggregateFunctionDefinition::UDF(..) => {
@@ -1850,8 +1845,7 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" {}", nt);
             }
             match func_def {
-                AggregateFunctionDefinition::BuiltIn(..)
-                | AggregateFunctionDefinition::Name(..) => {
+                AggregateFunctionDefinition::BuiltIn(..) => {
                     Ok(format!("{}{}", name, info))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {

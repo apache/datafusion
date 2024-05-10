@@ -750,12 +750,6 @@ pub fn serialize_expr(
                     },
                 ))),
             },
-            AggregateFunctionDefinition::Name(_) => {
-                return Err(Error::NotImplemented(
-                    "Proto serialization error: Trying to serialize a unresolved function"
-                        .to_string(),
-                ));
-            }
         },
 
         Expr::ScalarVariable(_, _) => {
