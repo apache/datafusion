@@ -37,7 +37,9 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
 };
-use datafusion_expr::type_coercion::functions::{data_types, data_types_with_scalar_udf};
+use datafusion_expr::type_coercion::functions::{
+    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
@@ -45,8 +47,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
+    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -306,7 +308,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 let new_expr = coerce_arguments_for_signature_with_scalar_udf(
                     args,
                     self.schema,
-                    func.signature(),
                     &func,
                 )?;
                 let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
@@ -341,10 +342,10 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     )))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
+                    let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                         args,
                         self.schema,
-                        fun.signature(),
+                        &fun,
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
@@ -539,7 +540,6 @@ fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 fn coerce_arguments_for_signature_with_scalar_udf(
     expressions: Vec<Expr>,
     schema: &DFSchema,
-    signature: &Signature,
     func: &ScalarUDF,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
@@ -551,7 +551,7 @@ fn coerce_arguments_for_signature_with_scalar_udf(
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types_with_scalar_udf(&current_types, signature, func)?;
+    let new_types = data_types_with_scalar_udf(&current_types, func)?;
 
     expressions
         .into_iter()
@@ -560,10 +560,14 @@ fn coerce_arguments_for_signature_with_scalar_udf(
         .collect()
 }
 
-fn coerce_arguments_for_signature(
+/// Returns `expressions` coerced to types compatible with
+/// `signature`, if possible.
+///
+/// See the module level documentation for more detail on coercion.
+fn coerce_arguments_for_signature_with_aggregate_udf(
     expressions: Vec<Expr>,
     schema: &DFSchema,
-    signature: &Signature,
+    func: &AggregateUDF,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(expressions);
@@ -574,7 +578,7 @@ fn coerce_arguments_for_signature(
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types(&current_types, signature)?;
+    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
 
     expressions
         .into_iter()

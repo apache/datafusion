@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
-use crate::{ScalarUDF, Signature, TypeSignature};
+use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -30,7 +30,7 @@ use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result}
 
 use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
-/// Performs type coercion for function arguments.
+/// Performs type coercion for scalar function arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
 /// match `signature`.
@@ -39,10 +39,10 @@ use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types_with_scalar_udf(
     current_types: &[DataType],
-    signature: &Signature,
-    // TODO: extend for UDAF and UDWF
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
+    let signature = func.signature();
+
     if current_types.is_empty() {
         if signature.type_signature.supports_zero_argument() {
             return Ok(vec![]);
@@ -85,6 +85,64 @@ pub fn data_types_with_scalar_udf(
     )
 }
 
+pub fn data_types_with_aggregate_udf(
+    current_types: &[DataType],
+    func: &AggregateUDF,
+) -> Result<Vec<DataType>> {
+    let signature = func.signature();
+
+    if current_types.is_empty() {
+        if signature.type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else {
+            return plan_err!(
+                "Coercion from {:?} to the signature {:?} failed.",
+                current_types,
+                &signature.type_signature
+            );
+        }
+    }
+
+    let valid_types =
+        if matches!(signature.type_signature, TypeSignature::VariadicCoercion) {
+            vec![func.coerce_types(current_types)?]
+        } else {
+            get_valid_types(&signature.type_signature, current_types)?
+        };
+
+    if valid_types
+        .iter()
+        .any(|data_type| data_type == current_types)
+    {
+        return Ok(current_types.to_vec());
+    }
+
+    // Try and coerce the argument types to match the signature, returning the
+    // coerced types from the first matching signature.
+    for valid_types in valid_types {
+        if let Some(types) = maybe_data_types(&valid_types, current_types) {
+            return Ok(types);
+        }
+    }
+
+    // none possible -> Error
+    plan_err!(
+        "Coercion from {:?} to the signature {:?} failed.",
+        current_types,
+        &signature.type_signature
+    )
+}
+
+/// Performs type coercion for function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+///
+/// This function will be replaced with [data_types_with_scalar_udf],
+/// [data_types_with_aggregate_udf], and [data_types_with_window_udf] gradually.
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
