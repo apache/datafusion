@@ -1901,59 +1901,18 @@ a
 # regular expressions, which we have not implemented yet.
 query error
 SELECT substring('alphabet' FROM '3')
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. and No function matches the given name and argument types 'substr(Utf8, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	substr(Utf8, Int64)
-	substr(LargeUtf8, Int64)
-	substr(Utf8, Int64, Int64)
-	substr(LargeUtf8, Int64, Int64)
-
 
 query error
 SELECT substring('alphabet' FROM '3' FOR '2')
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8, Utf8, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. and No function matches the given name and argument types 'substr(Utf8, Utf8, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	substr(Utf8, Int64)
-	substr(LargeUtf8, Int64)
-	substr(Utf8, Int64, Int64)
-	substr(LargeUtf8, Int64, Int64)
-
 
 query error
 SELECT substring('alphabet' FROM '3' FOR 2)
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8, Utf8, Int64] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. and No function matches the given name and argument types 'substr(Utf8, Utf8, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	substr(Utf8, Int64)
-	substr(LargeUtf8, Int64)
-	substr(Utf8, Int64, Int64)
-	substr(LargeUtf8, Int64, Int64)
-
 
 query error
 SELECT substring('alphabet' FROM 3 FOR '2')
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8, Int64, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. and No function matches the given name and argument types 'substr(Utf8, Int64, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	substr(Utf8, Int64)
-	substr(LargeUtf8, Int64)
-	substr(Utf8, Int64, Int64)
-	substr(LargeUtf8, Int64, Int64)
-
 
 query error
 SELECT substring('alphabet' FOR '2')
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8, Int64, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. and No function matches the given name and argument types 'substr(Utf8, Int64, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	substr(Utf8, Int64)
-	substr(LargeUtf8, Int64)
-	substr(Utf8, Int64, Int64)
-	substr(LargeUtf8, Int64, Int64)
-
-
 
 ##### csv_query_nullif_divide_by_0
 

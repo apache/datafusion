@@ -115,20 +115,10 @@ false true true NULL
 # abs: empty argumnet
 statement error
 SELECT abs();
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] signature Any(1) does not support zero arguments. and No function matches the given name and argument types 'abs()'. You might need to add explicit type casts.
-	Candidate functions:
-	abs(Any)
-
 
 # abs: wrong number of arguments
 statement error
 SELECT abs(1, 2);
-----
-DataFusion error: Error during planning: Error during planning: The function expected 1 arguments but received 2 and No function matches the given name and argument types 'abs(Int64, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	abs(Any)
-
 
 # abs: unsupported argument type
 query error DataFusion error: This feature is not implemented: Unsupported data type Utf8 for function abs

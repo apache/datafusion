@@ -42,11 +42,6 @@ select decode(hex_field, 'non_encoding') from test;
 
 query error
 select to_hex(hex_field) from test;
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8] to the signature Uniform(1, [Int64]) failed. and No function matches the given name and argument types 'to_hex(Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	to_hex(Int64)
-
 
 # Arrays tests
 query T

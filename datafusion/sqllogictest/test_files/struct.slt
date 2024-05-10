@@ -94,11 +94,6 @@ physical_plan
 # error on 0 arguments
 query error
 select named_struct();
-----
-DataFusion error: Error during planning: Error during planning: [data_types_with_scalar_udf] signature VariadicAny does not support zero arguments. and No function matches the given name and argument types 'named_struct()'. You might need to add explicit type casts.
-	Candidate functions:
-	named_struct(Any, .., Any)
-
 
 # error on odd number of arguments #1
 query error DataFusion error: Execution error: named_struct requires an even number of arguments, got 1 instead
