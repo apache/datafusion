@@ -52,13 +52,48 @@ make_udf_function!(
     array_element_udf
 );
 
-make_udf_function!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array.",
-    array_slice_udf
-);
+// make_udf_function!(
+//     ArraySlice,
+//     array_slice,
+//     array begin end stride,
+//     "returns a slice of the array.",
+//     array_slice_udf
+// );
+
+
+#[doc = "returns a slice of the array."]
+pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
+    if let Some(stride) = stride {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            array_slice_udf(),
+            vec![array, begin, end, stride],
+        ))
+    } else {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            array_slice_udf(),
+            vec![array, begin, end],
+        ))
+    }
+}
+
+#[doc = r" Singleton instance of [`$UDF`], ensures the UDF is only created once"]
+#[doc = r" named STATIC_$(UDF). For example `STATIC_ArrayToString`"]
+#[allow(non_upper_case_globals)]
+static STATIC_ArraySlice: std::sync::OnceLock<
+    std::sync::Arc<datafusion_expr::ScalarUDF>,
+> = std::sync::OnceLock::new();
+#[doc = r" ScalarFunction that returns a [`ScalarUDF`] for [`$UDF`]"]
+#[doc = r""]
+#[doc = r" [`ScalarUDF`]: datafusion_expr::ScalarUDF"]
+pub fn array_slice_udf() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+    STATIC_ArraySlice
+        .get_or_init(|| {
+            std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                <ArraySlice>::new(),
+            ))
+        })
+        .clone()
+}
 
 make_udf_function!(
     ArrayPopFront,
