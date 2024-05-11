@@ -354,8 +354,8 @@ VALUES (1),('2')
 query R
 VALUES (1),(2.0)
 ----
-1.0
-2.0
+1
+2
 
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
 VALUES (1,2), (1,'2')
