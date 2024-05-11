@@ -2170,7 +2170,7 @@ mod tests {
             fields,
             vec![
                 Field::new("column1", DataType::Float64, true),
-                Field::new("column2", DataType::Int64, true),
+                Field::new("column2", DataType::Int32, true),
                 Field::new("column3", DataType::Utf8, true)
             ]
             .into()
