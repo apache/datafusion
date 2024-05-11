@@ -30,6 +30,13 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 
+make_udaf_expr_and_func!(
+    Count,
+    count,
+    "Returns the number of non-null values in the group.",
+    count_udaf
+);
+
 pub struct Count {
     signature: Signature,
     aliases: Vec<String>,
@@ -65,7 +72,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn name(&self) -> &str {
-        "count"
+        "COUNT"
     }
 
     fn signature(&self) -> &Signature {

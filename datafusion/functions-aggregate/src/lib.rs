@@ -69,6 +69,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+    pub use super::count::count;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -77,6 +78,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         first_last::first_value_udaf(),
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
+        count::count_udaf(),
     ];
 
     functions.into_iter().try_for_each(|udf| {
