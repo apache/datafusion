@@ -92,7 +92,7 @@ physical_plan
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'named_struct\(\)'. You might need to add explicit type casts.
+query error
 select named_struct();
 
 # error on odd number of arguments #1

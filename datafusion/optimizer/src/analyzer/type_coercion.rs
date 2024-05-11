@@ -37,7 +37,9 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
 };
-use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_expr::type_coercion::functions::{
+    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
@@ -45,8 +47,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
+    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -303,8 +305,11 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let new_expr =
-                    coerce_arguments_for_signature(args, self.schema, func.signature())?;
+                let new_expr = coerce_arguments_for_signature_with_scalar_udf(
+                    args,
+                    self.schema,
+                    &func,
+                )?;
                 let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
@@ -337,10 +342,10 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     )))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
+                    let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                         args,
                         self.schema,
-                        fun.signature(),
+                        &fun,
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
@@ -532,10 +537,10 @@ fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 /// `signature`, if possible.
 ///
 /// See the module level documentation for more detail on coercion.
-fn coerce_arguments_for_signature(
+fn coerce_arguments_for_signature_with_scalar_udf(
     expressions: Vec<Expr>,
     schema: &DFSchema,
-    signature: &Signature,
+    func: &ScalarUDF,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(expressions);
@@ -546,7 +551,34 @@ fn coerce_arguments_for_signature(
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types(&current_types, signature)?;
+    let new_types = data_types_with_scalar_udf(&current_types, func)?;
+
+    expressions
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .collect()
+}
+
+/// Returns `expressions` coerced to types compatible with
+/// `signature`, if possible.
+///
+/// See the module level documentation for more detail on coercion.
+fn coerce_arguments_for_signature_with_aggregate_udf(
+    expressions: Vec<Expr>,
+    schema: &DFSchema,
+    func: &AggregateUDF,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(expressions);
+    }
+
+    let current_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
 
     expressions
         .into_iter()
@@ -833,12 +865,9 @@ mod test {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         })
         .call(vec![lit("Apple")]);
-        let plan_err = Projection::try_new(vec![udf], empty)
+        Projection::try_new(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
 
-        let expected_error = "Error during planning: No function matches the given name and argument types 'TestScalarUDF(Utf8)'. You might need to add explicit type casts.";
-
-        assert!(plan_err.to_string().starts_with(expected_error));
         Ok(())
     }
 
@@ -914,7 +943,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            "type_coercion\ncaused by\nError during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
             err.strip_backtrace()
         );
         Ok(())

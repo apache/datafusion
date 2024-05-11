@@ -213,6 +213,11 @@ impl ScalarUDF {
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
     }
+
+    /// See [`ScalarUDFImpl::coerce_types`] for more details.
+    pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -420,6 +425,29 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn short_circuits(&self) -> bool {
         false
     }
+
+    /// Coerce arguments of a function call to types that the function can evaluate.
+    ///
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
+    /// UDFs should return one of the other variants of `TypeSignature` which handle common
+    /// cases
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a floating point arguments, but the user calls
+    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
+    /// to ensure the argument was cast to `1::double`
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the arguments  this function with
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -446,6 +474,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         self.inner.name()
     }
