@@ -36,7 +36,9 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::comparison_coercion;
+use crate::type_coercion::binary::{
+    comparison_binary_numeric_coercion, comparison_coercion,
+};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
@@ -184,44 +186,44 @@ impl LogicalPlanBuilder {
         }
 
         let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut field_types: Vec<(bool, DataType)> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
+            let mut nullable = false;
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                if let Expr::Literal(ScalarValue::Null) = value {
+                let data_type = value.get_type(&empty_schema)?;
+                if data_type == DataType::Null {
+                    nullable = true;
                     continue;
-                } else {
-                    let data_type = value.get_type(&empty_schema)?;
-                    if let Some(prev_type) = common_type {
-                        // get common type of each row values.
-                        match comparison_coercion(&data_type, &prev_type) {
-                            Some(new_type) => {
-                                common_type = Some(new_type.clone());
-                            }
-                            None => {
-                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}")
-                            }
+                }
+                if let Some(prev_type) = common_type {
+                    // get common type of each column values.
+                    match comparison_binary_numeric_coercion(&data_type, &prev_type) {
+                        Some(new_type) => {
+                            common_type = Some(new_type.clone());
                         }
-                    } else {
-                        common_type = Some(data_type.clone());
+                        None => {
+                            return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}")
+                        }
                     }
+                } else {
+                    common_type = Some(data_type.clone());
                 }
             }
-            field_types.push(common_type.unwrap_or(DataType::Utf8));
+            field_types.push((nullable, common_type.unwrap_or(DataType::Utf8)));
         }
-        for j in 0..n_cols {
-            for i in 0..values.len() {
-                let value = &values[i][j];
-                if let Expr::Literal(ScalarValue::Null) = value {
-                    values[i][j] =
-                        Expr::Literal(ScalarValue::try_from(field_types[j].clone())?);
+        // wrap cast if data type is not same as common type.
+        for row in &mut values {
+            for (j, (_, field_type)) in field_types.iter().enumerate() {
+                if let Expr::Literal(ScalarValue::Null) = row[j] {
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
                 } else {
-                    let data_type = value.get_type(&empty_schema)?;
-                    if data_type != field_types[j] {
-                        values[i][j] = Expr::Cast(Cast {
-                            expr: Box::new(value.clone()),
-                            data_type: field_types[j].clone(),
+                    let data_type = row[j].get_type(&empty_schema)?;
+                    if data_type != *field_type {
+                        row[j] = Expr::Cast(Cast {
+                            expr: Box::new(row[j].clone()),
+                            data_type: field_type.clone(),
                         });
                     }
                 }
@@ -230,10 +232,10 @@ impl LogicalPlanBuilder {
         let fields = field_types
             .iter()
             .enumerate()
-            .map(|(j, data_type)| {
+            .map(|(j, (nullable, data_type))| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
+                Field::new(name, data_type.clone(), *nullable)
             })
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
@@ -2134,6 +2136,7 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
     fn test_change_redundant_column() -> Result<()> {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
@@ -2154,6 +2157,23 @@ mod tests {
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_values() -> Result<()> {
+        let values = vec![vec![lit(1.2), lit(3)], vec![lit(2), lit(ScalarValue::Null)]];
+        let plan = LogicalPlanBuilder::values(values.clone())?.build()?;
+        let schema = plan.schema();
+        let fields = schema.fields().clone();
+        assert_eq!(
+            fields,
+            vec![
+                Field::new("column1", DataType::Float64, false),
+                Field::new("column2", DataType::Int64, true)
+            ]
+            .into()
         );
         Ok(())
     }
