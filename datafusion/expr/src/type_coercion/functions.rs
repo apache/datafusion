@@ -207,7 +207,10 @@ fn get_valid_types_with_aggregate_udf(
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
         TypeSignature::UserDefined => {
-            vec![func.coerce_types(current_types)?]
+            match func.coerce_types(current_types) {
+                Ok(coerced_types) => vec![coerced_types],
+                Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            }
         }
         TypeSignature::OneOf(signatures) => signatures
             .iter()
