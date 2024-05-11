@@ -1619,7 +1619,7 @@ select count(1) from v;
 query I
 select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 ----
-1
+3
 
 # run below query without logical optimizations
 statement ok

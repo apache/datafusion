@@ -1409,8 +1409,7 @@ pub fn project(
                 input_schema,
                 None,
             )?),
-            _ => projected_expr
-                .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
+            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
 

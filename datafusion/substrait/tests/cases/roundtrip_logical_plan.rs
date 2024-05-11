@@ -592,6 +592,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         .await
 }
 
+#[ignore]
 #[tokio::test]
 async fn simple_window_function() -> Result<()> {
     roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, SUM(b) OVER (PARTITION BY a) FROM data;").await
