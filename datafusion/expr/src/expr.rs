@@ -1696,17 +1696,15 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         }) => {
             write!(
                 w,
-                "{} {}{} {} {}",
+                "{} {}{} {}",
                 expr,
                 if *negated { "NOT " } else { "" },
                 if *case_insensitive { "ILIKE" } else { "LIKE" },
                 pattern,
-                if let Some(char) = escape_char {
-                    format!("CHAR '{char}'")
-                } else {
-                    "".to_owned()
-                }
             )?;
+            if let Some(char) = escape_char {
+                write!(w, " CHAR '{char}'")?;
+            }
         }
         Expr::SimilarTo(Like {
             negated,
@@ -1717,7 +1715,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         }) => {
             write!(
                 w,
-                "{} {} {} {}",
+                "{} {} {}",
                 expr,
                 if *negated {
                     "NOT SIMILAR TO"
@@ -1725,12 +1723,10 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
                     "SIMILAR TO"
                 },
                 pattern,
-                if let Some(char) = escape_char {
-                    format!("CHAR '{char}'")
-                } else {
-                    "".to_owned()
-                }
             )?;
+            if let Some(char) = escape_char {
+                write!(w, " CHAR '{char}'")?;
+            }
         }
         Expr::Case(case) => {
             write!(w, "CASE ")?;
