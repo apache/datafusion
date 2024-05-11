@@ -476,7 +476,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn name(&self) -> &str {
-        ScalarUDFImpl::name(self.inner.as_ref())
+        self.inner.name()
     }
 
     fn signature(&self) -> &Signature {
