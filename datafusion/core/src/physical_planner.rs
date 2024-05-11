@@ -1157,7 +1157,7 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
-                columns,
+                output_columns: columns,
                 list_type_columns,
                 struct_type_columns,
                 schema,

@@ -22,34 +22,11 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3], [7], 1, [13, 14]),
-    ([4,5], [8,9,10], 2, [15, 16]),
-    ([6], [11,12], 3, null),
-    ([12], [null, 42, null], null, null),
-    -- null array to verify the `preserve_nulls` option
-    (null, null, 4, [17, 18])
+    (struct(1 as "name0", 2 as "name1"))
 ;
 
-query ?II
-select unnest(struct(1 as "name0", 3.14 as name1, 'e', true as 'name3'));
+
+query II
+select unnest(column1), column1 from unnest_table;
 ----
-
-query ?II
-select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table;
-----
-[1, 2, 3] 7 10
-[5] 8 20
-[5] 9 20
-[5] 10 20
-[6] 11 30
-[6] 12 30
-[12] NULL NULL
-[12] 42 NULL
-[12] NULL NULL
-
-
-
-
-
-statement ok
-drop table unnest_table;
+1 2

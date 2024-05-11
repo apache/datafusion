@@ -50,9 +50,9 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    get_target_functional_dependencies, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -1111,7 +1111,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        Ok(Self::from(unnest(self.plan, vec![column.into()])?))
+        Ok(Self::from(unnest(self.plan,vec![column.into()])?))
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1120,11 +1120,7 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        Ok(Self::from(unnest_with_options(
-            self.plan,
-            vec![column.into()],
-            options,
-        )?))
+        Ok(Self::from(unnest_with_options(self.plan, vec![column.into()], options)?))
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1133,9 +1129,7 @@ impl LogicalPlanBuilder {
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        Ok(Self::from(unnest_with_options(
-            self.plan, columns, options,
-        )?))
+        Ok(Self::from(unnest_with_options(self.plan, columns, options)?))
     }
 }
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
@@ -1544,8 +1538,43 @@ impl TableSource for LogicalTableSource {
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan
-pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
+pub fn unnest(
+    input: LogicalPlan,
+    columns: Vec<Column>,
+) -> Result<LogicalPlan> {
     unnest_with_options(input, columns, UnnestOptions::default())
+}
+
+pub fn projection_after_unnest(c: &Column, schema: &DFSchemaRef) -> Result<Vec<Column>> {
+    let mut qualified_columns = Vec::with_capacity(1);
+    let schema_idx = schema.index_of_column(c)?;
+    let (unnest_qualifier, unnest_field) = schema.qualified_field(schema_idx);
+    match unnest_field.data_type() {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => {
+            let new_field = Arc::new(Field::new(
+                unnest_field.name(),
+                field.data_type().clone(),
+                // Unnesting may produce NULLs even if the list is not null.
+                // For example: unnset([1], []) -> 1, null
+                true,
+            ));
+            qualified_columns.push(Column::from((unnest_qualifier, &new_field)));
+        }
+        DataType::Struct(fields) => {
+            let new_fields = fields.to_vec();
+            qualified_columns.extend(
+                new_fields
+                    .iter()
+                    .map(|f| Column::from((unnest_qualifier, f))),
+            );
+        }
+        _ => {
+            return Ok(vec![c.clone()]);
+        }
+    }
+    Ok(qualified_columns)
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
@@ -1561,9 +1590,8 @@ pub fn unnest_with_options(
     let mut qualified_columns = Vec::with_capacity(columns.len());
     let mut list_columns = Vec::with_capacity(columns.len());
     let mut struct_columns = Vec::with_capacity(columns.len());
-    for (idx,c) in columns.iter().enumerate() {
+    for (idx, c) in columns.iter().enumerate() {
         let schema_idx = input.schema().index_of_column(c)?;
-        println!("unnesting column {} {}",schema_idx,c.name);
         let (unnest_qualifier, unnest_field) = input.schema().qualified_field(schema_idx);
         match unnest_field.data_type() {
             DataType::List(field)
@@ -1596,7 +1624,6 @@ pub fn unnest_with_options(
             }
         }
     }
-    println!("---");
 
     let input_schema = input.schema();
 
@@ -1617,14 +1644,17 @@ pub fn unnest_with_options(
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    Ok(LogicalPlan::Unnest(Unnest {
-        input: Arc::new(input),
-        columns: qualified_columns,
-        list_type_columns: list_columns,
-        struct_type_columns: struct_columns,
-        schema,
-        options,
-    }))
+    Ok(
+        LogicalPlan::Unnest(Unnest {
+            input: Arc::new(input),
+            input_columns: columns,
+            output_columns: qualified_columns,
+            list_type_columns: list_columns,
+            struct_type_columns: struct_columns,
+            schema,
+            options,
+        })
+    )
 }
 
 #[cfg(test)]
@@ -2052,16 +2082,14 @@ mod tests {
     fn plan_builder_unnest() -> Result<()> {
         // Unnesting a simple column should return the child plan.
         let plan = nested_table_scan("test_table")?
-            .unnest_column("scalar")?
-            .build()?;
+        .unnest_column("scalar")?.build()?;
 
         let expected = "TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 
         // Unnesting the strings list.
-        let plan = nested_table_scan("test_table")?
-            .unnest_column("strings")?
-            .build()?;
+        let plan = nested_table_scan("test_table")?.unnest_column("strings")?
+        .build()?;
 
         let expected = "\
         Unnest: test_table.strings\
@@ -2076,10 +2104,8 @@ mod tests {
         assert_eq!(&DataType::Utf8, field.data_type());
 
         // Unnesting multiple fields.
-        let plan = nested_table_scan("test_table")?
-            .unnest_column("strings")?
-            .unnest_column("structs")?
-            .build()?;
+        let plan = nested_table_scan("test_table")?.unnest_column("strings")?
+            .unnest_column("structs")?.build()?;
 
         let expected = "\
         Unnest: test_table.structs\

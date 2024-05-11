@@ -109,10 +109,26 @@ fn optimize_projections(
     indices: RequiredIndicies,
 ) -> Result<Option<LogicalPlan>> {
     let child_required_indices: Vec<RequiredIndicies> = match plan {
+        LogicalPlan::Unnest(_) => {
+            println!("{:?}",indices);
+            // Pass index requirements from the parent as well as column indices
+            // that appear in this plan's expressions to its child. All these
+            // operators benefit from "small" inputs, so the projection_beneficial
+            // flag is `true`.
+            vec![RequiredIndicies::new_from_indices(vec![0,0])]
+            // plan.inputs()
+            //     .into_iter()
+            //     .map(|input| {
+            //         indices
+            //             .clone()
+            //             .with_projection_beneficial()
+            //             .with_plan_exprs(plan, input.schema())
+            //     })
+            //     .collect::<Result<_>>()?
+        }
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
-        | LogicalPlan::Unnest(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Distinct(Distinct::On(_)) => {

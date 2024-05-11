@@ -297,9 +297,13 @@ impl DataFrame {
         options: UnnestOptions,
     ) -> Result<DataFrame> {
         let columns = columns.iter().map(|c| Column::from(*c)).collect();
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_columns_with_options(columns, options)?
-            .build()?;
+        let (plan, transformed_columns) = LogicalPlanBuilder::from(self.plan)
+            .unnest_columns_with_options(columns, options)?;
+        let new_column_exprs: Vec<Expr> = transformed_columns
+            .into_iter()
+            .map(|col| Expr::Column(col))
+            .collect();
+        let plan = plan.project(new_column_exprs)?.build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

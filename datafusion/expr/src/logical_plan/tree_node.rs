@@ -311,7 +311,8 @@ impl TreeNode for LogicalPlan {
             }
             LogicalPlan::Unnest(Unnest {
                 input,
-                columns,
+                input_columns,
+                output_columns: columns,
                 list_type_columns,
                 struct_type_columns,
                 schema,
@@ -319,7 +320,8 @@ impl TreeNode for LogicalPlan {
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Unnest(Unnest {
                     input,
-                    columns,
+                    input_columns,
+                    output_columns: columns,
                     list_type_columns,
                     struct_type_columns,
                     schema,
@@ -494,10 +496,13 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().apply_until_stop(f)
             }
-            LogicalPlan::Unnest(Unnest {
-                columns,
-                ..
-            }) => {
+            LogicalPlan::Unnest(unnest) => {
+                let columns = unnest.input_columns.clone();
+                // let mut columns = unnest.get_list_columns();
+                // columns.extend_from_slice(
+                //     unnest.get_struct_columns().as_ref());
+
+                // TODO: detect struct column
                 let exprs = columns
                     .iter()
                     .map(|c| Expr::Column(c.clone()))

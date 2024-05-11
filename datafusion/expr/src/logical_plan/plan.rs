@@ -808,13 +808,15 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                columns,
+                input_columns: columns,
                 options,
                 ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                unnest_with_options(input, columns.clone(), options.clone())
+                let new_plan = unnest_with_options(input, 
+                    columns.clone(), options.clone())?;
+                Ok(new_plan)
             }
         }
     }
@@ -1686,6 +1688,8 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    // println!("display projection input {}\n---with schema {:?}",input.display_indent_schema(),input.schema());
+    // println!("exprs being used {:?}",exprs[0]);
     let mut schema = DFSchema::new_with_metadata(
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
@@ -2521,7 +2525,10 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    pub columns: Vec<Column>,
+    pub input_columns: Vec<Column>,
+    // TODO: this should be converted into output column
+    // instead of the columns in the input
+    pub output_columns: Vec<Column>,
     /// refer to the indices of field columns that have type list 
     pub list_type_columns: Vec<usize>,
     /// refer to the indices of field columns that have type struct 
@@ -2530,6 +2537,19 @@ pub struct Unnest {
     pub schema: DFSchemaRef,
     /// Options
     pub options: UnnestOptions,
+}
+impl Unnest{
+    // reference to columns field indexed by list_type_columns
+    pub fn get_list_columns(&self)-> Vec<Column> {
+        self.list_type_columns.iter().map(
+            |&i| self.output_columns[i].clone()
+        ).collect()
+    }
+    pub fn get_struct_columns(&self) ->Vec<Column>{
+        self.struct_type_columns.iter().map(
+            |&i| self.output_columns[i].clone()
+        ).collect()
+    }
 }
 
 #[cfg(test)]

@@ -295,54 +295,13 @@ impl UnnestStream {
     }
 }
 
-/// For each row in a `RecordBatch`, some list columns need to be unnested.
-/// We will expand the values in each list into multiple rows,
-/// taking the longest length among these lists, and shorter lists are padded with NULLs.
-//
-/// For columns that don't need to be unnested, repeat their values until reaching the longest length.
-fn build_batch(
-    batch: &RecordBatch,
+fn build_batch_vertically(
+    input_batch: &[Arc<dyn Array>],
     schema: &SchemaRef,
-    // list type column only
-    list_type_columns: &[Column],
     struct_column_indices: &HashSet<usize>,
-    options: &UnnestOptions,
 ) -> Result<RecordBatch> {
-    let list_arrays: Vec<ArrayRef> = list_type_columns
-        .iter()
-        .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<_>>()?;
-
-    let longest_length = find_longest_length(&list_arrays, options)?;
-    let unnested_length = longest_length.as_primitive::<Int64Type>();
-    let total_length = if unnested_length.is_empty() {
-        0
-    } else {
-        sum(unnested_length).ok_or_else(|| {
-            exec_datafusion_err!("Failed to calculate the total unnested length")
-        })? as usize
-    };
-    if total_length == 0 {
-        return Ok(RecordBatch::new_empty(schema.clone()));
-    }
-
-    // Unnest all the list arrays
-    let unnested_arrays =
-        unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-
-    let unnested_array_map: HashMap<_, _> = unnested_arrays
-        .into_iter()
-        .zip(list_type_columns.iter())
-        .map(|(array, column)| (column.index(), array))
-        .collect();
-
-    // Create the take indices array for other columns
-    let take_indicies = create_take_indicies(unnested_length, total_length);
-
-    // vertical expansion because of list unnest
-    let rows_expanded = batch_from_indices(batch, &unnested_array_map, &take_indicies)?;
     // horizontal expansion because of struct unnest
-    let columns_expanded = rows_expanded
+    let columns_expanded = input_batch
         .iter()
         .enumerate()
         .flat_map(|(idx, column_data)| match struct_column_indices.get(&idx) {
@@ -360,6 +319,62 @@ fn build_batch(
         })
         .collect::<Vec<_>>();
     Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
+}
+
+/// For each row in a `RecordBatch`, some list columns need to be unnested.
+/// We will expand the values in each list into multiple rows,
+/// taking the longest length among these lists, and shorter lists are padded with NULLs.
+//
+/// For columns that don't need to be unnested, repeat their values until reaching the longest length.
+fn build_batch(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    // list type column only
+    list_type_columns: &[Column],
+    struct_column_indices: &HashSet<usize>,
+    options: &UnnestOptions,
+) -> Result<RecordBatch> {
+    let transformed = match list_type_columns.len() {
+        0 => build_batch_vertically(batch.columns(), schema, struct_column_indices),
+        _ => {
+            let list_arrays: Vec<ArrayRef> = list_type_columns
+                .iter()
+                .map(|column| column.evaluate(batch)?.into_array(batch.num_rows()))
+                .collect::<Result<_>>()?;
+
+            let longest_length = find_longest_length(&list_arrays, options)?;
+            let unnested_length = longest_length.as_primitive::<Int64Type>();
+            let total_length = if unnested_length.is_empty() {
+                0
+            } else {
+                sum(unnested_length).ok_or_else(|| {
+                    exec_datafusion_err!("Failed to calculate the total unnested length")
+                })? as usize
+            };
+            if total_length == 0 {
+                return Ok(RecordBatch::new_empty(schema.clone()));
+            }
+
+            // Unnest all the list arrays
+            let unnested_arrays =
+                unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
+            let unnested_array_map: HashMap<_, _> = unnested_arrays
+                .into_iter()
+                .zip(list_type_columns.iter())
+                .map(|(array, column)| (column.index(), array))
+                .collect();
+
+            // Create the take indices array for other columns
+            let take_indicies = create_take_indicies(unnested_length, total_length);
+
+            // vertical expansion because of list unnest
+            let ret = batch_from_indices(batch, 
+                &unnested_array_map, &take_indicies)?;
+            build_batch_vertically(&ret, schema, struct_column_indices)
+        }
+    };
+    transformed
+    // Ok(RecordBatch::try_new(schema.clone(), transformed)?)
 }
 
 /// Find the longest list length among the given list arrays for each row.
