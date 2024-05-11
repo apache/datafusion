@@ -61,7 +61,7 @@ impl Default for Count {
 impl Count {
     pub fn new() -> Self {
         Self {
-            aliases: vec![],
+            aliases: vec!["count".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }

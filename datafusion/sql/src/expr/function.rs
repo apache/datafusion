@@ -219,7 +219,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
-            if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
+            let fm = self.context_provider.get_aggregate_meta(&name);
+            // TODO: Distinct Count is not supported yet, this filter should be removed when it is supported
+            if fm.is_some_and(|fm| fm.name().to_lowercase() != "count" || !distinct) {
+                let fm = self.context_provider.get_aggregate_meta(&name).unwrap();
                 let order_by = self.order_by_to_sort_expr(
                     &order_by,
                     schema,
@@ -242,6 +245,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
+
+                if fun.name() == "COUNT" && !distinct {
+                    panic!("COUNT should be handled as a scalar function")
+                }
+
                 let order_by = self.order_by_to_sort_expr(
                     &order_by,
                     schema,

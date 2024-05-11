@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
@@ -61,9 +61,9 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(
-            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
-        ),
+        (AggregateFunction::Count, false) => {
+            return internal_err!("Count should be handled by the optimizer")
+        }
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
             data_type,
             input_phy_exprs[0].clone(),

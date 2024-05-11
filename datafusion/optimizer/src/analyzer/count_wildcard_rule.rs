@@ -54,6 +54,7 @@ fn is_wildcard(expr: &Expr) -> bool {
 }
 // TODO: Move to UDAF analyzer
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
+    println!("{:?}", aggregate_function);
     match aggregate_function {
         AggregateFunction {
             func_def:
@@ -62,7 +63,7 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
                 ),
             args,
             ..
-        } if udf.name() == "count"
+        } if udf.name() == "COUNT"
             && args.len() == 1
             && is_wildcard(&args[0])
         => {
