@@ -91,10 +91,12 @@ pub enum TypeSignature {
     /// # Examples
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// One or more arguments of an arbitrary type and coerced with user-defined coercion rules.
-    VariadicCoercion,
-    /// Fixed number of arguments of an arbitrary type and coerced with user-defined coercion rules.
-    UniformCoercion(usize),
+    /// The acceptable signature and coercions rules to coerce arguments to this
+    /// signature are special for this function. If this signature is specified,
+    /// Datafusion will call [`ScalarUDFImpl::coerce_types`] to prepare argument types.
+    /// 
+    /// [`ScalarUDFImpl::coerce_types`]: crate::udf::ScalarUDFImpl::coerce_types
+    UserDefined,
     /// One or more arguments with arbitrary types
     VariadicAny,
     /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
@@ -185,14 +187,8 @@ impl TypeSignature {
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }
-            TypeSignature::VariadicCoercion => {
-                vec!["CoercibleT, .., CoercibleT".to_string()]
-            }
-            TypeSignature::UniformCoercion(arg_count) => {
-                vec![std::iter::repeat("CoercibleT")
-                    .take(*arg_count)
-                    .collect::<Vec<&str>>()
-                    .join(", ")]
+            TypeSignature::UserDefined => {
+                vec!["UserDefined".to_string()]
             }
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {
@@ -256,17 +252,10 @@ impl Signature {
             volatility,
         }
     }
-    /// An arbitrary number of arguments with user-defined coercion rules.
-    pub fn variadic_coercion(volatility: Volatility) -> Self {
+    /// User-defined coercion rules for the function.
+    pub fn user_defined(volatility: Volatility) -> Self {
         Self {
-            type_signature: TypeSignature::VariadicCoercion,
-            volatility,
-        }
-    }
-    /// Fixed number of arguments with user-defined coercion rules.
-    pub fn uniform_coercion(num: usize, volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::UniformCoercion(num),
+            type_signature: TypeSignature::UserDefined,
             volatility,
         }
     }

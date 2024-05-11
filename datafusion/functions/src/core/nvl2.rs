@@ -19,7 +19,7 @@ use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
     type_coercion::binary::comparison_coercion, ColumnarValue, ScalarUDFImpl, Signature,
     Volatility,
@@ -39,7 +39,7 @@ impl Default for NVL2Func {
 impl NVL2Func {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform_coercion(3, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -66,6 +66,12 @@ impl ScalarUDFImpl for NVL2Func {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 3 {
+            return exec_err!(
+                "NVL2 takes exactly three arguments, but got {}",
+                arg_types.len()
+            )
+        }
         let new_type = arg_types.iter().skip(1).try_fold(
             arg_types.first().unwrap().clone(),
             |acc, x| {

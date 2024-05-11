@@ -41,7 +41,7 @@ impl Default for CoalesceFunc {
 impl CoalesceFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_coercion(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }

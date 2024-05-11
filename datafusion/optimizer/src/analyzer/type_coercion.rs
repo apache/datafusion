@@ -865,8 +865,10 @@ mod test {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         })
         .call(vec![lit("Apple")]);
-        Projection::try_new(vec![udf], empty)
+        let plan_err = Projection::try_new(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
+
+        assert_eq!(plan_err.to_string(), "Error during planning: Error during planning: [data_types_with_scalar_udf] Coercion from [Utf8] to the signature Uniform(1, [Float32]) failed. and No function matches the given name and argument types 'TestScalarUDF(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tTestScalarUDF(Float32)");
         Ok(())
     }
 
