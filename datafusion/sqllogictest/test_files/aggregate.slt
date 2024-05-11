@@ -2435,7 +2435,7 @@ statement ok
 create table t (c int) as values (4), (7), (4), (7), (15);
 
 query IT
-Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(c))  from t;
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 ----
 12 Int32
 
@@ -2447,7 +2447,7 @@ statement ok
 create table t (c int) as values (1), (1), (NULL), (3), (5);
 
 query IT
-Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(c))  from t;
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 ----
 7 Int32
 
@@ -2460,7 +2460,7 @@ statement ok
 create table t (c int ) as values (NULL), (NULL);
 
 query IT
-Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(c))  from t;
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 ----
 NULL Int32
 
@@ -2473,7 +2473,7 @@ statement ok
 create table t (c int unsigned) as values (4), (7), (4), (7), (15);
 
 query IT
-Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(c))  from t;
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 ----
 12 UInt32
 
