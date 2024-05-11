@@ -174,9 +174,6 @@ impl ExprSchemable for Expr {
                     AggregateFunctionDefinition::UDF(fun) => {
                         Ok(fun.return_type(&data_types)?)
                     }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
                 }
             }
             Expr::Not(_)
