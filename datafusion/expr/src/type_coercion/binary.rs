@@ -305,6 +305,18 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
+/// Coerce `lhs_type` and `rhs_type` to a common type for value exprs
+pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    if lhs_type == rhs_type {
+        // same type => equality is possible
+        return Some(lhs_type.clone());
+    }
+    comparison_binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| string_coercion(lhs_type, rhs_type))
+        .or_else(|| binary_coercion(lhs_type, rhs_type))
+}
+
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one is numeric and one is `Utf8`/`LargeUtf8`.
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {

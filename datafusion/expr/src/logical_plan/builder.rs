@@ -36,9 +36,7 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::{
-    comparison_binary_numeric_coercion, comparison_coercion,
-};
+use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
@@ -199,7 +197,7 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    match comparison_binary_numeric_coercion(&data_type, &prev_type) {
+                    match values_coercion(&data_type, &prev_type) {
                         Some(new_type) => {
                             common_type = Some(new_type.clone());
                         }
@@ -2163,7 +2161,10 @@ mod tests {
 
     #[test]
     fn test_values() -> Result<()> {
-        let values = vec![vec![lit(1.2), lit(3)], vec![lit(2), lit(ScalarValue::Null)]];
+        let values = vec![
+            vec![lit(1.2), lit(3), lit("a")],
+            vec![lit(2), lit(ScalarValue::Null), lit("b")],
+        ];
         let plan = LogicalPlanBuilder::values(values.clone())?.build()?;
         let schema = plan.schema();
         let fields = schema.fields().clone();
@@ -2171,7 +2172,8 @@ mod tests {
             fields,
             vec![
                 Field::new("column1", DataType::Float64, false),
-                Field::new("column2", DataType::Int64, true)
+                Field::new("column2", DataType::Int64, true),
+                Field::new("column3", DataType::Utf8, false)
             ]
             .into()
         );
