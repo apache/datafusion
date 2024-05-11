@@ -358,9 +358,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                         ),
                     )))
                 }
-                AggregateFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
             },
             Expr::WindowFunction(WindowFunction {
                 fun,

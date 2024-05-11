@@ -733,9 +733,6 @@ pub fn to_substrait_agg_measure(
                         }
                     })
                 }
-                AggregateFunctionDefinition::Name(name) => {
-                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
-                }
             }
 
         }
