@@ -19,7 +19,8 @@
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{Column, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
     aggregate_function::AggregateFunction as AggregateFunctionFunc, col,
@@ -66,20 +67,24 @@ impl ReplaceDistinctWithAggregate {
 }
 
 impl OptimizerRule for ReplaceDistinctWithAggregate {
-    fn try_optimize(
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
+    ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Distinct(Distinct::All(input)) => {
-                let group_expr = expand_wildcard(input.schema(), input, None)?;
-                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    input.clone(),
+                let group_expr = expand_wildcard(input.schema(), &input, None)?;
+                let aggr_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+                    input,
                     group_expr,
                     vec![],
                 )?);
-                Ok(Some(aggregate))
+                Ok(Transformed::yes(aggr_plan))
             }
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 select_expr,
@@ -90,56 +95,68 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
             })) => {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
                 let aggr_expr = select_expr
-                    .iter()
+                    .into_iter()
                     .map(|e| {
                         Expr::AggregateFunction(AggregateFunction::new(
                             AggregateFunctionFunc::FirstValue,
-                            vec![e.clone()],
+                            vec![e],
                             false,
                             None,
                             sort_expr.clone(),
                             None,
                         ))
                     })
-                    .collect::<Vec<Expr>>();
+                    .collect::<Vec<_>>();
+
+                let expr_cnt = on_expr.len();
 
                 // Build the aggregation plan
-                let plan = LogicalPlanBuilder::from(input.as_ref().clone())
-                    .aggregate(on_expr.clone(), aggr_expr.to_vec())?
-                    .build()?;
+                let lpb = LogicalPlanBuilder::from(input.as_ref().clone())
+                    .aggregate(on_expr, aggr_expr)?;
 
-                let plan = if let Some(sort_expr) = sort_expr {
+                let plan = if let Some(mut sort_expr) = sort_expr {
                     // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
                     // this on it's own isn't enough to guarantee the proper output order of the grouping
                     // (`ON`) expression, so we need to sort those as well.
-                    LogicalPlanBuilder::from(plan)
-                        .sort(sort_expr[..on_expr.len()].to_vec())?
-                        .build()?
+
+                    // truncate the sort_expr to the length of on_expr
+                    sort_expr.truncate(expr_cnt);
+
+                    lpb.sort(sort_expr)?.build()?
                 } else {
-                    plan
+                    lpb.build()?
                 };
 
                 // Whereas the aggregation plan by default outputs both the grouping and the aggregation
                 // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
+
                 let project_exprs = plan
                     .schema()
                     .iter()
-                    .skip(on_expr.len())
+                    .skip(expr_cnt)
                     .zip(schema.iter())
                     .map(|((new_qualifier, new_field), (old_qualifier, old_field))| {
-                        Ok(col(Column::from((new_qualifier, new_field)))
-                            .alias_qualified(old_qualifier.cloned(), old_field.name()))
+                        col(Column::from((new_qualifier, new_field)))
+                            .alias_qualified(old_qualifier.cloned(), old_field.name())
                     })
-                    .collect::<Result<Vec<Expr>>>()?;
+                    .collect::<Vec<Expr>>();
 
                 let plan = LogicalPlanBuilder::from(plan)
                     .project(project_exprs)?
                     .build()?;
 
-                Ok(Some(plan))
+                Ok(Transformed::yes(plan))
             }
-            _ => Ok(None),
+            _ => Ok(Transformed::no(plan)),
         }
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        internal_err!("Should have called ReplaceDistinctWithAggregate::rewrite")
     }
 
     fn name(&self) -> &str {
