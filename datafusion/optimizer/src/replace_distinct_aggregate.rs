@@ -20,7 +20,8 @@ use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{internal_err, Column, Result};
+use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
     aggregate_function::AggregateFunction as AggregateFunctionFunc, col,
@@ -93,26 +94,26 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 input,
                 schema,
             })) => {
-                // Construct the aggregation expression to be used to fetch the selected expressions.
-                let aggr_expr = select_expr
-                    .into_iter()
-                    .map(|e| {
-                        Expr::AggregateFunction(AggregateFunction::new(
-                            AggregateFunctionFunc::FirstValue,
-                            vec![e],
-                            false,
-                            None,
-                            sort_expr.clone(),
-                            None,
-                        ))
-                    })
-                    .collect::<Vec<_>>();
-
                 let expr_cnt = on_expr.len();
 
+                // Construct the aggregation expression to be used to fetch the selected expressions.
+                let aggr_expr = vec![Expr::AggregateFunction(AggregateFunction::new(
+                    AggregateFunctionFunc::FirstValue,
+                    select_expr,
+                    false,
+                    None,
+                    sort_expr.clone(),
+                    None,
+                ))];
+
+                let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
+                let group_expr = normalize_cols(on_expr, input.as_ref())?;
+
                 // Build the aggregation plan
-                let lpb = LogicalPlanBuilder::from(input.as_ref().clone())
-                    .aggregate(on_expr, aggr_expr)?;
+                let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+                    input, group_expr, aggr_expr,
+                )?);
+                let lpb = LogicalPlanBuilder::from(plan);
 
                 let plan = if let Some(mut sort_expr) = sort_expr {
                     // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
@@ -153,7 +154,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         internal_err!("Should have called ReplaceDistinctWithAggregate::rewrite")
