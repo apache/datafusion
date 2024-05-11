@@ -33,6 +33,7 @@ use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::
 make_udaf_expr_and_func!(
     Count,
     count,
+    expression,
     "Returns the number of non-null values in the group.",
     count_udaf
 );
