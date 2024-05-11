@@ -1204,6 +1204,36 @@ impl LogicalPlan {
         .unwrap();
         contains
     }
+
+    /// Get the output expressions and their corresponding columns.
+    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(Expr, Column)>> {
+        match self {
+            LogicalPlan::Projection(Projection { expr, schema, .. }) => {
+                Ok(expr.clone().into_iter().zip(schema.columns()).collect())
+            }
+            LogicalPlan::Aggregate(aggregate) => Ok(aggregate
+                .output_expressions()?
+                .into_iter()
+                .zip(self.schema().columns())
+                .collect()),
+            LogicalPlan::Window(Window {
+                window_expr,
+                input,
+                schema,
+            }) => {
+                let mut output_exprs = input.columnized_output_exprs()?;
+                let input_len = input.schema().fields().len();
+                output_exprs.extend(
+                    window_expr
+                        .clone()
+                        .into_iter()
+                        .zip(schema.columns().into_iter().skip(input_len)),
+                );
+                Ok(output_exprs)
+            }
+            _ => Ok(vec![]),
+        }
+    }
 }
 
 impl LogicalPlan {
@@ -1865,15 +1895,6 @@ impl Projection {
             schema,
         }
     }
-
-    /// Get the output expressions and their corresponding columns.
-    pub(crate) fn columnized_output_exprs(&self) -> Vec<(Expr, Column)> {
-        self.expr
-            .clone()
-            .into_iter()
-            .zip(self.schema.columns())
-            .collect()
-    }
 }
 
 /// Computes the schema of the result produced by applying a projection to the input logical plan.
@@ -2131,16 +2152,6 @@ impl Window {
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
         })
-    }
-
-    /// Get the output expressions and their corresponding columns.
-    pub(crate) fn columnized_output_exprs(&self) -> Vec<(Expr, Column)> {
-        let input_len = self.input.schema().fields().len();
-        self.window_expr
-            .clone()
-            .into_iter()
-            .zip(self.schema.columns().into_iter().skip(input_len))
-            .collect()
     }
 }
 
@@ -2547,11 +2558,11 @@ impl Aggregate {
         })
     }
 
-    /// Get the output expressions and their corresponding columns.
-    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(Expr, Column)>> {
+    /// Get the output expressions.
+    fn output_expressions(&self) -> Result<Vec<Expr>> {
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         exprs.extend(self.aggr_expr.clone());
-        Ok(exprs.into_iter().zip(self.schema.columns()).collect())
+        Ok(exprs)
     }
 
     /// Get the length of the group by expression in the output schema

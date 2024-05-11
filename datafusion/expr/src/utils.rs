@@ -751,10 +751,8 @@ pub fn exprlist_to_fields(
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
-    let output_exprs = match input {
-        LogicalPlan::Aggregate(aggregate) => aggregate.columnized_output_exprs()?,
-        LogicalPlan::Window(window) => window.columnized_output_exprs(),
-        LogicalPlan::Projection(projection) => projection.columnized_output_exprs(),
+    let output_exprs = match input.columnized_output_exprs() {
+        Ok(exprs) if !exprs.is_empty() => exprs,
         _ => return Ok(e),
     };
     let exprs_map: HashMap<Expr, Column> = output_exprs.into_iter().collect();
