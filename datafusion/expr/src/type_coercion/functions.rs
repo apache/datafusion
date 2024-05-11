@@ -135,9 +135,6 @@ pub fn data_types_with_aggregate_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-///
-/// This function will be replaced with [data_types_with_scalar_udf],
-/// [data_types_with_aggregate_udf], and data_types_with_window_udf gradually.
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
