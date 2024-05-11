@@ -184,15 +184,13 @@ impl LogicalPlanBuilder {
         }
 
         let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<(bool, DataType)> = Vec::with_capacity(n_cols);
+        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
-            let mut nullable = false;
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let data_type = value.get_type(&empty_schema)?;
                 if data_type == DataType::Null {
-                    nullable = true;
                     continue;
                 }
                 if let Some(prev_type) = common_type {
@@ -209,11 +207,11 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type.clone());
                 }
             }
-            field_types.push((nullable, common_type.unwrap_or(DataType::Utf8)));
+            field_types.push(common_type.unwrap_or(DataType::Utf8));
         }
         // wrap cast if data type is not same as common type.
         for row in &mut values {
-            for (j, (_, field_type)) in field_types.iter().enumerate() {
+            for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
                 } else {
@@ -230,10 +228,10 @@ impl LogicalPlanBuilder {
         let fields = field_types
             .iter()
             .enumerate()
-            .map(|(j, (nullable, data_type))| {
+            .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), *nullable)
+                Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
@@ -2171,9 +2169,9 @@ mod tests {
         assert_eq!(
             fields,
             vec![
-                Field::new("column1", DataType::Float64, false),
+                Field::new("column1", DataType::Float64, true),
                 Field::new("column2", DataType::Int64, true),
-                Field::new("column3", DataType::Utf8, false)
+                Field::new("column3", DataType::Utf8, true)
             ]
             .into()
         );
