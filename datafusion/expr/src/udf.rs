@@ -428,11 +428,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
-    /// This function is only called if [`self::signature`] returns [`TypeSignature::UserDefined`]. Most
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
     /// UDFs should return one of the other variants of `TypeSignature` which handle common
     /// cases
     ///
-    /// See the [type coercion module](datafusion_expr::type_coercion)
+    /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
@@ -444,7 +444,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Return value
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
-    /// arguments to these specific types. 
+    /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }

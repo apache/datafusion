@@ -26,7 +26,9 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, plan_err, Result,
+};
 
 use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
@@ -183,12 +185,10 @@ fn get_valid_types_with_scalar_udf(
     func: &ScalarUDF,
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::UserDefined => {
-            match func.coerce_types(current_types) {
-                Ok(coerced_types) => vec![coerced_types],
-                Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
-            }
-        }
+        TypeSignature::UserDefined => match func.coerce_types(current_types) {
+            Ok(coerced_types) => vec![coerced_types],
+            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+        },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
             .filter_map(|t| get_valid_types_with_scalar_udf(t, current_types, func).ok())
@@ -206,12 +206,10 @@ fn get_valid_types_with_aggregate_udf(
     func: &AggregateUDF,
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::UserDefined => {
-            match func.coerce_types(current_types) {
-                Ok(coerced_types) => vec![coerced_types],
-                Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
-            }
-        }
+        TypeSignature::UserDefined => match func.coerce_types(current_types) {
+            Ok(coerced_types) => vec![coerced_types],
+            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+        },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
             .filter_map(|t| {
@@ -332,7 +330,9 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::UserDefined => {
-            return internal_err!("User-defined signature should be handled by function-specific coerce_types.")
+            return internal_err!(
+            "User-defined signature should be handled by function-specific coerce_types."
+        )
         }
         TypeSignature::VariadicAny => {
             vec![current_types.to_vec()]

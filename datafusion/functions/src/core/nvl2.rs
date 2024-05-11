@@ -70,7 +70,7 @@ impl ScalarUDFImpl for NVL2Func {
             return exec_err!(
                 "NVL2 takes exactly three arguments, but got {}",
                 arg_types.len()
-            )
+            );
         }
         let new_type = arg_types.iter().skip(1).try_fold(
             arg_types.first().unwrap().clone(),
