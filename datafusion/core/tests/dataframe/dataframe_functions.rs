@@ -76,17 +76,30 @@ async fn create_test_table() -> Result<DataFrame> {
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, using the assert_batch_eq! macro
 macro_rules! assert_fn_batches {
-    ($EXPR:expr, $EXPECTED: expr) => {
-        assert_fn_batches!($EXPR, $EXPECTED, 10)
+    ($EXPR:expr) => {
+        assert_fn_batches!($EXPR, 10)
     };
-    ($EXPR:expr, $EXPECTED: expr, $LIMIT: expr) => {
+    ($EXPR:expr, $LIMIT: expr) => {
         let df = create_test_table().await?;
         let df = df.select(vec![$EXPR])?.limit(0, Some($LIMIT))?;
         let batches = df.collect().await?;
 
-        assert_batches_eq!($EXPECTED, &batches);
+        datafusion_common::assert_snapshot!(&batches);
     };
 }
+
+// macro_rules! assert_fn_batches {
+//     ($EXPR:expr, $EXPECTED: expr) => {
+//         assert_fn_batches!($EXPR, $EXPECTED, 10)
+//     };
+//     ($EXPR:expr, $LIMIT: expr) => {
+//         let df = create_test_table().await?;
+//         let df = df.select(vec![$EXPR])?.limit(0, Some($LIMIT))?;
+//         let batches = df.collect().await?;
+
+//         assert_batches_eq!($EXPECTED, &batches);
+//     };
+// }
 
 #[tokio::test]
 async fn test_fn_ascii() -> Result<()> {
@@ -100,7 +113,7 @@ async fn test_fn_ascii() -> Result<()> {
         "+---------------+",
     ];
 
-    assert_fn_batches!(expr, expected, 1);
+    assert_fn_batches!(expr, 1);
 
     Ok(())
 }
@@ -119,7 +132,7 @@ async fn test_fn_bit_length() -> Result<()> {
         "| 72                 |",
         "+--------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -136,7 +149,7 @@ async fn test_fn_btrim() -> Result<()> {
         "+-----------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected, 1);
+    assert_fn_batches!(expr, 1);
 
     Ok(())
 }
@@ -156,7 +169,7 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
         "+--------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -176,7 +189,7 @@ async fn test_fn_nullif() -> Result<()> {
         "+-------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -196,7 +209,7 @@ async fn test_fn_arrow_cast() -> Result<()> {
         "+--------------------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -224,7 +237,7 @@ async fn test_nvl() -> Result<()> {
         "+-------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -252,7 +265,7 @@ async fn test_nvl2() -> Result<()> {
         "+-------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -271,7 +284,7 @@ async fn test_fn_arrow_typeof() -> Result<()> {
         "+------------------------------------------------------------------------------------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -291,7 +304,7 @@ async fn test_fn_struct() -> Result<()> {
         "+--------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -311,7 +324,7 @@ async fn test_fn_named_struct() -> Result<()> {
         "+---------------------------------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -331,7 +344,7 @@ async fn test_fn_coalesce() -> Result<()> {
         "+---------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -411,7 +424,7 @@ async fn test_fn_character_length() -> Result<()> {
         "+--------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -428,7 +441,7 @@ async fn test_fn_chr() -> Result<()> {
         "+--------------------+",
     ];
 
-    assert_fn_batches!(expr, expected, 1);
+    assert_fn_batches!(expr, 1);
 
     Ok(())
 }
@@ -448,7 +461,7 @@ async fn test_fn_initcap() -> Result<()> {
         "+-----------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -469,7 +482,7 @@ async fn test_fn_left() -> Result<()> {
         "+-----------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -489,7 +502,7 @@ async fn test_fn_lower() -> Result<()> {
         "+---------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -510,7 +523,7 @@ async fn test_fn_lpad() -> Result<()> {
         "+------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -531,7 +544,7 @@ async fn test_fn_lpad_with_string() -> Result<()> {
         "+----------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -548,7 +561,7 @@ async fn test_fn_ltrim() -> Result<()> {
         "+-----------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected, 1);
+    assert_fn_batches!(expr, 1);
 
     Ok(())
 }
@@ -568,7 +581,7 @@ async fn test_fn_ltrim_with_columns() -> Result<()> {
         "+---------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -589,7 +602,7 @@ async fn test_fn_md5() -> Result<()> {
         "+----------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -610,7 +623,7 @@ async fn test_fn_regexp_like() -> Result<()> {
         "+-----------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -631,7 +644,7 @@ async fn test_fn_regexp_match() -> Result<()> {
         "+------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -652,7 +665,7 @@ async fn test_fn_regexp_replace() -> Result<()> {
         "+----------------------------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -672,7 +685,7 @@ async fn test_fn_replace() -> Result<()> {
         "+---------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -692,7 +705,7 @@ async fn test_fn_repeat() -> Result<()> {
         "+-------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -713,7 +726,7 @@ async fn test_fn_reverse() -> Result<()> {
         "+-----------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -734,7 +747,7 @@ async fn test_fn_right() -> Result<()> {
         "+------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -755,7 +768,7 @@ async fn test_fn_rpad() -> Result<()> {
         "+------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -776,7 +789,7 @@ async fn test_fn_rpad_with_characters() -> Result<()> {
         "+----------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -797,7 +810,7 @@ async fn test_fn_sha224() -> Result<()> {
         "+----------------------------------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -816,7 +829,7 @@ async fn test_fn_split_part() -> Result<()> {
         "| 123A                                  |",
         "+---------------------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -836,7 +849,7 @@ async fn test_fn_starts_with() -> Result<()> {
         "+---------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -856,7 +869,7 @@ async fn test_fn_ends_with() -> Result<()> {
         "+-------------------------------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -865,18 +878,7 @@ async fn test_fn_ends_with() -> Result<()> {
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_strpos() -> Result<()> {
     let expr = strpos(col("a"), lit("f"));
-
-    let expected = [
-        "+--------------------------+",
-        "| strpos(test.a,Utf8(\"f\")) |",
-        "+--------------------------+",
-        "| 0                        |",
-        "| 0                        |",
-        "| 6                        |",
-        "| 9                        |",
-        "+--------------------------+",
-    ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -896,7 +898,7 @@ async fn test_fn_substr() -> Result<()> {
         "| 23AbcDef                |",
         "+-------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -915,7 +917,7 @@ async fn test_cast() -> Result<()> {
         "+--------+",
     ];
 
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -934,7 +936,7 @@ async fn test_fn_to_hex() -> Result<()> {
         "| 64             |",
         "+----------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -954,7 +956,7 @@ async fn test_fn_translate() -> Result<()> {
         "| 123AxxDef                               |",
         "+-----------------------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -973,7 +975,7 @@ async fn test_fn_upper() -> Result<()> {
         "| 123ABCDEF     |",
         "+---------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -992,7 +994,7 @@ async fn test_fn_encode() -> Result<()> {
         "| 313233416263446566         |",
         "+----------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -1018,7 +1020,7 @@ async fn test_fn_decode() -> Result<()> {
         "| 123AbcDef                                      |",
         "+------------------------------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
@@ -1037,7 +1039,7 @@ async fn test_fn_array_to_string() -> Result<()> {
         "| 6***7                               |",
         "+-------------------------------------+",
     ];
-    assert_fn_batches!(expr, expected);
+    assert_fn_batches!(expr);
 
     Ok(())
 }
