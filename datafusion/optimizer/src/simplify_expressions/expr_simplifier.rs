@@ -1387,16 +1387,29 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //
 
             // a between 3 and 5  -->  a >= 3 AND a <=5
+            // a between 3 and 1  -->  false
+            // a between 3 and 3  -->  a = 3
             // a not between 3 and 5  -->  a < 3 OR a > 5
             Expr::Between(between) => Transformed::yes(if between.negated {
                 let l = *between.expr.clone();
                 let r = *between.expr;
                 or(l.lt(*between.low), r.gt(*between.high))
             } else {
-                and(
-                    between.expr.clone().gt_eq(*between.low),
-                    between.expr.lt_eq(*between.high),
-                )
+                let low = *between.low;
+                let high = *between.high;
+                match (low.clone(), high.clone()) {
+                    (Expr::Literal(l), Expr::Literal(h)) => {
+                        if l < h {
+                            and(between.expr.clone().gt_eq(low), between.expr.lt_eq(high))
+                        } else if l > h {
+                            lit(false)
+                        } else {
+                            let l = *between.expr.clone();
+                            l.eq(low)
+                        }
+                    }
+                    _ => and(between.expr.clone().gt_eq(low), between.expr.lt_eq(high)),
+                }
             }),
 
             //
@@ -3527,6 +3540,14 @@ mod tests {
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
         );
+
+        // c2 between 3 and 1 is false
+        let expr = col("c2").between(lit(3), lit(1));
+        assert_eq!(simplify(expr), lit(false));
+
+        // c2 between 3 and 3 is c2 == 3
+        let expr = col("c2").between(lit(3), lit(3));
+        assert_eq!(simplify(expr), col("c2").eq(lit(3)));
     }
 
     #[test]
