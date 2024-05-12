@@ -66,20 +66,7 @@ pub fn data_types_with_scalar_udf(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
-        }
-    }
-
-    // none possible -> Error
-    plan_err!(
-        "[data_types_with_scalar_udf] Coercion from {:?} to the signature {:?} failed.",
-        current_types,
-        &signature.type_signature
-    )
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
 pub fn data_types_with_aggregate_udf(
@@ -112,20 +99,7 @@ pub fn data_types_with_aggregate_udf(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
-        }
-    }
-
-    // none possible -> Error
-    plan_err!(
-        "[data_types_with_aggregate_udf] Coercion from {:?} to the signature {:?} failed.",
-        current_types,
-        &signature.type_signature
-    )
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
 /// Performs type coercion for function arguments.
@@ -151,7 +125,7 @@ pub fn data_types(
         }
     }
 
-    let mut valid_types = get_valid_types(&signature.type_signature, current_types)?;
+    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -159,10 +133,18 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
+}
+
+fn try_coerce_types(
+    valid_types: Vec<Vec<DataType>>,
+    current_types: &[DataType],
+    type_signature: &TypeSignature,
+) -> Result<Vec<DataType>> {
+    let mut valid_types = valid_types;
+
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty()
-        && matches!(signature.type_signature, TypeSignature::Union(_))
-    {
+    if !valid_types.is_empty() && matches!(type_signature, TypeSignature::UserDefined) {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -181,9 +163,9 @@ pub fn data_types(
 
     // none possible -> Error
     plan_err!(
-        "[data_types] Coercion from {:?} to the signature {:?} failed.",
+        "Coercion from {:?} to the signature {:?} failed.",
         current_types,
-        &signature.type_signature
+        type_signature
     )
 }
 

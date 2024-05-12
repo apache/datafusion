@@ -304,51 +304,62 @@ enum TypeCategory {
 
 impl From<&DataType> for TypeCategory {
     fn from(data_type: &DataType) -> Self {
-        if data_type.is_numeric() {
-            return TypeCategory::Numeric;
-        }
+        match data_type {
+            // Dict is a special type in arrow, we check the value type
+            DataType::Dictionary(_, v) => {
+                let v = v.as_ref();
+                TypeCategory::from(v)
+            }
+            _ => {
+                if data_type.is_numeric() {
+                    return TypeCategory::Numeric;
+                }
 
-        if matches!(data_type, DataType::Boolean) {
-            return TypeCategory::Boolean;
-        }
+                if matches!(data_type, DataType::Boolean) {
+                    return TypeCategory::Boolean;
+                }
 
-        if matches!(
-            data_type,
-            DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_)
-        ) {
-            return TypeCategory::Array;
-        }
+                if matches!(
+                    data_type,
+                    DataType::List(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::LargeList(_)
+                ) {
+                    return TypeCategory::Array;
+                }
 
-        // String literal is possible to cast to many other types like numeric or datetime,
-        // therefore, it is categorized as a unknown type
-        if matches!(
-            data_type,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
-        ) {
-            return TypeCategory::Unknown;
-        }
+                // String literal is possible to cast to many other types like numeric or datetime,
+                // therefore, it is categorized as a unknown type
+                if matches!(
+                    data_type,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
+                ) {
+                    return TypeCategory::Unknown;
+                }
 
-        if matches!(
-            data_type,
-            DataType::Date32
-                | DataType::Date64
-                | DataType::Time32(_)
-                | DataType::Time64(_)
-                | DataType::Timestamp(_, _)
-                | DataType::Interval(_)
-                | DataType::Duration(_)
-        ) {
-            return TypeCategory::DateTime;
-        }
+                if matches!(
+                    data_type,
+                    DataType::Date32
+                        | DataType::Date64
+                        | DataType::Time32(_)
+                        | DataType::Time64(_)
+                        | DataType::Timestamp(_, _)
+                        | DataType::Interval(_)
+                        | DataType::Duration(_)
+                ) {
+                    return TypeCategory::DateTime;
+                }
 
-        if matches!(
-            data_type,
-            DataType::Dictionary(_, _) | DataType::Struct(_) | DataType::Union(_, _)
-        ) {
-            return TypeCategory::Composite;
-        }
+                if matches!(
+                    data_type,
+                    DataType::Map(_, _) | DataType::Struct(_) | DataType::Union(_, _)
+                ) {
+                    return TypeCategory::Composite;
+                }
 
-        TypeCategory::NotSupported
+                TypeCategory::NotSupported
+            }
+        }
     }
 }
 
@@ -360,7 +371,7 @@ impl From<&DataType> for TypeCategory {
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
 /// decimal percision and scale when coercing decimal types.
-pub(super) fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
+pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
     }
@@ -436,11 +447,46 @@ fn type_union_resolution_coercion(
         return Some(lhs_type.clone());
     }
 
-    // numeric coercion is the same as comparison coercion, both find the narrowest type
-    // that can accommodate both types
-    binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| pure_string_coercion(lhs_type, rhs_type))
-        .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
+    match (lhs_type, rhs_type) {
+        (
+            DataType::Dictionary(lhs_index_type, lhs_value_type),
+            DataType::Dictionary(rhs_index_type, rhs_value_type),
+        ) => {
+            
+            let new_index_type = type_union_resolution_coercion(lhs_index_type, rhs_index_type);
+            let new_value_type = type_union_resolution_coercion(lhs_value_type, rhs_value_type);
+            if let (Some(new_index_type), Some(new_value_type)) = (new_index_type, new_value_type) {
+                Some(DataType::Dictionary(
+                    Box::new(new_index_type),
+                    Box::new(new_value_type),
+                ))
+            } else {
+                None
+            }
+        }
+        (DataType::Dictionary(index_type, value_type), other_type)
+        | (other_type, DataType::Dictionary(index_type, value_type))
+        => {
+            let new_value_type = type_union_resolution_coercion(value_type, other_type);
+            if let Some(new_value_type) = new_value_type {
+                Some(DataType::Dictionary(
+                    index_type.clone(),
+                    Box::new(new_value_type),
+                ))
+            } else {
+                None
+            }
+        }        
+        _ => {
+
+            // numeric coercion is the same as comparison coercion, both find the narrowest type
+            // that can accommodate both types
+            binary_numeric_coercion(lhs_type, rhs_type)
+                .or_else(|| pure_string_coercion(lhs_type, rhs_type))
+                .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
+        }
+    }
+
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation

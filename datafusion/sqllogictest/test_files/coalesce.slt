@@ -209,20 +209,28 @@ select
 [3, 4] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # TODO: after switch signature of array to the same with coalesce, this query should be fixed
-query error
+query ?T
 select
   coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]),
   arrow_typeof(coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]));
+----
+[1, 2] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
 
 # Dictionary and String are not coercible
-query error
+query ?
 select coalesce(column1, 'none_set') from test1;
+----
+foo
+none_set
 
 query ?
 select coalesce(null, column1, 'none_set') from test1;
+----
+foo
+none_set
 
 # explicitly cast to Utf8
 query T
@@ -235,14 +243,20 @@ statement ok
 drop table test1
 
 # Numeric and Dictionary are not coercible
-query error
+query I
 select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
 
 query ?
 select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
+----
+123
 
 query ?
 select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
 
 # explicitly cast to Int8, and it will implicitly cast to Int64
 query IT

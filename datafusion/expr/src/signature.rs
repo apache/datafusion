@@ -190,9 +190,6 @@ impl TypeSignature {
             TypeSignature::UserDefined => {
                 vec!["UserDefined".to_string()]
             }
-            TypeSignature::Union(sig) => {
-                vec![format!("Union({:?})", sig.to_string_repr())]
-            }
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
