@@ -220,17 +220,11 @@ where
 
 #[doc = "returns a slice of the array."]
 pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
-    if let Some(stride) = stride {
-        Expr::ScalarFunction(ScalarFunction::new_udf(
-            array_slice_udf(),
-            vec![array, begin, end, stride],
-        ))
-    } else {
-        Expr::ScalarFunction(ScalarFunction::new_udf(
-            array_slice_udf(),
-            vec![array, begin, end],
-        ))
-    }
+    let args = match stride {
+        Some(stride) => vec![array, begin, end, stride],
+        None => vec![array, begin, end],
+    };
+    array_slice_udf().call(args)
 }
 
 #[derive(Debug)]
