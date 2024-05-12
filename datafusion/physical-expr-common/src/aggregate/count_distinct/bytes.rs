@@ -35,10 +35,10 @@ use std::sync::Arc;
 /// [`BinaryArray`]: arrow::array::BinaryArray
 /// [`LargeBinaryArray`]: arrow::array::LargeBinaryArray
 #[derive(Debug)]
-pub(super) struct BytesDistinctCountAccumulator<O: OffsetSizeTrait>(ArrowBytesSet<O>);
+pub struct BytesDistinctCountAccumulator<O: OffsetSizeTrait>(ArrowBytesSet<O>);
 
 impl<O: OffsetSizeTrait> BytesDistinctCountAccumulator<O> {
-    pub(super) fn new(output_type: OutputType) -> Self {
+    pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesSet::new(output_type))
     }
 }

@@ -39,15 +39,15 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
-use crate::aggregate::count_distinct::native::{
-    FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
-};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::binary_map::OutputType;
 use crate::physical_expr::PhysicalExpr;
 
 use super::AggregateExpr;
+
+pub use crate::aggregate::count_distinct::native::PrimitiveDistinctCountAccumulator;
+pub use crate::aggregate::count_distinct::native::FloatDistinctCountAccumulator;
+pub use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
 
 /// Expression for a `COUNT(DISTINCT)` aggregation.
 #[derive(Debug)]
