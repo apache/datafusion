@@ -84,6 +84,8 @@ macro_rules! assert_fn_batches {
         let df = df.select(vec![$EXPR])?.limit(0, Some($LIMIT))?;
         let batches = df.collect().await?;
 
+        // Once result is updated, run command below for snapshot update
+        // `cargo insta test --accept -p datafusion --test core_integration -- dataframe::dataframe_functions`
         datafusion_common::assert_snapshot!(&batches);
     };
 }
