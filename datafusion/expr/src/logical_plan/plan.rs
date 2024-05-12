@@ -1206,6 +1206,12 @@ impl LogicalPlan {
     }
 
     /// Get the output expressions and their corresponding columns.
+    ///
+    /// The parent node may reference the output columns of the plan by expressions, such as
+    /// projection over aggregate or window functions. This method helps to convert the
+    /// referenced expressions into columns.
+    ///
+    /// See also: [`crate::utils::columnize_expr`]
     pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(Expr, Column)>> {
         match self {
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
@@ -1218,6 +1224,13 @@ impl LogicalPlan {
                 input,
                 schema,
             }) => {
+                // The input could be another Window, so the result should also include the input's. For Example:
+                // `EXPLAIN SELECT RANK() OVER (PARTITION BY a ORDER BY b), SUM(b) OVER (PARTITION BY a) FROM t`
+                // Its plan is:
+                // Projection: RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(t.b) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                //   WindowAggr: windowExpr=[[SUM(CAST(t.b AS Int64)) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                //     WindowAggr: windowExpr=[[RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]/
+                //       TableScan: t projection=[a, b]
                 let mut output_exprs = input.columnized_output_exprs()?;
                 let input_len = input.schema().fields().len();
                 output_exprs.extend(
@@ -2559,6 +2572,7 @@ impl Aggregate {
     fn output_expressions(&self) -> Result<Vec<Expr>> {
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         exprs.extend(self.aggr_expr.clone());
+        debug_assert!(exprs.len() == self.schema.fields().len());
         Ok(exprs)
     }
 

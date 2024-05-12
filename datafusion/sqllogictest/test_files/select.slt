@@ -1621,6 +1621,15 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 ----
 3
 
+# Can't reference an output column by expression over projection.
+query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+select a + 1 from (select a+1 from (select 1 as a));
+
+query I
+select "a + Int64(1)" + 10 from (select a+1 from (select 1 as a));
+----
+12
+
 # run below query without logical optimizations
 statement ok
 set datafusion.optimizer.max_passes=0;
