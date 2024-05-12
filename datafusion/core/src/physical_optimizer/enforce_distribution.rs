@@ -1471,6 +1471,7 @@ pub(crate) mod tests {
             b',',
             b'"',
             None,
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1493,6 +1494,7 @@ pub(crate) mod tests {
             false,
             b',',
             b'"',
+            None,
             None,
             FileCompressionType::UNCOMPRESSED,
         ))
@@ -3766,6 +3768,7 @@ pub(crate) mod tests {
                     false,
                     b',',
                     b'"',
+                    None,
                     None,
                     compression_type,
                 )),

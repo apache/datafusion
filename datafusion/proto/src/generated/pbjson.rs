@@ -3698,6 +3698,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.optional_escape.is_some() {
             len += 1;
         }
+        if self.optional_comment.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -3718,6 +3721,13 @@ impl serde::Serialize for CsvScanExecNode {
                 }
             }
         }
+        if let Some(v) = self.optional_comment.as_ref() {
+            match v {
+                csv_scan_exec_node::OptionalComment::Comment(v) => {
+                    struct_ser.serialize_field("comment", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -3735,6 +3745,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "delimiter",
             "quote",
             "escape",
+            "comment",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3744,6 +3755,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             Delimiter,
             Quote,
             Escape,
+            Comment,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3770,6 +3782,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "quote" => Ok(GeneratedField::Quote),
                             "escape" => Ok(GeneratedField::Escape),
+                            "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3794,6 +3807,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut delimiter__ = None;
                 let mut quote__ = None;
                 let mut optional_escape__ = None;
+                let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -3826,6 +3840,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             optional_escape__ = map_.next_value::<::std::option::Option<_>>()?.map(csv_scan_exec_node::OptionalEscape::Escape);
                         }
+                        GeneratedField::Comment => {
+                            if optional_comment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("comment"));
+                            }
+                            optional_comment__ = map_.next_value::<::std::option::Option<_>>()?.map(csv_scan_exec_node::OptionalComment::Comment);
+                        }
                     }
                 }
                 Ok(CsvScanExecNode {
@@ -3834,6 +3854,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
                     optional_escape: optional_escape__,
+                    optional_comment: optional_comment__,
                 })
             }
         }
