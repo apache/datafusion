@@ -536,7 +536,7 @@ async fn fetch_statistics(
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    ///
+    /// Underlying parquet options
     parquet_options: TableParquetOptions,
     /// File metadata from successfully produced parquet files. The Mutex is only used
     /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.

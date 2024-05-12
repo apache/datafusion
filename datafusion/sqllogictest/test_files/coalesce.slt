@@ -221,7 +221,7 @@ create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (nu
 query error
 select coalesce(column1, 'none_set') from test1;
 
-query error
+query ?
 select coalesce(null, column1, 'none_set') from test1;
 
 # explicitly cast to Utf8
@@ -238,10 +238,10 @@ drop table test1
 query error
 select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 
-query error
+query ?
 select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
 
-query error
+query ?
 select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 
 # explicitly cast to Int8, and it will implicitly cast to Int64

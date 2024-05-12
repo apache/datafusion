@@ -623,15 +623,25 @@ mod tests {
 
         // cast(tag as Utf8) = Utf8('value') => tag = arrow_cast('value', 'Dictionary<Int32, Utf8>')
         let expr_input = cast(col("tag"), DataType::Utf8).eq(lit("value"));
-        let expected = col("tag").eq(lit(dict));
+        let expected = col("tag").eq(lit(dict.clone()));
         assert_eq!(optimize_test(expr_input, &schema), expected);
 
+        // Verify reversed argument order
+        // arrow_cast('value', 'Dictionary<Int32, Utf8>') = cast(str1 as Dictionary<Int32, Utf8>) => Utf8('value1') = str1
+        let expr_input = lit(dict.clone()).eq(cast(col("str1"), dict.data_type()));
+        let expected = lit("value").eq(col("str1"));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
+    #[test]
+    fn test_unwrap_cast_comparison_large_string() {
+        let schema = expr_test_schema();
         // cast(largestr as Dictionary<Int32, LargeUtf8>) = arrow_cast('value', 'Dictionary<Int32, LargeUtf8>') => str1 = LargeUtf8('value1')
         let dict = ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
         );
-        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict));
+        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict.clone()));
         let expected =
             col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);

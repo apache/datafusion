@@ -25,7 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    DFSchemaRef, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
@@ -37,7 +37,9 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
 };
-use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_expr::type_coercion::functions::{
+    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
@@ -45,9 +47,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
+    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -99,9 +100,7 @@ fn analyze_internal(
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
 
-    let mut expr_rewrite = TypeCoercionRewriter {
-        schema: Arc::new(schema),
-    };
+    let mut expr_rewrite = TypeCoercionRewriter { schema: &schema };
 
     let new_expr = plan
         .expressions()
@@ -116,11 +115,11 @@ fn analyze_internal(
     plan.with_new_exprs(new_expr, new_inputs)
 }
 
-pub(crate) struct TypeCoercionRewriter {
-    pub(crate) schema: DFSchemaRef,
+pub(crate) struct TypeCoercionRewriter<'a> {
+    pub(crate) schema: &'a DFSchema,
 }
 
-impl TreeNodeRewriter for TypeCoercionRewriter {
+impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -132,14 +131,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery)?;
+                let new_plan = analyze_internal(self.schema, &subquery)?;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
+                let new_plan = analyze_internal(self.schema, &subquery.subquery)?;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -153,8 +152,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             }) => {
-                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
-                let expr_type = expr.get_type(&self.schema)?;
+                let new_plan = analyze_internal(self.schema, &subquery.subquery)?;
+                let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
                         "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
@@ -165,32 +164,32 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    Box::new(expr.cast_to(&common_type, self.schema)?),
                     cast_subquery(new_subquery, &common_type)?,
                     negated,
                 ))))
             }
             Expr::Not(expr) => Ok(Transformed::yes(not(get_casted_expr_for_bool_op(
                 *expr,
-                &self.schema,
+                self.schema,
             )?))),
             Expr::IsTrue(expr) => Ok(Transformed::yes(is_true(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotTrue(expr) => Ok(Transformed::yes(is_not_true(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsFalse(expr) => Ok(Transformed::yes(is_false(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotFalse(expr) => Ok(Transformed::yes(is_not_false(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsUnknown(expr) => Ok(Transformed::yes(is_unknown(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::IsNotUnknown(expr) => Ok(Transformed::yes(is_not_unknown(
-                get_casted_expr_for_bool_op(*expr, &self.schema)?,
+                get_casted_expr_for_bool_op(*expr, self.schema)?,
             ))),
             Expr::Like(Like {
                 negated,
@@ -199,8 +198,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 escape_char,
                 case_insensitive,
             }) => {
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = pattern.get_type(&self.schema)?;
+                let left_type = expr.get_type(self.schema)?;
+                let right_type = pattern.get_type(self.schema)?;
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
                     let op_name = if case_insensitive {
                         "ILIKE"
@@ -211,8 +210,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
-                let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
-                let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
+                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
+                let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
                 Ok(Transformed::yes(Expr::Like(Like::new(
                     negated,
                     expr,
@@ -223,14 +222,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (left_type, right_type) = get_input_types(
-                    &left.get_type(&self.schema)?,
+                    &left.get_type(self.schema)?,
                     &op,
-                    &right.get_type(&self.schema)?,
+                    &right.get_type(self.schema)?,
                 )?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(left.cast_to(&left_type, &self.schema)?),
+                    Box::new(left.cast_to(&left_type, self.schema)?),
                     op,
-                    Box::new(right.cast_to(&right_type, &self.schema)?),
+                    Box::new(right.cast_to(&right_type, self.schema)?),
                 ))))
             }
             Expr::Between(Between {
@@ -239,15 +238,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 low,
                 high,
             }) => {
-                let expr_type = expr.get_type(&self.schema)?;
-                let low_type = low.get_type(&self.schema)?;
+                let expr_type = expr.get_type(self.schema)?;
+                let low_type = low.get_type(self.schema)?;
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         ))
                     })?;
-                let high_type = high.get_type(&self.schema)?;
+                let high_type = high.get_type(self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
@@ -262,10 +261,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                             ))
                         })?;
                 Ok(Transformed::yes(Expr::Between(Between::new(
-                    Box::new(expr.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(expr.cast_to(&coercion_type, self.schema)?),
                     negated,
-                    Box::new(low.cast_to(&coercion_type, &self.schema)?),
-                    Box::new(high.cast_to(&coercion_type, &self.schema)?),
+                    Box::new(low.cast_to(&coercion_type, self.schema)?),
+                    Box::new(high.cast_to(&coercion_type, self.schema)?),
                 ))))
             }
             Expr::InList(InList {
@@ -273,10 +272,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 list,
                 negated,
             }) => {
-                let expr_data_type = expr.get_type(&self.schema)?;
+                let expr_data_type = expr.get_type(self.schema)?;
                 let list_data_types = list
                     .iter()
-                    .map(|list_expr| list_expr.get_type(&self.schema))
+                    .map(|list_expr| list_expr.get_type(self.schema))
                     .collect::<Result<Vec<_>>>()?;
                 let result_type =
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
@@ -286,11 +285,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, &self.schema)?;
+                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
                         let cast_list_expr = list
                             .into_iter()
                             .map(|list_expr| {
-                                list_expr.cast_to(&coerced_type, &self.schema)
+                                list_expr.cast_to(&coerced_type, self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Ok(Transformed::yes(Expr::InList(InList ::new(
@@ -302,23 +301,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
             }
             Expr::Case(case) => {
-                let case = coerce_case_expression(case, &self.schema)?;
+                let case = coerce_case_expression(case, self.schema)?;
                 Ok(Transformed::yes(Expr::Case(case)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
-                        args,
-                        &self.schema,
-                        fun.signature(),
-                    )?;
-                    let new_expr =
-                        coerce_arguments_for_fun(new_expr, &self.schema, &fun)?;
-                    Ok(Transformed::yes(Expr::ScalarFunction(
-                        ScalarFunction::new_udf(fun, new_expr),
-                    )))
-                }
-            },
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                let new_expr = coerce_arguments_for_signature_with_scalar_udf(
+                    args,
+                    self.schema,
+                    &func,
+                )?;
+                let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
+                Ok(Transformed::yes(Expr::ScalarFunction(
+                    ScalarFunction::new_udf(func, new_expr),
+                )))
+            }
             Expr::AggregateFunction(expr::AggregateFunction {
                 func_def,
                 args,
@@ -331,7 +327,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     let new_expr = coerce_agg_exprs_for_signature(
                         &fun,
                         args,
-                        &self.schema,
+                        self.schema,
                         &fun.signature(),
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
@@ -346,10 +342,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     )))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature(
+                    let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                         args,
-                        &self.schema,
-                        fun.signature(),
+                        self.schema,
+                        &fun,
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
@@ -362,9 +358,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         ),
                     )))
                 }
-                AggregateFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
             },
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -375,14 +368,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 null_treatment,
             }) => {
                 let window_frame =
-                    coerce_window_frame(window_frame, &self.schema, &order_by)?;
+                    coerce_window_frame(window_frame, self.schema, &order_by)?;
 
                 let args = match &fun {
                     expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
                             args,
-                            &self.schema,
+                            self.schema,
                             &fun.signature(),
                         )?
                     }
@@ -495,7 +488,7 @@ fn coerce_frame_bound(
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
     window_frame: WindowFrame,
-    schema: &DFSchemaRef,
+    schema: &DFSchema,
     expressions: &[Expr],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
@@ -531,7 +524,7 @@ fn coerce_window_frame(
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
-fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
     expr.cast_to(&DataType::Boolean, schema)
@@ -541,10 +534,10 @@ fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchemaRef) -> Result<Expr>
 /// `signature`, if possible.
 ///
 /// See the module level documentation for more detail on coercion.
-fn coerce_arguments_for_signature(
+fn coerce_arguments_for_signature_with_scalar_udf(
     expressions: Vec<Expr>,
     schema: &DFSchema,
-    signature: &Signature,
+    func: &ScalarUDF,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(expressions);
@@ -555,7 +548,34 @@ fn coerce_arguments_for_signature(
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types(&current_types, signature)?;
+    let new_types = data_types_with_scalar_udf(&current_types, func)?;
+
+    expressions
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .collect()
+}
+
+/// Returns `expressions` coerced to types compatible with
+/// `signature`, if possible.
+///
+/// See the module level documentation for more detail on coercion.
+fn coerce_arguments_for_signature_with_aggregate_udf(
+    expressions: Vec<Expr>,
+    schema: &DFSchema,
+    func: &AggregateUDF,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(expressions);
+    }
+
+    let current_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
 
     expressions
         .into_iter()
@@ -615,7 +635,7 @@ fn coerce_agg_exprs_for_signature(
         .collect()
 }
 
-fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
+fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     // Given expressions like:
     //
     // CASE a1
@@ -777,7 +797,7 @@ mod test {
         let empty = empty_with_type(DataType::Float64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -791,7 +811,7 @@ mod test {
         )?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)\
             \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[derive(Debug, Clone)]
@@ -832,7 +852,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -842,12 +862,9 @@ mod test {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         })
         .call(vec![lit("Apple")]);
-        let plan_err = Projection::try_new(vec![udf], empty)
+        Projection::try_new(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
 
-        let expected_error = "Error during planning: No function matches the given name and argument types 'TestScalarUDF(Utf8)'. You might need to add explicit type casts.";
-
-        assert!(plan_err.to_string().starts_with(expected_error));
         Ok(())
     }
 
@@ -867,7 +884,7 @@ mod test {
         )?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int64(10) AS Float32))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -891,7 +908,7 @@ mod test {
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -919,11 +936,11 @@ mod test {
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
+        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "")
             .err()
             .unwrap();
         assert_eq!(
-            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            "type_coercion\ncaused by\nError during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
             err.strip_backtrace()
         );
         Ok(())
@@ -943,7 +960,7 @@ mod test {
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(CAST(Int64(12) AS Float64))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
         let fun: AggregateFunction = AggregateFunction::Avg;
@@ -957,7 +974,7 @@ mod test {
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(CAST(a AS Float64))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1018,7 +1035,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"386547056640\")\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1031,7 +1048,7 @@ mod test {
         let expected =
             "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         // a in (1,4,8), a is decimal
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
@@ -1046,7 +1063,7 @@ mod test {
         let expected =
             "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -1062,7 +1079,7 @@ mod test {
         let expected =
             "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
             \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -1079,7 +1096,7 @@ mod test {
         let expected =
             "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
             \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
@@ -1090,11 +1107,11 @@ mod test {
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![expr.clone()], empty)?);
         let expected = "Projection: a IS TRUE\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "");
+        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "");
         let err = ret.unwrap_err().to_string();
         assert!(err.contains("Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean"), "{err}");
 
@@ -1103,21 +1120,21 @@ mod test {
         let empty = empty_with_type(DataType::Boolean);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a IS NOT TRUE\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         // is false
         let expr = col("a").is_false();
         let empty = empty_with_type(DataType::Boolean);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a IS FALSE\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         // is not false
         let expr = col("a").is_not_false();
         let empty = empty_with_type(DataType::Boolean);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a IS NOT FALSE\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         Ok(())
     }
@@ -1131,7 +1148,7 @@ mod test {
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
@@ -1140,14 +1157,14 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL \
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
+        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected);
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains(
             "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
@@ -1160,7 +1177,7 @@ mod test {
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
@@ -1169,14 +1186,14 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL \
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
+        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected);
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains(
             "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression"
@@ -1192,11 +1209,11 @@ mod test {
         let plan =
             LogicalPlan::Projection(Projection::try_new(vec![expr.clone()], empty)?);
         let expected = "Projection: a IS UNKNOWN\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
+        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected);
         let err = ret.unwrap_err().to_string();
         assert!(err.contains("Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean"), "{err}");
 
@@ -1205,7 +1222,7 @@ mod test {
         let empty = empty_with_type(DataType::Boolean);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a IS NOT UNKNOWN\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         Ok(())
     }
@@ -1225,7 +1242,7 @@ mod test {
                 LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
             let expected =
                 "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
-            assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+            assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         }
 
         Ok(())
@@ -1238,7 +1255,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1249,7 +1266,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1260,7 +1277,7 @@ mod test {
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
+        let mut rewriter = TypeCoercionRewriter { schema: &schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
         let result = expr.rewrite(&mut rewriter).data()?;
@@ -1281,7 +1298,7 @@ mod test {
         dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1446,7 +1463,7 @@ mod test {
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: IntervalYearMonth(\"12\") + CAST(Utf8(\"2000-01-01T00:00:00\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1468,7 +1485,7 @@ mod test {
         dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1493,7 +1510,7 @@ mod test {
         \n    Projection: CAST(a AS Int64)\
         \n      EmptyRelation\
         \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1517,7 +1534,7 @@ mod test {
         \n  Subquery:\
         \n    EmptyRelation\
         \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 
@@ -1541,7 +1558,7 @@ mod test {
         \n    Projection: CAST(a AS Decimal128(13, 8))\
         \n      EmptyRelation\
         \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
 }

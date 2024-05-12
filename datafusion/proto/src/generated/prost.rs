@@ -1911,9 +1911,8 @@ pub struct ParquetOptions {
     /// default = "1.0"
     #[prost(string, tag = "9")]
     pub writer_version: ::prost::alloc::string::String,
-    /// default = false
-    #[prost(bool, tag = "20")]
-    pub bloom_filter_enabled: bool,
+    /// bool bloom_filter_enabled = 20; // default = false
+    ///
     /// default = true
     #[prost(bool, tag = "23")]
     pub allow_single_file_parallelism: bool,
@@ -1923,6 +1922,12 @@ pub struct ParquetOptions {
     /// default = 2
     #[prost(uint64, tag = "25")]
     pub maximum_buffered_record_batches_per_stream: u64,
+    /// default = true
+    #[prost(bool, tag = "26")]
+    pub bloom_filter_on_read: bool,
+    /// default = false
+    #[prost(bool, tag = "27")]
+    pub bloom_filter_on_write: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
@@ -2829,8 +2834,8 @@ pub enum AggregateFunction {
     ArrayAgg = 6,
     Variance = 7,
     VariancePop = 8,
-    Covariance = 9,
-    CovariancePop = 10,
+    /// COVARIANCE = 9;
+    /// COVARIANCE_POP = 10;
     Stddev = 11,
     StddevPop = 12,
     Correlation = 13,
@@ -2876,8 +2881,6 @@ impl AggregateFunction {
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Variance => "VARIANCE",
             AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::Covariance => "COVARIANCE",
-            AggregateFunction::CovariancePop => "COVARIANCE_POP",
             AggregateFunction::Stddev => "STDDEV",
             AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
@@ -2920,8 +2923,6 @@ impl AggregateFunction {
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "VARIANCE" => Some(Self::Variance),
             "VARIANCE_POP" => Some(Self::VariancePop),
-            "COVARIANCE" => Some(Self::Covariance),
-            "COVARIANCE_POP" => Some(Self::CovariancePop),
             "STDDEV" => Some(Self::Stddev),
             "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),

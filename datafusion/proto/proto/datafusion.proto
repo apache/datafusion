@@ -548,8 +548,8 @@ enum AggregateFunction {
   ARRAY_AGG = 6;
   VARIANCE = 7;
   VARIANCE_POP = 8;
-  COVARIANCE = 9;
-  COVARIANCE_POP = 10;
+  // COVARIANCE = 9;
+  // COVARIANCE_POP = 10;
   STDDEV = 11;
   STDDEV_POP = 12;
   CORRELATION = 13;
@@ -1215,10 +1215,12 @@ message ParquetOptions {
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
   uint64 write_batch_size = 8; // default = 1024
   string writer_version = 9; // default = "1.0"
-  bool bloom_filter_enabled = 20; // default = false
+  // bool bloom_filter_enabled = 20; // default = false
   bool allow_single_file_parallelism = 23; // default = true
   uint64 maximum_parallel_row_group_writers = 24; // default = 1
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+  bool bloom_filter_on_read = 26; // default = true
+  bool bloom_filter_on_write = 27; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;

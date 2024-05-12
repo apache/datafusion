@@ -1899,21 +1899,20 @@ a
 
 # The 'from' and 'for' parameters don't support string types, because they should be treated as
 # regular expressions, which we have not implemented yet.
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3' FOR '2')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3' FOR 2)
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM 3 FOR '2')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FOR '2')
-
 
 ##### csv_query_nullif_divide_by_0
 
@@ -2275,13 +2274,13 @@ select f64, round(1.0 / f64) as i64_1, acos(round(1.0 / f64)) from doubles;
 10.1 0 1.570796326795
 
 # common subexpr with coalesce (short-circuited)
-query RRR rowsort
+query RRR
 select f64, coalesce(1.0 / f64, 0.0), acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
 10.1 0.09900990099 1.471623942989
 
 # common subexpr with coalesce (short-circuited) and alias
-query RRR rowsort
+query RRR
 select f64, coalesce(1.0 / f64, 0.0) as f64_1, acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
 10.1 0.09900990099 1.471623942989

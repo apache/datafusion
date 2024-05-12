@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
-use crate::logical_plan::Aggregate;
 use crate::signature::{Signature, TypeSignature};
 use crate::{
     and, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
@@ -725,53 +724,14 @@ pub fn from_plan(
     plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
 }
 
-/// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Vec<Column> {
-    agg.aggr_expr
-        .iter()
-        .chain(&agg.group_expr)
-        .flat_map(find_columns_referenced_by_expr)
-        .collect()
-}
-
-fn exprlist_to_fields_aggregate(
-    exprs: &[Expr],
-    agg: &Aggregate,
-) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    let agg_cols = agg_cols(agg);
-    let mut fields = vec![];
-    for expr in exprs {
-        match expr {
-            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                // resolve against schema of input to aggregate
-                fields.push(expr.to_field(agg.input.schema())?);
-            }
-            _ => fields.push(expr.to_field(&agg.schema)?),
-        }
-    }
-    Ok(fields)
-}
-
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields(
     exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
-    // because it will contain columns representing complex expressions (such a column named
-    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
-    // look at the input to the aggregate instead.
-    let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs, agg)),
-        _ => None,
-    };
-    if let Some(fields) = fields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        let input_schema = &plan.schema();
-        exprs.iter().map(|e| e.to_field(input_schema)).collect()
-    }
+    // look for exact match in plan's output schema
+    let input_schema = &plan.schema();
+    exprs.iter().map(|e| e.to_field(input_schema)).collect()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
@@ -925,7 +885,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
     columns: &HashSet<Column>,
-    schema: DFSchemaRef,
+    schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
         let exist = schema.is_column_from_schema(col);
@@ -949,8 +909,8 @@ pub fn check_all_columns_from_schema(
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
-    left_schema: DFSchemaRef,
-    right_schema: DFSchemaRef,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
     let left_using_columns = left_key.to_columns()?;
     let right_using_columns = right_key.to_columns()?;
@@ -960,8 +920,8 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    if check_all_columns_from_schema(&left_using_columns, left_schema.clone())?
-        && check_all_columns_from_schema(&right_using_columns, right_schema.clone())?
+    if check_all_columns_from_schema(&left_using_columns, left_schema)?
+        && check_all_columns_from_schema(&right_using_columns, right_schema)?
     {
         return Ok(Some((left_key.clone(), right_key.clone())));
     } else if check_all_columns_from_schema(&right_using_columns, left_schema)?

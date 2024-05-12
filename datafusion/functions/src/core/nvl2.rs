@@ -19,8 +19,11 @@ use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, plan_datafusion_err, Result};
-use datafusion_expr::{utils, ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::{
+    type_coercion::binary::comparison_coercion, ColumnarValue, ScalarUDFImpl, Signature,
+    Volatility,
+};
 
 #[derive(Debug)]
 pub struct NVL2Func {
@@ -36,7 +39,7 @@ impl Default for NVL2Func {
 impl NVL2Func {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_equal(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -55,21 +58,36 @@ impl ScalarUDFImpl for NVL2Func {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 3 {
-            return Err(plan_datafusion_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    self.name(),
-                    self.signature().clone(),
-                    arg_types,
-                )
-            ));
-        }
         Ok(arg_types[1].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         nvl2_func(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 3 {
+            return exec_err!(
+                "NVL2 takes exactly three arguments, but got {}",
+                arg_types.len()
+            );
+        }
+        let new_type = arg_types.iter().skip(1).try_fold(
+            arg_types.first().unwrap().clone(),
+            |acc, x| {
+                // The coerced types found by `comparison_coercion` are not guaranteed to be
+                // coercible for the arguments. `comparison_coercion` returns more loose
+                // types that can be coerced to both `acc` and `x` for comparison purpose.
+                // See `maybe_data_types` for the actual coercion.
+                let coerced_type = comparison_coercion(&acc, x);
+                if let Some(coerced_type) = coerced_type {
+                    Ok(coerced_type)
+                } else {
+                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                }
+            },
+        )?;
+        Ok(vec![new_type; arg_types.len()])
     }
 }
 

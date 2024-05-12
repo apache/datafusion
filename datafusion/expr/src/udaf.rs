@@ -195,6 +195,10 @@ impl AggregateUDF {
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
     }
+
+    pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
+    }
 }
 
 impl<F> From<F> for AggregateUDF

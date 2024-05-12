@@ -91,24 +91,12 @@ pub enum TypeSignature {
     /// # Examples
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// One or more arguments of an arbitrary but equal type.
-    /// DataFusion attempts to coerce all argument types to match to the common type with [comparision coercion].
+    /// The acceptable signature and coercions rules to coerce arguments to this
+    /// signature are special for this function. If this signature is specified,
+    /// Datafusion will call [`ScalarUDFImpl::coerce_types`] to prepare argument types.
     ///
-    /// [comparision coercion]: https://docs.rs/datafusion/latest/datafusion/logical_expr/type_coercion/binary/fn.comparison_coercion.html
-    ///
-    /// # Examples
-    /// Given types in signature should be coercible to the same final type.
-    /// A function such as `make_array` is `VariadicEqual`.
-    ///
-    /// `make_array(i32, i64) -> make_array(i64, i64)`
-    VariadicEqual,
-    /// One or more arguments of an arbitrary but equal type or Null.
-    /// [Type union coercion] is attempted to match the signatures.
-    ///
-    /// Functions like `coalesce` is `Union(VariadicAny)`.
-    ///
-    /// [Type union coercion]: https://docs.rs/datafusion/latest/datafusion/logical_expr/type_coercion/binary/fn.type_union_resolution.html
-    Union(Box<TypeSignature>),
+    /// [`ScalarUDFImpl::coerce_types`]: crate::udf::ScalarUDFImpl::coerce_types
+    UserDefined,
     /// One or more arguments with arbitrary types
     VariadicAny,
     /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
@@ -199,8 +187,8 @@ impl TypeSignature {
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }
-            TypeSignature::VariadicEqual => {
-                vec!["CoercibleT, .., CoercibleT".to_string()]
+            TypeSignature::UserDefined => {
+                vec!["UserDefined".to_string()]
             }
             TypeSignature::Union(sig) => {
                 vec![format!("Union({:?})", sig.to_string_repr())]
@@ -267,19 +255,10 @@ impl Signature {
             volatility,
         }
     }
-    /// One or more number of arguments that is coercible to the same type, with `comparison_coercion`
-    /// See [TypeSignature::VariadicEqual] for more details.
-    pub fn variadic_equal(volatility: Volatility) -> Self {
+    /// User-defined coercion rules for the function.
+    pub fn user_defined(volatility: Volatility) -> Self {
         Self {
-            type_signature: TypeSignature::VariadicEqual,
-            volatility,
-        }
-    }
-    /// One or more number of arguments that is coercible to the same type, with `type_union_resolution`
-    /// See [TypeSignature::Union] for more details.
-    pub fn union_variadic(volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::Union(Box::new(TypeSignature::VariadicAny)),
+            type_signature: TypeSignature::UserDefined,
             volatility,
         }
     }

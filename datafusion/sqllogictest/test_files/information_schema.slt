@@ -49,6 +49,12 @@ SELECT * from information_schema.schemata;
 ----
 datafusion public NULL NULL NULL NULL NULL
 
+# Table name case insensitive
+query T rowsort
+SELECT catalog_name from information_schema.SchEmaTa;
+----
+datafusion
+
 # Disable information_schema and verify it now errors again
 statement ok
 set datafusion.catalog.information_schema = false
@@ -172,9 +178,10 @@ datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.minimum_parallel_output_files 4
 datafusion.execution.parquet.allow_single_file_parallelism true
-datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
+datafusion.execution.parquet.bloom_filter_on_read true
+datafusion.execution.parquet.bloom_filter_on_write false
 datafusion.execution.parquet.column_index_truncate_length NULL
 datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
@@ -252,9 +259,10 @@ datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum 
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
 datafusion.execution.minimum_parallel_output_files 4 Guarantees a minimum level of output files running in parallel. RecordBatches will be distributed in round robin fashion to each parallel writer. Each writer is closed and a new file opened once soft_max_rows_per_output_file is reached.
 datafusion.execution.parquet.allow_single_file_parallelism true Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
-datafusion.execution.parquet.bloom_filter_enabled false Sets if bloom filter is enabled for any column
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.bloom_filter_on_read true Use any available bloom filters when reading parquet files
+datafusion.execution.parquet.bloom_filter_on_write false Write bloom filters for all columns when creating parquet files
 datafusion.execution.parquet.column_index_truncate_length NULL Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) Sets default parquet compression codec Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.created_by datafusion Sets "created by" property

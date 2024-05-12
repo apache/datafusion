@@ -112,15 +112,12 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// array_resize keep the original array and append the default element to the end
-fn general_list_resize<O: OffsetSizeTrait>(
+fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
     field: &FieldRef,
     default_element: Option<ArrayRef>,
-) -> Result<ArrayRef>
-where
-    O: TryInto<i64>,
-{
+) -> Result<ArrayRef> {
     let data_type = array.value_type();
 
     let values = array.values();

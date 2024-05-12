@@ -61,6 +61,16 @@ pub enum TableType {
     Temporary,
 }
 
+impl std::fmt::Display for TableType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableType::Base => write!(f, "Base"),
+            TableType::View => write!(f, "View"),
+            TableType::Temporary => write!(f, "Temporary"),
+        }
+    }
+}
+
 /// The TableSource trait is used during logical query planning and optimizations and
 /// provides access to schema information and filter push-down capabilities. This trait
 /// provides a subset of the functionality of the TableProvider trait in the core

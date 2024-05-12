@@ -296,12 +296,12 @@ impl LogicalPlanBuilder {
             WriteOp::InsertInto
         };
 
-        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
-            table_name: table_name.into(),
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement::new(
+            table_name.into(),
             table_schema,
             op,
-            input: Arc::new(input),
-        })))
+            Arc::new(input),
+        ))))
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -1085,8 +1085,8 @@ impl LogicalPlanBuilder {
                 find_valid_equijoin_key_pair(
                         &normalized_left_key,
                         &normalized_right_key,
-                        self.plan.schema().clone(),
-                        right.schema().clone(),
+                        self.plan.schema(),
+                        right.schema(),
                     )?.ok_or_else(||
                         plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
