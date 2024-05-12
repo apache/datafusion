@@ -452,10 +452,13 @@ fn type_union_resolution_coercion(
             DataType::Dictionary(lhs_index_type, lhs_value_type),
             DataType::Dictionary(rhs_index_type, rhs_value_type),
         ) => {
-            
-            let new_index_type = type_union_resolution_coercion(lhs_index_type, rhs_index_type);
-            let new_value_type = type_union_resolution_coercion(lhs_value_type, rhs_value_type);
-            if let (Some(new_index_type), Some(new_value_type)) = (new_index_type, new_value_type) {
+            let new_index_type =
+                type_union_resolution_coercion(lhs_index_type, rhs_index_type);
+            let new_value_type =
+                type_union_resolution_coercion(lhs_value_type, rhs_value_type);
+            if let (Some(new_index_type), Some(new_value_type)) =
+                (new_index_type, new_value_type)
+            {
                 Some(DataType::Dictionary(
                     Box::new(new_index_type),
                     Box::new(new_value_type),
@@ -465,20 +468,11 @@ fn type_union_resolution_coercion(
             }
         }
         (DataType::Dictionary(index_type, value_type), other_type)
-        | (other_type, DataType::Dictionary(index_type, value_type))
-        => {
+        | (other_type, DataType::Dictionary(index_type, value_type)) => {
             let new_value_type = type_union_resolution_coercion(value_type, other_type);
-            if let Some(new_value_type) = new_value_type {
-                Some(DataType::Dictionary(
-                    index_type.clone(),
-                    Box::new(new_value_type),
-                ))
-            } else {
-                None
-            }
-        }        
+            new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
+        }
         _ => {
-
             // numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
@@ -486,7 +480,6 @@ fn type_union_resolution_coercion(
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
         }
     }
-
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -627,10 +620,7 @@ pub(crate) fn binary_numeric_coercion(
 }
 
 /// Decimal coercion rules.
-pub(crate) fn decimal_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
+pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
