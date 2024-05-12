@@ -19,7 +19,8 @@
 
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -1418,6 +1419,176 @@ impl Expr {
             | Expr::Sort(..)
             | Expr::Placeholder(..) => false,
         }
+    }
+
+    /// This method hashes the direct content of an expression node without recursing into
+    /// its children. This is useful because in `CommonSubexprEliminate` we can build up
+    /// the deep hash of a node and its descendants during the bottom-up phase of the
+    /// first traversal and so avoid computing the hash of the node and then the hash of
+    /// its descendants separately.
+    ///
+    /// As it is pretty easy to forget changing this method when `Expr` changes the
+    /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
+    /// compile time.
+    pub fn hash_node<H: Hasher>(&self, hasher: &mut H) {
+        mem::discriminant(self).hash(hasher);
+        match self {
+            Expr::Alias(Alias {
+                expr: _expr,
+                relation,
+                name,
+            }) => {
+                relation.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Column(column) => {
+                column.hash(hasher);
+            }
+            Expr::ScalarVariable(data_type, name) => {
+                data_type.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Literal(scalar_value) => {
+                scalar_value.hash(hasher);
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left: _left,
+                op,
+                right: _right,
+            }) => {
+                op.hash(hasher);
+            }
+            Expr::Like(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            })
+            | Expr::SimilarTo(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                negated.hash(hasher);
+                escape_char.hash(hasher);
+                case_insensitive.hash(hasher);
+            }
+            Expr::Not(_expr)
+            | Expr::IsNotNull(_expr)
+            | Expr::IsNull(_expr)
+            | Expr::IsTrue(_expr)
+            | Expr::IsFalse(_expr)
+            | Expr::IsUnknown(_expr)
+            | Expr::IsNotTrue(_expr)
+            | Expr::IsNotFalse(_expr)
+            | Expr::IsNotUnknown(_expr)
+            | Expr::Negative(_expr) => {}
+            Expr::Between(Between {
+                expr: _expr,
+                negated,
+                low: _low,
+                high: _high,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Case(Case {
+                expr: _expr,
+                when_then_expr: _when_then_expr,
+                else_expr: _else_expr,
+            }) => {}
+            Expr::Cast(Cast {
+                expr: _expr,
+                data_type,
+            })
+            | Expr::TryCast(TryCast {
+                expr: _expr,
+                data_type,
+            }) => {
+                data_type.hash(hasher);
+            }
+            Expr::Sort(Sort {
+                expr: _expr,
+                asc,
+                nulls_first,
+            }) => {
+                asc.hash(hasher);
+                nulls_first.hash(hasher);
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
+                func.hash(hasher);
+            }
+            Expr::AggregateFunction(AggregateFunction {
+                func_def,
+                args: _args,
+                distinct,
+                filter: _filter,
+                order_by: _order_by,
+                null_treatment,
+            }) => {
+                func_def.hash(hasher);
+                distinct.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args: _args,
+                partition_by: _partition_by,
+                order_by: _order_by,
+                window_frame,
+                null_treatment,
+            }) => {
+                fun.hash(hasher);
+                window_frame.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::InList(InList {
+                expr: _expr,
+                list: _list,
+                negated,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Exists(Exists { subquery, negated }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::InSubquery(InSubquery {
+                expr: _expr,
+                subquery,
+                negated,
+            }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::ScalarSubquery(subquery) => {
+                subquery.hash(hasher);
+            }
+            Expr::Wildcard { qualifier } => {
+                qualifier.hash(hasher);
+            }
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::Rollup(_exprs) => {
+                    hasher.write_u8(0);
+                }
+                GroupingSet::Cube(_exprs) => {
+                    hasher.write_u8(1);
+                }
+                GroupingSet::GroupingSets(_exprs) => {
+                    hasher.write_u8(2);
+                }
+            },
+            Expr::Placeholder(place_holder) => {
+                place_holder.hash(hasher);
+            }
+            Expr::OuterReferenceColumn(data_type, column) => {
+                data_type.hash(hasher);
+                column.hash(hasher);
+            }
+            Expr::Unnest(Unnest { expr: _expr }) => {}
+        };
     }
 }
 
