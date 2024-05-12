@@ -1208,9 +1208,6 @@ impl LogicalPlan {
     /// Get the output expressions and their corresponding columns.
     pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(Expr, Column)>> {
         match self {
-            LogicalPlan::Projection(Projection { expr, schema, .. }) => {
-                Ok(expr.clone().into_iter().zip(schema.columns()).collect())
-            }
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
                 .into_iter()

@@ -756,7 +756,6 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
         _ => return Ok(e),
     };
     let exprs_map: HashMap<Expr, Column> = output_exprs.into_iter().collect();
-
     e.transform_down(|node: Expr| match exprs_map.get(&node) {
         Some(column) => Ok(Transformed::new(
             Expr::Column(column.clone()),
