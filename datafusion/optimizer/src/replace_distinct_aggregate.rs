@@ -97,14 +97,19 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let expr_cnt = on_expr.len();
 
                 // Construct the aggregation expression to be used to fetch the selected expressions.
-                let aggr_expr = vec![Expr::AggregateFunction(AggregateFunction::new(
-                    AggregateFunctionFunc::FirstValue,
-                    select_expr,
-                    false,
-                    None,
-                    sort_expr.clone(),
-                    None,
-                ))];
+                let aggr_expr = select_expr
+                    .into_iter()
+                    .map(|e| {
+                        Expr::AggregateFunction(AggregateFunction::new(
+                            AggregateFunctionFunc::FirstValue,
+                            vec![e],
+                            false,
+                            None,
+                            sort_expr.clone(),
+                            None,
+                        ))
+                    })
+                    .collect::<Vec<Expr>>();
 
                 let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
                 let group_expr = normalize_cols(on_expr, input.as_ref())?;
