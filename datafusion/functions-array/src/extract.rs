@@ -52,13 +52,7 @@ make_udf_function!(
     array_element_udf
 );
 
-make_udf_function!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array.",
-    array_slice_udf
-);
+make_udf_function!(ArraySlice, array_slice_udf);
 
 make_udf_function!(
     ArrayPopFront,
@@ -222,6 +216,21 @@ where
 
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
+}
+
+#[doc = "returns a slice of the array."]
+pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
+    if let Some(stride) = stride {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            array_slice_udf(),
+            vec![array, begin, end, stride],
+        ))
+    } else {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            array_slice_udf(),
+            vec![array, begin, end],
+        ))
+    }
 }
 
 #[derive(Debug)]

@@ -581,7 +581,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),
             lit(2),
-            lit(1),
+            Some(lit(1)),
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
