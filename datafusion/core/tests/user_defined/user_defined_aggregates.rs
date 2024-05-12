@@ -43,7 +43,9 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{assert_contains, assert_snapshot, cast::as_primitive_array, exec_err};
+use datafusion_common::{
+    assert_contains, assert_snapshot, cast::as_primitive_array, exec_err,
+};
 use datafusion_expr::{
     create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
     SimpleAggregateUDF,

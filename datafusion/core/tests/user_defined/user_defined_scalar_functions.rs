@@ -26,7 +26,9 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
     cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{assert_contains, assert_snapshot, exec_err, internal_err, DataFusionError};
+use datafusion_common::{
+    assert_contains, assert_snapshot, exec_err, internal_err, DataFusionError,
+};
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
