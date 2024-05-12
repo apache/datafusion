@@ -233,7 +233,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                     fm,
                     args,
-                    false,
+                    distinct,
                     None,
                     order_by,
                     null_treatment,

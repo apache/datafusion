@@ -66,6 +66,7 @@ pub struct AccumulatorArgs<'a> {
     ///
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
+    pub is_distinct: bool,
 }
 
 impl<'a> AccumulatorArgs<'a> {
@@ -74,12 +75,14 @@ impl<'a> AccumulatorArgs<'a> {
         schema: &'a Schema,
         ignore_nulls: bool,
         sort_exprs: &'a [Expr],
+        is_distinct: bool,
     ) -> Self {
         Self {
             data_type,
             schema,
             ignore_nulls,
             sort_exprs,
+            is_distinct
         }
     }
 }

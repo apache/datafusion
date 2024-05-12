@@ -107,13 +107,15 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         for e in args {
                             fields_set.insert(e.canonical_name());
                         }
-                    } else if fun.name() != "SUM" && fun.name() != "MIN" && fun.name() != "MAX" {
+                    } else if fun.name() != "SUM"
+                        && fun.name() != "MIN"
+                        && fun.name() != "MAX"
+                    {
                         return Ok(false);
                     }
                 } else {
                     return Ok(false);
                 }
-
             }
             Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
         }
@@ -266,33 +268,39 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     index += 1;
                                     let alias_str = format!("alias{}", index);
                                     inner_aggr_exprs.push(
-                                        Expr::AggregateFunction(AggregateFunction::new_udf(
+                                        Expr::AggregateFunction(
+                                            AggregateFunction::new_udf(
+                                                udf.clone(),
+                                                args.clone(),
+                                                false,
+                                                None,
+                                                None,
+                                                None,
+                                            ),
+                                        )
+                                        .alias(&alias_str),
+                                    );
+                                    Ok(Expr::AggregateFunction(
+                                        AggregateFunction::new_udf(
                                             udf.clone(),
-                                            args.clone(),
+                                            vec![col(&alias_str)],
                                             false,
                                             None,
                                             None,
                                             None,
-                                        ))
-                                        .alias(&alias_str),
-                                    );
-                                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                        udf.clone(),
-                                        vec![col(&alias_str)],
-                                        false,
-                                        None,
-                                        None,
-                                        None,
-                                    )))
+                                        ),
+                                    ))
                                 } else {
-                                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                        udf.clone(),
-                                        vec![col(SINGLE_DISTINCT_ALIAS)],
-                                        false, // intentional to remove distinct here
-                                        None,
-                                        None,
-                                        None,
-                                    )))
+                                    Ok(Expr::AggregateFunction(
+                                        AggregateFunction::new_udf(
+                                            udf.clone(),
+                                            vec![col(SINGLE_DISTINCT_ALIAS)],
+                                            false, // intentional to remove distinct here
+                                            None,
+                                            None,
+                                            None,
+                                        ),
+                                    ))
                                 }
                             }
                             _ => Ok(aggr_expr.clone()),
@@ -381,8 +389,8 @@ mod tests {
     use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
-        count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
-        sum, AggregateFunction,
+        count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min, sum,
+        AggregateFunction,
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

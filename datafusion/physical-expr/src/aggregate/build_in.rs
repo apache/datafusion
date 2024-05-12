@@ -30,8 +30,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
 
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
@@ -63,10 +64,14 @@ pub fn create_aggregate_expr(
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => {
-            Arc::new(expressions::Count::new(input_phy_exprs[0].clone(), name, data_type))
+            Arc::new(expressions::Count::new(
+                input_phy_exprs[0].clone(),
+                name,
+                data_type,
+            ))
             // return internal_err!("Count should be handled by the optimizer")
         }
-        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
+        (AggregateFunction::Count, true) => Arc::new(DistinctCount::new(
             data_type,
             input_phy_exprs[0].clone(),
             name,
@@ -410,8 +415,8 @@ mod tests {
 
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
-        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg,
-        Max, Min, Stddev, Sum, Variance,
+        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, Max, Min,
+        Stddev, Sum, Variance,
     };
 
     use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;

@@ -182,13 +182,14 @@ impl AggregateUDF {
         name: &str,
         value_type: DataType,
         ordering_fields: Vec<Field>,
+        is_distinct: bool,
     ) -> Result<Vec<Field>> {
-        self.inner.state_fields(name, value_type, ordering_fields)
+        self.inner.state_fields(name, value_type, ordering_fields, is_distinct)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
-    pub fn groups_accumulator_supported(&self, args_num: usize) -> bool {
-        self.inner.groups_accumulator_supported(args_num)
+    pub fn groups_accumulator_supported(&self, args_num: usize, is_distinct: bool) -> bool {
+        self.inner.groups_accumulator_supported(args_num, is_distinct)
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
@@ -199,7 +200,7 @@ impl AggregateUDF {
     pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
     }
-    
+
     /// See [`AggregateUDFImpl::reverse_expr`] for more details.
     pub fn reverse_expr(&self) -> ReversedUDAF {
         self.inner.reverse_expr()
@@ -323,6 +324,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         name: &str,
         value_type: DataType,
         ordering_fields: Vec<Field>,
+        is_distinct: bool,
     ) -> Result<Vec<Field>> {
         let value_fields = vec![Field::new(
             format_state_name(name, "value"),
@@ -343,7 +345,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(&self, _args_num: usize) -> bool {
+    fn groups_accumulator_supported(&self, _args_num: usize, is_distinct: bool) -> bool {
         false
     }
 

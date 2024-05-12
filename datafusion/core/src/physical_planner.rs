@@ -1942,6 +1942,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         physical_input_schema,
                         name,
                         ignore_nulls,
+                        *distinct,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
                 }

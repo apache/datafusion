@@ -45,6 +45,7 @@ pub fn create_aggregate_expr(
     schema: &Schema,
     name: impl Into<String>,
     ignore_nulls: bool,
+    is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
@@ -74,6 +75,7 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
+        is_distinct,
     }))
 }
 
@@ -165,6 +167,7 @@ pub struct AggregateFunctionExpr {
     ordering_req: LexOrdering,
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
+    is_distinct: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -189,6 +192,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             self.name(),
             self.data_type.clone(),
             self.ordering_fields.clone(),
+            self.is_distinct
         )
     }
 
@@ -202,6 +206,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.schema,
             self.ignore_nulls,
             &self.sort_exprs,
+            self.is_distinct,
         );
 
         self.fun.accumulator(acc_args)
@@ -267,7 +272,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        self.fun.groups_accumulator_supported(self.args.len())
+        self.fun.groups_accumulator_supported(self.args.len(), self.is_distinct)
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

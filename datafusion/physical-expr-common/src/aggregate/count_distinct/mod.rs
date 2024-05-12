@@ -45,9 +45,9 @@ use crate::physical_expr::PhysicalExpr;
 
 use super::AggregateExpr;
 
-pub use crate::aggregate::count_distinct::native::PrimitiveDistinctCountAccumulator;
-pub use crate::aggregate::count_distinct::native::FloatDistinctCountAccumulator;
 pub use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
+pub use crate::aggregate::count_distinct::native::FloatDistinctCountAccumulator;
+pub use crate::aggregate::count_distinct::native::PrimitiveDistinctCountAccumulator;
 
 /// Expression for a `COUNT(DISTINCT)` aggregation.
 #[derive(Debug)]

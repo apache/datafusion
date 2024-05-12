@@ -853,10 +853,7 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(
-                vec![],
-                vec![count(Expr::Literal(COUNT_STAR_EXPANSION))],
-            )?
+            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
             .collect()
             .await?;
         let len = *rows

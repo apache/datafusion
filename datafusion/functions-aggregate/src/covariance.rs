@@ -106,6 +106,7 @@ impl AggregateUDFImpl for CovarianceSample {
         name: &str,
         _value_type: DataType,
         _ordering_fields: Vec<Field>,
+        _is_distinct: bool,
     ) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -181,6 +182,7 @@ impl AggregateUDFImpl for CovariancePopulation {
         name: &str,
         _value_type: DataType,
         _ordering_fields: Vec<Field>,
+        _is_distinct: bool,
     ) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),

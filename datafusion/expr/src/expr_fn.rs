@@ -683,6 +683,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         _name: &str,
         _value_type: DataType,
         _ordering_fields: Vec<Field>,
+        _is_distinct: bool,
     ) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
     }

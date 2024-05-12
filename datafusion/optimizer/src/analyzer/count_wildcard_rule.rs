@@ -54,19 +54,12 @@ fn is_wildcard(expr: &Expr) -> bool {
 }
 // TODO: Move to UDAF analyzer
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    println!("{:?}", aggregate_function);
     match aggregate_function {
         AggregateFunction {
-            func_def:
-                AggregateFunctionDefinition::UDF(
-                    udf
-                ),
+            func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "COUNT"
-            && args.len() == 1
-            && is_wildcard(&args[0])
-        => {
+        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => {
             return true;
         }
         AggregateFunction {
@@ -79,7 +72,7 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
         } if args.len() == 1 && is_wildcard(&args[0]) => {
             return true;
         }
-        _ => return false
+        _ => return false,
     }
 }
 
@@ -126,7 +119,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
         out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };
