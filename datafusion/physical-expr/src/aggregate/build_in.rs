@@ -30,13 +30,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
+// use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -65,11 +65,14 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
         ),
-        (AggregateFunction::Count, true) => Arc::new(DistinctCount::new(
-            data_type,
-            input_phy_exprs[0].clone(),
-            name,
-        )),
+        (AggregateFunction::Count, true) => {
+            // Arc::new(DistinctCount::new(
+            //     data_type,
+            //     input_phy_exprs[0].clone(),
+            //     name,
+            // ))
+            return internal_err!("COUNT(DISTINCT) aggregations are not available");
+        }
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,

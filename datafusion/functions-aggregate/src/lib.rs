@@ -77,6 +77,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         first_last::first_value_udaf(),
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
+        count_distinct::count_distinct_udaf(),
     ];
 
     functions.into_iter().try_for_each(|udf| {

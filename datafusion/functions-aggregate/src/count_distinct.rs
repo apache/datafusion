@@ -24,6 +24,15 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr_common::{aggregate::count_distinct::{BytesDistinctCountAccumulator, FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator}, binary_map::OutputType};
 
+
+make_udaf_expr_and_func!(
+    CountDistinct,
+    count_distinct,
+    expression,
+    "count_distinct doc",
+    count_distinct_udaf
+);
+
 pub struct CountDistinct {
     aliases: Vec<String>,
     signature: Signature,
@@ -32,9 +41,15 @@ pub struct CountDistinct {
 impl CountDistinct {
     pub fn new() -> Self {
         Self {
-            aliases: vec![],
+            aliases: vec!["count".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for CountDistinct {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -54,7 +69,7 @@ impl AggregateUDFImpl for CountDistinct {
     }
 
     fn name(&self) -> &str {
-        "count_distinct"
+        "COUNT"
     }
 
     fn signature(&self) -> &Signature {
