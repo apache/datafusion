@@ -44,6 +44,7 @@ use crate::utils::{
 use crate::{
     and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
+    logical_plan::tree_node::unwrap_arc
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -54,6 +55,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     ToDFSchema, UnnestOptions,
 };
+
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -1138,6 +1140,14 @@ impl LogicalPlanBuilder {
         )?))
     }
 }
+
+/// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
+impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
+    fn from(plan: Arc<LogicalPlan>) -> Self {
+        LogicalPlanBuilder::from(unwrap_arc(plan))
+    }
+}
+
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
     fields
