@@ -62,17 +62,15 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(
-            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
-        ),
-        (AggregateFunction::Count, true) => {
-            // Arc::new(DistinctCount::new(
-            //     data_type,
-            //     input_phy_exprs[0].clone(),
-            //     name,
-            // ))
-            return internal_err!("COUNT(DISTINCT) aggregations are not available");
+        (AggregateFunction::Count, false) => {
+            Arc::new(expressions::Count::new(input_phy_exprs[0].clone(), name, data_type))
+            // return internal_err!("Count should be handled by the optimizer")
         }
+        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
+            data_type,
+            input_phy_exprs[0].clone(),
+            name,
+        )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,

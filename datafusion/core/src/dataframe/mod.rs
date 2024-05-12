@@ -50,12 +50,13 @@ use datafusion_common::{
 };
 use datafusion_expr::lit;
 use datafusion_expr::{
-    avg, count, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    avg, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_expr::{case, is_null, sum};
 
 use async_trait::async_trait;
+use datafusion_functions_aggregate::count::count;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -854,7 +855,7 @@ impl DataFrame {
         let rows = self
             .aggregate(
                 vec![],
-                vec![datafusion_expr::count(Expr::Literal(COUNT_STAR_EXPANSION))],
+                vec![count(Expr::Literal(COUNT_STAR_EXPANSION))],
             )?
             .collect()
             .await?;

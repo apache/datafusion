@@ -52,15 +52,35 @@ impl AnalyzerRule for CountWildcardRule {
 fn is_wildcard(expr: &Expr) -> bool {
     matches!(expr, Expr::Wildcard { qualifier: None })
 }
-
+// TODO: Move to UDAF analyzer
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    matches!(
-        &aggregate_function.func_def,
-        AggregateFunctionDefinition::BuiltIn(
-            datafusion_expr::aggregate_function::AggregateFunction::Count,
-        )
-    ) && aggregate_function.args.len() == 1
-        && is_wildcard(&aggregate_function.args[0])
+    println!("{:?}", aggregate_function);
+    match aggregate_function {
+        AggregateFunction {
+            func_def:
+                AggregateFunctionDefinition::UDF(
+                    udf
+                ),
+            args,
+            ..
+        } if udf.name() == "COUNT"
+            && args.len() == 1
+            && is_wildcard(&args[0])
+        => {
+            return true;
+        }
+        AggregateFunction {
+            func_def:
+                AggregateFunctionDefinition::BuiltIn(
+                    datafusion_expr::aggregate_function::AggregateFunction::Count,
+                ),
+            args,
+            ..
+        } if args.len() == 1 && is_wildcard(&args[0]) => {
+            return true;
+        }
+        _ => return false
+    }
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {

@@ -270,11 +270,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     );
                 }
 
-                let names = args
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(format!("{}({})", fun.name(), names.join(",")))
+                create_function_physical_name(
+                    &fun.name(),
+                    *distinct,
+                    args,
+                    order_by.as_ref(),
+                )
             }
         },
         Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -2226,7 +2227,6 @@ impl DefaultPhysicalPlanner {
         expr: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_schema = input.as_ref().schema();
-
         let physical_exprs = expr
             .iter()
             .map(|e| {
