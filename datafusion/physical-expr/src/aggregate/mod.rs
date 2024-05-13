@@ -36,10 +36,7 @@ pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
 pub(crate) mod correlation;
 pub(crate) mod count;
-// pub(crate) mod count_distinct {
-//     pub use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount
-
-// }
+pub(crate) mod count_distinct;
 pub(crate) mod covariance;
 pub(crate) mod grouping;
 pub(crate) mod median;

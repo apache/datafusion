@@ -31,7 +31,6 @@ use crate::{
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
-use core::panic;
 use datafusion_common::{Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
@@ -204,6 +203,19 @@ pub fn avg(expr: Expr) -> Expr {
     ))
 }
 
+/// Create an expression to represent the count() aggregate function
+// TODO: Remove this and use `expr_fn::count` instead
+pub fn count(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Count,
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(
@@ -250,8 +262,8 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
 }
 
 /// Create an expression to represent the count(distinct) aggregate function
+// TODO: Remove this and use `expr_fn::count_distinct` instead
 pub fn count_distinct(expr: Expr) -> Expr {
-    panic!("count_distinct is not implemented");
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Count,
         vec![expr],

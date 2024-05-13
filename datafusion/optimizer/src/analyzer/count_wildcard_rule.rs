@@ -59,9 +59,7 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
             func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => {
-            return true;
-        }
+        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => true,
         AggregateFunction {
             func_def:
                 AggregateFunctionDefinition::BuiltIn(
@@ -69,10 +67,8 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
                 ),
             args,
             ..
-        } if args.len() == 1 && is_wildcard(&args[0]) => {
-            return true;
-        }
-        _ => return false,
+        } if args.len() == 1 && is_wildcard(&args[0]) => true,
+        _ => false,
     }
 }
 
@@ -118,6 +114,7 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
+    use datafusion_expr::count;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,

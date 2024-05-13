@@ -252,25 +252,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             func_def,
             distinct,
             args,
-            filter,
+            filter: _,
             order_by,
             null_treatment: _,
-        }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn(..) => create_function_physical_name(
-                func_def.name(),
-                *distinct,
-                args,
-                order_by.as_ref(),
-            ),
-            AggregateFunctionDefinition::UDF(fun) => {
-                create_function_physical_name(
-                    &fun.name(),
-                    *distinct,
-                    args,
-                    order_by.as_ref(),
-                )
-            }
-        },
+        }) => create_function_physical_name(
+            func_def.name(),
+            *distinct,
+            args,
+            order_by.as_ref(),
+        ),
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",

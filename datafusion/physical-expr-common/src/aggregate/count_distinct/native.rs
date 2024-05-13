@@ -149,6 +149,15 @@ where
     }
 }
 
+impl<T> Default for FloatDistinctCountAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Accumulator for FloatDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send + Debug,

@@ -30,14 +30,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
+use crate::aggregate::count_distinct::DistinctCount;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
 
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-// use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -419,7 +418,7 @@ mod tests {
         Stddev, Sum, Variance,
     };
 
-    use datafusion_physical_expr_common::aggregate::count_distinct::DistinctCount;
+    use crate::aggregate::count_distinct::DistinctCount;
 
     use super::*;
 
