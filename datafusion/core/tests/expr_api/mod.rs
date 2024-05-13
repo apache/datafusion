@@ -106,7 +106,7 @@ fn test_list() {
 #[test]
 fn test_list_range() {
     evaluate_expr_test(
-        array_slice(col("list"), lit(1i64), lit(2i64), lit(1i64)),
+        array_slice(col("list"), lit(1i64), lit(2i64), None),
         vec![
             "+--------------+",
             "| expr         |",
