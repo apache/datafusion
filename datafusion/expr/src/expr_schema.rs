@@ -23,7 +23,7 @@ use crate::expr::{
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::type_coercion::functions::data_types;
+use crate::type_coercion::functions::data_types_with_scalar_udf;
 use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -139,9 +139,10 @@ impl ExprSchemable for Expr {
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                         // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, func.signature()).map_err(|_| {
+                        data_types_with_scalar_udf(&arg_data_types, func).map_err(|err| {
                             plan_datafusion_err!(
-                                "{}",
+                                "{} and {}",
+                                err,
                                 utils::generate_signature_error_msg(
                                     func.name(),
                                     func.signature().clone(),
@@ -172,9 +173,6 @@ impl ExprSchemable for Expr {
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
                         Ok(fun.return_type(&data_types)?)
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }

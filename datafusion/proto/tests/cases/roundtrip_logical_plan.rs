@@ -30,8 +30,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::execution::FunctionRegistry;
-use datafusion::functions_aggregate::covariance::covar_samp;
+use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
 use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -617,6 +616,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
         covar_samp(lit(1.5), lit(2.2), false, None, None, None),
+        covar_pop(lit(1.5), lit(2.2), true, None, None, None),
     ];
 
     // ensure expressions created with the expr api can be round tripped

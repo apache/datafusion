@@ -3602,17 +3602,16 @@ EXPLAIN SELECT * FROM (
 ) as a FULL JOIN (SELECT 1 as e, 3 AS f) AS rhs ON a.c=rhs.e;
 ----
 logical_plan
-01)Projection: a.c, a.d, rhs.e, rhs.f
-02)--Full Join: a.c = rhs.e
-03)----SubqueryAlias: a
-04)------Union
-05)--------Projection: Int64(1) AS c, Int64(2) AS d
-06)----------EmptyRelation
-07)--------Projection: Int64(1) AS c, Int64(3) AS d
-08)----------EmptyRelation
-09)----SubqueryAlias: rhs
-10)------Projection: Int64(1) AS e, Int64(3) AS f
-11)--------EmptyRelation
+01)Full Join: a.c = rhs.e
+02)--SubqueryAlias: a
+03)----Union
+04)------Projection: Int64(1) AS c, Int64(2) AS d
+05)--------EmptyRelation
+06)------Projection: Int64(1) AS c, Int64(3) AS d
+07)--------EmptyRelation
+08)--SubqueryAlias: rhs
+09)----Projection: Int64(1) AS e, Int64(3) AS f
+10)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3650,17 +3649,16 @@ EXPLAIN SELECT * FROM (
 ) as a FULL JOIN (SELECT 1 as e, 3 AS f) AS rhs ON a.c=rhs.e;
 ----
 logical_plan
-01)Projection: a.c, a.d, rhs.e, rhs.f
-02)--Full Join: a.c = rhs.e
-03)----SubqueryAlias: a
-04)------Union
-05)--------Projection: Int64(1) AS c, Int64(2) AS d
-06)----------EmptyRelation
-07)--------Projection: Int64(1) AS c, Int64(3) AS d
-08)----------EmptyRelation
-09)----SubqueryAlias: rhs
-10)------Projection: Int64(1) AS e, Int64(3) AS f
-11)--------EmptyRelation
+01)Full Join: a.c = rhs.e
+02)--SubqueryAlias: a
+03)----Union
+04)------Projection: Int64(1) AS c, Int64(2) AS d
+05)--------EmptyRelation
+06)------Projection: Int64(1) AS c, Int64(3) AS d
+07)--------EmptyRelation
+08)--SubqueryAlias: rhs
+09)----Projection: Int64(1) AS e, Int64(3) AS f
+10)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2

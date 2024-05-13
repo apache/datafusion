@@ -51,7 +51,7 @@ Here are links to some important information
 - [Rust Getting Started](https://datafusion.apache.org/user-guide/example-usage.html)
 - [Rust DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
-- [Rust Examples](https://github.com/apache/datafusion/tree/master/datafusion-examples)
+- [Rust Examples](https://github.com/apache/datafusion/tree/main/datafusion-examples)
 - [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
 - [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
 

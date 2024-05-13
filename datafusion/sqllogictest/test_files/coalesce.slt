@@ -23,7 +23,7 @@ select coalesce(1, 2, 3);
 1
 
 # test with first null
-query IT
+query ?T
 select coalesce(null, 3, 2, 1), arrow_typeof(coalesce(null, 3, 2, 1));
 ----
 3 Int64
@@ -35,7 +35,7 @@ select coalesce(null, null);
 NULL
 
 # cast to float
-query RT
+query IT
 select
   coalesce(1, 2.0),
   arrow_typeof(coalesce(1, 2.0))
@@ -51,7 +51,7 @@ select
 ----
 2 Float64
 
-query RT
+query IT
 select
   coalesce(1, arrow_cast(2.0, 'Float32')),
   arrow_typeof(coalesce(1, arrow_cast(2.0, 'Float32')))
@@ -177,7 +177,7 @@ select
 2 Decimal256(22, 2)
 
 # coalesce string
-query TT
+query T?
 select
   coalesce('', 'test'),
   coalesce(null, 'test');
@@ -226,7 +226,7 @@ select coalesce(column1, 'none_set') from test1;
 foo
 none_set
 
-query T
+query ?
 select coalesce(null, column1, 'none_set') from test1;
 ----
 foo
@@ -248,12 +248,12 @@ select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 34
 
-query I
+query ?
 select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
 ----
 123
 
-query I
+query ?
 select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 34
@@ -288,7 +288,7 @@ SELECT COALESCE(c1, c2) FROM test
 NULL
 
 # numeric string is coerced to numeric in both Postgres and DuckDB
-query T
+query I
 SELECT COALESCE(c1, c2, '-1') FROM test;
 ----
 0

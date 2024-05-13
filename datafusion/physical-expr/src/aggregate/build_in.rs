@@ -181,17 +181,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::VariancePop, true) => {
             return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::CovariancePop, false) => {
-            Arc::new(expressions::CovariancePop::new(
-                input_phy_exprs[0].clone(),
-                input_phy_exprs[1].clone(),
-                name,
-                data_type,
-            ))
-        }
-        (AggregateFunction::CovariancePop, true) => {
-            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             input_phy_exprs[0].clone(),
             name,

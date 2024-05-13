@@ -25,12 +25,12 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
     ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, Count, CovariancePop, CumeDist, DistinctArrayAgg,
-    DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping, InListExpr,
-    IsNotNullExpr, IsNullExpr, LastValue, Literal, Max, Median, Min, NegativeExpr,
-    NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr,
-    RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr, Variance,
-    VariancePop, WindowShift,
+    CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
+    DistinctCount, DistinctSum, FirstValue, Grouping, InListExpr, IsNotNullExpr,
+    IsNullExpr, LastValue, Literal, Max, Median, Min, NegativeExpr, NotExpr, NthValue,
+    NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType,
+    RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr, Variance, VariancePop,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -291,8 +291,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Variance
     } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
         protobuf::AggregateFunction::VariancePop
-    } else if aggr_expr.downcast_ref::<CovariancePop>().is_some() {
-        protobuf::AggregateFunction::CovariancePop
     } else if aggr_expr.downcast_ref::<Stddev>().is_some() {
         protobuf::AggregateFunction::Stddev
     } else if aggr_expr.downcast_ref::<StddevPop>().is_some() {
