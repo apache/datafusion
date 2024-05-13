@@ -242,6 +242,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
+                println!("fun: {:?} name: {:?}", fun, name);
                 let order_by = self.order_by_to_sort_expr(
                     &order_by,
                     schema,

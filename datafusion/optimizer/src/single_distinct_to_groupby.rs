@@ -143,6 +143,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 ..
             }) => {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
+
+                    println!("schema: {:?}", schema);
+
                     // alias all original group_by exprs
                     let (mut inner_group_exprs, out_group_expr_with_alias): (
                         Vec<Expr>,
@@ -306,6 +309,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             _ => Ok(aggr_expr.clone()),
                         })
                         .collect::<Result<Vec<_>>>()?;
+
+                    println!("outer_aggr_exprs: {:?}", outer_aggr_exprs);
 
                     // construct the inner AggrPlan
                     let inner_fields = inner_group_exprs

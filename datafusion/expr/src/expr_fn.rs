@@ -32,6 +32,7 @@ use crate::{
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, Result};
+use core::panic;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -250,6 +251,7 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
 
 /// Create an expression to represent the count(distinct) aggregate function
 pub fn count_distinct(expr: Expr) -> Expr {
+    panic!("count_distinct is not implemented");
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Count,
         vec![expr],

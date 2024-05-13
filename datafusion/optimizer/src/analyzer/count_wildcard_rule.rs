@@ -84,6 +84,8 @@ fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
         )
     ) && window_function.args.len() == 1
         && is_wildcard(&window_function.args[0])
+    // TODO: Add count udf
+
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {

@@ -324,7 +324,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         name: &str,
         value_type: DataType,
         ordering_fields: Vec<Field>,
-        is_distinct: bool,
+        _is_distinct: bool,
     ) -> Result<Vec<Field>> {
         let value_fields = vec![Field::new(
             format_state_name(name, "value"),
@@ -345,7 +345,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(&self, _args_num: usize, is_distinct: bool) -> bool {
+    fn groups_accumulator_supported(&self, _args_num: usize, _is_distinct: bool) -> bool {
         false
     }
 

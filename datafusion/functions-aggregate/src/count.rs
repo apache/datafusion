@@ -107,7 +107,7 @@ impl AggregateUDFImpl for Count {
     fn state_fields(
         &self,
         name: &str,
-        _value_type: DataType,
+        value_type: DataType,
         _ordering_fields: Vec<Field>,
         is_distinct: bool,
     ) -> Result<Vec<Field>> {
@@ -118,8 +118,10 @@ impl AggregateUDFImpl for Count {
                 false,
             )])
         } else {
+            println!("value_type: {:?}", value_type);
             Ok(vec![Field::new(
                 format_state_name(name, "count"),
+                // value_type,
                 DataType::Int64,
                 true,
             )])

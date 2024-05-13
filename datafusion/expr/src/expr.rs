@@ -1873,9 +1873,10 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
                     write_function_name(w, func_def.name(), *distinct, args)?;
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    write!(w, "{}(", fun.name())?;
-                    write_names_join(w, args, ",")?;
-                    write!(w, ")")?;
+                    write_function_name(w, fun.name(), *distinct, args)?;
+                    // write!(w, "{}(", fun.name())?;
+                    // write_names_join(w, args, ",")?;
+                    // write!(w, ")")?;
                 }
             };
             if let Some(fe) = filter {
