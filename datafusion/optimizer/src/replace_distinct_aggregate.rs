@@ -118,6 +118,8 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let plan = LogicalPlan::Aggregate(Aggregate::try_new(
                     input, group_expr, aggr_expr,
                 )?);
+                // TODO use LogicalPlanBuilder directly rather than recreating the Aggregate
+                // when https://github.com/apache/datafusion/issues/10485 is available
                 let lpb = LogicalPlanBuilder::from(plan);
 
                 let plan = if let Some(mut sort_expr) = sort_expr {
