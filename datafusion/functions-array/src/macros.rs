@@ -76,6 +76,7 @@ macro_rules! make_udf_expr_and_func {
 /// function named `$SCALAR_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
+///
 /// # Arguments
 /// * `UDF`: name of the [`ScalarUDFImpl`]
 /// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
