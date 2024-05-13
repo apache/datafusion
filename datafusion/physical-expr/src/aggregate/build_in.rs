@@ -181,26 +181,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::VariancePop, true) => {
             return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::Covariance, false) => Arc::new(expressions::Covariance::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::Covariance, true) => {
-            return not_impl_err!("COVAR(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::CovariancePop, false) => {
-            Arc::new(expressions::CovariancePop::new(
-                input_phy_exprs[0].clone(),
-                input_phy_exprs[1].clone(),
-                name,
-                data_type,
-            ))
-        }
-        (AggregateFunction::CovariancePop, true) => {
-            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             input_phy_exprs[0].clone(),
             name,
@@ -428,8 +408,8 @@ mod tests {
 
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
-        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Correlation, Count, Covariance,
-        DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
+        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
+        Max, Min, Stddev, Sum, Variance,
     };
 
     use super::*;
@@ -939,147 +919,6 @@ mod tests {
                 )?;
                 if fun == AggregateFunction::Variance {
                     assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_covar_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Covariance];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema = Schema::new(vec![
-                    Field::new("c1", data_type.clone(), true),
-                    Field::new("c2", data_type.clone(), true),
-                ]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                    Arc::new(
-                        expressions::Column::new_with_schema("c1", &input_schema)
-                            .unwrap(),
-                    ),
-                    Arc::new(
-                        expressions::Column::new_with_schema("c2", &input_schema)
-                            .unwrap(),
-                    ),
-                ];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..2],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Covariance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Covariance>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_covar_pop_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::CovariancePop];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema = Schema::new(vec![
-                    Field::new("c1", data_type.clone(), true),
-                    Field::new("c2", data_type.clone(), true),
-                ]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                    Arc::new(
-                        expressions::Column::new_with_schema("c1", &input_schema)
-                            .unwrap(),
-                    ),
-                    Arc::new(
-                        expressions::Column::new_with_schema("c2", &input_schema)
-                            .unwrap(),
-                    ),
-                ];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..2],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Covariance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Covariance>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_corr_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Correlation];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema = Schema::new(vec![
-                    Field::new("c1", data_type.clone(), true),
-                    Field::new("c2", data_type.clone(), true),
-                ]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                    Arc::new(
-                        expressions::Column::new_with_schema("c1", &input_schema)
-                            .unwrap(),
-                    ),
-                    Arc::new(
-                        expressions::Column::new_with_schema("c2", &input_schema)
-                            .unwrap(),
-                    ),
-                ];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..2],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Covariance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Correlation>());
                     assert_eq!("c1", result_agg_phy_exprs.name());
                     assert_eq!(
                         Field::new("c1", DataType::Float64, true),

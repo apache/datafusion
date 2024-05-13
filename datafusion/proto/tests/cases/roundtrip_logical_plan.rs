@@ -15,12 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-use std::vec;
-
 use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -30,6 +24,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
 use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -59,6 +54,11 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+use std::vec;
 
 use datafusion::execution::FunctionRegistry;
 use prost::Message;
@@ -235,10 +235,10 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';";
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')";
 
     let plan = ctx.state().create_logical_plan(query).await?;
 
@@ -265,10 +265,10 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';",
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')",
     )
     .await?;
 
@@ -614,6 +614,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
+        covar_samp(lit(1.5), lit(2.2), false, None, None, None),
+        covar_pop(lit(1.5), lit(2.2), true, None, None, None),
     ];
 
     // ensure expressions created with the expr api can be round tripped

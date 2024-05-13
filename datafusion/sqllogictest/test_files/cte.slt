@@ -31,10 +31,9 @@ query TT
 EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT "NUMBERS".* FROM "NUMBERS"
 ----
 logical_plan
-01)Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c
-02)--SubqueryAlias: NUMBERS
-03)----Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-04)------EmptyRelation
+01)SubqueryAlias: NUMBERS
+02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
+03)----EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -105,14 +104,13 @@ EXPLAIN WITH RECURSIVE nodes AS (
 SELECT * FROM nodes
 ----
 logical_plan
-01)Projection: nodes.id
-02)--SubqueryAlias: nodes
-03)----RecursiveQuery: is_distinct=false
-04)------Projection: Int64(1) AS id
-05)--------EmptyRelation
-06)------Projection: nodes.id + Int64(1) AS id
-07)--------Filter: nodes.id < Int64(10)
-08)----------TableScan: nodes
+01)SubqueryAlias: nodes
+02)--RecursiveQuery: is_distinct=false
+03)----Projection: Int64(1) AS id
+04)------EmptyRelation
+05)----Projection: nodes.id + Int64(1) AS id
+06)------Filter: nodes.id < Int64(10)
+07)--------TableScan: nodes
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
@@ -126,11 +124,11 @@ physical_plan
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE balance STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/balance.csv'
+CREATE EXTERNAL TABLE balance STORED as CSV LOCATION '../core/tests/data/recursive_cte/balance.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE growth STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/growth.csv'
+CREATE EXTERNAL TABLE growth STORED as CSV LOCATION '../core/tests/data/recursive_cte/growth.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
@@ -152,14 +150,13 @@ ORDER BY time, name, account_balance
 ----
 logical_plan
 01)Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.account_balance ASC NULLS LAST
-02)--Projection: balances.time, balances.name, balances.account_balance
-03)----SubqueryAlias: balances
-04)------RecursiveQuery: is_distinct=false
-05)--------Projection: balance.time, balance.name, balance.account_balance
-06)----------TableScan: balance
-07)--------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
-08)----------Filter: balances.time < Int64(10)
-09)------------TableScan: balances
+02)--SubqueryAlias: balances
+03)----RecursiveQuery: is_distinct=false
+04)------Projection: balance.time, balance.name, balance.account_balance
+05)--------TableScan: balance
+06)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
+07)--------Filter: balances.time < Int64(10)
+08)----------TableScan: balances
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST,name@1 ASC NULLS LAST,account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
@@ -407,7 +404,7 @@ FROM
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE prices STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/prices.csv'
+CREATE EXTERNAL TABLE prices STORED as CSV LOCATION '../core/tests/data/recursive_cte/prices.csv' OPTIONS ('format.has_header' 'true');
 
 # CTE within window function inside nested CTE works. This test demonstrates using a nested window function to recursively iterate over a column.
 query RRII
@@ -598,11 +595,11 @@ ORDER BY
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE sales STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/sales.csv'
+CREATE EXTERNAL TABLE sales STORED as CSV LOCATION '../core/tests/data/recursive_cte/sales.csv' OPTIONS ('format.has_header' 'true');
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE salespersons STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/salespersons.csv'
+CREATE EXTERNAL TABLE salespersons STORED as CSV LOCATION '../core/tests/data/recursive_cte/salespersons.csv' OPTIONS ('format.has_header' 'true');
 
 
 # group by works within recursive cte. This test case demonstrates rolling up a hierarchy of salespeople to their managers.
@@ -720,18 +717,17 @@ explain WITH RECURSIVE recursive_cte AS (
 SELECT * FROM recursive_cte;
 ----
 logical_plan
-01)Projection: recursive_cte.val
-02)--SubqueryAlias: recursive_cte
-03)----RecursiveQuery: is_distinct=false
-04)------Projection: Int64(1) AS val
-05)--------EmptyRelation
-06)------Projection: Int64(2) AS val
-07)--------CrossJoin:
-08)----------Filter: recursive_cte.val < Int64(2)
-09)------------TableScan: recursive_cte
-10)----------SubqueryAlias: sub_cte
-11)------------Projection: Int64(2) AS val
-12)--------------EmptyRelation
+01)SubqueryAlias: recursive_cte
+02)--RecursiveQuery: is_distinct=false
+03)----Projection: Int64(1) AS val
+04)------EmptyRelation
+05)----Projection: Int64(2) AS val
+06)------CrossJoin:
+07)--------Filter: recursive_cte.val < Int64(2)
+08)----------TableScan: recursive_cte
+09)--------SubqueryAlias: sub_cte
+10)----------Projection: Int64(2) AS val
+11)------------EmptyRelation
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]

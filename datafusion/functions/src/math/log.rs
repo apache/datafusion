@@ -25,7 +25,6 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{lit, ColumnarValue, Expr, ScalarFunctionDefinition};
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
@@ -181,8 +180,8 @@ impl ScalarUDFImpl for LogFunc {
                     &info.get_data_type(&base)?,
                 )?)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, mut args })
-                if is_pow(&func_def) && args.len() == 2 && base == args[0] =>
+            Expr::ScalarFunction(ScalarFunction { func, mut args })
+                if is_pow(&func) && args.len() == 2 && base == args[0] =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
@@ -210,15 +209,8 @@ impl ScalarUDFImpl for LogFunc {
 }
 
 /// Returns true if the function is `PowerFunc`
-fn is_pow(func_def: &ScalarFunctionDefinition) -> bool {
-    match func_def {
-        ScalarFunctionDefinition::UDF(fun) => fun
-            .as_ref()
-            .inner()
-            .as_any()
-            .downcast_ref::<PowerFunc>()
-            .is_some(),
-    }
+fn is_pow(func: &ScalarUDF) -> bool {
+    func.inner().as_any().downcast_ref::<PowerFunc>().is_some()
 }
 
 #[cfg(test)]

@@ -625,17 +625,23 @@ impl<T> Transformed<T> {
         Self::new(data, false, TreeNodeRecursion::Continue)
     }
 
-    /// Applies the given `f` to the data of this [`Transformed`] object.
+    /// Applies an infallible `f` to the data of this [`Transformed`] object,
+    /// without modifying the `transformed` flag.
     pub fn update_data<U, F: FnOnce(T) -> U>(self, f: F) -> Transformed<U> {
         Transformed::new(f(self.data), self.transformed, self.tnr)
     }
 
-    /// Maps the data of [`Transformed`] object to the result of the given `f`.
+    /// Applies a fallible `f` (returns `Result`) to the data of this
+    /// [`Transformed`] object, without modifying the `transformed` flag.
     pub fn map_data<U, F: FnOnce(T) -> Result<U>>(self, f: F) -> Result<Transformed<U>> {
         f(self.data).map(|data| Transformed::new(data, self.transformed, self.tnr))
     }
 
-    /// Maps the [`Transformed`] object to the result of the given `f`.
+    /// Applies a fallible transforming `f` to the data of this [`Transformed`]
+    /// object.
+    ///
+    /// The returned `Transformed` object has the `transformed` flag set if either
+    /// `self` or the return value of `f` have the `transformed` flag set.
     pub fn transform_data<U, F: FnOnce(T) -> Result<Transformed<U>>>(
         self,
         f: F,

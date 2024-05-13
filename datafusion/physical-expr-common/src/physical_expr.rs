@@ -24,7 +24,6 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -185,7 +184,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         Ok(expr.with_new_children(children)?)
     } else {

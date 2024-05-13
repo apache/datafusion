@@ -384,7 +384,7 @@ COPY source_table  to 'test_files/scratch/copy/table_json_gz' STORED AS JSON OPT
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_json_gz STORED AS json COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_json_gz';
+CREATE EXTERNAL TABLE validate_json_gz STORED AS json LOCATION 'test_files/scratch/copy/table_json_gz' OPTIONS ('format.compression' 'gzip');
 
 query IT
 select * from validate_json_gz;
@@ -400,7 +400,7 @@ COPY source_table  to 'test_files/scratch/copy/table_csv' STORED AS CSV OPTIONS 
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_csv';
+CREATE EXTERNAL TABLE validate_csv STORED AS csv LOCATION 'test_files/scratch/copy/table_csv' OPTIONS ('format.compression' 'gzip');
 
 query IT
 select * from validate_csv;
@@ -416,7 +416,7 @@ COPY source_table  to 'test_files/scratch/copy/table.csv';
 
 # Validate single csv output
 statement ok
-CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/copy/table.csv';
+CREATE EXTERNAL TABLE validate_single_csv STORED AS csv LOCATION 'test_files/scratch/copy/table.csv' OPTIONS ('format.has_header' 'false');
 
 query IT
 select * from validate_single_csv;

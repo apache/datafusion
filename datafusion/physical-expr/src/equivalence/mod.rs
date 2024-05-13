@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::expressions::Column;
+use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+
 mod class;
 mod ordering;
 mod projection;
@@ -45,52 +52,7 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    collapse_monotonic_lex_req(output)
-}
-
-/// This function constructs a normalized [`LexRequirement`] by filtering out entries
-/// that are ordered if the next entry is.
-/// Used in `collapse_lex_req`
-fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
-    let mut result = Vec::with_capacity(input.len());
-    let mut i = 0;
-
-    while i < input.len() {
-        let current_expr = &input[i];
-
-        // Determine if current and next expressions can be collapsed
-        if i + 1 < input.len() {
-            let next_expr = &input[i + 1];
-            // Check for a single child that matches the next expression
-            if current_expr.expr.children().len() == 1
-                && current_expr.expr.children()[0].eq(&next_expr.expr)
-            {
-                if let Some(next_opts) = next_expr.options {
-                    // Compare the properties based on the ordering of the next options
-                    let properties = current_expr
-                        .expr
-                        .get_properties(&[ExprProperties::new_unknown()
-                            .with_order(SortProperties::Ordered(next_opts))]);
-
-                    if let Ok(prop) = properties {
-                        if current_expr.options.map(SortProperties::Ordered)
-                            == Some(prop.sort_properties)
-                        {
-                            // If the properties match, skip adding the current item to result as it's redundant
-                            i += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Add the current item to the result
-        result.push(current_expr.clone());
-        i += 1;
-    }
-
-    result
+    output
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is

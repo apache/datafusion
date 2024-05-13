@@ -66,7 +66,6 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION 'test_files/scratch/parquet/test_table';
 
 # Basic query:
@@ -107,7 +106,6 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
 WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
 LOCATION 'test_files/scratch/parquet/test_table';
 
@@ -189,8 +187,7 @@ CREATE EXTERNAL TABLE alltypes_plain (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
+LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Test a basic query with a CAST:
 query IT
@@ -214,7 +211,6 @@ DROP TABLE alltypes_plain;
 statement ok
 CREATE EXTERNAL TABLE test_binary
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../core/tests/data/test_binary.parquet';
 
 # Check size of table:
@@ -247,7 +243,6 @@ DROP TABLE test_binary;
 statement ok
 CREATE EXTERNAL TABLE timestamp_with_tz
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../core/tests/data/timestamp_with_tz.parquet';
 
 # Check size of table:
@@ -288,7 +283,6 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE listing_table
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
 
 statement ok
@@ -317,7 +311,6 @@ DROP TABLE timestamp_with_tz;
 statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../../parquet-testing/data/single_nan.parquet';
 
 # Check table size:
@@ -339,7 +332,6 @@ DROP TABLE single_nan;
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../../parquet-testing/data/list_columns.parquet';
 
 query ??

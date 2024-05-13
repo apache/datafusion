@@ -46,7 +46,7 @@ The `example usage`_ section in the user guide and the `datafusion-examples`_ co
 Please see the `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
 
 .. _example usage: user-guide/example-usage.html
-.. _datafusion-examples: https://github.com/apache/datafusion/tree/master/datafusion-examples
+.. _datafusion-examples: https://github.com/apache/datafusion/tree/main/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
 .. _communication: contributor-guide/communication.html
 
@@ -116,3 +116,13 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    contributor-guide/quarterly_roadmap
    contributor-guide/governance
    contributor-guide/specification/index
+
+.. _toc.contributor-guide:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: DataFusion Subprojects
+
+   DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Python <https://datafusion.apache.org/python/>
