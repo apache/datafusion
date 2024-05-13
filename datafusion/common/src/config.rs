@@ -585,7 +585,7 @@ config_namespace! {
         pub prefer_existing_union: bool, default = false
 
 
-        /// Number of input streams to prefect for ProgressiveEvalExec
+        /// Number of input streams to prefetch for ProgressiveEvalExec
         /// Since ProgressiveEvalExec only polls one stream at a time in their stream order,
         /// we do not need to prefetch all streams at once to save resources. However, if the
         /// streams' IO time is way more than their CPU/procesing time, prefetching them will help
