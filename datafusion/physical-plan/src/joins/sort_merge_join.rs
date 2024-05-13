@@ -1382,7 +1382,7 @@ fn get_filter_column(
     filter_columns
 }
 
-// Get buffered data sliece by specific batch index and for specified column indices only
+/// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]`
 #[inline(always)]
 fn get_buffered_columns(
     buffered_data: &BufferedData,
