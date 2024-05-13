@@ -80,6 +80,8 @@ where
             return Ok(());
         }
 
+        println!("values: {:?}", values);
+
         let arr = as_primitive_array::<T>(&values[0])?;
         arr.iter().for_each(|value| {
             if let Some(value) = value {

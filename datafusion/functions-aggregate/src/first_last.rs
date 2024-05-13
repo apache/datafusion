@@ -153,6 +153,7 @@ impl AggregateUDFImpl for FirstValue {
         value_type: DataType,
         ordering_fields: Vec<Field>,
         _is_distinct: bool,
+        _input_type: DataType,
     ) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(name, "first_value"),

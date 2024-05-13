@@ -183,13 +183,25 @@ impl AggregateUDF {
         value_type: DataType,
         ordering_fields: Vec<Field>,
         is_distinct: bool,
+        input_type: DataType,
     ) -> Result<Vec<Field>> {
-        self.inner.state_fields(name, value_type, ordering_fields, is_distinct)
+        self.inner.state_fields(
+            name,
+            value_type,
+            ordering_fields,
+            is_distinct,
+            input_type,
+        )
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
-    pub fn groups_accumulator_supported(&self, args_num: usize, is_distinct: bool) -> bool {
-        self.inner.groups_accumulator_supported(args_num, is_distinct)
+    pub fn groups_accumulator_supported(
+        &self,
+        args_num: usize,
+        is_distinct: bool,
+    ) -> bool {
+        self.inner
+            .groups_accumulator_supported(args_num, is_distinct)
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
@@ -325,6 +337,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         value_type: DataType,
         ordering_fields: Vec<Field>,
         _is_distinct: bool,
+        _input_type: DataType,
     ) -> Result<Vec<Field>> {
         let value_fields = vec![Field::new(
             format_state_name(name, "value"),

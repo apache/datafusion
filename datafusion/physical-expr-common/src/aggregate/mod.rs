@@ -76,6 +76,7 @@ pub fn create_aggregate_expr(
         ignore_nulls,
         ordering_fields,
         is_distinct,
+        input_type: input_exprs_types[0].clone(),
     }))
 }
 
@@ -168,12 +169,17 @@ pub struct AggregateFunctionExpr {
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
     is_distinct: bool,
+    input_type: DataType,
 }
 
 impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
+    }
+
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
     }
 }
 
@@ -192,7 +198,8 @@ impl AggregateExpr for AggregateFunctionExpr {
             self.name(),
             self.data_type.clone(),
             self.ordering_fields.clone(),
-            self.is_distinct
+            self.is_distinct,
+            self.input_type.clone(),
         )
     }
 
@@ -207,6 +214,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             self.ignore_nulls,
             &self.sort_exprs,
             self.is_distinct,
+            &self.input_type,
         );
 
         self.fun.accumulator(acc_args)
@@ -272,7 +280,8 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        self.fun.groups_accumulator_supported(self.args.len(), self.is_distinct)
+        self.fun
+            .groups_accumulator_supported(self.args.len(), self.is_distinct)
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

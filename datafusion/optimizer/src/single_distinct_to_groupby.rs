@@ -143,7 +143,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 ..
             }) => {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
-
                     println!("schema: {:?}", schema);
 
                     // alias all original group_by exprs

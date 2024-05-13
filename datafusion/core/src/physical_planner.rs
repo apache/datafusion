@@ -1008,8 +1008,6 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                println!("agg_filter: {:?}", agg_filter);
-
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
 
@@ -1886,9 +1884,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-
-            println!("func_def: {:?}", func_def);
-
             let args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
@@ -1916,7 +1911,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     };
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-                    
+
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,

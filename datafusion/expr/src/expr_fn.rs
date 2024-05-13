@@ -31,8 +31,8 @@ use crate::{
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, Result};
 use core::panic;
+use datafusion_common::{Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -686,6 +686,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         _value_type: DataType,
         _ordering_fields: Vec<Field>,
         _is_distinct: bool,
+        _input_type: DataType,
     ) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
     }

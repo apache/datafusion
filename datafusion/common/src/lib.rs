@@ -81,6 +81,9 @@ macro_rules! downcast_value {
     ($Value: expr, $Type: ident) => {{
         use std::any::type_name;
         $Value.as_any().downcast_ref::<$Type>().ok_or_else(|| {
+            // panic!(
+            //     "could not downcast value 1",
+            // );
             DataFusionError::Internal(format!(
                 "could not cast value to {}",
                 type_name::<$Type>()
@@ -90,6 +93,9 @@ macro_rules! downcast_value {
     ($Value: expr, $Type: ident, $T: tt) => {{
         use std::any::type_name;
         $Value.as_any().downcast_ref::<$Type<$T>>().ok_or_else(|| {
+            // panic!(
+            //     "could not downcast value 2",
+            // );
             DataFusionError::Internal(format!(
                 "could not cast value to {}",
                 type_name::<$Type<$T>>()

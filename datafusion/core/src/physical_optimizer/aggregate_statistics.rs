@@ -173,14 +173,13 @@ fn take_optimizable_column_and_lit_count(
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
     if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name() == "COUNT" {
+        if agg_expr.fun().name() == "COUNT" && !agg_expr.is_distinct() {
             if let Precision::Exact(num_rows) = stats.num_rows {
                 let exprs = agg_expr.expressions();
                 if exprs.len() == 1 {
                     // TODO optimize with exprs other than Column
-                    if let Some(col_expr) = exprs[0]
-                        .as_any()
-                        .downcast_ref::<expressions::Column>()
+                    if let Some(col_expr) =
+                        exprs[0].as_any().downcast_ref::<expressions::Column>()
                     {
                         let current_val = &col_stats[col_expr.index()].null_count;
                         if let &Precision::Exact(val) = current_val {
@@ -189,9 +188,8 @@ fn take_optimizable_column_and_lit_count(
                                 agg_expr.name().to_string(),
                             ));
                         }
-                    } else if let Some(lit_expr) = exprs[0]
-                        .as_any()
-                        .downcast_ref::<expressions::Literal>()
+                    } else if let Some(lit_expr) =
+                        exprs[0].as_any().downcast_ref::<expressions::Literal>()
                     {
                         if lit_expr.value() == &COUNT_STAR_EXPANSION {
                             return Some((
@@ -200,7 +198,6 @@ fn take_optimizable_column_and_lit_count(
                             ));
                         }
                     }
-                
                 }
             }
         }

@@ -41,6 +41,7 @@ pub type ReturnTypeFunction =
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
 /// ordering expressions.
+#[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
     pub data_type: &'a DataType,
@@ -67,6 +68,7 @@ pub struct AccumulatorArgs<'a> {
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
     pub is_distinct: bool,
+    pub input_type: &'a DataType,
 }
 
 impl<'a> AccumulatorArgs<'a> {
@@ -76,13 +78,15 @@ impl<'a> AccumulatorArgs<'a> {
         ignore_nulls: bool,
         sort_exprs: &'a [Expr],
         is_distinct: bool,
+        input_type: &'a DataType,
     ) -> Self {
         Self {
             data_type,
             schema,
             ignore_nulls,
             sort_exprs,
-            is_distinct
+            is_distinct,
+            input_type,
         }
     }
 }
