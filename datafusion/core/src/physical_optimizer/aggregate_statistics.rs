@@ -189,6 +189,16 @@ fn take_optimizable_column_and_lit_count(
                         casted_expr.name().to_string(),
                     ));
                 }
+            } else if let Some(lit_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+            {
+                if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                    return Some((
+                        ScalarValue::Int64(Some(num_rows as i64)),
+                        agg_expr.name().to_string(),
+                    ));
+                }
             }
         }
     }
