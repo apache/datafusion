@@ -1141,6 +1141,23 @@ impl LogicalPlanBuilder {
 }
 
 /// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
+/// fn employee_schema() -> Schema {
+///     Schema::new(vec![
+///         Field::new("id", DataType::Int32, false),
+///         Field::new("first_name", DataType::Utf8, false),
+///         Field::new("last_name", DataType::Utf8, false),
+///         Field::new("state", DataType::Utf8, false),
+///         Field::new("salary", DataType::Int32, false),
+///     ])
+/// }
+/// let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+///     .sort(vec![
+///         Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+///         Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+///      ])?
+///     .build()?;
+/// let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+
 impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     fn from(plan: Arc<LogicalPlan>) -> Self {
         LogicalPlanBuilder::from(unwrap_arc(plan))
@@ -2147,6 +2164,23 @@ mod tests {
                 Field::new("a:2", DataType::Int32, false),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_from_logical_plan() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .sort(vec![
+                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+                ])?
+                .build()?;
+
+        let plan_expected = format!("{plan:?}");
+        let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+        assert_eq!(plan_expected, format!("{:?}", plan_builder.plan));
+
         Ok(())
     }
 }
