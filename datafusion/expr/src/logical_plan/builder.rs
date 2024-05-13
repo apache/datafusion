@@ -98,7 +98,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// ```
 #[derive(Debug, Clone)]
 pub struct LogicalPlanBuilder {
-    plan: LogicalPlan,
+    plan: Arc<LogicalPlan>,,
 }
 
 impl LogicalPlanBuilder {
