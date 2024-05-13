@@ -171,7 +171,7 @@ impl FunctionRewrite for ArrayFunctionRewriter {
                         stop,
                         stride,
                     },
-            }) => Transformed::yes(array_slice(*expr, *start, *stop, *stride)),
+            }) => Transformed::yes(array_slice(*expr, *start, *stop, Some(*stride))),
 
             _ => Transformed::no(expr),
         };

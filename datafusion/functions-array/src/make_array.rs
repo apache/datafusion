@@ -35,7 +35,7 @@ use datafusion_expr::{Expr, TypeSignature};
 
 use crate::utils::make_scalar_function;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     MakeArray,
     make_array,
     "Returns an Arrow array using the specified input expressions.",
