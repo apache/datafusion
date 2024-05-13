@@ -192,7 +192,7 @@ impl FilterExec {
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(predicate);
         for (lhs, rhs) in equal_pairs {
-            eq_properties.add_equal_conditions(lhs, rhs)
+            eq_properties.add_equal_conditions(lhs, rhs)?
         }
         // Add the columns that have only one viable value (singleton) after
         // filtering to constants.

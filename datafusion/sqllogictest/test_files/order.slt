@@ -955,3 +955,81 @@ drop table foo;
 
 statement ok
 drop table ambiguity_test;
+
+# Casting from numeric to string types breaks the ordering
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query T
+SELECT CAST(c as VARCHAR) as c_str
+FROM ordered_table
+ORDER BY c_str
+limit 5;
+----
+0
+1
+10
+11
+12
+
+query TT
+EXPLAIN SELECT CAST(c as VARCHAR) as c_str
+FROM ordered_table
+ORDER BY c_str
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: c_str ASC NULLS LAST, fetch=5
+03)----Projection: CAST(ordered_table.c AS Utf8) AS c_str
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
+03)----SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+query I
+SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+0
+1
+2
+3
+4
+
+query TT
+EXPLAIN SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: c_bigint ASC NULLS LAST, fetch=5
+03)----Projection: CAST(ordered_table.c AS Int64) AS c_bigint
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
+03)----ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table ordered_table; 

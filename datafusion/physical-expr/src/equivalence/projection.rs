@@ -941,7 +941,7 @@ mod tests {
         for (orderings, equal_columns, expected) in test_cases {
             let mut eq_properties = EquivalenceProperties::new(schema.clone());
             for (lhs, rhs) in equal_columns {
-                eq_properties.add_equal_conditions(lhs, rhs);
+                eq_properties.add_equal_conditions(lhs, rhs)?;
             }
 
             let orderings = convert_to_orderings(&orderings);

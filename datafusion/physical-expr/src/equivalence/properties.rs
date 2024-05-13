@@ -200,7 +200,7 @@ impl EquivalenceProperties {
         &mut self,
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
-    ) {
+    ) -> Result<()> {
         // Discover new constants in light of new the equality:
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
@@ -237,9 +237,16 @@ impl EquivalenceProperties {
                     if children.len() == 1
                         && children[0].eq(&next_expr.expr)
                         && SortProperties::Ordered(leading_ordering)
-                            == other_expr.get_ordering(&[SortProperties::Ordered(
-                                next_expr.options,
-                            )])
+                            == other_expr
+                                .get_properties(&[ExprProperties {
+                                    sort_properties: SortProperties::Ordered(
+                                        leading_ordering,
+                                    ),
+                                    range: Interval::make_unbounded(
+                                        &other_expr.data_type(&self.schema)?,
+                                    )?,
+                                }])?
+                                .sort_properties
                     {
                         // Assume existing ordering is [a ASC, b ASC]
                         // When equality a = f(b) is given, If we know that given ordering `[b ASC]`, ordering `[f(b) ASC]` is valid,
@@ -257,6 +264,7 @@ impl EquivalenceProperties {
 
         // Add equal expressions to the state
         self.eq_group.add_equal_conditions(left, right);
+        Ok(())
     }
 
     /// Track/register physical expressions with constant values.
@@ -941,11 +949,11 @@ impl EquivalenceProperties {
 /// Calculates the properties of a given [`ExprPropertiesNode`].
 ///
 /// Order information can be retrieved as:
-/// 1) If it is a leaf node, we directly find the order of the node by looking
+/// - If it is a leaf node, we directly find the order of the node by looking
 /// at the given sort expression and equivalence properties if it is a `Column`
 /// leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
 /// it as singleton so that it can cooperate with all ordered columns.
-/// 2) If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
 /// and operator has its own rules on how to propagate the children orderings.
 /// However, before we engage in recursion, we check whether this intermediate
 /// node directly matches with the sort expression. If there is a match, the
@@ -953,10 +961,10 @@ impl EquivalenceProperties {
 /// result coming from its children.
 ///
 /// Range information is calculated as:
-/// 1) If it is a `Literal` node, we set the range as a point value.
+/// - If it is a `Literal` node, we set the range as a point value.
 /// If it is a `Column` node, we set the datatype of the range, but
 /// cannot limit an interval for the range, yet.
-/// 2) If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
 /// and operator has its own rules on how to propagate the children range.
 fn update_ordering(
     mut node: ExprPropertiesNode,
@@ -1624,8 +1632,8 @@ mod tests {
 
         let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
         // a=x and d=w
-        join_eq_properties.add_equal_conditions(col_a, col_x);
-        join_eq_properties.add_equal_conditions(col_d, col_w);
+        join_eq_properties.add_equal_conditions(col_a, col_x)?;
+        join_eq_properties.add_equal_conditions(col_d, col_w)?;
 
         updated_right_ordering_equivalence_class(
             &mut right_oeq_class,
@@ -1662,7 +1670,7 @@ mod tests {
         let col_c_expr = col("c", &schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
-        eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr);
+        eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr)?;
         let others = vec![
             vec![PhysicalSortExpr {
                 expr: col_b_expr.clone(),
@@ -1825,7 +1833,7 @@ mod tests {
             nulls_first: false,
         };
         // b=a (e.g they are aliases)
-        eq_properties.add_equal_conditions(col_b, col_a);
+        eq_properties.add_equal_conditions(col_b, col_a)?;
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings(vec![
             vec![PhysicalSortExpr {
@@ -2382,7 +2390,7 @@ mod tests {
         for case in cases {
             let mut properties = base_properties.clone().add_constants(case.constants);
             for [left, right] in &case.equal_conditions {
-                properties.add_equal_conditions(left, right)
+                properties.add_equal_conditions(left, right)?
             }
 
             let sort = case

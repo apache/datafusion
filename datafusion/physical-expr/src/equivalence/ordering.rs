@@ -883,7 +883,7 @@ mod tests {
         };
         // a=c (e.g they are aliases).
         let mut eq_properties = EquivalenceProperties::new(test_schema);
-        eq_properties.add_equal_conditions(col_a, col_c);
+        eq_properties.add_equal_conditions(col_a, col_c)?;
 
         let orderings = vec![
             vec![(col_a, options)],

@@ -17,9 +17,8 @@
 
 //! "math" DataFusion functions
 
-use std::sync::Arc;
-
 use datafusion_expr::ScalarUDF;
+use std::sync::Arc;
 
 pub mod abs;
 pub mod cot;

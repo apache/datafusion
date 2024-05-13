@@ -17,6 +17,8 @@
 
 //! Math function: `log()`.
 
+use super::power::PowerFunc;
+use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
@@ -25,14 +27,11 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{lit, ColumnarValue, Expr, ScalarUDF, TypeSignature::*};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+
 use std::any::Any;
 use std::sync::Arc;
-
-use super::power::PowerFunc;
 
 #[derive(Debug)]
 pub struct LogFunc {
@@ -82,11 +81,24 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(if input[0].sort_properties == -input[1].sort_properties {
-            input[0].sort_properties
-        } else {
-            SortProperties::Unordered
-        })
+        match (&input[0].sort_properties, &input[1].sort_properties) {
+            (SortProperties::Ordered(value), SortProperties::Ordered(base))
+                if !value.descending && base.descending
+                    || value.descending && !base.descending =>
+            {
+                Ok(SortProperties::Ordered(*value))
+            }
+            (SortProperties::Ordered(_), SortProperties::Singleton) => {
+                Ok(input[0].sort_properties)
+            }
+            (SortProperties::Singleton, SortProperties::Ordered(_)) => {
+                Ok(-input[1].sort_properties)
+            }
+            (SortProperties::Singleton, SortProperties::Singleton) => {
+                Ok(SortProperties::Singleton)
+            }
+            _ => Ok(SortProperties::Unordered),
+        }
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)

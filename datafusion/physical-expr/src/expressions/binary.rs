@@ -443,7 +443,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
-    /// TODO: There may be rules specific to some data types and expression range.
+    /// TODO: There may be rules specific to some data types and expression ranges.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);

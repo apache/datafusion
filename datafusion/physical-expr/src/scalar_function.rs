@@ -32,7 +32,6 @@
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Neg;
 use std::sync::Arc;
 
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
@@ -40,14 +39,11 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-
 use datafusion_common::{internal_err, DFSchema, Result};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarUDF};
-
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
-use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -164,7 +160,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        self.fun().evaluate_bounds(children)
+        self.fun.evaluate_bounds(children)
     }
 
     fn propagate_constraints(
@@ -172,7 +168,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        self.fun().propagate_constraints(interval, children)
+        self.fun.propagate_constraints(interval, children)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -184,7 +180,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        let sort_properties = self.fun().monotonicity(children)?;
+        let sort_properties = self.fun.monotonicity(children)?;
         let children_range = children
             .iter()
             .map(|props| &props.range)
@@ -239,63 +235,5 @@ pub fn create_physical_expr(
         Arc::new(fun.clone()),
         input_phy_exprs.to_vec(),
         return_type,
-        fun.monotonicity()?,
     )))
-}
-
-/// Determines a [ScalarFunctionExpr]'s monotonicity for the given arguments
-/// and the function's behavior depending on its arguments.
-///
-/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
-pub fn out_ordering(
-    func: &FuncMonotonicity,
-    arg_orderings: &[SortProperties],
-) -> SortProperties {
-    func.iter().zip(arg_orderings).fold(
-        SortProperties::Singleton,
-        |prev_sort, (item, arg)| {
-            let current_sort = func_order_in_one_dimension(item, arg);
-
-            match (prev_sort, current_sort) {
-                (_, SortProperties::Unordered) => SortProperties::Unordered,
-                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
-                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
-                    if prev.descending != current.descending =>
-                {
-                    SortProperties::Unordered
-                }
-                _ => prev_sort,
-            }
-        },
-    )
-}
-
-/// This function decides the monotonicity property of a [ScalarFunctionExpr] for a single argument (i.e. across a single dimension), given that argument's sort properties.
-///
-/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
-fn func_order_in_one_dimension(
-    func_monotonicity: &Option<bool>,
-    arg: &SortProperties,
-) -> SortProperties {
-    if *arg == SortProperties::Singleton {
-        SortProperties::Singleton
-    } else {
-        match func_monotonicity {
-            None => SortProperties::Unordered,
-            Some(false) => {
-                if let SortProperties::Ordered(_) = arg {
-                    arg.neg()
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-            Some(true) => {
-                if let SortProperties::Ordered(_) = arg {
-                    *arg
-                } else {
-                    SortProperties::Unordered
-                }
-            }
-        }
-    }
 }

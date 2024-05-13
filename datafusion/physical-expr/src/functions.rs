@@ -38,7 +38,6 @@ use arrow_array::Array;
 
 pub use crate::scalar_function::create_physical_expr;
 use datafusion_common::{Result, ScalarValue};
-pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 #[derive(Debug, Clone, Copy)]

@@ -776,10 +776,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn aliases(&self) -> &[String] {
         &[]
     }
-
-    fn monotonicity(&self) -> Result<Option<datafusion_expr::FuncMonotonicity>> {
-        Ok(None)
-    }
 }
 
 impl ScalarFunctionWrapper {

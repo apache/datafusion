@@ -44,21 +44,21 @@ physical_plan
 05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # constant ticker, CAST(time AS DATE) = time, order by time
-# query TT
-# explain SELECT * FROM data
-# WHERE ticker = 'A' AND CAST(time AS DATE) = date
-# ORDER BY "time"
-# ----
-# logical_plan
-# 01)Sort: data.time ASC NULLS LAST
-# 02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-# 03)----TableScan: data projection=[date, ticker, time]
-# physical_plan
-# 01)SortPreservingMergeExec: [time@2 ASC NULLS LAST]
-# 02)--CoalesceBatchesExec: target_batch_size=8192
-# 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
-# 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-# 05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time"
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [time@2 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # same thing but order by date
 query TT
@@ -95,21 +95,21 @@ physical_plan
 05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # same thing but order by time, date
-# query TT
-# explain SELECT * FROM data 
-# WHERE ticker = 'A' AND CAST(time AS DATE) = date
-# ORDER BY "time", "date";
-# ----
-# logical_plan
-# 01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
-# 02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-# 03)----TableScan: data projection=[date, ticker, time]
-# physical_plan
-# 01)SortPreservingMergeExec: [time@2 ASC NULLS LAST,date@0 ASC NULLS LAST]
-# 02)--CoalesceBatchesExec: target_batch_size=8192
-# 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
-# 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-# 05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time", "date";
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [time@2 ASC NULLS LAST,date@0 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # CAST(time AS DATE) <> date (should require a sort)
 # no physical plan due to sort breaking pipeline
