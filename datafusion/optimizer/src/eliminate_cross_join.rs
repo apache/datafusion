@@ -98,7 +98,6 @@ impl OptimizerRule for EliminateCrossJoin {
         let mut possible_join_keys = JoinKeySet::new();
         let mut all_inputs: Vec<LogicalPlan> = vec![];
 
-        let can_flatten_inputs = can_flatten_join_inputs(&plan);
         let parent_predicate = if let LogicalPlan::Filter(filter) = plan {
             // if input isn't a join that can potentially be rewritten
             // avoid unwrapping the input
@@ -111,6 +110,7 @@ impl OptimizerRule for EliminateCrossJoin {
             );
 
             if !rewriteable {
+                // recursively try to rewrite children
                 return rewrite_children(self, LogicalPlan::Filter(filter), config);
             }
 
@@ -136,12 +136,13 @@ impl OptimizerRule for EliminateCrossJoin {
                 ..
             })
         ) {
-            if !can_flatten_inputs {
+            if !can_flatten_join_inputs(&plan) {
                 return Ok(Transformed::no(plan));
             }
             flatten_join_inputs(plan, &mut possible_join_keys, &mut all_inputs)?;
             None
         } else {
+            // recursively try to rewrite children
             return rewrite_children(self, plan, config);
         };
 
