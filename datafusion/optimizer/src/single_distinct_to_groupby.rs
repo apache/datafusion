@@ -386,8 +386,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::{count, expr};
     use datafusion_expr::{
         count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min, sum,
         AggregateFunction,
@@ -573,23 +573,23 @@ mod tests {
         assert_optimized_plan_equal(plan, expected)
     }
 
-    // #[test]
-    // fn distinct_and_common() -> Result<()> {
-    //     let table_scan = test_table_scan()?;
+    #[test]
+    fn distinct_and_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
 
-    //     let plan = LogicalPlanBuilder::from(table_scan)
-    //         .aggregate(
-    //             vec![col("a")],
-    //             vec![count_distinct(col("b")), count(col("c"))],
-    //         )?
-    //         .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
 
-    //     // Do nothing
-    //     let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(DISTINCT test.b), COUNT(test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(test.c):Int64;N]\
-    //                         \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(DISTINCT test.b), COUNT(test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(test.c):Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
-    //     assert_optimized_plan_equal(plan, expected)
-    // }
+        assert_optimized_plan_equal(plan, expected)
+    }
 
     #[test]
     fn group_by_with_expr() -> Result<()> {

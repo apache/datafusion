@@ -1868,17 +1868,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             order_by,
             null_treatment,
         }) => {
-            match func_def {
-                AggregateFunctionDefinition::BuiltIn(..) => {
-                    write_function_name(w, func_def.name(), *distinct, args)?;
-                }
-                AggregateFunctionDefinition::UDF(fun) => {
-                    write_function_name(w, fun.name(), *distinct, args)?;
-                    // write!(w, "{}(", fun.name())?;
-                    // write_names_join(w, args, ",")?;
-                    // write!(w, ")")?;
-                }
-            };
+            write_function_name(w, func_def.name(), *distinct, args)?;
             if let Some(fe) = filter {
                 write!(w, " FILTER (WHERE {fe})")?;
             };

@@ -25,7 +25,9 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionDefinition, WindowFunction,
 };
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
+use datafusion_expr::{
+    aggregate_function, lit, Expr, LogicalPlan, WindowFunctionDefinition,
+};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -73,14 +75,18 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
-    matches!(
-        &window_function.fun,
+    let args = &window_function.args;
+    match window_function.fun {
         WindowFunctionDefinition::AggregateFunction(
-            datafusion_expr::aggregate_function::AggregateFunction::Count,
-        )
-    ) && window_function.args.len() == 1
-        && is_wildcard(&window_function.args[0])
-    // TODO: Add count udf
+            aggregate_function::AggregateFunction::Count,
+        ) if args.len() == 1 && is_wildcard(&args[0]) => true,
+        WindowFunctionDefinition::AggregateUDF(ref udaf)
+            if udaf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {

@@ -385,7 +385,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn aliases(&self) -> &[String] {
         &[]
     }
-    
+
     /// Optionally apply per-UDaF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
