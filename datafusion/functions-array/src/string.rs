@@ -102,7 +102,7 @@ macro_rules! call_array_function {
 }
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayToString,
     array_to_string,
     array delimiter, // arg name
@@ -160,7 +160,7 @@ impl ScalarUDFImpl for ArrayToString {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     StringToArray,
     string_to_array,
     string delimiter null_string, // arg name

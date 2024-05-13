@@ -34,7 +34,7 @@ use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility}
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayRepeat,
     array_repeat,
     element count, // arg name

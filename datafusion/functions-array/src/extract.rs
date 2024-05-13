@@ -44,7 +44,7 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayElement,
     array_element,
     array element,
@@ -52,9 +52,9 @@ make_udf_function!(
     array_element_udf
 );
 
-make_udf_function!(ArraySlice, array_slice_udf);
+create_func!(ArraySlice, array_slice_udf);
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopFront,
     array_pop_front,
     array,
@@ -62,7 +62,7 @@ make_udf_function!(
     array_pop_front_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopBack,
     array_pop_back,
     array,

@@ -19,8 +19,8 @@
 ///
 /// 1. Single `ScalarUDF` instance
 ///
-/// Creates a singleton `ScalarUDF` of the `$UDF` function named `STATIC_$UDF` and a
-/// function named `$NAME` which returns that function named $NAME.
+/// Creates a singleton `ScalarUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
+/// function named `$SCALAR_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 ///
@@ -43,7 +43,7 @@
 /// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
 ///
 /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
-macro_rules! make_udf_function {
+macro_rules! make_udf_expr_and_func {
     ($UDF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr , $SCALAR_UDF_FN:ident) => {
         paste::paste! {
             // "fluent expr_fn" style function
@@ -54,25 +54,7 @@ macro_rules! make_udf_function {
                     vec![$($arg),*],
                 ))
             }
-
-            /// Singleton instance of [`$UDF`], ensures the UDF is only created once
-            /// named STATIC_$(UDF). For example `STATIC_ArrayToString`
-            #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
-                std::sync::OnceLock::new();
-
-            /// ScalarFunction that returns a [`ScalarUDF`] for [`$UDF`]
-            ///
-            /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
-            pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-                [< STATIC_ $UDF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                            <$UDF>::new(),
-                        ))
-                    })
-                    .clone()
-            }
+            create_func!($UDF, $SCALAR_UDF_FN);
         }
     };
     ($UDF:ty, $EXPR_FN:ident, $DOC:expr , $SCALAR_UDF_FN:ident) => {
@@ -85,27 +67,19 @@ macro_rules! make_udf_function {
                     arg,
                 ))
             }
-
-            /// Singleton instance of [`$UDF`], ensures the UDF is only created once
-            /// named STATIC_$(UDF). For example `STATIC_ArrayToString`
-            #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
-                std::sync::OnceLock::new();
-            /// ScalarFunction that returns a [`ScalarUDF`] for [`$UDF`]
-            ///
-            /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
-            pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-                [< STATIC_ $UDF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                            <$UDF>::new(),
-                        ))
-                    })
-                    .clone()
-            }
+            create_func!($UDF, $SCALAR_UDF_FN);
         }
     };
-    // This pattern does not generate the "fluent expr_fn" style function, it should be provided externally.
+}
+
+/// Creates a singleton `ScalarUDF` of the `$UDF` function named `STATIC_$(UDF)` and a
+/// function named `$SCALAR_UDF_FUNC` which returns that function named `STATIC_$(UDF)`.
+///
+/// This is used to ensure creating the list of `ScalarUDF` only happens once.
+/// # Arguments
+/// * `UDF`: name of the [`ScalarUDFImpl`]
+/// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
+macro_rules! create_func {
     ($UDF:ty, $SCALAR_UDF_FN:ident) => {
         paste::paste! {
             /// Singleton instance of [`$UDF`], ensures the UDF is only created once
