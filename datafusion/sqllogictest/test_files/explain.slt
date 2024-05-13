@@ -32,8 +32,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain SELECT c1 FROM aggregate_test_100 where c2 > 10
@@ -68,9 +68,9 @@ CREATE EXTERNAL TABLE aggregate_test_100_with_order (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv';
+LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain SELECT c1 FROM aggregate_test_100_with_order order by c1 ASC limit 10
@@ -128,8 +128,8 @@ CREATE EXTERNAL TABLE simple_explain_test (
   c INT
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/example.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test
@@ -156,8 +156,8 @@ CREATE UNBOUNDED EXTERNAL TABLE sink_table (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN INSERT INTO sink_table SELECT * FROM aggregate_test_100 ORDER by c1

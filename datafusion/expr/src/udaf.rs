@@ -17,7 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::AccumulatorArgs;
+use crate::function::{AccumulatorArgs, AggregateFunctionSimplification};
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
@@ -217,6 +217,13 @@ impl AggregateUDF {
     pub fn reverse_expr(&self) -> ReversedUDAF {
         self.inner.reverse_expr()
     }
+
+    /// Do the function rewrite
+    ///
+    /// See [`AggregateUDFImpl::simplify`] for more details.
+    pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        self.inner.simplify()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -377,6 +384,31 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+    
+    /// Optionally apply per-UDaF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// # Returns
+    ///
+    /// [None] if simplify is not defined or,
+    ///
+    /// Or, a closure with two arguments:
+    /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// closure returns simplified [Expr] or an error.
+    ///
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        None
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {

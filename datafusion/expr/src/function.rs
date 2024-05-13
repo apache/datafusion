@@ -104,3 +104,16 @@ pub type PartitionEvaluatorFactory =
 /// its state, given its return datatype.
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
+
+/// [crate::udaf::AggregateUDFImpl::simplify] simplifier closure
+/// A closure with two arguments:
+/// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
+/// * 'info': [crate::simplify::SimplifyInfo]
+///
+/// closure returns simplified [Expr] or an error.
+pub type AggregateFunctionSimplification = Box<
+    dyn Fn(
+        crate::expr::AggregateFunction,
+        &dyn crate::simplify::SimplifyInfo,
+    ) -> Result<Expr>,
+>;

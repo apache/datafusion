@@ -32,11 +32,11 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 
 # csv_query_group_by_int_min_max
