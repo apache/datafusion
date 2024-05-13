@@ -610,7 +610,8 @@ mod tests {
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
@@ -675,7 +676,8 @@ mod tests {
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
@@ -1017,7 +1019,9 @@ mod tests {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_target_partitions(8),
+            SessionConfig::new()
+                .with_target_partitions(8)
+                .set_str("datafusion.catalog.has_header", "false"),
         );
 
         let schema = populate_csv_partitions(&tmp_dir, 8, ".csv")?;
@@ -1045,7 +1049,9 @@ mod tests {
             .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().set_str("datafusion.catalog.has_header", "false"),
+        );
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::UInt32, false),
@@ -1074,7 +1080,7 @@ mod tests {
             panic!("Did not find part_0 in csv output files!")
         }
         // register each partition as well as the top level dir
-        let csv_read_option = CsvReadOptions::new().schema(&schema);
+        let csv_read_option = CsvReadOptions::new().schema(&schema).has_header(false);
         ctx.register_csv(
             "part0",
             &format!("{out_dir}/{part_0_name}"),

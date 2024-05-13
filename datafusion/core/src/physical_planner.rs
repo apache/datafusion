@@ -276,9 +276,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(format!("{}({})", fun.name(), names.join(",")))
             }
-            AggregateFunctionDefinition::Name(_) => {
-                internal_err!("Aggregate function `Expr` with name should be resolved.")
-            }
         },
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
@@ -1946,11 +1943,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         ignore_nulls,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
-                }
-                AggregateFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Aggregate function name should have been resolved"
-                    )
                 }
             };
             Ok((agg_expr, filter, order_by))

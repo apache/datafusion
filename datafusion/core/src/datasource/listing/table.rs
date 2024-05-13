@@ -1033,7 +1033,6 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     #[cfg(feature = "parquet")]
     use crate::datasource::{provider_as_source, MemTable};
@@ -1566,8 +1565,8 @@ mod tests {
         helper_test_insert_into_sql(
             "csv",
             FileCompressionType::UNCOMPRESSED,
-            "WITH HEADER ROW",
-            None,
+            "",
+            Some(HashMap::from([("has_header".into(), "true".into())])),
         )
         .await?;
         Ok(())
