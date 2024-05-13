@@ -174,14 +174,12 @@ impl OptimizerRule for EliminateCrossJoin {
         // If there are no join keys then do nothing:
         if all_join_keys.is_empty() {
             Filter::try_new(predicate, Arc::new(left))
-                .map(LogicalPlan::Filter)
-                .map(Transformed::yes)
+                .map(|filter| Transformed::yes(LogicalPlan::Filter(filter)))
         } else {
             // Remove join expressions from filter:
             match remove_join_expressions(predicate, &all_join_keys) {
                 Some(filter_expr) => Filter::try_new(filter_expr, Arc::new(left))
-                    .map(LogicalPlan::Filter)
-                    .map(Transformed::yes),
+                    .map(|filter| Transformed::yes(LogicalPlan::Filter(filter))),
                 _ => Ok(Transformed::yes(left)),
             }
         }
