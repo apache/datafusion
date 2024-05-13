@@ -31,11 +31,11 @@ use arrow::{
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-use datafusion_physical_expr_common::sort_properties::ExprProperties;
 
 /// Negative expression
 #[derive(Debug, Hash)]

@@ -15,21 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use crate::expressions::Column;
-use crate::sort_properties::SortProperties;
-use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-
 mod class;
 mod ordering;
 mod projection;
 mod properties;
 
+use std::sync::Arc;
+
+use crate::expressions::Column;
+use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 pub use class::{EquivalenceClass, EquivalenceGroup};
-use datafusion_physical_expr_common::sort_properties::ExprProperties;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};

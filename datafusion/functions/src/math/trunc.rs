@@ -21,12 +21,13 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::ScalarValue::Int64;
 use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, FuncMonotonicity};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -86,8 +87,8 @@ impl ScalarUDFImpl for TruncFunc {
         make_scalar_function(trunc, vec![])(args)
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true)]))
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(input[0].sort_properties)
     }
 }
 

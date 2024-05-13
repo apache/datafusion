@@ -165,9 +165,8 @@ macro_rules! make_math_unary_udf {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
-            use datafusion_expr::{
-                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-            };
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
             use std::any::Any;
             use std::sync::Arc;
 
@@ -211,8 +210,11 @@ macro_rules! make_math_unary_udf {
                     }
                 }
 
-                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-                    Ok($MONOTONICITY)
+                fn monotonicity(
+                    &self,
+                    input: &[ExprProperties],
+                ) -> Result<SortProperties> {
+                    $MONOTONICITY(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -269,10 +271,9 @@ macro_rules! make_math_binary_udf {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature::*;
-            use datafusion_expr::{
-                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-            };
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
             use std::any::Any;
             use std::sync::Arc;
 
@@ -318,8 +319,11 @@ macro_rules! make_math_binary_udf {
                     }
                 }
 
-                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-                    Ok($MONOTONICITY)
+                fn monotonicity(
+                    &self,
+                    input: &[ExprProperties],
+                ) -> Result<SortProperties> {
+                    $MONOTONICITY(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

@@ -56,22 +56,24 @@ pub fn create_physical_expr(
         fun_def,
         input_phy_exprs.to_vec(),
         return_type,
-        fun.monotonicity()?,
     )))
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Schema, SortOptions};
 
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::ScalarUDF;
+    use datafusion_expr::interval_arithmetic::Interval;
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+    use datafusion_expr::{ScalarFunctionDefinition, ScalarUDF};
 
     use crate::utils::tests::TestScalarUDF;
     use crate::ScalarFunctionExpr;
 
     use super::create_physical_expr;
 
+    #[allow(irrefutable_let_patterns)]
     #[test]
     fn test_functions() -> Result<()> {
         // create and register the udf
@@ -81,13 +83,25 @@ mod tests {
         let p_expr =
             create_physical_expr(&udf, &[e], &Schema::empty(), &[], &DFSchema::empty())?;
 
+        let ScalarFunctionDefinition::UDF(udf) = p_expr
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .unwrap()
+            .fun()
+        else {
+            panic!()
+        };
+
+        let sort_opt = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
         assert_eq!(
-            p_expr
-                .as_any()
-                .downcast_ref::<ScalarFunctionExpr>()
-                .unwrap()
-                .monotonicity(),
-            &Some(vec![Some(true)])
+            udf.monotonicity(&vec![ExprProperties {
+                sort_properties: SortProperties::Ordered(sort_opt),
+                range: Interval::make_unbounded(&DataType::Float64)?
+            }])?,
+            SortProperties::Ordered(sort_opt)
         );
 
         Ok(())

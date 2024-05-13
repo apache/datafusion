@@ -24,7 +24,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
+use crate::interval_arithmetic::Interval;
 use crate::logical_plan::Subquery;
+use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::{
@@ -35,7 +37,8 @@ use crate::{
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
+    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
+    TableReference,
 };
 use sqlparser::ast::NullTreatment;
 
@@ -438,6 +441,34 @@ impl ScalarFunctionDefinition {
                 Ok(udf.signature().volatility == crate::Volatility::Volatile)
             }
         }
+    }
+
+    #[allow(irrefutable_let_patterns)]
+    pub fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        let ScalarFunctionDefinition::UDF(udf) = &self else {
+            return not_impl_err!("Not implemented for {:?}", self);
+        };
+        udf.evaluate_bounds(input)
+    }
+
+    #[allow(irrefutable_let_patterns)]
+    pub fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        input: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let ScalarFunctionDefinition::UDF(udf) = &self else {
+            return not_impl_err!("Not implemented for {:?}", self);
+        };
+        udf.propagate_constraints(interval, input)
+    }
+
+    #[allow(irrefutable_let_patterns)]
+    pub fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        let ScalarFunctionDefinition::UDF(udf) = &self else {
+            return not_impl_err!("Not implemented for {:?}", self);
+        };
+        udf.monotonicity(input)
     }
 }
 

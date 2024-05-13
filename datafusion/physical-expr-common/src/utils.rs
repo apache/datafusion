@@ -15,13 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::{
+    physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr, tree_node::ExprContext,
+};
+
 use arrow::{
     array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
     compute::{and_kleene, is_not_null, SlicesIterator},
+    datatypes::DataType,
 };
 use datafusion_common::Result;
+use datafusion_expr::{
+    interval_arithmetic::Interval,
+    sort_properties::{ExprProperties, SortProperties},
+};
 
-use crate::sort_expr::PhysicalSortExpr;
+/// Represents a [`PhysicalExpr`] node with associated properties in a context where properties are tracked.
+pub type ExprPropertiesNode = ExprContext<ExprProperties>;
+impl ExprPropertiesNode {
+    /// Constructs a new `ExprPropertiesNode` with unknown properties for a given physical expression.
+    /// This node initializes with default properties and recursively applies this to all child expressions.
+    pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr.children().into_iter().map(Self::new_unknown).collect();
+        Self {
+            expr,
+            data: ExprProperties {
+                sort_properties: SortProperties::default(),
+                range: Interval::make_unbounded(&DataType::Null).unwrap(),
+            },
+            children,
+        }
+    }
+}
 
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
 /// are taken, when the mask evaluates `false` values null values are filled.

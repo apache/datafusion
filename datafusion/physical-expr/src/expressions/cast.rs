@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
-use datafusion_physical_expr_common::sort_properties::ExprProperties;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use DataType::*;
+
+use crate::physical_expr::down_cast_any_ref;
+use crate::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, Schema};
@@ -30,7 +29,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
+use DataType::*;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: false,

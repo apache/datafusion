@@ -34,20 +34,16 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
+use crate::PhysicalExpr;
+
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
-};
-use datafusion_physical_expr_common::sort_properties::ExprProperties;
-
-use crate::functions::out_ordering;
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
-use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, ScalarFunctionDefinition};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -55,11 +51,6 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
-    // Keeps monotonicity information of the function.
-    // FuncMonotonicity vector is one to one mapped to `args`,
-    // and it specifies the effect of an increase or decrease in
-    // the corresponding `arg` to the function value.
-    monotonicity: Option<FuncMonotonicity>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -69,7 +60,6 @@ impl Debug for ScalarFunctionExpr {
             .field("name", &self.name)
             .field("args", &self.args)
             .field("return_type", &self.return_type)
-            .field("monotonicity", &self.monotonicity)
             .finish()
     }
 }
@@ -81,14 +71,12 @@ impl ScalarFunctionExpr {
         fun: ScalarFunctionDefinition,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
-        monotonicity: Option<FuncMonotonicity>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_type,
-            monotonicity,
         }
     }
 
@@ -110,11 +98,6 @@ impl ScalarFunctionExpr {
     /// Data type produced by this expression
     pub fn return_type(&self) -> &DataType {
         &self.return_type
-    }
-
-    /// Monotonicity information of the function
-    pub fn monotonicity(&self) -> &Option<FuncMonotonicity> {
-        &self.monotonicity
     }
 }
 
@@ -177,8 +160,19 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.fun.clone(),
             children,
             self.return_type().clone(),
-            self.monotonicity.clone(),
         )))
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        self.fun().evaluate_bounds(children)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.fun().propagate_constraints(interval, children)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -190,19 +184,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        let child_orderings = children
+        let sort_properties = self.fun().monotonicity(children)?;
+        let children_range = children
             .iter()
-            .map(|c| c.sort_properties)
+            .map(|props| &props.range)
             .collect::<Vec<_>>();
-        let order = self
-            .monotonicity
-            .as_ref()
-            .map(|monotonicity| out_ordering(monotonicity, &child_orderings))
-            .unwrap_or(SortProperties::Unordered);
+        let range = self.fun().evaluate_bounds(&children_range)?;
 
         Ok(ExprProperties {
-            sort_properties: order,
-            range: Interval::make_unbounded(&self.return_type)?,
+            sort_properties,
+            range,
         })
     }
 }

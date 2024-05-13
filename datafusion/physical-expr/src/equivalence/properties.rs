@@ -20,10 +20,9 @@ use std::sync::Arc;
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::sort_properties::{
-    ExprProperties, ExprPropertiesNode,
-};
+use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -34,7 +33,6 @@ use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{CastExpr, Literal};
-use crate::sort_properties::SortProperties;
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,

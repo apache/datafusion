@@ -24,9 +24,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    lit, ColumnarValue, Expr, FuncMonotonicity, ScalarFunctionDefinition,
-};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{lit, ColumnarValue, Expr, ScalarFunctionDefinition};
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
@@ -83,8 +82,12 @@ impl ScalarUDFImpl for LogFunc {
         }
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true), Some(false)]))
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(if input[0].sort_properties == -input[1].sort_properties {
+            input[0].sort_properties
+        } else {
+            SortProperties::Unordered
+        })
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)

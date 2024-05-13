@@ -17,10 +17,11 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
-    ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
-    ScalarFunctionImplementation, Signature,
+    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
@@ -194,16 +195,25 @@ impl ScalarUDF {
         Arc::new(move |args| captured.invoke(args))
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
-    ///
-    /// See [`ScalarUDFImpl::monotonicity`] for more details.
-    pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        self.inner.monotonicity()
-    }
-
     /// Get the circuits of inner implementation
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
+    }
+
+    pub fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(input)
+    }
+
+    pub fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        input: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.inner.propagate_constraints(interval, input)
+    }
+
+    pub fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.monotonicity(input)
     }
 }
 
@@ -367,11 +377,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         &[]
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(None)
-    }
-
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
@@ -404,6 +409,23 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
+        // We cannot assume the input datatype is the same of output type.
+        Interval::make_unbounded(&DataType::Null)
+    }
+
+    fn propagate_constraints(
+        &self,
+        _interval: &Interval,
+        input: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        Ok(Some(input.iter().map(|&i| i.clone()).collect()))
+    }
+
+    fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(SortProperties::Unordered)
     }
 }
 

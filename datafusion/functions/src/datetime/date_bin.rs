@@ -33,10 +33,10 @@ use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-    TIMEZONE_WILDCARD,
+    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
 
 #[derive(Debug)]
@@ -146,8 +146,8 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![None, Some(true)]))
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(input[1].sort_properties)
     }
 }
 

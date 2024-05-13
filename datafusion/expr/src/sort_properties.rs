@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ops::Neg, sync::Arc};
+use std::ops::Neg;
 
-use crate::{physical_expr::PhysicalExpr, tree_node::ExprContext};
-
-use arrow::{compute::SortOptions, datatypes::DataType};
+use arrow::compute::SortOptions;
 use datafusion_common::ScalarValue;
-use datafusion_expr::interval_arithmetic::Interval;
+
+use crate::interval_arithmetic::Interval;
 
 /// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -163,24 +162,5 @@ impl ExprProperties {
     pub fn with_range(mut self, range: Interval) -> Self {
         self.range = range;
         self
-    }
-}
-
-/// Represents a [`PhysicalExpr`] node with associated properties in a context where properties are tracked.
-pub type ExprPropertiesNode = ExprContext<ExprProperties>;
-
-impl ExprPropertiesNode {
-    /// Constructs a new `ExprPropertiesNode` with unknown properties for a given physical expression.
-    /// This node initializes with default properties and recursively applies this to all child expressions.
-    pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children().into_iter().map(Self::new_unknown).collect();
-        Self {
-            expr,
-            data: ExprProperties {
-                sort_properties: SortProperties::default(),
-                range: Interval::make_unbounded(&DataType::Null).unwrap(),
-            },
-            children,
-        }
     }
 }

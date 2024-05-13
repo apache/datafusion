@@ -27,9 +27,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
 
-use crate::sort_properties::ExprProperties;
 use crate::utils::scatter;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)

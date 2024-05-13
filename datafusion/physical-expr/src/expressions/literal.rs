@@ -22,7 +22,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -31,8 +30,8 @@ use arrow::{
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, Expr};
-use datafusion_physical_expr_common::sort_properties::ExprProperties;
 
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Hash)]

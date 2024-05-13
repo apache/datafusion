@@ -21,7 +21,8 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 
 use datafusion_common::{not_impl_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, FuncMonotonicity, Volatility};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
@@ -70,7 +71,7 @@ impl ScalarUDFImpl for PiFunc {
         ))))
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true)]))
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(input[0].sort_properties)
     }
 }
