@@ -31,8 +31,7 @@ CREATE EXTERNAL TABLE alltypes_plain (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/alltypes_plain.avro'
+LOCATION '../../testing/data/avro/alltypes_plain.avro';
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_snappy (
@@ -49,8 +48,7 @@ CREATE EXTERNAL TABLE alltypes_plain_snappy (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/alltypes_plain.snappy.avro'
+LOCATION '../../testing/data/avro/alltypes_plain.snappy.avro';
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
@@ -67,8 +65,7 @@ CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/alltypes_plain.bzip2.avro'
+LOCATION '../../testing/data/avro/alltypes_plain.bzip2.avro';
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_xz (
@@ -85,8 +82,7 @@ CREATE EXTERNAL TABLE alltypes_plain_xz (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/alltypes_plain.xz.avro'
+LOCATION '../../testing/data/avro/alltypes_plain.xz.avro';
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain_zstandard (
@@ -103,34 +99,29 @@ CREATE EXTERNAL TABLE alltypes_plain_zstandard (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro'
+LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro';
 
 statement ok
 CREATE EXTERNAL TABLE single_nan (
   mycol FLOAT
 )
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/single_nan.avro'
+LOCATION '../../testing/data/avro/single_nan.avro';
 
 statement ok
 CREATE EXTERNAL TABLE nested_records
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/nested_records.avro'
+LOCATION '../../testing/data/avro/nested_records.avro';
 
 statement ok
 CREATE EXTERNAL TABLE simple_enum
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/simple_enum.avro'
+LOCATION '../../testing/data/avro/simple_enum.avro';
 
 statement ok
 CREATE EXTERNAL TABLE simple_fixed
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/simple_fixed.avro'
+LOCATION '../../testing/data/avro/simple_fixed.avro';
 
 # test avro query
 query IT

@@ -398,9 +398,6 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                         AggregateFunctionDefinition::UDF { .. } => {
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
-                        AggregateFunctionDefinition::Name(_) => {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
-                        }
                     },
                     _ => Transformed::no(expr),
                 };

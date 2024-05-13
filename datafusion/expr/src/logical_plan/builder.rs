@@ -42,8 +42,9 @@ use crate::utils::{
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
+    and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
+    ExprSchemable, Operator, RecursiveQuery, TableProviderFilterPushDown, TableSource,
+    WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -1138,6 +1139,31 @@ impl LogicalPlanBuilder {
         )?))
     }
 }
+
+/// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
+/// fn employee_schema() -> Schema {
+///     Schema::new(vec![
+///         Field::new("id", DataType::Int32, false),
+///         Field::new("first_name", DataType::Utf8, false),
+///         Field::new("last_name", DataType::Utf8, false),
+///         Field::new("state", DataType::Utf8, false),
+///         Field::new("salary", DataType::Int32, false),
+///     ])
+/// }
+/// let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+///     .sort(vec![
+///         Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+///         Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+///      ])?
+///     .build()?;
+/// let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+
+impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
+    fn from(plan: Arc<LogicalPlan>) -> Self {
+        LogicalPlanBuilder::from(unwrap_arc(plan))
+    }
+}
+
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
     fields
@@ -1489,7 +1515,7 @@ pub fn wrap_projection_for_join_if_necessary(
         let mut projection = expand_wildcard(input_schema, &input, None)?;
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
@@ -1504,8 +1530,12 @@ pub fn wrap_projection_for_join_if_necessary(
     let join_on = alias_join_keys
         .into_iter()
         .map(|key| {
-            key.try_into_col()
-                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+            if let Some(col) = key.try_as_col() {
+                Ok(col.clone())
+            } else {
+                let name = key.display_name()?;
+                Ok(Column::from_name(name))
+            }
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -2138,6 +2168,23 @@ mod tests {
                 Field::new("a:2", DataType::Int32, false),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_from_logical_plan() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .sort(vec![
+                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+                ])?
+                .build()?;
+
+        let plan_expected = format!("{plan:?}");
+        let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+        assert_eq!(plan_expected, format!("{:?}", plan_builder.plan));
+
         Ok(())
     }
 }

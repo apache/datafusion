@@ -369,8 +369,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        accumu.insert(l.try_into_col()?);
-                        accumu.insert(r.try_into_col()?);
+                        let Some(l) = l.try_as_col().cloned() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {l:?}"
+                            );
+                        };
+                        let Some(r) = r.try_as_col().cloned() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {r:?}"
+                            );
+                        };
+                        accumu.insert(l);
+                        accumu.insert(r);
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);
@@ -478,6 +488,11 @@ impl LogicalPlan {
     /// Some `LogicalPlan`s schema is unaffected by any changes to their
     /// expressions. For example [`LogicalPlan::Filter`] schema is always the
     /// same as its input schema.
+    ///
+    /// This is useful after modifying a plans `Expr`s (or input plans) via
+    /// methods such as [Self::map_children] and [Self::map_expressions]. Unlike
+    /// [Self::with_new_exprs], this method does not require a new set of
+    /// expressions or inputs plans.
     ///
     /// # Return value
     /// Returns an error if there is some issue recomputing the schema.

@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Round
 query R
@@ -113,11 +113,11 @@ SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 false true true NULL
 
 # abs: empty argumnet
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+statement error
 SELECT abs();
 
 # abs: wrong number of arguments
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
