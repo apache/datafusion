@@ -1489,7 +1489,7 @@ pub fn wrap_projection_for_join_if_necessary(
         let mut projection = expand_wildcard(input_schema, &input, None)?;
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
@@ -1504,8 +1504,12 @@ pub fn wrap_projection_for_join_if_necessary(
     let join_on = alias_join_keys
         .into_iter()
         .map(|key| {
-            key.try_into_col()
-                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+            if let Some(col) = key.try_as_col() {
+                Ok(col.clone())
+            } else {
+                let name = key.display_name()?;
+                Ok(Column::from_name(name))
+            }
         })
         .collect::<Result<Vec<_>>>()?;
 
