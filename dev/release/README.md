@@ -195,37 +195,7 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate artifacts
 
-Send the email output from the script to dev@datafusion.apache.org. The email should look like
-
-```
-To: dev@datafusion.apache.org
-Subject: [VOTE] Release Apache DataFusion 38.0.0 RC1
-
-Hi,
-
-I would like to propose a release of Apache DataFusion version 38.0.0.
-
-This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
-The proposed release artifacts and signatures are hosted at [2].
-The changelog is located at [3].
-
-Please download, verify checksums and signatures, run the unit tests,
-and vote on the release.
-
-The vote will be open for at least 72 hours.
-
-[ ] +1 Release this as Apache DataFusion 38.0.0
-[ ] +0
-[ ] -1 Do not release this as Apache DataFusion 38.0.0 because...
-
-Here is my vote:
-
-+1
-
-[1]: https://github.com/apache/datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-38.0.0
-[3]: https://github.com/apache/datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
-```
+Send the email output from the script to dev@datafusion.apache.org.
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.
 
@@ -280,22 +250,7 @@ been made to crates.io using the following instructions.
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
-of the following crates:
-
-- [datafusion-common](https://crates.io/crates/datafusion-common)
-- [datafusion-expr](https://crates.io/crates/datafusion-expr)
-- [datafusion-execution](https://crates.io/crates/datafusion-execution)
-- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
-- [datafusion-functions](https://crates.io/crates/datafusion-functions)
-- [datafusion-functions-array](https://crates.io/crates/datafusion-functions-array)
-- [datafusion-sql](https://crates.io/crates/datafusion-sql)
-- [datafusion-optimizer](https://crates.io/crates/datafusion-optimizer)
-- [datafusion-common-runtime](https://crates.io/crates/datafusion-common-runtime)
-- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
-- [datafusion](https://crates.io/crates/datafusion)
-- [datafusion-proto](https://crates.io/crates/datafusion-proto)
-- [datafusion-substrait](https://crates.io/crates/datafusion-substrait)
-- [datafusion-cli](https://crates.io/crates/datafusion-cli)
+to all of the DataFusion crates.
 
 Download and unpack the official release tarball
 
@@ -319,6 +274,8 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
+(cd datafusion/physical-expr-common && cargo publish)
+(cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
 (cd datafusion/functions-array && cargo publish)
@@ -392,23 +349,6 @@ Sample announcement template:
 ```
 The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
-```
-
-You can include mention crates.io and PyPI version URLs in the email if applicable.
-
-```
-We have published new versions of DataFusion to crates.io:
-
-https://crates.io/crates/datafusion/28.0.0
-https://crates.io/crates/datafusion-cli/28.0.0
-https://crates.io/crates/datafusion-common/28.0.0
-https://crates.io/crates/datafusion-expr/28.0.0
-https://crates.io/crates/datafusion-optimizer/28.0.0
-https://crates.io/crates/datafusion-physical-expr/28.0.0
-https://crates.io/crates/datafusion-proto/28.0.0
-https://crates.io/crates/datafusion-sql/28.0.0
-https://crates.io/crates/datafusion-execution/28.0.0
-https://crates.io/crates/datafusion-substrait/28.0.0
 ```
 
 ### Add the release to Apache Reporter

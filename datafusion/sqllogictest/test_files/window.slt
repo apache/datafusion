@@ -32,8 +32,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE null_cases(
@@ -42,8 +42,8 @@ CREATE EXTERNAL TABLE null_cases(
   c3 BIGINT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/null_cases.csv';
+LOCATION '../core/tests/data/null_cases.csv'
+OPTIONS ('format.has_header' 'true');
 
 ### This is the same table as
 ### execute_with_partition with 4 partitions
@@ -2488,10 +2488,9 @@ CREATE EXTERNAL TABLE annotated_data_finite (
   desc_col INTEGER,
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (ts ASC)
 LOCATION '../core/tests/data/window_1.csv'
-;
+OPTIONS ('format.has_header' 'true');
 
 # 100 rows. Columns in the table are ts, inc_col, desc_col.
 # Source is CsvExec which is ordered by ts column.
@@ -2503,9 +2502,9 @@ CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite (
   desc_col INTEGER,
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (ts ASC)
-LOCATION '../core/tests/data/window_1.csv';
+LOCATION '../core/tests/data/window_1.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test_source_sorted_aggregate
 
@@ -2910,9 +2909,9 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2926,9 +2925,9 @@ CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 # test_infinite_source_partition_by
@@ -3402,10 +3401,10 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # Since column b is constant after filter b=0,
 # There should be no SortExec(b ASC) in the plan
@@ -3455,10 +3454,10 @@ CREATE UNBOUNDED EXTERNAL TABLE multiple_ordered_table_inf (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # All of the window execs in the physical plan should work in the
 # sorted mode.

@@ -571,7 +571,8 @@ DROP VIEW test.xyz
 statement ok
 CREATE EXTERNAL TABLE abc
 STORED AS CSV
-WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TTTT
 SHOW CREATE TABLE abc;

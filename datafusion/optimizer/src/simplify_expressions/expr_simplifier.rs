@@ -32,7 +32,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery};
+use datafusion_expr::expr::{AggregateFunctionDefinition, InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
@@ -1382,6 +1382,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
             }
 
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                func_def: AggregateFunctionDefinition::UDF(ref udaf),
+                ..
+            }) => match (udaf.simplify(), expr) {
+                (Some(simplify_function), Expr::AggregateFunction(af)) => {
+                    Transformed::yes(simplify_function(af, info)?)
+                }
+                (_, expr) => Transformed::no(expr),
+            },
+
             //
             // Rules for Between
             //
@@ -1748,7 +1758,9 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
-    use datafusion_expr::{interval_arithmetic::Interval, *};
+    use datafusion_expr::{
+        function::AggregateFunctionSimplification, interval_arithmetic::Interval, *,
+    };
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3697,5 +3709,94 @@ mod tests {
         let (expr, num_iter) = simplify_with_cycle_count(expr);
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
+    }
+    #[test]
+    fn test_simplify_udaf() {
+        let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
+        let aggregate_function_expr =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                udaf.into(),
+                vec![],
+                false,
+                None,
+                None,
+                None,
+            ));
+
+        let expected = col("result_column");
+        assert_eq!(simplify(aggregate_function_expr), expected);
+
+        let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
+        let aggregate_function_expr =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                udaf.into(),
+                vec![],
+                false,
+                None,
+                None,
+                None,
+            ));
+
+        let expected = aggregate_function_expr.clone();
+        assert_eq!(simplify(aggregate_function_expr), expected);
+    }
+
+    /// A Mock UDAF which defines `simplify` to be used in tests
+    /// related to UDAF simplification
+    #[derive(Debug, Clone)]
+    struct SimplifyMockUdaf {
+        simplify: bool,
+    }
+
+    impl SimplifyMockUdaf {
+        /// make simplify method return new expression
+        fn new_with_simplify() -> Self {
+            Self { simplify: true }
+        }
+        /// make simplify method return no change
+        fn new_without_simplify() -> Self {
+            Self { simplify: false }
+        }
+    }
+
+    impl AggregateUDFImpl for SimplifyMockUdaf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "mock_simplify"
+        }
+
+        fn signature(&self) -> &Signature {
+            unimplemented!()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: function::AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn groups_accumulator_supported(&self) -> bool {
+            unimplemented!("not needed for testing")
+        }
+
+        fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+            unimplemented!("not needed for testing")
+        }
+
+        fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+            if self.simplify {
+                Some(Box::new(|_, _| Ok(col("result_column"))))
+            } else {
+                None
+            }
+        }
     }
 }

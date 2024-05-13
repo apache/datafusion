@@ -38,12 +38,12 @@ use datafusion::{
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use futures::stream;
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
     ObjectMeta, ObjectStore, PutOptions, PutResult,
@@ -202,7 +202,9 @@ fn extract_as_utf(v: &ScalarValue) -> Option<String> {
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -238,7 +240,9 @@ async fn csv_filter_with_file_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_filter_with_file_nonstring_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -274,7 +278,9 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -310,7 +316,9 @@ async fn csv_projection_on_partition() -> Result<()> {
 
 #[tokio::test]
 async fn csv_grouping_by_partition() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
