@@ -42,9 +42,9 @@ use crate::utils::{
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
-    logical_plan::tree_node::unwrap_arc
+    and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
+    ExprSchemable, Operator, RecursiveQuery, TableProviderFilterPushDown, TableSource,
+    WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -55,7 +55,6 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     ToDFSchema, UnnestOptions,
 };
-
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
