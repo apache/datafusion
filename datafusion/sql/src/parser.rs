@@ -462,7 +462,18 @@ impl<'a> DFParser<'a> {
     pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
         let next_token = self.parser.next_token();
         match next_token.token {
-            Token::Word(Word { value, .. }) => Ok(value),
+            Token::Word(Word { value, .. }) => {
+                let mut parts = vec![value];
+                while self.parser.consume_token(&Token::Period) {
+                    let next_token = self.parser.next_token();
+                    if let Token::Word(Word { value, .. }) = next_token.token {
+                        parts.push(value);
+                    } else {
+                        return self.parser.expected("key name", next_token);
+                    }
+                }
+                Ok(parts.join("."))
+            }
             Token::SingleQuotedString(s) => Ok(s),
             Token::DoubleQuotedString(s) => Ok(s),
             Token::EscapedStringLiteral(s) => Ok(s),
@@ -712,15 +723,15 @@ impl<'a> DFParser<'a> {
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
-                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')");
+                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)");
                         }
                     }
                     Keyword::DELIMITER => {
-                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS ('format.delimiter' ',')");
+                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')");
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS ('format.compression' 'gzip')");
+                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)");
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -933,7 +944,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case with delimiter
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS ('format.delimiter' '|')";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS (format.delimiter '|')";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),

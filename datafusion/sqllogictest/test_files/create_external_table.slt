@@ -190,8 +190,8 @@ LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
 statement error DataFusion error: Error during planning: Option format.delimiter is specified multiple times
 CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS (
     'format.delimiter' '*',
-    'format.has_header' 'true', 
-    'format.delimiter' '|') 
+    'format.has_header' 'true',
+    'format.delimiter' '|')
 LOCATION 'foo.csv';
 
 # If a config does not belong to any namespace, we assume it is a 'format' option and apply the 'format' prefix for backwards compatibility.
@@ -201,7 +201,20 @@ CREATE EXTERNAL TABLE IF NOT EXISTS region (
         r_name VARCHAR,
         r_comment VARCHAR,
         r_rev VARCHAR,
-) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl' 
+) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl'
 OPTIONS (
         'format.delimiter' '|',
         'has_header' 'false');
+
+# Verify that we do not need quotations for simple namespaced keys.
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS region (
+        r_regionkey BIGINT,
+        r_name VARCHAR,
+        r_comment VARCHAR,
+        r_rev VARCHAR,
+) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl'
+OPTIONS (
+        format.delimiter '|',
+        has_header false,
+        compression gzip);
