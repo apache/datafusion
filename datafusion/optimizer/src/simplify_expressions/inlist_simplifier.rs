@@ -52,7 +52,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                     // expressions
                     list.len() == 1
                         || list.len() <= THRESHOLD_INLINE_INLIST
-                            && expr.try_into_col().is_ok()
+                            && expr.try_as_col().is_some()
                 )
             {
                 let first_val = list[0].clone();
