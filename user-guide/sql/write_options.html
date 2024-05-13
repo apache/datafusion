@@ -538,11 +538,11 @@
 <span class="w">  </span><span class="n">my_table</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">bigint</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">bigint</span><span class="p">)</span>
 <span class="w">  </span><span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">csv</span>
 <span class="w">  </span><span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">gzip</span>
-<span class="w">  </span><span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
 <span class="w">  </span><span class="k">DELIMITER</span><span class="w"> </span><span class="s1">&#39;;&#39;</span>
 <span class="w">  </span><span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/test/location/my_csv_table/&#39;</span>
 <span class="w">  </span><span class="k">OPTIONS</span><span class="p">(</span>
-<span class="w">    </span><span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span>
+<span class="w">    </span><span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span>
 <span class="w">  </span><span class="p">)</span>
 </pre></div>
 </div>

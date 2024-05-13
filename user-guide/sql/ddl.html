@@ -571,9 +571,6 @@ file system or remote object store as a named table which can be queried.</p>
 <span class="p">[</span> <span class="n">IF</span> <span class="n">NOT</span> <span class="n">EXISTS</span> <span class="p">]</span>
 <span class="o">&lt;</span><span class="n">TABLE_NAME</span><span class="o">&gt;</span><span class="p">[</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_definition</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="n">STORED</span> <span class="n">AS</span> <span class="o">&lt;</span><span class="n">file_type</span><span class="o">&gt;</span>
-<span class="p">[</span> <span class="n">WITH</span> <span class="n">HEADER</span> <span class="n">ROW</span> <span class="p">]</span>
-<span class="p">[</span> <span class="n">DELIMITER</span> <span class="o">&lt;</span><span class="n">char</span><span class="o">&gt;</span> <span class="p">]</span>
-<span class="p">[</span> <span class="n">COMPRESSION</span> <span class="n">TYPE</span> <span class="o">&lt;</span><span class="n">GZIP</span> <span class="o">|</span> <span class="n">BZIP2</span> <span class="o">|</span> <span class="n">XZ</span> <span class="o">|</span> <span class="n">ZSTD</span><span class="o">&gt;</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">PARTITIONED</span> <span class="n">BY</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">WITH</span> <span class="n">ORDER</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">ordered</span> <span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">OPTIONS</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
@@ -604,16 +601,16 @@ provide schema information for Parquet files.</p>
 scanning a subset of the file.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>It is also possible to use compressed files, such as <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
 <span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">GZIP</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv.gz&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv.gz&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>It is also possible to specify the schema manually.</p>
@@ -633,16 +630,16 @@ scanning a subset of the file.</p>
 <span class="w">    </span><span class="n">c13</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span>
 <span class="p">)</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>It is also possible to specify a directory that contains a partitioned
 table (multiple files with the same schema)</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/directory/of/files&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/directory/of/files&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>With <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">UNBOUNDED</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. We can create unbounded data sources such as following:</p>
@@ -673,9 +670,9 @@ sorting is complex, allowing for greater flexibility.</p>
 <span class="w">    </span><span class="n">c13</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span>
 <span class="p">)</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
-<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
 <span class="k">WITH</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="p">(</span><span class="n">c2</span><span class="w"> </span><span class="k">ASC</span><span class="p">,</span><span class="w"> </span><span class="n">c5</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">c8</span><span class="w"> </span><span class="k">DESC</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">FIRST</span><span class="p">)</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Where <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause specifies the sort order:</p>
