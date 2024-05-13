@@ -15,12 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-use std::vec;
-
 use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -57,11 +51,16 @@ use datafusion_proto::bytes::{
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::{
-    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+use std::vec;
 
+use datafusion::execution::FunctionRegistry;
 use prost::Message;
 
 #[cfg(feature = "json")]
