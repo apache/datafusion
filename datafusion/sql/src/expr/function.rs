@@ -229,12 +229,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                // TODO: Support filter and distinct for UDAFs
+                let filter: Option<Box<Expr>> = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                     fm,
                     args,
                     distinct,
-                    None,
+                    filter,
                     order_by,
                     null_treatment,
                 )));

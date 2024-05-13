@@ -109,7 +109,7 @@ impl AggregateUDFImpl for Count {
     fn state_fields(
         &self,
         name: &str,
-        value_type: DataType,
+        _value_type: DataType,
         _ordering_fields: Vec<Field>,
         is_distinct: bool,
         input_type: DataType,
@@ -130,13 +130,11 @@ impl AggregateUDFImpl for Count {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        println!("acc_args: {:?}", acc_args);
         if !acc_args.is_distinct {
             return Ok(Box::new(CountAccumulator::new()));
         }
 
         let data_type = acc_args.input_type;
-        println!("data_type: {:?}", data_type);
         Ok(match data_type {
             // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             DataType::Int8 => Box::new(

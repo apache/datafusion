@@ -263,13 +263,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 order_by.as_ref(),
             ),
             AggregateFunctionDefinition::UDF(fun) => {
-                // TODO: Add support for filter by in AggregateUDF
-                if filter.is_some() {
-                    return exec_err!(
-                        "aggregate expression with filter is not supported"
-                    );
-                }
-
                 create_function_physical_name(
                     &fun.name(),
                     *distinct,

@@ -140,31 +140,31 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
 }
 
 /// If this agg_expr is a count that is exactly defined in the statistics, return it.
-fn take_optimizable_table_count(
-    agg_expr: &dyn AggregateExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
-        &stats.num_rows,
-        agg_expr.as_any().downcast_ref::<expressions::Count>(),
-    ) {
-        // TODO implementing Eq on PhysicalExpr would help a lot here
-        if casted_expr.expressions().len() == 1 {
-            if let Some(lit_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-            {
-                if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                    return Some((
-                        ScalarValue::Int64(Some(num_rows as i64)),
-                        casted_expr.name().to_owned(),
-                    ));
-                }
-            }
-        }
-    }
-    None
-}
+// fn take_optimizable_table_count(
+//     agg_expr: &dyn AggregateExpr,
+//     stats: &Statistics,
+// ) -> Option<(ScalarValue, String)> {
+//     if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
+//         &stats.num_rows,
+//         agg_expr.as_any().downcast_ref::<expressions::Count>(),
+//     ) {
+//         // TODO implementing Eq on PhysicalExpr would help a lot here
+//         if casted_expr.expressions().len() == 1 {
+//             if let Some(lit_expr) = casted_expr.expressions()[0]
+//                 .as_any()
+//                 .downcast_ref::<expressions::Literal>()
+//             {
+//                 if lit_expr.value() == &COUNT_STAR_EXPANSION {
+//                     return Some((
+//                         ScalarValue::Int64(Some(num_rows as i64)),
+//                         casted_expr.name().to_owned(),
+//                     ));
+//                 }
+//             }
+//         }
+//     }
+//     None
+// }
 
 /// If this agg_expr is a count that can be exactly derived from the statistics, return it.
 fn take_optimizable_column_and_lit_count(

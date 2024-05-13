@@ -854,7 +854,6 @@ macro_rules! eq_array_primitive {
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
             .ok_or_else(|| {
-                panic!("eq_array_primitive");
                 DataFusionError::Internal(format!(
                     "could not cast value to {}",
                     type_name::<$ARRAYTYPE>()
