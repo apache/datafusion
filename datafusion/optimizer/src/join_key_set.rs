@@ -66,16 +66,42 @@ impl JoinKeySet {
         }
     }
 
+    /// Same as [`Self::insert`] but avoids cloning expression if they
+    /// are owned
+    pub fn insert_owned(&mut self, left: Expr, right: Expr) -> bool {
+        if self.contains(&left, &right) {
+            false
+        } else {
+            self.inner.insert((left, right));
+            true
+        }
+    }
+
     /// Inserts potentially many join keys into the set, copying only when necessary
     ///
     /// returns true if any of the pairs were inserted
     pub fn insert_all<'a>(
         &mut self,
-        iter: impl Iterator<Item = &'a (Expr, Expr)>,
+        iter: impl IntoIterator<Item = &'a (Expr, Expr)>,
     ) -> bool {
         let mut inserted = false;
-        for (left, right) in iter {
+        for (left, right) in iter.into_iter() {
             inserted |= self.insert(left, right);
+        }
+        inserted
+    }
+
+    /// Same as [`Self::insert_all`] but avoids cloning expressions if they are
+    /// already owned
+    ///
+    /// returns true if any of the pairs were inserted
+    pub fn insert_all_owned(
+        &mut self,
+        iter: impl IntoIterator<Item = (Expr, Expr)>,
+    ) -> bool {
+        let mut inserted = false;
+        for (left, right) in iter.into_iter() {
+            inserted |= self.insert_owned(left, right);
         }
         inserted
     }
@@ -157,6 +183,15 @@ mod test {
     }
 
     #[test]
+    fn test_insert_owned() {
+        let mut set = JoinKeySet::new();
+        assert!(set.insert_owned(col("a"), col("b")));
+        assert!(set.contains(&col("a"), &col("b")));
+        assert!(set.contains(&col("b"), &col("a")));
+        assert!(!set.contains(&col("a"), &col("c")));
+    }
+
+    #[test]
     fn test_contains() {
         let mut set = JoinKeySet::new();
         assert!(set.insert(&col("a"), &col("b")));
@@ -217,18 +252,34 @@ mod test {
     }
 
     #[test]
-    fn test_insert_many() {
+    fn test_insert_all() {
         let mut set = JoinKeySet::new();
 
         // insert (a=b), (b=c), (b=a)
-        set.insert_all(
-            vec![
-                &(col("a"), col("b")),
-                &(col("b"), col("c")),
-                &(col("b"), col("a")),
-            ]
-            .into_iter(),
-        );
+        set.insert_all(vec![
+            &(col("a"), col("b")),
+            &(col("b"), col("c")),
+            &(col("b"), col("a")),
+        ]);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&col("a"), &col("b")));
+        assert!(set.contains(&col("b"), &col("c")));
+        assert!(set.contains(&col("b"), &col("a")));
+
+        // should not contain (a=c)
+        assert!(!set.contains(&col("a"), &col("c")));
+    }
+
+    #[test]
+    fn test_insert_all_owned() {
+        let mut set = JoinKeySet::new();
+
+        // insert (a=b), (b=c), (b=a)
+        set.insert_all_owned(vec![
+            (col("a"), col("b")),
+            (col("b"), col("c")),
+            (col("b"), col("a")),
+        ]);
         assert_eq!(set.len(), 2);
         assert!(set.contains(&col("a"), &col("b")));
         assert!(set.contains(&col("b"), &col("c")));
