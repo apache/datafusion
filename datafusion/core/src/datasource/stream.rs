@@ -25,12 +25,13 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::{create_ordering, TableProvider};
+use crate::execution::context::SessionState;
+
 use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
-use futures::StreamExt;
-
-use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
@@ -40,9 +41,8 @@ use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::{create_ordering, TableProvider};
-use crate::execution::context::SessionState;
+use async_trait::async_trait;
+use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Debug, Default)]
@@ -58,12 +58,24 @@ impl TableProviderFactory for StreamTableFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
+        let header = if let Ok(opt) = cmd
+            .options
+            .get("format.has_header")
+            .map(|has_header| bool::from_str(has_header))
+            .transpose()
+        {
+            opt.unwrap_or(false)
+        } else {
+            return config_err!(
+                "Valid values for format.has_header option are 'true' or 'false'"
+            );
+        };
 
         let config = StreamConfig::new_file(schema, location.into())
             .with_encoding(encoding)
             .with_order(cmd.order_exprs.clone())
-            .with_header(cmd.has_header)
             .with_batch_size(state.config().batch_size())
+            .with_header(header)
             .with_constraints(cmd.constraints.clone());
 
         Ok(Arc::new(StreamTable(Arc::new(config))))
