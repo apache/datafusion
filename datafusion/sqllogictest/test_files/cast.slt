@@ -56,3 +56,16 @@ query I
 SELECT 10::bigint unsigned
 ----
 10
+
+# cast array
+query ?
+SELECT CAST(MAKE_ARRAY(1, 2, 3) AS VARCHAR[])
+----
+[1, 2, 3]
+
+
+# cast empty array
+query ?
+SELECT CAST(MAKE_ARRAY() AS VARCHAR[])
+----
+[]
