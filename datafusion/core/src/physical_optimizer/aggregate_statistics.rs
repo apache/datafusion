@@ -171,6 +171,27 @@ fn take_optimizable_column_and_lit_count(
             }
         }
     }
+    // TODO: Remove this after revmoing Builtin Count
+    else if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
+        &stats.num_rows,
+        agg_expr.as_any().downcast_ref::<expressions::Count>(),
+    ) {
+        if casted_expr.expressions().len() == 1 {
+            // TODO optimize with exprs other than Column
+            if let Some(col_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Column>()
+            {
+                let current_val = &col_stats[col_expr.index()].null_count;
+                if let &Precision::Exact(val) = current_val {
+                    return Some((
+                        ScalarValue::Int64(Some((num_rows - val) as i64)),
+                        casted_expr.name().to_string(),
+                    ));
+                }
+            }
+        }
+    }
 
     None
 }
