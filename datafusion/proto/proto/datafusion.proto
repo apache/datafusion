@@ -201,23 +201,19 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  TableReference name = 12;
+  TableReference name = 9;
   string location = 2;
   string file_type = 3;
-  bool has_header = 4;
-  DfSchema schema = 5;
-  repeated string table_partition_cols = 6;
-  bool if_not_exists = 7;
-  string delimiter = 8;
-  string definition = 9;
-  reserved 10; // was string file_compression_type
-  CompressionTypeVariant file_compression_type = 17;
-  repeated LogicalExprNodeCollection order_exprs = 13;
-  bool unbounded = 14;
-  map<string, string> options = 11;
-  Constraints constraints = 15;
-  map<string, LogicalExprNode> column_defaults = 16;
-}
+  DfSchema schema = 4;
+  repeated string table_partition_cols = 5;
+  bool if_not_exists = 6;
+  string definition = 7;
+  repeated LogicalExprNodeCollection order_exprs = 10;
+  bool unbounded = 11;
+  map<string, string> options = 8;
+  Constraints constraints = 12;
+  map<string, LogicalExprNode> column_defaults = 13;
+ }
 
 message PrepareNode {
   string name = 1;
@@ -548,8 +544,8 @@ enum AggregateFunction {
   ARRAY_AGG = 6;
   VARIANCE = 7;
   VARIANCE_POP = 8;
-  COVARIANCE = 9;
-  COVARIANCE_POP = 10;
+  // COVARIANCE = 9;
+  // COVARIANCE_POP = 10;
   STDDEV = 11;
   STDDEV_POP = 12;
   CORRELATION = 13;
@@ -1106,7 +1102,7 @@ message CsvWriterOptions {
 
 // Options controlling CSV format
 message CsvOptions {
-  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes has_header = 1; // Indicates if the CSV has a header row
   bytes delimiter = 2; // Delimiter character as a byte
   bytes quote = 3; // Quote character as a byte
   bytes escape = 4; // Optional escape character as a byte
@@ -1215,10 +1211,12 @@ message ParquetOptions {
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
   uint64 write_batch_size = 8; // default = 1024
   string writer_version = 9; // default = "1.0"
-  bool bloom_filter_enabled = 20; // default = false
+  // bool bloom_filter_enabled = 20; // default = false
   bool allow_single_file_parallelism = 23; // default = true
   uint64 maximum_parallel_row_group_writers = 24; // default = 1
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+  bool bloom_filter_on_read = 26; // default = true
+  bool bloom_filter_on_write = 27; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;
@@ -1692,6 +1690,7 @@ message PartitionedFile {
   uint64 last_modified_ns = 3;
   repeated ScalarValue partition_values = 4;
   FileRange range = 5;
+  Statistics statistics = 6;
 }
 
 message FileRange {

@@ -34,9 +34,9 @@ CREATE EXTERNAL TABLE annotated_data (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT t2.a

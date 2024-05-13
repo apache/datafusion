@@ -50,8 +50,29 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "get_field"
+    }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        if args.len() != 2 {
+            return exec_err!(
+                "get_field function requires 2 arguments, got {}",
+                args.len()
+            );
+        }
+
+        let name = match &args[1] {
+            Expr::Literal(name) => name,
+            _ => {
+                return exec_err!(
+                    "get_field function requires the argument field_name to be a string"
+                );
+            }
+        };
+
+        Ok(format!("{}[{}]", args[0].display_name()?, name))
     }
 
     fn signature(&self) -> &Signature {

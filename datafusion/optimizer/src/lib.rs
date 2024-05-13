@@ -62,6 +62,7 @@ pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
 
+pub(crate) mod join_key_set;
 mod plan_signature;
 
 #[cfg(test)]

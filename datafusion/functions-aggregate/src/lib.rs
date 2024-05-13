@@ -55,6 +55,7 @@
 #[macro_use]
 pub mod macros;
 
+pub mod covariance;
 pub mod first_last;
 
 use datafusion_common::Result;
@@ -65,12 +66,17 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<AggregateUDF>> = vec![first_last::first_value_udaf()];
+    let functions: Vec<Arc<AggregateUDF>> = vec![
+        first_last::first_value_udaf(),
+        covariance::covar_samp_udaf(),
+        covariance::covar_pop_udaf(),
+    ];
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;

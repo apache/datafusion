@@ -185,7 +185,7 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         for expr in exprs {
             match expr {
                 Expr::Literal(ScalarValue::Utf8(Some(ref path))) => {
-                    filepath = path.clone()
+                    filepath.clone_from(path);
                 }
                 expr => new_exprs.push(expr.clone()),
             }

@@ -151,6 +151,7 @@ impl TestParquetFile {
                 object_meta: self.object_meta.clone(),
                 partition_values: vec![],
                 range: None,
+                statistics: None,
                 extensions: None,
             }]],
             statistics: Statistics::new_unknown(&self.schema),
@@ -168,7 +169,7 @@ impl TestParquetFile {
         let parquet_options = ctx.copied_table_options().parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
-            let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
+            let filter = simplifier.coerce(filter, &df_schema).unwrap();
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
             let parquet_exec = Arc::new(ParquetExec::new(

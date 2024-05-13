@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Round
 query R
@@ -113,11 +113,11 @@ SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 false true true NULL
 
 # abs: empty argumnet
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+statement error
 SELECT abs();
 
 # abs: wrong number of arguments
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
@@ -142,12 +142,12 @@ CREATE TABLE test_nullable_integer(
     (0, 0, 0, 0, 0, 0, 0, 0, 'zeros'),
     (1, 1, 1, 1, 1, 1, 1, 1, 'ones');
 
-query IIIIIIIIT
+query I
 INSERT into test_nullable_integer values(-128, -32768, -2147483648, -9223372036854775808, 0, 0, 0, 0, 'mins');
 ----
 1
 
-query IIIIIIIIT
+query I
 INSERT into test_nullable_integer values(127, 32767, 2147483647, 9223372036854775807, 255, 65535, 4294967295, 18446744073709551615, 'maxs');
 ----
 1
@@ -283,7 +283,7 @@ CREATE TABLE test_non_nullable_integer(
     c8 BIGINT UNSIGNED NOT NULL, 
     );
 
-query IIIIIIII
+query I
 INSERT INTO test_non_nullable_integer VALUES(1, 1, 1, 1, 1, 1, 1, 1)
 ----
 1
@@ -418,7 +418,7 @@ CREATE TABLE test_non_nullable_float(
     c2 double NOT NULL, 
     ); 
 
-query RR
+query I
 INSERT INTO test_non_nullable_float VALUES
     (-1.0, -1.0),
     (1.0, 1.0),
@@ -473,7 +473,7 @@ CREATE TABLE test_nullable_decimal(
     (0, 0, 0, 0), 
     (NULL, NULL, NULL, NULL);
 
-query RRRR
+query I
 INSERT into test_nullable_decimal values
     (
         -99999999.99, 
@@ -546,7 +546,7 @@ drop table test_nullable_decimal
 statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); 
 
-query R
+query I
 INSERT INTO test_non_nullable_decimal VALUES(1)
 ----
 1

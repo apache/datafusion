@@ -27,10 +27,10 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../../datafusion/core/tests/data/window_2.csv';
+LOCATION '../../datafusion/core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 query TT

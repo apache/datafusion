@@ -25,9 +25,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_expr::{
-    analyze, create_physical_expr, AnalysisContext, ExprBoundaries, PhysicalExpr,
-};
+use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -92,7 +90,8 @@ fn evaluate_demo() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
 
     // First, you make a "physical expression" from the logical `Expr`
-    let physical_expr = physical_expr(&batch.schema(), expr)?;
+    let df_schema = DFSchema::try_from(batch.schema())?;
+    let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
 
     // Now, you can evaluate the expression against the RecordBatch
     let result = physical_expr.evaluate(&batch)?;
@@ -213,7 +212,7 @@ fn range_analysis_demo() -> Result<()> {
     // `date < '2020-10-01' AND date > '2020-09-01'`
 
     // As always, we need to tell DataFusion the type of column "date"
-    let schema = Schema::new(vec![make_field("date", DataType::Date32)]);
+    let schema = Arc::new(Schema::new(vec![make_field("date", DataType::Date32)]));
 
     // You can provide DataFusion any known boundaries on the values of `date`
     // (for example, maybe you know you only have data up to `2020-09-15`), but
@@ -222,9 +221,13 @@ fn range_analysis_demo() -> Result<()> {
     let boundaries = ExprBoundaries::try_new_unbounded(&schema)?;
 
     // Now, we invoke the analysis code to perform the range analysis
-    let physical_expr = physical_expr(&schema, expr)?;
-    let analysis_result =
-        analyze(&physical_expr, AnalysisContext::new(boundaries), &schema)?;
+    let df_schema = DFSchema::try_from(schema)?;
+    let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+    let analysis_result = analyze(
+        &physical_expr,
+        AnalysisContext::new(boundaries),
+        df_schema.as_ref(),
+    )?;
 
     // The results of the analysis is an range, encoded as an `Interval`,  for
     // each column in the schema, that must be true in order for the predicate
@@ -246,21 +249,6 @@ fn make_field(name: &str, data_type: DataType) -> Field {
 fn make_ts_field(name: &str) -> Field {
     let tz = None;
     make_field(name, DataType::Timestamp(TimeUnit::Nanosecond, tz))
-}
-
-/// Build a physical expression from a logical one, after applying simplification and type coercion
-pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr>> {
-    let df_schema = schema.clone().to_dfschema_ref()?;
-
-    // Simplify
-    let props = ExecutionProps::new();
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::new(&props).with_schema(df_schema.clone()));
-
-    // apply type coercion here to ensure types match
-    let expr = simplifier.coerce(expr, df_schema.clone())?;
-
-    create_physical_expr(&expr, df_schema.as_ref(), &props)
 }
 
 /// This function shows how to use `Expr::get_type` to retrieve the DataType

@@ -22,8 +22,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -41,7 +41,7 @@ impl Default for CoalesceFunc {
 impl CoalesceFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_equal(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -60,9 +60,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // COALESCE has multiple args and they might get coerced, get a preview of this
-        let coerced_types = data_types(arg_types, self.signature());
-        coerced_types.map(|types| types[0].clone())
+        Ok(arg_types[0].clone())
     }
 
     /// coalesce evaluates to the first value which is not NULL
@@ -123,6 +121,25 @@ impl ScalarUDFImpl for CoalesceFunc {
 
     fn short_circuits(&self) -> bool {
         true
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let new_type = arg_types.iter().skip(1).try_fold(
+            arg_types.first().unwrap().clone(),
+            |acc, x| {
+                // The coerced types found by `comparison_coercion` are not guaranteed to be
+                // coercible for the arguments. `comparison_coercion` returns more loose
+                // types that can be coerced to both `acc` and `x` for comparison purpose.
+                // See `maybe_data_types` for the actual coercion.
+                let coerced_type = comparison_coercion(&acc, x);
+                if let Some(coerced_type) = coerced_type {
+                    Ok(coerced_type)
+                } else {
+                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                }
+            },
+        )?;
+        Ok(vec![new_type; arg_types.len()])
     }
 }
 

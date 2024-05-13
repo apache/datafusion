@@ -182,20 +182,20 @@ impl FunctionRewrite for ArrayFunctionRewriter {
 /// Returns true if expr is a function call to the specified named function.
 /// Returns false otherwise.
 fn is_func(expr: &Expr, func_name: &str) -> bool {
-    let Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) = expr else {
+    let Expr::ScalarFunction(ScalarFunction { func, args: _ }) = expr else {
         return false;
     };
 
-    func_def.name() == func_name
+    func.name() == func_name
 }
 
 /// Returns true if expr is a function call with one of the specified names
 fn is_one_of_func(expr: &Expr, func_names: &[&str]) -> bool {
-    let Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) = expr else {
+    let Expr::ScalarFunction(ScalarFunction { func, args: _ }) = expr else {
         return false;
     };
 
-    func_names.contains(&func_def.name())
+    func_names.contains(&func.name())
 }
 
 /// returns Some(col) if this is Expr::Column

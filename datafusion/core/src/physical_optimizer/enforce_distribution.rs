@@ -411,7 +411,7 @@ fn adjust_input_keys_ordering(
     } else {
         // By default, push down the parent requirements to children
         for child in requirements.children.iter_mut() {
-            child.data = requirements.data.clone();
+            child.data.clone_from(&requirements.data);
         }
     }
     Ok(Transformed::yes(requirements))

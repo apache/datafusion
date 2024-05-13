@@ -3162,9 +3162,9 @@ CREATE EXTERNAL TABLE annotated_data (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC NULLS FIRST, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # sort merge join should propagate ordering equivalence of the left side
 # for inner join. Hence final requirement rn1 ASC is already satisfied at
@@ -3379,10 +3379,10 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT LAST_VALUE(l.d ORDER BY l.a) AS amount_usd
@@ -3602,17 +3602,16 @@ EXPLAIN SELECT * FROM (
 ) as a FULL JOIN (SELECT 1 as e, 3 AS f) AS rhs ON a.c=rhs.e;
 ----
 logical_plan
-01)Projection: a.c, a.d, rhs.e, rhs.f
-02)--Full Join: a.c = rhs.e
-03)----SubqueryAlias: a
-04)------Union
-05)--------Projection: Int64(1) AS c, Int64(2) AS d
-06)----------EmptyRelation
-07)--------Projection: Int64(1) AS c, Int64(3) AS d
-08)----------EmptyRelation
-09)----SubqueryAlias: rhs
-10)------Projection: Int64(1) AS e, Int64(3) AS f
-11)--------EmptyRelation
+01)Full Join: a.c = rhs.e
+02)--SubqueryAlias: a
+03)----Union
+04)------Projection: Int64(1) AS c, Int64(2) AS d
+05)--------EmptyRelation
+06)------Projection: Int64(1) AS c, Int64(3) AS d
+07)--------EmptyRelation
+08)--SubqueryAlias: rhs
+09)----Projection: Int64(1) AS e, Int64(3) AS f
+10)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3650,17 +3649,16 @@ EXPLAIN SELECT * FROM (
 ) as a FULL JOIN (SELECT 1 as e, 3 AS f) AS rhs ON a.c=rhs.e;
 ----
 logical_plan
-01)Projection: a.c, a.d, rhs.e, rhs.f
-02)--Full Join: a.c = rhs.e
-03)----SubqueryAlias: a
-04)------Union
-05)--------Projection: Int64(1) AS c, Int64(2) AS d
-06)----------EmptyRelation
-07)--------Projection: Int64(1) AS c, Int64(3) AS d
-08)----------EmptyRelation
-09)----SubqueryAlias: rhs
-10)------Projection: Int64(1) AS e, Int64(3) AS f
-11)--------EmptyRelation
+01)Full Join: a.c = rhs.e
+02)--SubqueryAlias: a
+03)----Union
+04)------Projection: Int64(1) AS c, Int64(2) AS d
+05)--------EmptyRelation
+06)------Projection: Int64(1) AS c, Int64(3) AS d
+07)--------EmptyRelation
+08)--SubqueryAlias: rhs
+09)----Projection: Int64(1) AS e, Int64(3) AS f
+10)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2

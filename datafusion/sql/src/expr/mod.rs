@@ -699,6 +699,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 input_schema,
                 planner_context,
                 true,
+                None,
             )?)
         } else {
             None
