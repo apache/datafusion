@@ -39,7 +39,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{internal_err, DFSchema, Result};
-use datafusion_expr::type_coercion::functions::data_types;
+use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarUDF};
 
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
@@ -220,7 +220,7 @@ pub fn create_physical_expr(
         .collect::<Result<Vec<_>>>()?;
 
     // verify that input data types is consistent with function's `TypeSignature`
-    data_types(&input_expr_types, fun.signature())?;
+    data_types_with_scalar_udf(&input_expr_types, fun)?;
 
     // Since we have arg_types, we dont need args and schema.
     let return_type =
