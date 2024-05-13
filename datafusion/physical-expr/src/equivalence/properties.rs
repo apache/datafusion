@@ -2321,8 +2321,8 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
-    #[ignore]
     fn test_eliminate_redundant_monotonic_sorts() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Date32, true),
