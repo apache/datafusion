@@ -34,19 +34,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(ArrayHas,
+make_udf_expr_and_func!(ArrayHas,
     array_has,
     first_array second_array, // arg name
     "returns true, if the element appears in the first array, otherwise false.", // doc
     array_has_udf // internal function name
 );
-make_udf_function!(ArrayHasAll,
+make_udf_expr_and_func!(ArrayHasAll,
     array_has_all,
     first_array second_array, // arg name
     "returns true if each element of the second array appears in the first array; otherwise, it returns false.", // doc
     array_has_all_udf // internal function name
 );
-make_udf_function!(ArrayHasAny,
+make_udf_expr_and_func!(ArrayHasAny,
     array_has_any,
     first_array second_array, // arg name
     "returns true if at least one element of the second array appears in the first array; otherwise, it returns false.", // doc

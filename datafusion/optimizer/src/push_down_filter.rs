@@ -131,25 +131,25 @@ use crate::{OptimizerConfig, OptimizerRule};
 #[derive(Default)]
 pub struct PushDownFilter {}
 
-// For a given JOIN logical plan, determine whether each side of the join is preserved.
-// We say a join side is preserved if the join returns all or a subset of the rows from
-// the relevant side, such that each row of the output table directly maps to a row of
-// the preserved input table. If a table is not preserved, it can provide extra null rows.
-// That is, there may be rows in the output table that don't directly map to a row in the
-// input table.
-//
-// For example:
-//   - In an inner join, both sides are preserved, because each row of the output
-//     maps directly to a row from each side.
-//   - In a left join, the left side is preserved and the right is not, because
-//     there may be rows in the output that don't directly map to a row in the
-//     right input (due to nulls filling where there is no match on the right).
-//
-// This is important because we can always push down post-join filters to a preserved
-// side of the join, assuming the filter only references columns from that side. For the
-// non-preserved side it can be more tricky.
-//
-// Returns a tuple of booleans - (left_preserved, right_preserved).
+/// For a given JOIN logical plan, determine whether each side of the join is preserved.
+/// We say a join side is preserved if the join returns all or a subset of the rows from
+/// the relevant side, such that each row of the output table directly maps to a row of
+/// the preserved input table. If a table is not preserved, it can provide extra null rows.
+/// That is, there may be rows in the output table that don't directly map to a row in the
+/// input table.
+///
+/// For example:
+///   - In an inner join, both sides are preserved, because each row of the output
+///     maps directly to a row from each side.
+///   - In a left join, the left side is preserved and the right is not, because
+///     there may be rows in the output that don't directly map to a row in the
+///     right input (due to nulls filling where there is no match on the right).
+///
+/// This is important because we can always push down post-join filters to a preserved
+/// side of the join, assuming the filter only references columns from that side. For the
+/// non-preserved side it can be more tricky.
+///
+/// Returns a tuple of booleans - (left_preserved, right_preserved).
 fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
@@ -169,9 +169,10 @@ fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     }
 }
 
-// For a given JOIN logical plan, determine whether each side of the join is preserved
-// in terms on join filtering.
-// Predicates from join filter can only be pushed to preserved join side.
+/// For a given JOIN logical plan, determine whether each side of the join is preserved
+/// in terms on join filtering.
+///
+/// Predicates from join filter can only be pushed to preserved join side.
 fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
@@ -190,11 +191,11 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     }
 }
 
-// Determine which predicates in state can be pushed down to a given side of a join.
-// To determine this, we need to know the schema of the relevant join side and whether
-// or not the side's rows are preserved when joining. If the side is not preserved, we
-// do not push down anything. Otherwise we can push down predicates where all of the
-// relevant columns are contained on the relevant join side's schema.
+/// Determine which predicates in state can be pushed down to a given side of a join.
+/// To determine this, we need to know the schema of the relevant join side and whether
+/// or not the side's rows are preserved when joining. If the side is not preserved, we
+/// do not push down anything. Otherwise we can push down predicates where all of the
+/// relevant columns are contained on the relevant join side's schema.
 fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bool> {
     let schema_columns = schema
         .iter()
@@ -215,7 +216,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
         == columns.len())
 }
 
-// Determine whether the predicate can evaluate as the join conditions
+/// Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
@@ -261,39 +262,39 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     Ok(is_evaluate)
 }
 
-// examine OR clause to see if any useful clauses can be extracted and push down.
-// extract at least one qual from each sub clauses of OR clause, then form the quals
-// to new OR clause as predicate.
-//
-// Filter: (a = c and a < 20) or (b = d and b > 10)
-//     join/crossjoin:
-//          TableScan: projection=[a, b]
-//          TableScan: projection=[c, d]
-//
-// is optimized to
-//
-// Filter: (a = c and a < 20) or (b = d and b > 10)
-//     join/crossjoin:
-//          Filter: (a < 20) or (b > 10)
-//              TableScan: projection=[a, b]
-//          TableScan: projection=[c, d]
-//
-// In general, predicates of this form:
-//
-// (A AND B) OR (C AND D)
-//
-// will be transformed to
-//
-// ((A AND B) OR (C AND D)) AND (A OR C)
-//
-// OR
-//
-// ((A AND B) OR (C AND D)) AND ((A AND B) OR C)
-//
-// OR
-//
-// do nothing.
-//
+/// examine OR clause to see if any useful clauses can be extracted and push down.
+/// extract at least one qual from each sub clauses of OR clause, then form the quals
+/// to new OR clause as predicate.
+///
+/// # Example
+/// ```text
+/// Filter: (a = c and a < 20) or (b = d and b > 10)
+///     join/crossjoin:
+///          TableScan: projection=[a, b]
+///          TableScan: projection=[c, d]
+/// ```
+///
+/// is optimized to
+///
+/// ```text
+/// Filter: (a = c and a < 20) or (b = d and b > 10)
+///     join/crossjoin:
+///          Filter: (a < 20) or (b > 10)
+///              TableScan: projection=[a, b]
+///          TableScan: projection=[c, d]
+/// ```
+///
+/// In general, predicates of this form:
+///
+/// ```sql
+/// (A AND B) OR (C AND D)
+/// ```
+///
+/// will be transformed to one of:
+///
+/// * `((A AND B) OR (C AND D)) AND (A OR C)`
+/// * `((A AND B) OR (C AND D)) AND ((A AND B) OR C)`
+/// * do nothing.
 fn extract_or_clauses_for_join<'a>(
     filters: &'a [Expr],
     schema: &'a DFSchema,
@@ -329,17 +330,17 @@ fn extract_or_clauses_for_join<'a>(
     })
 }
 
-// extract qual from OR sub-clause.
-//
-// A qual is extracted if it only contains set of column references in schema_columns.
-//
-// For AND clause, we extract from both sub-clauses, then make new AND clause by extracted
-// clauses if both extracted; Otherwise, use the extracted clause from any sub-clauses or None.
-//
-// For OR clause, we extract from both sub-clauses, then make new OR clause by extracted clauses if both extracted;
-// Otherwise, return None.
-//
-// For other clause, apply the rule above to extract clause.
+/// extract qual from OR sub-clause.
+///
+/// A qual is extracted if it only contains set of column references in schema_columns.
+///
+/// For AND clause, we extract from both sub-clauses, then make new AND clause by extracted
+/// clauses if both extracted; Otherwise, use the extracted clause from any sub-clauses or None.
+///
+/// For OR clause, we extract from both sub-clauses, then make new OR clause by extracted clauses if both extracted;
+/// Otherwise, return None.
+///
+/// For other clause, apply the rule above to extract clause.
 fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Expr> {
     let mut predicate = None;
 
@@ -396,7 +397,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
     predicate
 }
 
-// push down join/cross-join
+/// push down join/cross-join
 fn push_down_all_join(
     predicates: Vec<Expr>,
     infer_predicates: Vec<Expr>,
@@ -534,8 +535,8 @@ fn push_down_join(
             .on
             .iter()
             .filter_map(|(l, r)| {
-                let left_col = l.try_into_col().ok()?;
-                let right_col = r.try_into_col().ok()?;
+                let left_col = l.try_as_col().cloned()?;
+                let right_col = r.try_as_col().cloned()?;
                 Some((left_col, right_col))
             })
             .collect::<Vec<_>>();

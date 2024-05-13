@@ -430,7 +430,6 @@ impl serde::Serialize for AggregateFunction {
             Self::ArrayAgg => "ARRAY_AGG",
             Self::Variance => "VARIANCE",
             Self::VariancePop => "VARIANCE_POP",
-            Self::CovariancePop => "COVARIANCE_POP",
             Self::Stddev => "STDDEV",
             Self::StddevPop => "STDDEV_POP",
             Self::Correlation => "CORRELATION",
@@ -477,7 +476,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "ARRAY_AGG",
             "VARIANCE",
             "VARIANCE_POP",
-            "COVARIANCE_POP",
             "STDDEV",
             "STDDEV_POP",
             "CORRELATION",
@@ -553,7 +551,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
                     "VARIANCE" => Ok(AggregateFunction::Variance),
                     "VARIANCE_POP" => Ok(AggregateFunction::VariancePop),
-                    "COVARIANCE_POP" => Ok(AggregateFunction::CovariancePop),
                     "STDDEV" => Ok(AggregateFunction::Stddev),
                     "STDDEV_POP" => Ok(AggregateFunction::StddevPop),
                     "CORRELATION" => Ok(AggregateFunction::Correlation),
@@ -4676,9 +4673,6 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_type.is_empty() {
             len += 1;
         }
-        if self.has_header {
-            len += 1;
-        }
         if self.schema.is_some() {
             len += 1;
         }
@@ -4688,13 +4682,7 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.if_not_exists {
             len += 1;
         }
-        if !self.delimiter.is_empty() {
-            len += 1;
-        }
         if !self.definition.is_empty() {
-            len += 1;
-        }
-        if self.file_compression_type != 0 {
             len += 1;
         }
         if !self.order_exprs.is_empty() {
@@ -4722,9 +4710,6 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
         }
-        if self.has_header {
-            struct_ser.serialize_field("hasHeader", &self.has_header)?;
-        }
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
         }
@@ -4734,16 +4719,8 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.if_not_exists {
             struct_ser.serialize_field("ifNotExists", &self.if_not_exists)?;
         }
-        if !self.delimiter.is_empty() {
-            struct_ser.serialize_field("delimiter", &self.delimiter)?;
-        }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
-        }
-        if self.file_compression_type != 0 {
-            let v = CompressionTypeVariant::try_from(self.file_compression_type)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.file_compression_type)))?;
-            struct_ser.serialize_field("fileCompressionType", &v)?;
         }
         if !self.order_exprs.is_empty() {
             struct_ser.serialize_field("orderExprs", &self.order_exprs)?;
@@ -4774,17 +4751,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "location",
             "file_type",
             "fileType",
-            "has_header",
-            "hasHeader",
             "schema",
             "table_partition_cols",
             "tablePartitionCols",
             "if_not_exists",
             "ifNotExists",
-            "delimiter",
             "definition",
-            "file_compression_type",
-            "fileCompressionType",
             "order_exprs",
             "orderExprs",
             "unbounded",
@@ -4799,13 +4771,10 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Name,
             Location,
             FileType,
-            HasHeader,
             Schema,
             TablePartitionCols,
             IfNotExists,
-            Delimiter,
             Definition,
-            FileCompressionType,
             OrderExprs,
             Unbounded,
             Options,
@@ -4835,13 +4804,10 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "name" => Ok(GeneratedField::Name),
                             "location" => Ok(GeneratedField::Location),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
-                            "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
-                            "delimiter" => Ok(GeneratedField::Delimiter),
                             "definition" => Ok(GeneratedField::Definition),
-                            "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
                             "orderExprs" | "order_exprs" => Ok(GeneratedField::OrderExprs),
                             "unbounded" => Ok(GeneratedField::Unbounded),
                             "options" => Ok(GeneratedField::Options),
@@ -4869,13 +4835,10 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut name__ = None;
                 let mut location__ = None;
                 let mut file_type__ = None;
-                let mut has_header__ = None;
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut if_not_exists__ = None;
-                let mut delimiter__ = None;
                 let mut definition__ = None;
-                let mut file_compression_type__ = None;
                 let mut order_exprs__ = None;
                 let mut unbounded__ = None;
                 let mut options__ = None;
@@ -4901,12 +4864,6 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             file_type__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::HasHeader => {
-                            if has_header__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("hasHeader"));
-                            }
-                            has_header__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
@@ -4925,23 +4882,11 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             if_not_exists__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::Delimiter => {
-                            if delimiter__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("delimiter"));
-                            }
-                            delimiter__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("definition"));
                             }
                             definition__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::FileCompressionType => {
-                            if file_compression_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fileCompressionType"));
-                            }
-                            file_compression_type__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
                         }
                         GeneratedField::OrderExprs => {
                             if order_exprs__.is_some() {
@@ -4983,13 +4928,10 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     name: name__,
                     location: location__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
-                    has_header: has_header__.unwrap_or_default(),
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     if_not_exists: if_not_exists__.unwrap_or_default(),
-                    delimiter: delimiter__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
-                    file_compression_type: file_compression_type__.unwrap_or_default(),
                     order_exprs: order_exprs__.unwrap_or_default(),
                     unbounded: unbounded__.unwrap_or_default(),
                     options: options__.unwrap_or_default(),
@@ -5459,7 +5401,7 @@ impl serde::Serialize for CsvOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.has_header {
+        if !self.has_header.is_empty() {
             len += 1;
         }
         if !self.delimiter.is_empty() {
@@ -5496,8 +5438,9 @@ impl serde::Serialize for CsvOptions {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvOptions", len)?;
-        if self.has_header {
-            struct_ser.serialize_field("hasHeader", &self.has_header)?;
+        if !self.has_header.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("hasHeader", pbjson::private::base64::encode(&self.has_header).as_str())?;
         }
         if !self.delimiter.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -5654,7 +5597,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             if has_header__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hasHeader"));
                             }
-                            has_header__ = Some(map_.next_value()?);
+                            has_header__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Delimiter => {
                             if delimiter__.is_some() {

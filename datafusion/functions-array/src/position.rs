@@ -37,7 +37,7 @@ use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPosition,
     array_position,
     array element index,
@@ -168,7 +168,7 @@ fn generic_position<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(UInt64Array::from(data)))
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPositions,
     array_positions,
     array element, // arg name

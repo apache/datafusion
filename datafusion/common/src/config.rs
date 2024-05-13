@@ -130,9 +130,9 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => return Err(DataFusionError::Configuration(format!(
+                    _ => return _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
-                    )))
+                    )
                 }
             }
 
@@ -181,7 +181,8 @@ config_namespace! {
         /// Type of `TableProvider` to use when loading `default` schema
         pub format: Option<String>, default = None
 
-        /// If the file has a header
+        /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
         pub has_header: bool, default = false
     }
 }
@@ -675,22 +676,17 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (prefix, key) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::Configuration(format!(
-                "could not find config namespace for key \"{key}\"",
-            ))
-        })?;
+        let Some((prefix, key)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
 
         if prefix == "datafusion" {
             return ConfigField::set(self, key, value);
         }
 
-        let e = self.extensions.0.get_mut(prefix);
-        let e = e.ok_or_else(|| {
-            DataFusionError::Configuration(format!(
-                "Could not find config namespace \"{prefix}\""
-            ))
-        })?;
+        let Some(e) = self.extensions.0.get_mut(prefix) else {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        };
         e.0.set(key, value)
     }
 
@@ -1278,22 +1274,17 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (prefix, _) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::Configuration(format!(
-                "could not find config namespace for key \"{key}\""
-            ))
-        })?;
+        let Some((prefix, _)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
 
         if prefix == "format" {
             return ConfigField::set(self, key, value);
         }
 
-        let e = self.extensions.0.get_mut(prefix);
-        let e = e.ok_or_else(|| {
-            DataFusionError::Configuration(format!(
-                "Could not find config namespace \"{prefix}\""
-            ))
-        })?;
+        let Some(e) = self.extensions.0.get_mut(prefix) else {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        };
         e.0.set(key, value)
     }
 
@@ -1412,19 +1403,19 @@ impl ConfigField for TableParquetOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Determine if the key is a global, metadata, or column-specific setting
         if key.starts_with("metadata::") {
-            let k =
-                match key.split("::").collect::<Vec<_>>()[..] {
-                    [_meta] | [_meta, ""] => return Err(DataFusionError::Configuration(
+            let k = match key.split("::").collect::<Vec<_>>()[..] {
+                [_meta] | [_meta, ""] => {
+                    return _config_err!(
                         "Invalid metadata key provided, missing key in metadata::<key>"
-                            .to_string(),
-                    )),
-                    [_meta, k] => k.into(),
-                    _ => {
-                        return Err(DataFusionError::Configuration(format!(
+                    )
+                }
+                [_meta, k] => k.into(),
+                _ => {
+                    return _config_err!(
                         "Invalid metadata key provided, found too many '::' in \"{key}\""
-                    )))
-                    }
-                };
+                    )
+                }
+            };
             self.key_value_metadata.insert(k, Some(value.into()));
             Ok(())
         } else if key.contains("::") {
@@ -1497,10 +1488,7 @@ macro_rules! config_namespace_with_hashmap {
 
                         inner_value.set(inner_key, value)
                     }
-                    _ => Err(DataFusionError::Configuration(format!(
-                        "Unrecognized key '{}'.",
-                        key
-                    ))),
+                    _ => _config_err!("Unrecognized key '{key}'."),
                 }
             }
 
@@ -1564,18 +1552,21 @@ config_namespace_with_hashmap! {
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
-        pub has_header: bool, default = true
+        /// Specifies whether there is a CSV header (i.e. the first line
+        /// consists of is column names). The value `None` indicates that
+        /// the configuration should be consulted.
+        pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
-        pub date_format: Option<String>,  default = None
-        pub datetime_format: Option<String>,  default = None
-        pub timestamp_format: Option<String>,  default = None
-        pub timestamp_tz_format: Option<String>,  default = None
-        pub time_format: Option<String>,  default = None
-        pub null_value: Option<String>,  default = None
+        pub date_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = None
+        pub timestamp_format: Option<String>, default = None
+        pub timestamp_tz_format: Option<String>, default = None
+        pub time_format: Option<String>, default = None
+        pub null_value: Option<String>, default = None
     }
 }
 
@@ -1600,12 +1591,14 @@ impl CsvOptions {
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.has_header = Some(has_header);
         self
     }
 
-    /// True if the first line is a header.
-    pub fn has_header(&self) -> bool {
+    /// Returns true if the first line is a header. If format options does not
+    /// specify whether there is a header, returns `None` (indicating that the
+    /// configuration should be consulted).
+    pub fn has_header(&self) -> Option<bool> {
         self.has_header
     }
 
