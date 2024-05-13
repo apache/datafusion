@@ -17,7 +17,10 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::{AccumulatorArgs, AggregateFunctionSimplification};
+use crate::function::{
+    AccumulatorArgs, AggregateFunctionSimplification, GroupsAccumulatorSupportedArgs,
+    StateFieldsArgs,
+};
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::{Accumulator, Expr};
@@ -177,31 +180,16 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-        is_distinct: bool,
-        input_type: DataType,
-    ) -> Result<Vec<Field>> {
-        self.inner.state_fields(
-            name,
-            value_type,
-            ordering_fields,
-            is_distinct,
-            input_type,
-        )
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.inner.state_fields(args)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
     pub fn groups_accumulator_supported(
         &self,
-        args_num: usize,
-        is_distinct: bool,
+        args: GroupsAccumulatorSupportedArgs,
     ) -> bool {
-        self.inner
-            .groups_accumulator_supported(args_num, is_distinct)
+        self.inner.groups_accumulator_supported(args)
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
@@ -338,21 +326,17 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-        _is_distinct: bool,
-        _input_type: DataType,
-    ) -> Result<Vec<Field>> {
-        let value_fields = vec![Field::new(
-            format_state_name(name, "value"),
-            value_type,
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let fields = vec![Field::new(
+            format_state_name(args.name, "value"),
+            args.return_type.clone(),
             true,
         )];
 
-        Ok(value_fields.into_iter().chain(ordering_fields).collect())
+        Ok(fields
+            .into_iter()
+            .chain(args.ordering_fields.to_vec())
+            .collect())
     }
 
     /// If the aggregate expression has a specialized
@@ -365,7 +349,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(&self, _args_num: usize, _is_distinct: bool) -> bool {
+    fn groups_accumulator_supported(
+        &self,
+        _args: GroupsAccumulatorSupportedArgs,
+    ) -> bool {
         false
     }
 

@@ -22,6 +22,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::function::{GroupsAccumulatorSupportedArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
@@ -195,13 +196,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        self.fun.state_fields(
-            self.name(),
-            self.data_type.clone(),
-            self.ordering_fields.clone(),
-            self.is_distinct,
-            self.input_type.clone(),
-        )
+        let args = StateFieldsArgs {
+            name: self.name(),
+            input_type: &self.input_type,
+            return_type: &self.data_type,
+            ordering_fields: &self.ordering_fields,
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.state_fields(args)
     }
 
     fn field(&self) -> Result<Field> {
@@ -281,8 +284,12 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        self.fun
-            .groups_accumulator_supported(self.args.len(), self.is_distinct)
+        let args = GroupsAccumulatorSupportedArgs {
+            args_num: self.args.len(),
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.groups_accumulator_supported(args)
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

@@ -40,6 +40,7 @@ use datafusion_common::{
     downcast_value, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::function::{GroupsAccumulatorSupportedArgs, StateFieldsArgs};
 use datafusion_expr::Expr;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
@@ -120,23 +121,16 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
-    fn state_fields(
-        &self,
-        name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<Field>,
-        is_distinct: bool,
-        input_type: DataType,
-    ) -> Result<Vec<Field>> {
-        if is_distinct {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        if args.is_distinct {
             Ok(vec![Field::new_list(
-                format_state_name(name, "count distinct"),
-                Field::new("item", input_type, true),
+                format_state_name(args.name, "count distinct"),
+                Field::new("item", args.input_type.clone(), true),
                 false,
             )])
         } else {
             Ok(vec![Field::new(
-                format_state_name(name, "count"),
+                format_state_name(args.name, "count"),
                 DataType::Int64,
                 true,
             )])
@@ -258,13 +252,13 @@ impl AggregateUDFImpl for Count {
         &self.aliases
     }
 
-    fn groups_accumulator_supported(&self, args_num: usize, is_distinct: bool) -> bool {
+    fn groups_accumulator_supported(&self, args: GroupsAccumulatorSupportedArgs) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
-        if is_distinct {
+        if args.is_distinct {
             return false;
         }
-        args_num == 1
+        args.args_num == 1
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

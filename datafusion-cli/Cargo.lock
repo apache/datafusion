@@ -1206,6 +1206,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
+ "hashbrown 0.14.5",
  "instant",
  "libc",
  "num_cpus",
@@ -1363,9 +1364,11 @@ dependencies = [
 name = "datafusion-physical-expr-common"
 version = "38.0.0"
 dependencies = [
+ "ahash",
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "hashbrown 0.14.5",
 ]
 
 [[package]]

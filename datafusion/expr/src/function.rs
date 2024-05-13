@@ -19,7 +19,7 @@
 
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -89,6 +89,21 @@ impl<'a> AccumulatorArgs<'a> {
             input_type,
         }
     }
+}
+
+/// [`GroupsAccumulatorSupportedArgs`] contains information to determine if an
+/// aggregate function supports the groups accumulator.
+pub struct GroupsAccumulatorSupportedArgs {
+    pub args_num: usize,
+    pub is_distinct: bool,
+}
+
+pub struct StateFieldsArgs<'a> {
+    pub name: &'a str,
+    pub input_type: &'a DataType,
+    pub return_type: &'a DataType,
+    pub ordering_fields: &'a [Field],
+    pub is_distinct: bool,
 }
 
 /// Factory that returns an accumulator for the given aggregate function.
