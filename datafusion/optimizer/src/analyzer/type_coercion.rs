@@ -106,7 +106,7 @@ fn analyze_internal(
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);
-    // apply coercion rewrite all expressions in the plan indivdually
+    // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr)?;
         expr.rewrite(&mut expr_rewrite)?
