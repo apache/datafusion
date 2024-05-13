@@ -42,7 +42,7 @@ CREATE EXTERNAL TABLE
   LOCATION '/test/location/my_csv_table/'
   OPTIONS(
     NULL_VALUE 'NAN',
-    'format.has_header' 'true'
+    'has_header' 'true'
   )
 ```
 

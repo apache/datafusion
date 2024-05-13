@@ -734,7 +734,8 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
-        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let mut cfg = SessionConfig::new();
+        cfg.options_mut().catalog.has_header = true;
         let session_state = SessionState::new_with_config_rt(cfg, runtime);
 
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();

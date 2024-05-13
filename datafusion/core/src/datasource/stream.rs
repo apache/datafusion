@@ -66,7 +66,7 @@ impl TableProviderFactory for StreamTableFactory {
         {
             opt.unwrap_or(false)
         } else {
-            return config_err!("format.has_header can either be true or false");
+            return config_err!("Valid values for format.has_header option are 'true' or 'false'");
         };
 
         let config = StreamConfig::new_file(schema, location.into())

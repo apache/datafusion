@@ -167,7 +167,7 @@ Register a single file csv datasource with a header row.
 CREATE EXTERNAL TABLE test
 STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 Register a single file csv datasource with explicitly defined schema.

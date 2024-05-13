@@ -98,7 +98,7 @@ scanning a subset of the file.
 CREATE EXTERNAL TABLE test
 STORED AS CSV
 LOCATION '/path/to/aggregate_simple.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 It is also possible to use compressed files, such as `.csv.gz`:
@@ -108,7 +108,7 @@ CREATE EXTERNAL TABLE test
 STORED AS CSV
 COMPRESSION TYPE GZIP
 LOCATION '/path/to/aggregate_simple.csv.gz'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 It is also possible to specify the schema manually.
@@ -131,7 +131,7 @@ CREATE EXTERNAL TABLE test (
 )
 STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 It is also possible to specify a directory that contains a partitioned
@@ -141,7 +141,7 @@ table (multiple files with the same schema)
 CREATE EXTERNAL TABLE test
 STORED AS CSV
 LOCATION '/path/to/directory/of/files'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 With `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement. We can create unbounded data sources such as following:
@@ -180,7 +180,7 @@ CREATE EXTERNAL TABLE test (
 STORED AS CSV
 WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
 LOCATION '/path/to/aggregate_test_100.csv'
-OPTIONS ('format.has_header' 'true');
+OPTIONS ('has_header' 'true');
 ```
 
 Where `WITH ORDER` clause specifies the sort order:
