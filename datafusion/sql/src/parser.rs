@@ -469,6 +469,9 @@ impl<'a> DFParser<'a> {
                     if let Token::Word(Word { value, .. }) = next_token.token {
                         parts.push(value);
                     } else {
+                        // Unquoted namespaced keys have to conform to the syntax
+                        // "<WORD>[\.<WORD>]*". If we have a key that breaks this
+                        // pattern, error out:
                         return self.parser.expected("key name", next_token);
                     }
                 }
