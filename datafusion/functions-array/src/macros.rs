@@ -80,6 +80,8 @@ macro_rules! make_udf_expr_and_func {
 /// # Arguments
 /// * `UDF`: name of the [`ScalarUDFImpl`]
 /// * `SCALAR_UDF_FUNC`: name of the function to create (just) the `ScalarUDF`
+///
+/// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
 macro_rules! create_func {
     ($UDF:ty, $SCALAR_UDF_FN:ident) => {
         paste::paste! {
