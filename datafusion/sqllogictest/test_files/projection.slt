@@ -37,8 +37,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_simple (
@@ -47,8 +47,8 @@ CREATE EXTERNAL TABLE aggregate_simple (
   c3 BOOLEAN NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE TABLE memory_table(a INT NOT NULL, b INT NOT NULL, c INT NOT NULL) AS VALUES

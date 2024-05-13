@@ -36,8 +36,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 # async fn csv_query_limit
 query T
@@ -529,9 +529,8 @@ CREATE UNBOUNDED EXTERNAL TABLE data (
     "column1"  INTEGER,
     "column2" VARCHAR,
 ) STORED AS CSV
-WITH HEADER ROW
 WITH ORDER ("column1", "column2")
-LOCATION 'test_files/scratch/limit/data.csv';
+LOCATION 'test_files/scratch/limit/data.csv' OPTIONS ('format.has_header' 'false');
 
 query IT
 SELECT * from data LIMIT 3;

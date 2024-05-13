@@ -66,6 +66,9 @@ use crate::{functions, functions_aggregate};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     alias::AliasGenerator,
     config::{ConfigExtension, TableOptions},
@@ -84,10 +87,6 @@ use datafusion_sql::{
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
     ResolvedTableReference,
 };
-
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_common::tree_node::TreeNode;
 use parking_lot::RwLock;
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
@@ -1560,7 +1559,6 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options().catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1578,14 +1576,8 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema = ListingSchemaProvider::new(
-            authority,
-            path,
-            factory.clone(),
-            store,
-            format,
-            has_header,
-        );
+        let schema =
+            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");

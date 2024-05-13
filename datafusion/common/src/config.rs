@@ -1564,18 +1564,21 @@ config_namespace_with_hashmap! {
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
-        pub has_header: bool, default = true
+        /// Specifies whether there is a CSV header (i.e. the first line
+        /// consists of is column names). The value `None` indicates that
+        /// the configuration should be consulted.
+        pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
-        pub date_format: Option<String>,  default = None
-        pub datetime_format: Option<String>,  default = None
-        pub timestamp_format: Option<String>,  default = None
-        pub timestamp_tz_format: Option<String>,  default = None
-        pub time_format: Option<String>,  default = None
-        pub null_value: Option<String>,  default = None
+        pub date_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = None
+        pub timestamp_format: Option<String>, default = None
+        pub timestamp_tz_format: Option<String>, default = None
+        pub time_format: Option<String>, default = None
+        pub null_value: Option<String>, default = None
     }
 }
 
@@ -1600,12 +1603,14 @@ impl CsvOptions {
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.has_header = Some(has_header);
         self
     }
 
-    /// True if the first line is a header.
-    pub fn has_header(&self) -> bool {
+    /// Returns true if the first line is a header. If format options does not
+    /// specify whether there is a header, returns `None` (indicating that the
+    /// configuration should be consulted).
+    pub fn has_header(&self) -> Option<bool> {
         self.has_header
     }
 
