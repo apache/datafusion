@@ -2569,7 +2569,7 @@ impl Aggregate {
     }
 
     /// Get the output expressions.
-    fn output_expressions(&self) -> Result<Vec<Expr>> {
+    fn output_expressions(&self) -> Result<Vec<&Expr>> {
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         exprs.extend(self.aggr_expr.clone());
         debug_assert!(exprs.len() == self.schema.fields().len());
