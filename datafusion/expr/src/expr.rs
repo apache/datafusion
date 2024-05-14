@@ -833,15 +833,16 @@ impl GroupingSet {
     /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
     /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
     /// the exprs in the underlying sets.
-    pub fn distinct_expr(&self) -> Vec<Expr> {
+    pub fn distinct_expr(&self) -> Vec<&Expr> {
         match self {
-            GroupingSet::Rollup(exprs) => exprs.clone(),
-            GroupingSet::Cube(exprs) => exprs.clone(),
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => {
+                exprs.iter().collect()
+            }
             GroupingSet::GroupingSets(groups) => {
-                let mut exprs: Vec<Expr> = vec![];
+                let mut exprs: Vec<&Expr> = vec![];
                 for exp in groups.iter().flatten() {
-                    if !exprs.contains(exp) {
-                        exprs.push(exp.clone());
+                    if !exprs.contains(&exp) {
+                        exprs.push(exp);
                     }
                 }
                 exprs

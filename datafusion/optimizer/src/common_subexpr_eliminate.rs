@@ -1154,12 +1154,12 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![lit(1) + col("a")])?
+            .project(vec![lit(1) + col("a"), col("a")])?
             .project(vec![lit(1) + col("a")])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a\
-        \n  Projection: Int32(1) + test.a\
+        \n  Projection: Int32(1) + test.a, test.a\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);

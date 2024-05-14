@@ -1214,6 +1214,45 @@ impl LogicalPlan {
         .unwrap();
         contains
     }
+
+    /// Get the output expressions and their corresponding columns.
+    ///
+    /// The parent node may reference the output columns of the plan by expressions, such as
+    /// projection over aggregate or window functions. This method helps to convert the
+    /// referenced expressions into columns.
+    ///
+    /// See also: [`crate::utils::columnize_expr`]
+    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
+        match self {
+            LogicalPlan::Aggregate(aggregate) => Ok(aggregate
+                .output_expressions()?
+                .into_iter()
+                .zip(self.schema().columns())
+                .collect()),
+            LogicalPlan::Window(Window {
+                window_expr,
+                input,
+                schema,
+            }) => {
+                // The input could be another Window, so the result should also include the input's. For Example:
+                // `EXPLAIN SELECT RANK() OVER (PARTITION BY a ORDER BY b), SUM(b) OVER (PARTITION BY a) FROM t`
+                // Its plan is:
+                // Projection: RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(t.b) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                //   WindowAggr: windowExpr=[[SUM(CAST(t.b AS Int64)) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                //     WindowAggr: windowExpr=[[RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]/
+                //       TableScan: t projection=[a, b]
+                let mut output_exprs = input.columnized_output_exprs()?;
+                let input_len = input.schema().fields().len();
+                output_exprs.extend(
+                    window_expr
+                        .iter()
+                        .zip(schema.columns().into_iter().skip(input_len)),
+                );
+                Ok(output_exprs)
+            }
+            _ => Ok(vec![]),
+        }
+    }
 }
 
 impl LogicalPlan {
@@ -2480,9 +2519,9 @@ impl Aggregate {
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut qualified_fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
+        let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2536,6 +2575,14 @@ impl Aggregate {
             aggr_expr,
             schema,
         })
+    }
+
+    /// Get the output expressions.
+    fn output_expressions(&self) -> Result<Vec<&Expr>> {
+        let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
+        exprs.extend(self.aggr_expr.iter());
+        debug_assert!(exprs.len() == self.schema.fields().len());
+        Ok(exprs)
     }
 
     /// Get the length of the group by expression in the output schema
