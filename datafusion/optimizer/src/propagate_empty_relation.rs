@@ -145,7 +145,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                     Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                         EmptyRelation {
                             produce_one_row: false,
-                            schema: plan.schema().clone(),
+                            schema: input_schema.clone(),
                         },
                     )))
                 } else if new_inputs.len() == 1 {
@@ -156,15 +156,11 @@ impl OptimizerRule for PropagateEmptyRelation {
                         Ok(Transformed::yes(LogicalPlan::Projection(
                             Projection::new_from_schema(
                                 Arc::new(child),
-                                plan.schema().clone(),
+                                input_schema.clone(),
                             ),
                         )))
                     }
                 } else {
-                    println!(
-                        "This is the schema after prpagate: {:?}",
-                        union.schema.clone()
-                    );
                     Ok(Transformed::yes(LogicalPlan::Union(Union {
                         inputs: new_inputs,
                         schema: input_schema.clone(),
