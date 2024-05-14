@@ -231,32 +231,3 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     }
     Ok(())
 }
-
-#[tokio::test]
-async fn test_smj_with_join_filter_fitering_all() -> Result<()> {
-    let ctx: SessionContext = SessionContext::new();
-
-    let sql = "set datafusion.optimizer.prefer_hash_join = false;";
-    let _ = ctx.sql(sql).await?.collect().await?;
-
-    let sql = "set datafusion.execution.batch_size = 1";
-    let _ = ctx.sql(sql).await?.collect().await?;
-
-    let sql = "
-        select * from (
-        with
-        t1 as (
-            select 12 a, 12 b
-            ),
-        t2 as (
-            select 12 a, 12 b
-            )
-            select t1.* from t1 join t2 on t1.a = t2.b where t1.a > t2.b
-        ) order by 1, 2;
-        ";
-
-    let results = ctx.sql(sql).await?.collect().await?;
-    assert_eq!(results.len(), 0);
-
-    Ok(())
-}

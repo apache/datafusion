@@ -263,5 +263,22 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
+# Set batch size to 1 for sort merge join
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+SELECT * FROM (
+    WITH
+        t1 AS (
+            SELECT 12 a, 12 b
+        ),
+        t2 AS (
+            SELECT 12 a, 12 b
+        )
+        SELECT t1.* FROM t1 JOIN t2 on t1.a = t2.b WHERE t1.a > t2.b
+) ORDER BY 1, 2;
+----
+
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
