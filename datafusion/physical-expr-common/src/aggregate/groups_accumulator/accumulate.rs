@@ -20,11 +20,15 @@ use arrow::{array::BooleanArray, buffer::NullBuffer};
 /// This function is called to update the accumulator state per row
 /// when the value is not needed (e.g. COUNT)
 ///
-/// `F`: Invoked like `value_fn(group_index) for all non null values
+/// # Arguments:
+///
+/// * `group_indices`:  To which groups do the rows in `values` belong, (aka group_index)
+/// * `opt_filter`: if present, only rows for which is Some(true) are included
+/// * `index_fn`: `F` invoked like `value_fn(group_index) for all non null values
 /// passing the filter. Note that no tracking is done for null inputs
 /// or which groups have seen any values
-///
-/// See [`NullState::accumulate`], for more details on other
+/// 
+/// See `NullState::accumulate`, for more details on other
 /// arguments.
 pub fn accumulate_indices<F>(
     group_indices: &[usize],
