@@ -88,7 +88,20 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[0].sort_properties)
+        // trunc preserves the order of the first argument
+        let value = &input[0];
+        let precision = input.get(1);
+
+        Ok(
+            if precision
+                .map(|r| SortProperties::Singleton.eq(&r.sort_properties))
+                .unwrap_or(true)
+            {
+                value.sort_properties
+            } else {
+                SortProperties::Unordered
+            },
+        )
     }
 }
 

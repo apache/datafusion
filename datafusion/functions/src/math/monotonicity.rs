@@ -46,7 +46,7 @@ pub fn acosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 
     let valid_domain = Interval::try_new(
         ScalarValue::new_one(&x.range.lower().data_type())?,
-        ScalarValue::new_null(&x.range.upper().data_type())?,
+        ScalarValue::try_from(&x.range.upper().data_type())?,
     )?;
 
     if valid_domain.contains(&x.range)? == Interval::CERTAINLY_TRUE {

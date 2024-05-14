@@ -245,7 +245,7 @@ impl Interval {
             return internal_err!("Endpoints of an Interval should have the same type");
         }
 
-        let interval = Self::new(lower, upper);
+        let interval = Self::new(lower, upper)?;
 
         if interval.lower.is_null()
             || interval.upper.is_null()
@@ -266,26 +266,33 @@ impl Interval {
     /// the given bounds for ordering, or verify that they have the same data
     /// type. For its user-facing counterpart and more details, see
     /// [`Interval::try_new`].
-    fn new(lower: ScalarValue, upper: ScalarValue) -> Self {
+    fn new(lower: ScalarValue, upper: ScalarValue) -> Result<Self> {
         if let ScalarValue::Boolean(lower_bool) = lower {
             let ScalarValue::Boolean(upper_bool) = upper else {
                 // We are sure that upper and lower bounds have the same type.
                 unreachable!();
             };
             // Standardize boolean interval endpoints:
-            Self {
+            Ok(Self {
                 lower: ScalarValue::Boolean(Some(lower_bool.unwrap_or(false))),
                 upper: ScalarValue::Boolean(Some(upper_bool.unwrap_or(true))),
-            }
+            })
         }
         // Standardize floating-point endpoints:
         else if lower.data_type() == DataType::Float32 {
-            handle_float_intervals!(Float32, f32, lower, upper)
+            Ok(handle_float_intervals!(Float32, f32, lower, upper))
         } else if lower.data_type() == DataType::Float64 {
-            handle_float_intervals!(Float64, f64, lower, upper)
+            Ok(handle_float_intervals!(Float64, f64, lower, upper))
+        }
+        // Unsigned null values for lower bounds are set to 0:
+        else if lower.data_type().is_unsigned_integer() && lower.is_null() {
+            Ok(Self {
+                lower: ScalarValue::new_zero(&lower.data_type())?,
+                upper,
+            })
         } else {
             // Other data types do not require standardization:
-            Self { lower, upper }
+            Ok(Self { lower, upper })
         }
     }
 
@@ -302,7 +309,7 @@ impl Interval {
     /// Creates an unbounded interval from both sides if the datatype supported.
     pub fn make_unbounded(data_type: &DataType) -> Result<Self> {
         let unbounded_endpoint = ScalarValue::try_from(data_type)?;
-        Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
+        Self::new(unbounded_endpoint.clone(), unbounded_endpoint)
     }
 
     /// Returns a reference to the lower bound.
@@ -632,10 +639,10 @@ impl Interval {
         let rhs = other.borrow();
         let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
 
-        Ok(Self::new(
+        Self::new(
             add_bounds::<false>(&dt, &self.lower, &rhs.lower),
             add_bounds::<true>(&dt, &self.upper, &rhs.upper),
-        ))
+        )
     }
 
     /// Subtract the given interval (`other`) from this interval. Say we have
@@ -647,10 +654,10 @@ impl Interval {
         let rhs = other.borrow();
         let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
 
-        Ok(Self::new(
+        Self::new(
             sub_bounds::<false>(&dt, &self.lower, &rhs.upper),
             sub_bounds::<true>(&dt, &self.upper, &rhs.lower),
-        ))
+        )
     }
 
     /// Multiply the given interval (`other`) with this interval. Say we have
@@ -676,7 +683,7 @@ impl Interval {
 
         let zero = ScalarValue::new_zero(&dt)?;
 
-        let result = match (
+        match (
             self.contains_value(&zero)?,
             rhs.contains_value(&zero)?,
             dt.is_unsigned_integer(),
@@ -689,8 +696,7 @@ impl Interval {
                 mul_helper_single_zero_inclusive(&dt, rhs, self, zero)
             }
             _ => mul_helper_zero_exclusive(&dt, self, rhs, zero),
-        };
-        Ok(result)
+        }
     }
 
     /// Divide this interval by the given interval (`other`). Say we have intervals
@@ -722,7 +728,7 @@ impl Interval {
         let zero_point = match &dt {
             DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
             _ => Self::new(prev_value(zero.clone()), next_value(zero)),
-        };
+        }?;
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
@@ -735,9 +741,9 @@ impl Interval {
         else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
             && !dt.is_unsigned_integer()
         {
-            Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
+            div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point)
         } else {
-            Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
+            div_helper_zero_exclusive(&dt, self, rhs, &zero_point)
         }
     }
 
@@ -1137,8 +1143,8 @@ pub fn satisfy_greater(
         if !strict && left.upper == right.lower {
             // Singleton intervals:
             return Ok(Some((
-                Interval::new(left.upper.clone(), left.upper.clone()),
-                Interval::new(left.upper.clone(), left.upper.clone()),
+                Interval::new(left.upper.clone(), left.upper.clone())?,
+                Interval::new(left.upper.clone(), left.upper.clone())?,
             )));
         } else {
             // Left-hand side:  <--======----0------------>
@@ -1174,8 +1180,8 @@ pub fn satisfy_greater(
     };
 
     Ok(Some((
-        Interval::new(new_left_lower, left.upper.clone()),
-        Interval::new(right.lower.clone(), new_right_upper),
+        Interval::new(new_left_lower, left.upper.clone())?,
+        Interval::new(right.lower.clone(), new_right_upper)?,
     )))
 }
 
@@ -1198,13 +1204,13 @@ fn mul_helper_multi_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-) -> Interval {
+) -> Result<Interval> {
     if lhs.lower.is_null()
         || lhs.upper.is_null()
         || rhs.lower.is_null()
         || rhs.upper.is_null()
     {
-        return Interval::make_unbounded(dt).unwrap();
+        return Interval::make_unbounded(dt);
     }
     // Since unbounded cases are handled above, we can safely
     // use the utility functions here to eliminate code duplication.
@@ -1246,7 +1252,7 @@ fn mul_helper_single_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
     zero: ScalarValue,
-) -> Interval {
+) -> Result<Interval> {
     // With the following interval bounds, there is no possibility to create an invalid interval.
     if rhs.upper <= zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
@@ -1298,7 +1304,7 @@ fn mul_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
     zero: ScalarValue,
-) -> Interval {
+) -> Result<Interval> {
     let (lower, upper) = match (
         lhs.upper <= zero && !lhs.upper.is_null(),
         rhs.upper <= zero && !rhs.upper.is_null(),
@@ -1358,7 +1364,7 @@ fn div_helper_lhs_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Interval {
+) -> Result<Interval> {
     // With the following interval bounds, there is no possibility to create an invalid interval.
     if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
@@ -1411,7 +1417,7 @@ fn div_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Interval {
+) -> Result<Interval> {
     let (lower, upper) = match (
         lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
         rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
@@ -1928,10 +1934,10 @@ mod tests {
 
         let unbounded_cases = vec![
             (DataType::Boolean, Boolean(Some(false)), Boolean(Some(true))),
-            (DataType::UInt8, UInt8(None), UInt8(None)),
-            (DataType::UInt16, UInt16(None), UInt16(None)),
-            (DataType::UInt32, UInt32(None), UInt32(None)),
-            (DataType::UInt64, UInt64(None), UInt64(None)),
+            (DataType::UInt8, UInt8(Some(0)), UInt8(None)),
+            (DataType::UInt16, UInt16(Some(0)), UInt16(None)),
+            (DataType::UInt32, UInt32(Some(0)), UInt32(None)),
+            (DataType::UInt64, UInt64(Some(0)), UInt64(None)),
             (DataType::Int8, Int8(None), Int8(None)),
             (DataType::Int16, Int16(None), Int16(None)),
             (DataType::Int32, Int32(None), Int32(None)),
@@ -2038,6 +2044,10 @@ mod tests {
                 Interval::make(Some(1000_i64), Some(1500_i64))?,
             ),
             (
+                Interval::make(Some(0_u8), Some(0_u8))?,
+                Interval::make::<u8>(None, None)?,
+            ),
+            (
                 Interval::try_new(
                     prev_value(ScalarValue::Float32(Some(0.0_f32))),
                     ScalarValue::Float32(Some(0.0_f32)),
@@ -2078,6 +2088,10 @@ mod tests {
             (
                 Interval::make(Some(-1000_i64), Some(1000_i64))?,
                 Interval::make(None, Some(-1500_i64))?,
+            ),
+            (
+                Interval::make::<u64>(None, None)?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
             ),
             (
                 Interval::make(Some(0.0_f32), Some(0.0_f32))?,

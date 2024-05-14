@@ -24,8 +24,12 @@ use arrow::array::Int32Array;
 use arrow::array::Int64Array;
 use arrow::array::Int8Array;
 use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, not_impl_err};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::SortProperties;
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
@@ -172,5 +176,28 @@ impl ScalarUDFImpl for AbsFunc {
 
         let arr = abs_fun(&args)?;
         Ok(ColumnarValue::Array(arr))
+    }
+
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // Non-decreasing for x≥0 and symmetrically non-increasing for x≤0.
+        let x = &input[0];
+        let zero_point = Interval::try_new(
+            ScalarValue::new_zero(&x.range.lower().data_type())?,
+            ScalarValue::new_zero(&x.range.upper().data_type())?,
+        )?;
+
+        if x.range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+            Ok(match x.sort_properties {
+                SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
+                other => other,
+            })
+        } else if x.range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+            Ok(match x.sort_properties {
+                SortProperties::Ordered(opt) => -SortProperties::Ordered(opt),
+                other => other,
+            })
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 }

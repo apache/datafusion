@@ -147,7 +147,22 @@ impl ScalarUDFImpl for DateBinFunc {
     }
 
     fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[1].sort_properties)
+        // date_bin preserves the order of the second argument
+        let step = &input[0];
+        let date_value = &input[1];
+        let reference = input.get(2);
+
+        Ok(
+            if SortProperties::Singleton.eq(&step.sort_properties)
+                && reference
+                    .map(|r| SortProperties::Singleton.eq(&r.sort_properties))
+                    .unwrap_or(true)
+            {
+                date_value.sort_properties
+            } else {
+                SortProperties::Unordered
+            },
+        )
     }
 }
 

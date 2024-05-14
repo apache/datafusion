@@ -206,7 +206,17 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[1].sort_properties)
+        // date_trunc preserves the order of the second argument
+        let precision = &input[0];
+        let date_value = &input[1];
+
+        Ok(
+            if SortProperties::Singleton.eq(&precision.sort_properties) {
+                date_value.sort_properties
+            } else {
+                SortProperties::Unordered
+            },
+        )
     }
 }
 
