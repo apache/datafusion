@@ -628,16 +628,12 @@ impl LogicalPlan {
                     node: node.from_template(&expr, &inputs),
                 }))
             }
-            LogicalPlan::Union(Union { inputs, schema }) => {
-                let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema
-                // TODO this seems wrong (shouldn't we always use the schema of the input?)
-                let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
-                } else {
-                    input_schema.clone()
-                };
-                Ok(LogicalPlan::Union(Union { inputs, schema }))
+            LogicalPlan::Union(Union { inputs, schema: _ }) => {
+                let input_schema = inputs[0].schema().clone();
+                Ok(LogicalPlan::Union(Union {
+                    inputs,
+                    schema: input_schema,
+                }))
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
