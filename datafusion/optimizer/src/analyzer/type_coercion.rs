@@ -1155,7 +1155,7 @@ mod test {
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
-        let expected = "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL \
+        let expected = "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL\
              \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
@@ -1184,7 +1184,7 @@ mod test {
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
-        let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL \
+        let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL\
              \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
