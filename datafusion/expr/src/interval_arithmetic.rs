@@ -28,7 +28,10 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{IntervalUnit, TimeUnit};
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    internal_err, not_impl_err, ColumnStatistics, Result, ScalarValue,
+};
 
 macro_rules! get_extreme_value {
     ($extreme:ident, $value:expr) => {
@@ -1469,6 +1472,8 @@ pub enum NullableInterval {
     MaybeNull { values: Interval },
     /// The value is definitely not null, and is within the specified range.
     NotNull { values: Interval },
+    /// No information is known about this intervals values or nullness
+    Unknown,
 }
 
 impl Display for NullableInterval {
@@ -1479,6 +1484,7 @@ impl Display for NullableInterval {
                 write!(f, "NullableInterval: {} U {{NULL}}", values)
             }
             Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+            Self::Unknown => write!(f, "NullableInterval: Unknown"),
         }
     }
 }
@@ -1501,27 +1507,74 @@ impl From<ScalarValue> for NullableInterval {
     }
 }
 
+impl From<ColumnStatistics> for NullableInterval {
+    fn from(stats: ColumnStatistics) -> Self {
+        let null_count = match stats.null_count {
+            Precision::Exact(value) | Precision::Inexact(value) => value,
+            Precision::Absent => return NullableInterval::Unknown,
+        };
+
+        let distinct_count = match stats.distinct_count {
+            Precision::Exact(value) | Precision::Inexact(value) => value,
+            Precision::Absent => return NullableInterval::Unknown,
+        };
+
+        let lower_value = match stats.min_value {
+            Precision::Exact(ref value) | Precision::Inexact(ref value) => value.clone(),
+            Precision::Absent => return NullableInterval::Unknown,
+        };
+
+        let upper_value = match stats.max_value {
+            Precision::Exact(ref value) | Precision::Inexact(ref value) => value.clone(),
+            Precision::Absent => return NullableInterval::Unknown,
+        };
+
+        let datatype = lower_value.data_type();
+
+        if null_count == 0 {
+            NullableInterval::NotNull {
+                values: Interval {
+                    lower: lower_value,
+                    upper: upper_value,
+                },
+            }
+        } else if null_count == distinct_count {
+            NullableInterval::Null { datatype }
+        } else {
+            NullableInterval::MaybeNull {
+                values: Interval {
+                    lower: lower_value,
+                    upper: upper_value,
+                },
+            }
+        }
+    }
+}
+
 impl NullableInterval {
     /// Get the values interval, or None if this interval is definitely null.
     pub fn values(&self) -> Option<&Interval> {
         match self {
-            Self::Null { .. } => None,
+            Self::Null { .. } | Self::Unknown => None,
             Self::MaybeNull { values } | Self::NotNull { values } => Some(values),
         }
     }
 
     /// Get the data type
-    pub fn data_type(&self) -> DataType {
+    pub fn data_type(&self) -> Option<DataType> {
         match self {
-            Self::Null { datatype } => datatype.clone(),
-            Self::MaybeNull { values } | Self::NotNull { values } => values.data_type(),
+            Self::Null { datatype } => Some(datatype.clone()),
+            Self::MaybeNull { values } | Self::NotNull { values } => {
+                Some(values.data_type())
+            }
+            Self::Unknown => None,
         }
     }
 
     /// Return true if the value is definitely true (and not null).
     pub fn is_certainly_true(&self) -> bool {
         match self {
-            Self::Null { .. } | Self::MaybeNull { .. } => false,
+            Self::Null { .. } | Self::MaybeNull { .. } | Self::Unknown => false,
             Self::NotNull { values } => values == &Interval::CERTAINLY_TRUE,
         }
     }
@@ -1529,8 +1582,7 @@ impl NullableInterval {
     /// Return true if the value is definitely false (and not null).
     pub fn is_certainly_false(&self) -> bool {
         match self {
-            Self::Null { .. } => false,
-            Self::MaybeNull { .. } => false,
+            Self::Null { .. } | Self::MaybeNull { .. } | Self::Unknown => false,
             Self::NotNull { values } => values == &Interval::CERTAINLY_FALSE,
         }
     }
@@ -1547,6 +1599,7 @@ impl NullableInterval {
             Self::NotNull { values } => Ok(Self::NotNull {
                 values: values.not()?,
             }),
+            Self::Unknown => Ok(Self::Unknown),
         }
     }
 
@@ -1640,9 +1693,10 @@ impl NullableInterval {
                         datatype: DataType::Boolean,
                     })
                 } else {
-                    Ok(Self::Null {
-                        datatype: self.data_type(),
-                    })
+                    match self.data_type() {
+                        Some(datatype) => Ok(Self::Null { datatype }),
+                        None => not_impl_err!("Cannot determine data type for operation"),
+                    }
                 }
             }
         }
@@ -1714,10 +1768,13 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
+    use crate::interval_arithmetic::{
+        next_value, prev_value, satisfy_greater, Interval, NullableInterval,
+    };
 
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
 
     #[test]
     fn test_next_prev_value() -> Result<()> {
@@ -3212,7 +3269,64 @@ mod tests {
 
         Ok(())
     }
+    #[test]
+    fn test_interval_from_column_statistics() {
+        let stats_null = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+            distinct_count: Precision::Exact(10),
+        };
+        assert_eq!(
+            NullableInterval::from(stats_null),
+            NullableInterval::Null {
+                datatype: DataType::Int32
+            }
+        );
 
+        let stats_not_null = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+            distinct_count: Precision::Exact(20),
+        };
+        assert_eq!(
+            NullableInterval::from(stats_not_null),
+            NullableInterval::NotNull {
+                values: Interval {
+                    lower: ScalarValue::Int32(Some(1)),
+                    upper: ScalarValue::Int32(Some(100)),
+                }
+            }
+        );
+
+        let stats_maybe_null = ColumnStatistics {
+            null_count: Precision::Exact(5),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+            distinct_count: Precision::Exact(20),
+        };
+        assert_eq!(
+            NullableInterval::from(stats_maybe_null),
+            NullableInterval::MaybeNull {
+                values: Interval {
+                    lower: ScalarValue::Int32(Some(1)),
+                    upper: ScalarValue::Int32(Some(100)),
+                }
+            }
+        );
+
+        let stats_unknown = ColumnStatistics {
+            null_count: Precision::Absent,
+            max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+            distinct_count: Precision::Exact(20),
+        };
+        assert_eq!(
+            NullableInterval::from(stats_unknown),
+            NullableInterval::Unknown
+        );
+    }
     #[test]
     fn test_interval_display() {
         let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
