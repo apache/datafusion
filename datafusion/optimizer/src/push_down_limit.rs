@@ -17,6 +17,7 @@
 
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
+use std::cmp::min;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -56,47 +57,12 @@ impl OptimizerRule for PushDownLimit {
 
         if let LogicalPlan::Limit(child) = &*limit.input {
             // Merge the Parent Limit and the Child Limit.
-
-            //  Case 0: Parent and Child are disjoint. (child_fetch <= skip)
-            //   Before merging:
-            //                     |........skip........|---fetch-->|              Parent Limit
-            //    |...child_skip...|---child_fetch-->|                             Child Limit
-            //   After merging:
-            //    |.........(child_skip + skip).........|
-            //   Before merging:
-            //                     |...skip...|------------fetch------------>|     Parent Limit
-            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
-            //   After merging:
-            //    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-
-            //  Case 1: Parent is beyond the range of Child. (skip < child_fetch <= skip + fetch)
-            //   Before merging:
-            //                     |...skip...|------------fetch------------>|     Parent Limit
-            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
-            //   After merging:
-            //    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-
-            //  Case 2: Parent is in the range of Child. (skip + fetch < child_fetch)
-            //   Before merging:
-            //                     |...skip...|---fetch-->|                        Parent Limit
-            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
-            //   After merging:
-            //    |....(child_skip + skip)....|---fetch-->|
-            let parent_skip = limit.skip;
-            let new_fetch = match (limit.fetch, child.fetch) {
-                (Some(fetch), Some(child_fetch)) => {
-                    Some(min(fetch, child_fetch.saturating_sub(parent_skip)))
-                }
-                (Some(fetch), None) => Some(fetch),
-                (None, Some(child_fetch)) => {
-                    Some(child_fetch.saturating_sub(parent_skip))
-                }
-                (None, None) => None,
-            };
+            let (skip, fetch) =
+                combine_limit(limit.skip, limit.fetch, child.skip, child.fetch);
 
             let plan = LogicalPlan::Limit(Limit {
-                skip: child.skip + parent_skip,
-                fetch: new_fetch,
+                skip,
+                fetch,
                 input: Arc::new((*child.input).clone()),
             });
             return self
@@ -215,6 +181,78 @@ impl OptimizerRule for PushDownLimit {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
     }
+}
+
+/// Combines two limits into a single
+///
+/// Returns the combined limit `(skip, fetch)`
+///
+/// # Case 0: Parent and Child are disjoint. (`child_fetch <= skip`)
+///
+/// ```text
+///   Before merging:
+///                     |........skip........|---fetch-->|              Parent Limit
+///    |...child_skip...|---child_fetch-->|                             Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |.........(child_skip + skip).........|
+/// ```
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|     Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+/// # Case 1: Parent is beyond the range of Child. (`skip < child_fetch <= skip + fetch`)
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|     Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+///  # Case 2: Parent is in the range of Child. (`skip + fetch < child_fetch`)
+///   Before merging:
+/// ```text
+///                     |...skip...|---fetch-->|                        Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---fetch-->|
+/// ```
+fn combine_limit(
+    parent_skip: usize,
+    parent_fetch: Option<usize>,
+    child_skip: usize,
+    child_fetch: Option<usize>,
+) -> (usize, Option<usize>) {
+    let combined_skip = child_skip + parent_skip;
+
+    let combined_fetch = match (parent_fetch, child_fetch) {
+        (Some(parent_fetch), Some(child_fetch)) => {
+            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
+        }
+        (Some(parent_fetch), None) => Some(parent_fetch),
+        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
+        (None, None) => None,
+    };
+
+    (combined_skip, combined_fetch)
 }
 
 fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
