@@ -108,8 +108,8 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                let func_name = func_def.name();
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                let func_name = func.name();
 
                 let args = args
                     .iter()

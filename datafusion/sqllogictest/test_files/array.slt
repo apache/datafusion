@@ -1137,7 +1137,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # array_element error
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_element\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_element\(array, index\)
+query error
 select array_element(1, 2);
 
 # array_element with null
@@ -4625,7 +4625,7 @@ NULL 10
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_dims\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_dims\(array\)
+query error
 select array_dims(1);
 
 # array_dims scalar function
@@ -6475,7 +6475,7 @@ create table test_create_array_table(
   d int
 );
 
-query ???I
+query I
 insert into test_create_array_table values
   ([1, 2, 3], ['a', 'b', 'c'], [[4,6], [6,7,8]], 1);
 ----

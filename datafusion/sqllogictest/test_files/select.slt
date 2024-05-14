@@ -33,8 +33,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_simple (
@@ -43,8 +43,8 @@ CREATE EXTERNAL TABLE aggregate_simple (
   c3 BOOLEAN NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 ##########
 ## SELECT Tests
@@ -351,8 +351,11 @@ VALUES (1),(1,2)
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
 VALUES (1),('2')
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+query R
 VALUES (1),(2.0)
+----
+1
+2
 
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
 VALUES (1,2), (1,'2')
@@ -472,6 +475,13 @@ CREATE TABLE foo AS VALUES
 (1, 2),
 (3, 4),
 (5, 6);
+
+# multiple rows and columns need type coercion
+statement ok
+CREATE TABLE foo2(c1 double, c2 double) AS VALUES
+(1.1, 4.1),
+(2, 5),
+(3, 6);
 
 # foo distinct
 query T
@@ -1067,9 +1077,9 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test_source_projection
 
@@ -1426,12 +1436,12 @@ query TT
 EXPLAIN SELECT x/2, x/2+1 FROM t;
 ----
 logical_plan
-01)Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
-02)--Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
+01)Projection: {t.x / Int64(2)|{Int64(2)}|{t.x}} AS t.x / Int64(2), {t.x / Int64(2)|{Int64(2)}|{t.x}} AS t.x / Int64(2) + Int64(1)
+02)--Projection: t.x / Int64(2) AS {t.x / Int64(2)|{Int64(2)}|{t.x}}
 03)----TableScan: t projection=[x]
 physical_plan
-01)ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
-02)--ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
+01)ProjectionExec: expr=[{t.x / Int64(2)|{Int64(2)}|{t.x}}@0 as t.x / Int64(2), {t.x / Int64(2)|{Int64(2)}|{t.x}}@0 + 1 as t.x / Int64(2) + Int64(1)]
+02)--ProjectionExec: expr=[x@0 / 2 as {t.x / Int64(2)|{Int64(2)}|{t.x}}]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1444,12 +1454,12 @@ query TT
 EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
 ----
 logical_plan
-01)Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
-02)--Projection: abs(t.x) AS abs(t.x)t.x, t.y
+01)Projection: {abs(t.x)|{t.x}} AS abs(t.x), {abs(t.x)|{t.x}} AS abs(t.x) + abs(t.y)
+02)--Projection: abs(t.x) AS {abs(t.x)|{t.x}}, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
-02)--ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
+01)ProjectionExec: expr=[{abs(t.x)|{t.x}}@0 as abs(t.x), {abs(t.x)|{t.x}}@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+02)--ProjectionExec: expr=[abs(x@0) as {abs(t.x)|{t.x}}, y@1 as y]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -1612,6 +1622,23 @@ query I
 select count(1) from v;
 ----
 1
+
+# Ensure CSE resolves columns correctly
+# should be 3, not 1
+# https://github.com/apache/datafusion/issues/10413
+query I
+select a + b from (select 1 as a, 2 as b, 1 as "a + b");
+----
+3
+
+# Can't reference an output column by expression over projection.
+query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+select a + 1 from (select a+1 from (select 1 as a));
+
+query I
+select "a + Int64(1)" + 10 from (select a+1 from (select 1 as a));
+----
+12
 
 # run below query without logical optimizations
 statement ok

@@ -210,7 +210,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![count(wildcard())])?
+        .select(vec![col("COUNT(*)")])?
         .explain(false, false)?
         .collect()
         .await?;

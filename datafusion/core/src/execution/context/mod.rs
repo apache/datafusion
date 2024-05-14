@@ -23,6 +23,8 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
 use crate::{
     catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
     catalog::listing_schema::ListingSchemaProvider,
@@ -44,6 +46,7 @@ use crate::{
     error::{DataFusionError, Result},
     execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
     logical_expr::AggregateUDF,
+    logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
@@ -52,14 +55,12 @@ use crate::{
     },
     optimizer::analyzer::{Analyzer, AnalyzerRule},
     optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
+    physical_expr::{create_physical_expr, PhysicalExpr},
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-    physical_plan::{udf::ScalarUDF, ExecutionPlan},
+    physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
     variable::{VarProvider, VarType},
 };
-
-#[cfg(feature = "array_expressions")]
-use crate::functions_array;
 use crate::{functions, functions_aggregate};
 
 use arrow::datatypes::{DataType, SchemaRef};
@@ -69,32 +70,34 @@ use datafusion_common::{
     alias::AliasGenerator,
     config::{ConfigExtension, TableOptions},
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    SchemaReference, TableReference,
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+    DFSchema, SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
+    expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
+    simplify::SimplifyInfo,
     var_provider::is_system_variables,
-    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    Expr, ExprSchemable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::{
     parser::{CopyToSource, CopyToStatement, DFParser},
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
     ResolvedTableReference,
 };
+use sqlparser::dialect::dialect_from_str;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
 
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr_rewriter::FunctionRewrite;
 
 mod avro;
 mod csv;
@@ -520,6 +523,41 @@ impl SessionContext {
 
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
+    }
+
+    /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
+    /// coercion and function rewrites.
+    ///
+    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
+    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// See the [expr_api] example for how to simplify expressions.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion::prelude::*;
+    /// # use datafusion_common::DFSchema;
+    /// // a = 1 (i64)
+    /// let expr = col("a").eq(lit(1i64));
+    /// // provide type information that `a` is an Int32
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+    /// let df_schema = DFSchema::try_from(schema).unwrap();
+    /// // Create a PhysicalExpr. Note DataFusion automatically coerces (casts) `1i64` to `1i32`
+    /// let physical_expr = SessionContext::new()
+    ///   .create_physical_expr(expr, &df_schema).unwrap();
+    /// ```
+    /// # See Also
+    /// * [`SessionState::create_physical_expr`] for a lower level API
+    ///
+    /// [simplified]: datafusion_optimizer::simplify_expressions
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    pub fn create_physical_expr(
+        &self,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.state.read().create_physical_expr(expr, df_schema)
     }
 
     // return an empty dataframe
@@ -1519,7 +1557,6 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options().catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1537,14 +1574,8 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema = ListingSchemaProvider::new(
-            authority,
-            path,
-            factory.clone(),
-            store,
-            format,
-            has_header,
-        );
+        let schema =
+            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");
@@ -1945,13 +1976,14 @@ impl SessionState {
         }
     }
 
-    /// Creates a physical plan from a logical plan.
+    /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].
     ///
     /// Note: this first calls [`Self::optimize`] on the provided
     /// plan.
     ///
-    /// This function will error for [`LogicalPlan`]s such as catalog
-    /// DDL `CREATE TABLE` must be handled by another layer.
+    /// This function will error for [`LogicalPlan`]s such as catalog DDL like
+    /// `CREATE TABLE`, which do not have corresponding physical plans and must
+    /// be handled by another layer, typically [`SessionContext`].
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1960,6 +1992,39 @@ impl SessionState {
         self.query_planner
             .create_physical_plan(&logical_plan, self)
             .await
+    }
+
+    /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
+    /// coercion, and function rewrites.
+    ///
+    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
+    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// See the [expr_api] example for how to simplify expressions.
+    ///
+    /// # See Also:
+    /// * [`SessionContext::create_physical_expr`] for a higher-level API
+    /// * [`create_physical_expr`] for a lower-level API
+    ///
+    /// [simplified]: datafusion_optimizer::simplify_expressions
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    pub fn create_physical_expr(
+        &self,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let simplifier =
+            ExprSimplifier::new(SessionSimplifyProvider::new(self, df_schema));
+        // apply type coercion here to ensure types match
+        let mut expr = simplifier.coerce(expr, df_schema)?;
+
+        // rewrite Exprs to functions if necessary
+        let config_options = self.config_options();
+        for rewrite in self.analyzer.function_rewrites() {
+            expr = expr
+                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
+                .data;
+        }
+        create_physical_expr(&expr, df_schema, self.execution_props())
     }
 
     /// Return the session ID
@@ -2036,6 +2101,35 @@ impl SessionState {
     /// Return version of the cargo package that produced this query
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
+    }
+}
+
+struct SessionSimplifyProvider<'a> {
+    state: &'a SessionState,
+    df_schema: &'a DFSchema,
+}
+
+impl<'a> SessionSimplifyProvider<'a> {
+    fn new(state: &'a SessionState, df_schema: &'a DFSchema) -> Self {
+        Self { state, df_schema }
+    }
+}
+
+impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+        Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
+    }
+
+    fn nullable(&self, expr: &Expr) -> Result<bool> {
+        expr.nullable(self.df_schema)
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.state.execution_props()
+    }
+
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+        expr.get_type(self.df_schema)
     }
 }
 

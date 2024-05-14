@@ -28,7 +28,7 @@ use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     col, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
-    GetFieldAccess, GetIndexedField, Like, Literal, Operator, TryCast,
+    GetFieldAccess, Like, Literal, Operator, TryCast,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -932,10 +932,48 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr
         };
 
-        Ok(Expr::GetIndexedField(GetIndexedField::new(
-            Box::new(expr),
-            self.plan_indices(indices, schema, planner_context)?,
-        )))
+        let field = self.plan_indices(indices, schema, planner_context)?;
+        match field {
+            GetFieldAccess::NamedStructField { name } => {
+                if let Some(udf) = self.context_provider.get_function_meta("get_field") {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, lit(name)],
+                    )))
+                } else {
+                    internal_err!("get_field not found")
+                }
+            }
+            // expr[idx] ==> array_element(expr, idx)
+            GetFieldAccess::ListIndex { key } => {
+                if let Some(udf) =
+                    self.context_provider.get_function_meta("array_element")
+                {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, *key],
+                    )))
+                } else {
+                    internal_err!("get_field not found")
+                }
+            }
+            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+            GetFieldAccess::ListRange {
+                start,
+                stop,
+                stride,
+            } => {
+                if let Some(udf) = self.context_provider.get_function_meta("array_slice")
+                {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![expr, *start, *stop, *stride],
+                    )))
+                } else {
+                    internal_err!("array_slice not found")
+                }
+            }
+        }
     }
 }
 

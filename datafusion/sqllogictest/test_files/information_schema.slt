@@ -49,6 +49,12 @@ SELECT * from information_schema.schemata;
 ----
 datafusion public NULL NULL NULL NULL NULL
 
+# Table name case insensitive
+query T rowsort
+SELECT catalog_name from information_schema.SchEmaTa;
+----
+datafusion
+
 # Disable information_schema and verify it now errors again
 statement ok
 set datafusion.catalog.information_schema = false
@@ -240,7 +246,7 @@ datafusion.catalog.create_default_catalog_and_schema true Whether the default ca
 datafusion.catalog.default_catalog datafusion The default catalog name - this impacts what SQL queries use if not specified
 datafusion.catalog.default_schema public The default schema name - this impacts what SQL queries use if not specified
 datafusion.catalog.format NULL Type of `TableProvider` to use when loading `default` schema
-datafusion.catalog.has_header false If the file has a header
+datafusion.catalog.has_header false Default value for `format.has_header` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement.
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.execution.aggregate.scalar_update_factor 10 Specifies the threshold for using `ScalarValue`s to update accumulators during high-cardinality aggregations for each input batch. The aggregation is considered high-cardinality if the number of affected groups is greater than or equal to `batch_size / scalar_update_factor`. In such cases, `ScalarValue`s are utilized for updating accumulators, rather than the default batch-slice approach. This can lead to performance improvements. By adjusting the `scalar_update_factor`, you can balance the trade-off between more efficient accumulator updates and the number of groups affected.
@@ -565,7 +571,8 @@ DROP VIEW test.xyz
 statement ok
 CREATE EXTERNAL TABLE abc
 STORED AS CSV
-WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TTTT
 SHOW CREATE TABLE abc;

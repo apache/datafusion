@@ -37,8 +37,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test_insert_into
 
@@ -75,7 +75,7 @@ physical_plan
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
-query II
+query I
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
@@ -137,7 +137,7 @@ physical_plan
 
 
 
-query II
+query I
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a1,
 COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a2
@@ -187,7 +187,7 @@ physical_plan
 10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
 
-query II
+query I
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a1,
 COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a2
@@ -221,7 +221,7 @@ physical_plan
 02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
-query T
+query I
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
 ----
 100
@@ -239,12 +239,12 @@ drop table table_without_values;
 statement ok
 CREATE TABLE table_without_values(id BIGINT, name varchar);
 
-query IT
+query I
 insert into table_without_values(id, name) values(1, 'foo');
 ----
 1
 
-query IT
+query I
 insert into table_without_values(name, id) values('bar', 2);
 ----
 1
@@ -259,7 +259,7 @@ statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
 # insert NULL values for the missing column (name)
-query IT
+query I
 insert into table_without_values(id) values(4);
 ----
 1
@@ -279,18 +279,18 @@ drop table table_without_values;
 statement ok
 CREATE TABLE table_without_values(field1 BIGINT NOT NULL, field2 BIGINT NULL);
 
-query II
+query I
 insert into table_without_values values(1, 100);
 ----
 1
 
-query II
+query I
 insert into table_without_values values(2, NULL);
 ----
 1
 
 # insert NULL values for the missing column (field2)
-query II
+query I
 insert into table_without_values(field1) values(3);
 ----
 1
@@ -363,7 +363,7 @@ create table test_column_defaults(
   e timestamp default now()
 )
 
-query IIITP
+query I
 insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 ----
 1
@@ -371,7 +371,7 @@ insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
 insert into test_column_defaults(a) values(2)
 
-query IIITP
+query I
 insert into test_column_defaults(b) values(20)
 ----
 1
@@ -383,7 +383,7 @@ select a,b,c,d from test_column_defaults
 NULL 20 500 default_text
 
 # fill the timestamp column with default value `now()` again, it should be different from the previous one
-query IIITP
+query I
 insert into test_column_defaults(a, b, c, d) values(2, 20, 200, 'DEF')
 ----
 1
@@ -417,7 +417,7 @@ create table test_column_defaults(
   e timestamp default now()
 ) as values(1, 10, 100, 'ABC', now())
 
-query IIITP
+query I
 insert into test_column_defaults(b) values(20)
 ----
 1
