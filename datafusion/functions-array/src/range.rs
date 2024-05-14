@@ -35,7 +35,7 @@ use datafusion_expr::{
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     Range,
     range,
     start stop step,
@@ -106,7 +106,7 @@ impl ScalarUDFImpl for Range {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     GenSeries,
     gen_series,
     start stop step,

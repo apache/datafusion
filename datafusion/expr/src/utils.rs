@@ -1107,7 +1107,7 @@ fn split_binary_impl<'a>(
 /// assert_eq!(conjunction(split), Some(expr));
 /// ```
 pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    filters.into_iter().reduce(|accum, expr| accum.and(expr))
+    filters.into_iter().reduce(Expr::and)
 }
 
 /// Combines an array of filter expressions into a single filter
@@ -1115,12 +1115,41 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// logical OR.
 ///
 /// Returns None if the filters array is empty.
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_expr::utils::disjunction;
+/// // a=1 OR b=2
+/// let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
+///
+/// // [a=1, b=2]
+/// let split = vec![
+///   col("a").eq(lit(1)),
+///   col("b").eq(lit(2)),
+/// ];
+///
+/// // use disjuncton to join them together with `OR`
+/// assert_eq!(disjunction(split), Some(expr));
+/// ```
 pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    filters.into_iter().reduce(|accum, expr| accum.or(expr))
+    filters.into_iter().reduce(Expr::or)
 }
 
-/// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
-/// its predicate be all `predicates` ANDed.
+/// Returns a new [LogicalPlan] that filters the output of  `plan` with a
+/// [LogicalPlan::Filter] with all `predicates` ANDed.
+///
+/// # Example
+/// Before:
+/// ```text
+/// plan
+/// ```
+///
+/// After:
+/// ```text
+/// Filter(predicate)
+///   plan
+/// ```
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
     // reduce filters to a single filter with an AND
     let predicate = predicates

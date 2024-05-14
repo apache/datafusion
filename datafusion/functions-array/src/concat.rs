@@ -36,7 +36,7 @@ use datafusion_expr::{
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayAppend,
     array_append,
     array element,                                // arg name
@@ -96,7 +96,7 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPrepend,
     array_prepend,
     element array,
@@ -156,7 +156,7 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayConcat,
     array_concat,
     "Concatenates arrays.",

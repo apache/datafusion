@@ -19,9 +19,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
-    TableReference,
+    ScalarValue, TableReference,
 };
-use datafusion_expr::{Case, Expr};
+use datafusion_expr::{expr::ScalarFunction, lit, Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -133,7 +133,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         );
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::Column(Column::from((qualifier, field))).field(nested_name))
+
+                    let col = Expr::Column(Column::from((qualifier, field)));
+                    if let Some(udf) =
+                        self.context_provider.get_function_meta("get_field")
+                    {
+                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                            udf,
+                            vec![col, lit(ScalarValue::from(nested_name))],
+                        )))
+                    } else {
+                        internal_err!("get_field not found")
+                    }
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
