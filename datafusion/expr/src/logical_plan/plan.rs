@@ -1212,7 +1212,7 @@ impl LogicalPlan {
     /// referenced expressions into columns.
     ///
     /// See also: [`crate::utils::columnize_expr`]
-    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(Expr, Column)>> {
+    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
         match self {
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
@@ -1235,8 +1235,7 @@ impl LogicalPlan {
                 let input_len = input.schema().fields().len();
                 output_exprs.extend(
                     window_expr
-                        .clone()
-                        .into_iter()
+                        .iter()
                         .zip(schema.columns().into_iter().skip(input_len)),
                 );
                 Ok(output_exprs)
@@ -2510,9 +2509,9 @@ impl Aggregate {
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut qualified_fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
+        let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2571,7 +2570,7 @@ impl Aggregate {
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
-        exprs.extend(self.aggr_expr.clone());
+        exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
         Ok(exprs)
     }

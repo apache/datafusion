@@ -248,7 +248,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
 
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
-pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
             return plan_err!(
@@ -257,7 +257,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
         }
         Ok(grouping_set.distinct_expr())
     } else {
-        Ok(group_expr.to_vec())
+        Ok(group_expr.iter().collect())
     }
 }
 
@@ -726,13 +726,16 @@ pub fn from_plan(
 }
 
 /// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields(
-    exprs: &[Expr],
+pub fn exprlist_to_fields<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // look for exact match in plan's output schema
     let input_schema = &plan.schema();
-    exprs.iter().map(|e| e.to_field(input_schema)).collect()
+    exprs
+        .into_iter()
+        .map(|e| e.to_field(input_schema))
+        .collect()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
@@ -755,7 +758,7 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
         Ok(exprs) if !exprs.is_empty() => exprs,
         _ => return Ok(e),
     };
-    let exprs_map: HashMap<Expr, Column> = output_exprs.into_iter().collect();
+    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
     e.transform_down(|node: Expr| match exprs_map.get(&node) {
         Some(column) => Ok(Transformed::new(
             Expr::Column(column.clone()),
