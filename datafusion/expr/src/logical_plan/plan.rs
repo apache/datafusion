@@ -925,17 +925,11 @@ impl LogicalPlan {
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.from_template(&expr, &inputs),
             })),
-            LogicalPlan::Union(Union { schema, .. }) => {
-                let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema.
-                let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
-                } else {
-                    input_schema.clone()
-                };
+            LogicalPlan::Union(_) => {
+                let input_schema = inputs[0].schema().clone();
                 Ok(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect(),
-                    schema,
+                    schema: input_schema,
                 }))
             }
             LogicalPlan::Distinct(distinct) => {
