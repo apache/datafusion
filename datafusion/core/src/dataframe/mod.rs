@@ -2086,13 +2086,18 @@ mod tests {
     async fn test_aggregate_name_collision() -> Result<()> {
         let df = test_table().await?;
 
-        let group_expr = lit(1).alias("aggregate_test_100.c2 + aggregate_test_100.c3");
+        let collided_alias = "aggregate_test_100.c2 + aggregate_test_100.c3";
+        let group_expr = lit(1).alias(collided_alias);
 
         let df = df
             // GROUP BY 1
             .aggregate(vec![group_expr], vec![])?
-            // SELECT aggregate_test_100.c2 + aggregate_test_100.c3
-            .select(vec![(col("c2") + col("c3"))])
+            // SELECT `aggregate_test_100.c2 + aggregate_test_100.c3`
+            .select(vec![
+                (col("aggregate_test_100.c2") + col("aggregate_test_100.c3")),
+            ])
+            // The select expr has the same display_name as the group_expr,
+            // but since they are different expressions, it should fail.
             .expect_err("Expected error");
         let expected = "Schema error: No field named aggregate_test_100.c2. \
             Valid fields are \"aggregate_test_100.c2 + aggregate_test_100.c3\".";
