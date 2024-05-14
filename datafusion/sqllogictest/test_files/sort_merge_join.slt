@@ -263,7 +263,7 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
-# Set batch size to 1 for sort merge join
+# Set batch size to 1 for sort merge join to test scenario when data spread across multiple batches
 statement ok
 set datafusion.execution.batch_size = 1;
 
