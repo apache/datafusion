@@ -962,7 +962,7 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         {
             Some(other_type.clone())
         }
-        _ => None
+        _ => None,
     }
 }
 
