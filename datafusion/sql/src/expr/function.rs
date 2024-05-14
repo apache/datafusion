@@ -29,7 +29,11 @@ use datafusion_expr::{
     expr::{ScalarFunction, Unnest},
     BuiltInWindowFunction,
 };
-use sqlparser::ast::{DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments, NullTreatment, ObjectName, OrderByExpr, WindowType};
+use sqlparser::ast::{
+    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
+    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
+    NullTreatment, ObjectName, OrderByExpr, WindowType,
+};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 
@@ -192,7 +196,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let FunctionArgs {
             name,
             args,
-            order_by, over,
+            order_by,
+            over,
             filter,
             null_treatment,
             distinct,
