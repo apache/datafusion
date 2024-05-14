@@ -29,11 +29,7 @@ use datafusion_expr::{
     expr::{ScalarFunction, Unnest},
     BuiltInWindowFunction,
 };
-use sqlparser::ast::{
-    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
-    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    WindowType,
-};
+use sqlparser::ast::{DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments, NullTreatment, ObjectName, OrderByExpr, WindowType};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 
@@ -81,13 +77,27 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
         .expect("No candidates provided.") // Panic if `candidates` argument is empty
 }
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(super) fn sql_function_to_expr(
-        &self,
-        function: SQLFunction,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
+/// Arguments to for a function call extracted from the SQL AST
+#[derive(Debug)]
+struct FunctionArgs {
+    /// Function name
+    name: ObjectName,
+    /// Argument expressions
+    args: Vec<FunctionArg>,
+    /// ORDER BY clause, if any
+    order_by: Vec<OrderByExpr>,
+    /// OVER clause, if any
+    over: Option<WindowType>,
+    /// FILTER clause, if any
+    filter: Option<Box<SQLExpr>>,
+    /// NULL treatment clause, if any
+    null_treatment: Option<NullTreatment>,
+    /// DISTINCT
+    distinct: bool,
+}
+
+impl FunctionArgs {
+    fn try_new(function: SQLFunction) -> Result<Self> {
         let SQLFunction {
             name,
             args,
@@ -97,9 +107,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             within_group,
         } = function;
 
-        // todo handle case when args is none (for current_timestamp)
+        // Handle no argument form (aka `current_time`  as opposed to `current_time()`)
         let FunctionArguments::List(args) = args else {
-            return not_impl_err!("Unsupported function argument {args:?}");
+            return Ok(Self {
+                name,
+                args: vec![],
+                order_by: vec![],
+                over,
+                filter,
+                null_treatment,
+                distinct: false,
+            });
         };
 
         let FunctionArgumentList {
@@ -149,6 +167,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("WITHIN GROUP is not supported yet: {within_group:?}");
         }
 
+        let order_by = order_by.unwrap_or_default();
+
+        Ok(Self {
+            name,
+            args,
+            order_by,
+            over,
+            filter,
+            null_treatment,
+            distinct,
+        })
+    }
+}
+
+impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+    pub(super) fn sql_function_to_expr(
+        &self,
+        function: SQLFunction,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let function_args = FunctionArgs::try_new(function)?;
+        let FunctionArgs {
+            name,
+            args,
+            order_by, over,
+            filter,
+            null_treatment,
+            distinct,
+        } = function_args;
+
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
@@ -180,13 +229,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::Unnest(Unnest::new(expr)));
         }
 
-        if order_by.is_some() && is_function_window {
+        if !order_by.is_empty() && is_function_window {
             return plan_err!(
                 "Aggregate ORDER BY is not implemented for window functions"
             );
         }
-
-        let order_by = order_by.unwrap_or_default();
 
         // then, window function
         if let Some(WindowType::WindowSpec(window)) = over {
