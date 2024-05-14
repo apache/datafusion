@@ -31,8 +31,8 @@ impl DataFrame {
     /// TODO: add documentation
     pub fn franz_window(
         self,
-        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
-        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        group_expr: Vec<Expr>,
+        aggr_expr: Vec<Expr>,
         window_length: Duration,
     ) -> Result<Self> {
         let plan = LogicalPlanBuilder::from(self.plan)
