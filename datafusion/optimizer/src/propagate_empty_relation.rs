@@ -137,6 +137,8 @@ impl OptimizerRule for PropagateEmptyRelation {
                     .cloned()
                     .collect::<Vec<_>>();
 
+                let input = new_inputs[0].clone();
+                let input_schema = input.schema();
                 if new_inputs.len() == union.inputs.len() {
                     Ok(Transformed::no(plan))
                 } else if new_inputs.is_empty() {
@@ -159,9 +161,13 @@ impl OptimizerRule for PropagateEmptyRelation {
                         )))
                     }
                 } else {
+                    println!(
+                        "This is the schema after prpagate: {:?}",
+                        union.schema.clone()
+                    );
                     Ok(Transformed::yes(LogicalPlan::Union(Union {
                         inputs: new_inputs,
-                        schema: union.schema.clone(),
+                        schema: input_schema.clone(),
                     })))
                 }
             }
