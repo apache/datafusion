@@ -495,9 +495,22 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| pure_string_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
+        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| binary_coercion(lhs_type, rhs_type))
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for value exprs
+pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    if lhs_type == rhs_type {
+        // same type => equality is possible
+        return Some(lhs_type.clone());
+    }
+    binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
@@ -877,15 +890,17 @@ fn dictionary_coercion(
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
-        (Utf8, from_type) | (from_type, Utf8) => {
-            string_concat_internal_coercion(from_type, &Utf8)
-        }
-        (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
-            string_concat_internal_coercion(from_type, &LargeUtf8)
-        }
-        _ => None,
-    })
+    string_coercion(lhs_type, rhs_type)
+        .or_else(|| list_coercion(lhs_type, rhs_type))
+        .or(match (lhs_type, rhs_type) {
+            (Utf8, from_type) | (from_type, Utf8) => {
+                string_concat_internal_coercion(from_type, &Utf8)
+            }
+            (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
+                string_concat_internal_coercion(from_type, &LargeUtf8)
+            }
+            _ => None,
+        })
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -947,6 +962,18 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         {
             Some(other_type.clone())
         }
+        _ => None
+    }
+}
+
+/// Coercion rules for list types.
+fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        // TODO: cast between array elements (#6558)
+        (List(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), _) => Some(lhs_type.clone()),
+        (_, List(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -989,6 +1016,7 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
+        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -998,6 +1026,7 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
+        .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
 }
 

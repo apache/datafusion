@@ -156,8 +156,8 @@ impl SimpleCsvTable {
         let logical_plan = Projection::try_new(
             vec![columnize_expr(
                 normalize_col(self.exprs[0].clone(), &plan)?,
-                plan.schema(),
-            )],
+                &plan,
+            )?],
             Arc::new(plan),
         )
         .map(LogicalPlan::Projection)?;
