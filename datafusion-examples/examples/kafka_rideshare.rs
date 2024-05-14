@@ -34,6 +34,10 @@ use datafusion_expr::{
     TableType, Volatility, WindowFrame,
 };
 
+use datafusion::execution::SendableRecordBatchStream;
+
+use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
+use datafusion_common::config::CsvOptions;
 use datafusion_common::Result;
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
@@ -80,10 +84,7 @@ async fn main() {
     // register the window function with DataFusion so we can call it
     let sample_value: serde_json::Value = serde_json::from_str(sample_event).unwrap();
     let inferred_schema = infer_arrow_schema_from_json_value(&sample_value).unwrap();
-
-    // println!("{:?}", inferred_schema);
     let mut fields = inferred_schema.fields().to_vec();
-    // println!("{:?}", fields);
 
     // Add a new column to the dataset that should mirror the occured_at_ms field
     fields.insert(
@@ -113,16 +114,17 @@ async fn main() {
     };
 
     // Create a new streaming table
-    let db = StreamTable(Arc::new(_config));
+    let kafka_source = StreamTable(Arc::new(_config));
     let mut config = ConfigOptions::default();
     let _ = config.set("datafusion.execution.batch_size", "32");
 
+    // Create the context object with a source from kafka
     let ctx = SessionContext::new_with_config(config.into());
 
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
         "kafka_imu_data",
-        provider_as_source(Arc::new(db)),
+        provider_as_source(Arc::new(kafka_source)),
         None,
         vec![],
     )
@@ -143,7 +145,16 @@ async fn main() {
         )
         .unwrap();
 
-    print_stream(&windowed_df).await;
+    // print_stream(&windowed_df).await;
+
+    use datafusion::dataframe::FileWriter;
+    use datafusion::dataframe::FranzSink;
+
+    let writer = FileWriter::new("out.json").unwrap();
+    let file_writer = Box::new(writer) as Box<dyn FranzSink>;
+
+    let _ = windowed_df.sink(file_writer).await;
+
 }
 
 async fn print_stream(windowed_df: &DataFrame) {
