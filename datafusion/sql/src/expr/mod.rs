@@ -17,7 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{CastKind, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{CastKind, Expr as SQLExpr, JsonPathElem, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
@@ -212,7 +212,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 agg_func.order_by.clone(),
                                 agg_func.null_treatment,
                             )), true)
-                        },
+                        }
                         _ => (expr, false),
                     }
                 }
@@ -916,7 +916,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 distinct,
                 order_by,
                 null_treatment,
-                filter: None, // filter is passed in
+                filter: _, // filter is passed in
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
                 args,
@@ -944,65 +944,68 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<GetFieldAccess> {
-        let field = match expr.clone() {
+        match expr.clone() {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => GetFieldAccess::NamedStructField {
-                name: ScalarValue::from(s),
-            },
+            ) => {
+                return Ok(GetFieldAccess::NamedStructField {
+                    name: ScalarValue::from(s),
+                })
+            }
             SQLExpr::JsonAccess { value, path } => {
-                let (start, stop, stride) = if let SQLExpr::JsonAccess {
-                    left: l,
-                    operator: JsonOperator::Colon,
-                    right: r,
-                } = *left
-                {
-                    let start = Box::new(self.sql_expr_to_logical_expr(
-                        *l,
+                let start = Box::new(self.sql_expr_to_logical_expr(
+                    *value,
+                    schema,
+                    planner_context,
+                )?);
+
+                fn json_path_elem_to_expr(expr: JsonPathElem) -> SQLExpr {
+                    match expr {
+                        JsonPathElem::Dot { key, .. } => SQLExpr::Value(Value::SingleQuotedString(key)),
+                        JsonPathElem::Bracket { key } => key,
+                    }
+                }
+
+                let mut path_iter = path.path.into_iter();
+                let stop = match path_iter.next() {
+                    None => {
+                        return Ok(GetFieldAccess::ListIndex {
+                            key: Box::new(self.sql_expr_to_logical_expr(
+                                expr,
+                                schema,
+                                planner_context,
+                            )?),
+                        })
+                    }
+                    Some(expr) => Box::new(self.sql_expr_to_logical_expr(
+                        json_path_elem_to_expr(expr),
                         schema,
                         planner_context,
-                    )?);
-                    let stop = Box::new(self.sql_expr_to_logical_expr(
-                        *r,
-                        schema,
-                        planner_context,
-                    )?);
-                    let stride = Box::new(self.sql_expr_to_logical_expr(
-                        *right,
-                        schema,
-                        planner_context,
-                    )?);
-                    (start, stop, stride)
-                } else {
-                    let start = Box::new(self.sql_expr_to_logical_expr(
-                        *left,
-                        schema,
-                        planner_context,
-                    )?);
-                    let stop = Box::new(self.sql_expr_to_logical_expr(
-                        *right,
-                        schema,
-                        planner_context,
-                    )?);
-                    let stride = Box::new(Expr::Literal(ScalarValue::Int64(Some(1))));
-                    (start, stop, stride)
+                    )?),
                 };
-                GetFieldAccess::ListRange {
+                let stride = match path_iter.next() {
+                    None => Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
+                    Some(expr) => Box::new(self.sql_expr_to_logical_expr(
+                        json_path_elem_to_expr(expr),
+                        schema,
+                        planner_context,
+                    )?),
+                };
+
+                Ok(GetFieldAccess::ListRange {
                     start,
                     stop,
                     stride,
-                }
+                })
             }
-            _ => GetFieldAccess::ListIndex {
+            _ => Ok(GetFieldAccess::ListIndex {
                 key: Box::new(self.sql_expr_to_logical_expr(
                     expr,
                     schema,
                     planner_context,
                 )?),
-            },
-        };
-
-        Ok(field)
+            }),
+        }
     }
 
     fn plan_indexed(
