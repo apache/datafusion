@@ -384,21 +384,6 @@ impl DataFrame {
         })
     }
 
-    /// Return a new DataFrame that adds the result of evaluating one or more
-    /// window functions ([`Expr::WindowFunction`]) to the existing columns
-    ///
-    pub fn franz_window(
-        self,
-        group_expr: Vec<Expr>,
-        aggr_expr: Vec<Expr>,
-        window_length: Duration,
-    ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .franz_window(group_expr, aggr_expr, window_length)?
-            .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
-    }
-
     /// Returns a new `DataFrame` with a limited number of rows.
     ///
     /// # Arguments
