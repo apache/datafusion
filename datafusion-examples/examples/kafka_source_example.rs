@@ -180,9 +180,7 @@ async fn main() {
 
     println!("{:?}\n\n", canonical_schema);
     let _config = KafkaStreamConfig {
-        bootstrap_servers: String::from(
-            "localhost:19092,localhost:29092,localhost:39092",
-        ),
+        bootstrap_servers: String::from("localhost:9092"),
         topic: String::from("accounts"),
         consumer_group_id: String::from("my_test_consumer"),
         original_schema: Arc::new(inferred_schema),

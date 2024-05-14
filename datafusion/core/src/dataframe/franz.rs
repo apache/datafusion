@@ -28,7 +28,7 @@ use crate::logical_expr::Expr;
 impl DataFrame {
     /// Return a new DataFrame that adds the result of evaluating one or more
     /// window functions ([`Expr::WindowFunction`]) to the existing columns
-    /// TODO: add documentation
+    ///
     pub fn franz_window(
         self,
         group_expr: Vec<Expr>,
