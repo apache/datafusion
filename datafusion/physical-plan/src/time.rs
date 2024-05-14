@@ -11,14 +11,12 @@ use arrow_array::{
 use chrono::NaiveDateTime;
 use datafusion_common::DataFusionError;
 use std::time::Duration;
-use tracing::info;
 
-struct Time {}
 #[derive(Debug, Clone)]
 pub enum TimestampUnit {
-    String_ISO_8601(String),
-    Int64_Seconds,
-    Int64_Millis,
+    StringIso8601(String),
+    Int64Seconds,
+    Int64Millis,
 }
 
 #[derive(Debug)]
@@ -60,7 +58,7 @@ pub fn array_to_timestamp_array(
     data_type: TimestampUnit,
 ) -> TimestampMillisecondArray {
     match data_type {
-        TimestampUnit::String_ISO_8601(fmt) => {
+        TimestampUnit::StringIso8601(fmt) => {
             let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
             let naive_datetimes: Vec<NaiveDateTime> = string_array
                 .iter()
@@ -69,26 +67,25 @@ pub fn array_to_timestamp_array(
 
             let timestamps: Vec<i64> = naive_datetimes
                 .into_iter()
-                .map(|dt| dt.timestamp_millis())
+                .map(|dt| dt.and_utc().timestamp_millis())
                 .collect();
 
-            let primitive_array = PrimitiveArray::from_vec(timestamps, None);
+            let primitive_array = PrimitiveArray::from(timestamps);
             TimestampMillisecondArray::from(primitive_array)
         }
-        TimestampUnit::Int64_Millis => {
+        TimestampUnit::Int64Millis => {
             let int64_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
             let timestamps: Vec<i64> = int64_array.values().to_vec();
-            let primitive_array = PrimitiveArray::from_vec(timestamps, None);
+            let primitive_array = PrimitiveArray::from(timestamps);
             TimestampMillisecondArray::from(primitive_array)
         }
-        TimestampUnit::Int64_Seconds => {
+        TimestampUnit::Int64Seconds => {
             let int64_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
             let timestamps: Vec<i64> = int64_array.values().to_vec();
             let millisecond_timestamps: Vec<i64> =
                 timestamps.into_iter().map(|ts| ts * 1000).collect();
-            let primitive_array = PrimitiveArray::from_vec(millisecond_timestamps, None);
+            let primitive_array = PrimitiveArray::from(millisecond_timestamps);
             TimestampMillisecondArray::from(primitive_array)
         }
-        _ => panic!("Unsupported data type: {:?}", data_type),
     }
 }

@@ -319,8 +319,10 @@ impl CommonSubexprEliminate {
             // Since group_epxr changes, schema changes also. Use try_new method.
             let inner_agg =
                 Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr);
-            if let LogicalPlan::StreamingWindow(_) = plan {
-                inner_agg.map(LogicalPlan::StreamingWindow)
+            if let LogicalPlan::StreamingWindow(_, window_length) = plan {
+                inner_agg.map(|new_aggr| {
+                    LogicalPlan::StreamingWindow(new_aggr, window_length.clone())
+                })
             } else {
                 inner_agg.map(LogicalPlan::Aggregate)
             }
@@ -358,8 +360,8 @@ impl CommonSubexprEliminate {
             let inner_agg =
                 Aggregate::try_new(Arc::new(new_input), new_group_expr, agg_exprs)?;
 
-            let agg = if let LogicalPlan::StreamingWindow(_) = plan {
-                LogicalPlan::StreamingWindow(inner_agg)
+            let agg = if let LogicalPlan::StreamingWindow(_, window_length) = plan {
+                LogicalPlan::StreamingWindow(inner_agg, window_length.clone())
             } else {
                 LogicalPlan::Aggregate(inner_agg)
             };
@@ -405,7 +407,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 Some(self.try_optimize_window(window, config)?)
             }
             LogicalPlan::Aggregate(aggregate)
-            | LogicalPlan::StreamingWindow(aggregate) => {
+            | LogicalPlan::StreamingWindow(aggregate, _) => {
                 Some(self.try_optimize_aggregate(aggregate, config, plan)?)
             }
             LogicalPlan::Join(_)

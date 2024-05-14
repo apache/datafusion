@@ -7,10 +7,7 @@ use datafusion_physical_plan::ExecutionPlanProperties;
 use crate::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use crate::error::Result;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::{
-    coalesce_partitions::CoalescePartitionsExec,
-    continuous::window::FranzStreamingWindowExec, ExecutionPlan,
-};
+use crate::physical_plan::continuous::window::FranzStreamingWindowExec;
 pub struct CoaslesceBeforeStreamingAggregate {}
 
 impl CoaslesceBeforeStreamingAggregate {
@@ -20,6 +17,7 @@ impl CoaslesceBeforeStreamingAggregate {
     }
 }
 
+#[allow(unused_variables)]
 impl PhysicalOptimizerRule for CoaslesceBeforeStreamingAggregate {
     fn optimize(
         &self,
@@ -150,7 +148,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expected = &[
-            "FranzStreamingWindowExec: mode=Partial, gby=[], aggr=[COUNT(a)]",
+            "FranzStreamingWindowExec: mode=Partial, gby=[], aggr=[COUNT(a)], window_type=[Tumbling(5s)]",
             "MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         assert_optimized!(expected, optimized);
@@ -183,7 +181,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let expected = &[
-            "FranzStreamingWindowExec: mode=Partial, gby=[], aggr=[COUNT(a)]",
+            "FranzStreamingWindowExec: mode=Partial, gby=[], aggr=[COUNT(a)], window_type=[Tumbling(5s)]",
             "RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=2",
             "MemoryExec: partitions=2, partition_sizes=[1, 1]",
         ];

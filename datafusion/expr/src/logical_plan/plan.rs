@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
@@ -280,7 +281,7 @@ pub enum LogicalPlan {
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
 
-    StreamingWindow(Aggregate),
+    StreamingWindow(Aggregate, Duration),
 }
 
 impl LogicalPlan {
@@ -322,7 +323,7 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
-            LogicalPlan::StreamingWindow(Aggregate { schema, .. }) => schema,
+            LogicalPlan::StreamingWindow(Aggregate { schema, .. }, _) => schema,
         }
     }
 
@@ -475,7 +476,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => vec![],
-            LogicalPlan::StreamingWindow(Aggregate { input, .. }) => vec![input],
+            LogicalPlan::StreamingWindow(Aggregate { input, .. }, _) => vec![input],
         }
     }
 
@@ -593,7 +594,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Unnest(_) => Ok(None),
-            LogicalPlan::StreamingWindow(agg) => {
+            LogicalPlan::StreamingWindow(agg, _) => {
                 if agg.group_expr.is_empty() {
                     Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
                 } else {
@@ -1158,12 +1159,15 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
-            LogicalPlan::StreamingWindow(Aggregate { group_expr, .. }) => {
+            LogicalPlan::StreamingWindow(Aggregate { group_expr, .. }, window_length) => {
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Aggregate::try_new(Arc::new(inputs.swap_remove(0)), expr, agg_expr)
-                    .map(LogicalPlan::StreamingWindow)
+                Aggregate::try_new(Arc::new(inputs.swap_remove(0)), expr, agg_expr).map(
+                    |new_agg_expr| {
+                        LogicalPlan::StreamingWindow(new_agg_expr, window_length.clone())
+                    },
+                )
             }
         }
     }
@@ -1339,9 +1343,12 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
-            LogicalPlan::StreamingWindow(Aggregate {
-                input, group_expr, ..
-            }) => {
+            LogicalPlan::StreamingWindow(
+                Aggregate {
+                    input, group_expr, ..
+                },
+                _,
+            ) => {
                 // Empty group_expr will return Some(1)
                 if group_expr
                     .iter()
@@ -1967,11 +1974,12 @@ impl LogicalPlan {
                         ref group_expr,
                         ref aggr_expr,
                         ..
-                    }) => write!(
+                    }, window_length) => write!(
                         f,
-                        "StreamingWindow: groupBy=[[{}]], aggr=[[{}]]",
+                        "StreamingWindow: groupBy=[[{}]], aggr=[[{}]], window_length[{:?}]",
                         expr_vec_fmt!(group_expr),
-                        expr_vec_fmt!(aggr_expr)
+                        expr_vec_fmt!(aggr_expr),
+                        window_length,
                     ),
                 }
             }

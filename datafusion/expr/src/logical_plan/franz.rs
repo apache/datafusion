@@ -19,13 +19,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::LogicalPlanBuilder;
-use crate::builder::{add_group_by_exprs_from_dependencies, validate_unique_names};
+use crate::builder::add_group_by_exprs_from_dependencies;
 use crate::{Aggregate, Expr};
 
 use crate::expr_rewriter::normalize_cols;
 use datafusion_common::Result;
 
-use crate::logical_plan::{LogicalPlan, Window};
+use crate::logical_plan::LogicalPlan;
 
 impl LogicalPlanBuilder {
     /// Apply franz window functions to extend the schema
@@ -41,7 +41,7 @@ impl LogicalPlanBuilder {
         let group_expr =
             add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
         let aggr = Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
-            .map(LogicalPlan::StreamingWindow)
+            .map(|new_aggr| LogicalPlan::StreamingWindow(new_aggr, window_length))
             .map(Self::from);
         aggr
     }

@@ -659,15 +659,19 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
             }
-            LogicalPlan::StreamingWindow(Aggregate {
-                ref group_expr,
-                ref aggr_expr,
-                ..
-            }) => {
+            LogicalPlan::StreamingWindow(
+                Aggregate {
+                    ref group_expr,
+                    ref aggr_expr,
+                    ..
+                },
+                window_length,
+            ) => {
                 json!({
-                    "Node Type": "Aggregate",
+                    "Node Type": "StreamingWindow",
                     "Group By": expr_vec_fmt!(group_expr),
-                    "Aggregates": expr_vec_fmt!(aggr_expr)
+                    "Aggregates": expr_vec_fmt!(aggr_expr),
+                    "Window Length": window_length,
                 })
             }
         }

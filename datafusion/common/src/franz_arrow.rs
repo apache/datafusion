@@ -126,8 +126,6 @@ pub fn json_to_avro_value(
             }
             _ => Err("JSON object encountered, but schema is not a Record".to_string()),
         },
-        // @TODO: analyzer says this is unreachable, is that true?
-        _ => Err("Unsupported JSON type for Avro conversion".to_string()),
     }
 }
 
