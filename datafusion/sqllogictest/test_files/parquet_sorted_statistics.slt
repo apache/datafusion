@@ -266,36 +266,36 @@ DROP TABLE test_table;
 
 # Create a table as a data source
 statement ok
-CREATE TABLE src_table2 (
+CREATE TABLE int_table (
   a INT,
   b INT,
   c INT
 ) AS VALUES
 -- first file
-(1, 100, 0),
+(3, 100, 0),
 (2, 200, 0),
-(3, 300, 0),
+(1, 300, 0),
 -- second file
-(7, 700, 0),
+(9, 700, 0),
 (8, 800, 0),
-(9, 900, 0);
+(7, 900, 0);
 
-# Create files: file1.parquet, file2.parquet both sorted on a
+# Create files: 0.parquet, 1.parquet both sorted on a, the schema of the files is different but compatible 
 # but file 1 has the columns in the order a, b, c and file 2 has the columns in the order c, b, a
 # The keyranges of values of a should be non overlapping
 
-# Create file1.parquet
+# Create 0.parquet
 query III
-COPY (SELECT * FROM src_table2 WHERE a <= 3 ORDER BY a)
-TO 'test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet'
+COPY (SELECT * FROM int_table WHERE a <= 3 ORDER BY a)
+TO 'test_files/scratch/parquet_sorted_statistics/int_table/0.parquet'
 STORED AS PARQUET;
 ----
 3
 
-# Create file2.parquet
+# Create 1.parquet
 query III
-COPY (SELECT c, b, a FROM src_table2 WHERE a > 6 ORDER BY a)
-TO 'test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet'
+COPY (SELECT c, b, a FROM int_table WHERE a > 6 ORDER BY a)
+TO 'test_files/scratch/parquet_sorted_statistics/int_table/1.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -311,8 +311,9 @@ CREATE EXTERNAL TABLE test_table (
 STORED AS PARQUET
 PARTITIONED BY (partition_col)
 WITH ORDER (a ASC NULLS LAST)
-LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table1';
+LOCATION 'test_files/scratch/parquet_sorted_statistics/int_table';
 
+# Make sure the output plan doesn't use sort preserving merge
 query TT
 EXPLAIN SELECT *
 FROM test_table
@@ -321,8 +322,9 @@ ORDER BY a;
 logical_plan
 01)Sort: test_table.a ASC NULLS LAST
 02)--TableScan: test_table projection=[a, b, c, partition_col]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/int_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/int_table/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
 
+# Make sure the output plan doesn't use sort preserving merge
 query TT
 EXPLAIN SELECT *
 FROM test_table
@@ -333,4 +335,4 @@ logical_plan
 02)--TableScan: test_table projection=[a, b, c, partition_col]
 physical_plan
 01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table1/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/int_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/int_table/1.parquet]]}, projection=[a, b, c, partition_col], output_ordering=[a@0 ASC NULLS LAST]
