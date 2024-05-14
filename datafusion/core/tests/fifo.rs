@@ -384,8 +384,8 @@ mod unix_test {
                 a2  INT NOT NULL
             )
             STORED AS CSV
-            WITH HEADER ROW
-            LOCATION '{source_display_fifo_path}'"
+            LOCATION '{source_display_fifo_path}'
+            OPTIONS ('format.has_header' 'true')"
         ))
         .await?;
 
@@ -396,8 +396,8 @@ mod unix_test {
                 a2  INT NOT NULL
             )
             STORED AS CSV
-            WITH HEADER ROW
-            LOCATION '{sink_display_fifo_path}'"
+            LOCATION '{sink_display_fifo_path}'
+            OPTIONS ('format.has_header' 'true')"
         ))
         .await?;
 
