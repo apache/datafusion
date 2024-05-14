@@ -26,11 +26,7 @@ use crate::logical_expr::Expr;
 
 use futures::StreamExt;
 
-use arrow::json::LineDelimitedWriter;
-use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
-use std::fs::File;
-use std::sync::Arc;
+use crate::franz_sinks::FranzSink;
 
 impl DataFrame {
     /// Return a new DataFrame that adds the result of evaluating one or more
@@ -63,46 +59,9 @@ impl DataFrame {
                 // let mut writer = LineDelimitedWriter::new(std::io::stdout().lock());
                 // let _ = writer.write(&batch);
 
-                let _ = sink.write_stuff(batch).await;
+                let _ = sink.write_record(batch).await;
             }
             // println!("<<<<< window end >>>>>>");
         }
     }
 }
-
-#[async_trait]
-pub trait FranzSink {
-    async fn write_stuff(&mut self, batch: RecordBatch) -> Result<(), DataFusionError>;
-}
-
-pub struct FileWriter {
-    file: Arc<tokio::sync::Mutex<LineDelimitedWriter<File>>>,
-}
-
-// todo
-impl FileWriter {
-    // todo
-    pub fn new(fname: &str) -> Result<Self> {
-        // todo
-        let file = File::create(fname)?;
-        let writer = LineDelimitedWriter::new(file);
-        Ok(Self {
-            file: Arc::new(tokio::sync::Mutex::new(writer)),
-        })
-    }
-}
-
-#[async_trait]
-impl FranzSink for FileWriter {
-    async fn write_stuff(&mut self, batch: RecordBatch) -> Result<()> {
-        let mut file = self.file.lock().await;
-
-        file.write(&batch).map_err(DataFusionError::from)?;
-        file.finish().map_err(DataFusionError::from)?;
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {}
