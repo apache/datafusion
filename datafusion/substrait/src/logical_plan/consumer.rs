@@ -16,7 +16,7 @@
 // under the License.
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
@@ -68,10 +68,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::variation_const::{
-    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
-    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
-    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
-    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF, DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF
 };
 
 enum ScalarFunctionType {
@@ -1157,6 +1154,24 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
+            r#type::Kind::UserDefined(u) => {
+                match u.type_reference {
+                    INTERVAL_YEAR_MONTH_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::YearMonth))
+                    }
+                    INTERVAL_DAY_TIME_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::DayTime))
+                    }
+                    INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                    }
+                    _ => not_impl_err!(
+                        "Unsupported Substrait user defined type with ref {} and variation {}",
+                        u.type_reference,
+                        u.type_variation_reference
+                    ),
+                }
+            }
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
