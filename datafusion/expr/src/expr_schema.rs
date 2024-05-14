@@ -447,7 +447,7 @@ impl ExprSchemable for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 let st = self.data_type_and_nullable(input_schema);
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                if let Err(_) = self.metadata(input_schema) {
+                if let Err(_) = st {
                     panic!("here");
                 }
                 Ok((

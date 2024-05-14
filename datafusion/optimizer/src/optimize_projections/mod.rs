@@ -29,6 +29,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_err, Column, JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -109,22 +110,9 @@ fn optimize_projections(
     indices: RequiredIndicies,
 ) -> Result<Option<LogicalPlan>> {
     let child_required_indices: Vec<RequiredIndicies> = match plan {
-        LogicalPlan::Unnest(_) => {
-            println!("{:?}",indices);
-            // Pass index requirements from the parent as well as column indices
-            // that appear in this plan's expressions to its child. All these
-            // operators benefit from "small" inputs, so the projection_beneficial
-            // flag is `true`.
-            vec![RequiredIndicies::new_from_indices(vec![0,0])]
-            // plan.inputs()
-            //     .into_iter()
-            //     .map(|input| {
-            //         indices
-            //             .clone()
-            //             .with_projection_beneficial()
-            //             .with_plan_exprs(plan, input.schema())
-            //     })
-            //     .collect::<Result<_>>()?
+        LogicalPlan::Unnest(Unnest{dependency_indices,..}) => {
+            println!("{:?}",dependency_indices);
+            vec![RequiredIndicies::new_from_indices(dependency_indices.clone())]
         }
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
@@ -402,13 +390,14 @@ fn optimize_projections(
             // If new_input is `None`, this means child is not changed, so use
             // `old_child` during construction:
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
-            .collect();
+            .collect::<Vec<_>>();
+
         let exprs = plan.expressions();
         plan.with_new_exprs(exprs, new_inputs).map(Some)
     }
 }
 
-/// Merges consecutive projections.
+/// Merges consecutive projectionsDFSchema { inner: Schema { fields: [Field { name: "name0", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "name1", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None, None], functional_dependencies: FunctionalDependencies { deps: [] } }.
 ///
 /// Given a projection `proj`, this function attempts to merge it with a previous
 /// projection if it exists and if merging is beneficial. Merging is considered
@@ -445,6 +434,7 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
     // projections will benefit from a compute-once approach. For details, see:
     // https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
+        let a = prev_projection.schema.index_of_column(&col);
         usage > 1
             && !is_expr_trivial(
                 &prev_projection.expr
@@ -743,6 +733,10 @@ fn rewrite_projection_given_requirements(
     return if let Some(input) =
         optimize_projections(&proj.input, config, required_indices)?
     {
+        if let Err(e) = is_projection_unnecessary(&input, &exprs_used) {
+            println!("==========\n\nerror checking if projection is necessary, input\n{:?}\nwith schema\n{:?}\n project exprs {:?}",
+            input,input.schema(),exprs_used);
+        }
         if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {

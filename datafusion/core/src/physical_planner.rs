@@ -1170,14 +1170,15 @@ impl DefaultPhysicalPlanner {
                     .map(|idx| {
                         let column = &columns[*idx];
                         let schema_idx = schema.index_of_column(column)?;
-                        Ok(Column::new(&column.name,schema_idx))
+                        Ok(Column::new(&column.name, schema_idx))
                     })
                     .collect::<Result<_>>()?;
 
-                let struct_columns_set: HashSet<usize> = struct_type_columns
-                    .iter()
-                    .map(|idx| schema.index_of_column(&columns[*idx]))
-                    .collect::<Result<_>>()?;
+                let struct_columns_set: HashSet<usize> =
+                    struct_type_columns.iter().copied().collect();
+                // .iter()
+                // .map(|idx| schema.index_of_column(&columns[*idx]))
+                // .collect::<Result<_>>()?;
 
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(

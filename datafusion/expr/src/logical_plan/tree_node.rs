@@ -315,6 +315,7 @@ impl TreeNode for LogicalPlan {
                 output_columns: columns,
                 list_type_columns,
                 struct_type_columns,
+                dependency_indices,
                 schema,
                 options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
@@ -322,6 +323,7 @@ impl TreeNode for LogicalPlan {
                     input,
                     input_columns,
                     output_columns: columns,
+                    dependency_indices,
                     list_type_columns,
                     struct_type_columns,
                     schema,
@@ -498,6 +500,12 @@ impl LogicalPlan {
             }
             LogicalPlan::Unnest(unnest) => {
                 let columns = unnest.input_columns.clone();
+                // we use output_columns instead of input column
+                // let output_exprs = unnest
+                //     .output_columns
+                //     .iter()
+                //     .map(|c| Expr::Column(c.clone()))
+                //     .collect::<Vec<_>>();
                 // let mut columns = unnest.get_list_columns();
                 // columns.extend_from_slice(
                 //     unnest.get_struct_columns().as_ref());

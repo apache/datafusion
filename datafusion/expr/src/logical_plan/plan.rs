@@ -813,6 +813,10 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
+                // TODO: we are not considering new expr rewrite
+                // If this case happen
+                // original plan: column1.field1, column1.field2, column2.field3
+                // input is optimized so that it only gives the schema of column1
                 let input = inputs.swap_remove(0);
                 let new_plan = unnest_with_options(input, 
                     columns.clone(), options.clone())?;
@@ -1688,8 +1692,6 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    // println!("display projection input {}\n---with schema {:?}",input.display_indent_schema(),input.schema());
-    // println!("exprs being used {:?}",exprs[0]);
     let mut schema = DFSchema::new_with_metadata(
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
@@ -2526,13 +2528,21 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     pub input_columns: Vec<Column>,
+    // which index of original column in the input is each new column depend on
+    // e.g original input: (struct_col,list[int])
+    // new column after unnest (struct_col.field1, struct_col,field2, int)
+    // then dependency_map will be {0:0,1:0,2:1} 
     // TODO: this should be converted into output column
     // instead of the columns in the input
     pub output_columns: Vec<Column>,
-    /// refer to the indices of field columns that have type list 
+    /// refer to the indices(in the original input schema) of field columns 
+    /// that have type list to run unnest on 
     pub list_type_columns: Vec<usize>,
-    /// refer to the indices of field columns that have type struct 
+    /// refer to the indices (in the original input schema) of field columns
+    /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,
+    /// for each column in output schema, which column in the input schema it depends on
+    pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options

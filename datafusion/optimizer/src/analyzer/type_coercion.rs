@@ -77,9 +77,6 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    println!("\n==============analyzing_internal begins========================");
-    println!("external schema: {:?}", external_schema);
-    println!("current plan\n{:?}\nrecursively transforming input", plan);
     let new_inputs = plan
         .inputs()
         .iter()
@@ -106,25 +103,17 @@ fn analyze_internal(
         schema: Arc::new(schema),
     };
 
-    println!("===|rewriting children expressions");
-
     let new_expr = plan
         .expressions()
         .into_iter()
         .map(|expr| {
             // ensure aggregate names don't change:
             // https://github.com/apache/datafusion/issues/3555
-            let new_expr = rewrite_preserving_name(expr.clone(), &mut expr_rewrite);
-            let ret = new_expr?;
-            println!("=====|{:?} => {:?}",expr, ret);
-            Ok(ret)
+            rewrite_preserving_name(expr.clone(), &mut expr_rewrite)
         })
         .collect::<Result<Vec<_>>>()?;
 
-
-    let new_plan = plan.with_new_exprs(new_expr, new_inputs)?;
-    println!("===|New plan:\n{:?}\n\n===============", new_plan);
-    Ok(new_plan)
+    plan.with_new_exprs(new_expr, new_inputs)
 }
 
 pub(crate) struct TypeCoercionRewriter {

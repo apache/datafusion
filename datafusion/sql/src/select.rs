@@ -312,23 +312,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // For expr at root level, we need to check if it is an unnest on struct 
                 // column to transform the expr unnest(struct(field1, field2)) 
                 // into struct.field1, struct.field2
-                if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+            if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                     // will need to be rewritten into (struct_col.field1, struct_col,
                     //field2 ...)
                     let column_name = expr.display_name()?;
-                    let column = Column::from_name(column_name);
+                    let col_in_unnest = match arg.try_into_col() {
+                        Ok(col) => col,
+                        Err(err) => return internal_err!("failed to convert expression inside unnest into column {},unnest only support expression representing column for now",
+                         err)
+                    };
                     unnest_columns.push(column_name.clone());
                     // Add alias for the argument expression, to avoid naming conflicts 
                     // with other expressions
                     // in the select list. For example: `select unnest(col1), col1 from t`.
+                    // this extra projection is used to unnest transforming
                     inner_projection_exprs.push(arg.clone().alias(column_name.clone()));
                     let schema = input.schema();
 
-                let outer_projection_columns = projection_after_unnest(
-                    &column, schema)?;
+                let (outer_projection_columns ,_)= projection_after_unnest(
+                    &col_in_unnest, schema)?;
                     let expr =   outer_projection_columns
                     .iter()
- .map(|col| Expr::Column(col.clone()))
+ .map(|col| Expr::Column(col.0.clone()))
  .collect::<Vec<_>>();
                     return Ok(expr);
                 }
@@ -342,12 +347,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         // will need to be rewritten into (struct_col.field1, struct_col,field2 ...)
                         let column_name = expr.display_name()?;
                         unnest_columns.push(column_name.clone());
-                        let col = Column::from_name(column_name);
+                        let col = Column::from_name(&column_name);
                         // Add alias for the argument expression, to avoid naming conflicts with other expressions
                         // in the select list. For example: `select unnest(col1), col1 from t`.
                         let schema = input.schema();
                         if let DataType::Struct(_)=  schema.data_type(&col)? {
-                            internal_err!("unnest on struct can ony be applied at the root level of select expression")
+                            return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                         }
 
                         inner_projection_exprs
@@ -376,7 +381,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<_>>>()?
             .into_iter().flatten().collect();
 
-
         // Do the final projection
         if unnest_columns.is_empty() {
             LogicalPlanBuilder::from(input)
@@ -388,8 +392,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
             let plan = LogicalPlanBuilder::from(input)
                 .project(inner_projection_exprs)?
-                .unnest_columns_with_options(columns, unnest_options)?
-                .project(outer_projection_exprs)?.build();
+                .unnest_columns_with_options(columns, unnest_options)?;
+            let plan = plan.project(outer_projection_exprs)?.build();
             plan
         }
     }

@@ -22,11 +22,12 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    (struct(1 as "name0", 2 as "name1"))
+    (struct(1 as "name0", 2 as "name1"),[1,2,3])
 ;
 
 
-query II
-select unnest(column1), column1 from unnest_table;
+
+query II?
+select unnest(column1), column1, unnest(column2) from unnest_table;
 ----
-1 2
+1 2 {name0: 1, name1: 2}
