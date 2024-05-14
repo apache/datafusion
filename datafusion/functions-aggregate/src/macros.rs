@@ -33,7 +33,6 @@
 // under the License.
 
 macro_rules! make_udaf_expr_and_func {
-    // e.g. fun(arg)
     ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
@@ -51,7 +50,6 @@ macro_rules! make_udaf_expr_and_func {
         }
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    // e.g. fun(arg, distinct)
     ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $distinct:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
@@ -70,29 +68,6 @@ macro_rules! make_udaf_expr_and_func {
         }
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    // e.g. fun(arg, distinct, filter, order_by, null_treatment)
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $distinct:ident, $filter:ident, $order_by:ident, $null_treatment:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
-        // "fluent expr_fn" style function
-        #[doc = $DOC]
-        pub fn $EXPR_FN(
-            $($arg: datafusion_expr::Expr,)*
-            distinct: bool,
-            filter: Option<Box<datafusion_expr::Expr>>,
-            order_by: Option<Vec<datafusion_expr::Expr>>,
-            null_treatment: Option<sqlparser::ast::NullTreatment>
-        ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                $AGGREGATE_UDF_FN(),
-                vec![$($arg),*],
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            ))
-        }
-        create_func!($UDAF, $AGGREGATE_UDF_FN);
-    };
-    // e.g. func(vec![arg], distinct, filter, order_by, null_treatment)
     ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
