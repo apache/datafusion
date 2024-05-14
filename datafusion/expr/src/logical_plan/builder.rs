@@ -1141,22 +1141,34 @@ impl LogicalPlanBuilder {
 }
 
 /// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
-/// fn employee_schema() -> Schema {
-///     Schema::new(vec![
-///         Field::new("id", DataType::Int32, false),
-///         Field::new("first_name", DataType::Utf8, false),
-///         Field::new("last_name", DataType::Utf8, false),
-///         Field::new("state", DataType::Utf8, false),
-///         Field::new("salary", DataType::Int32, false),
-///     ])
-/// }
+/// ```
+/// # use datafusion_expr::{Expr, expr, col, LogicalPlanBuilder, logical_plan::table_scan};
+/// # use datafusion_common::Result;
+/// # use arrow::datatypes::{Schema, DataType, Field};
+/// # fn main() -> Result<()> {
+/// #
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("id", DataType::Int32, false),
+/// #           Field::new("first_name", DataType::Utf8, false),
+/// #           Field::new("last_name", DataType::Utf8, false),
+/// #           Field::new("state", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// #
+/// // Create the plan
 /// let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
 ///     .sort(vec![
 ///         Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
 ///         Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
 ///      ])?
 ///     .build()?;
-/// let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+/// // Convert LogicalPlan into LogicalPlanBuilder
+/// let plan_builder: LogicalPlanBuilder = std::sync::Arc::new(plan).into();
+/// # Ok(())
+/// # }
+/// ```
 
 impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     fn from(plan: Arc<LogicalPlan>) -> Self {
