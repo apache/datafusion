@@ -697,20 +697,15 @@ mod tests {
 
     #[test]
     fn test_compute_record_batch_statistics_null() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("u64", DataType::UInt64, true),
-        ]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("u64", DataType::UInt64, true)]));
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![
-                Arc::new(UInt64Array::from(vec![Some(1), None, None])),
-            ],
+            vec![Arc::new(UInt64Array::from(vec![Some(1), None, None]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![
-                Arc::new(UInt64Array::from(vec![Some(1), Some(2), None])),
-            ],
+            vec![Arc::new(UInt64Array::from(vec![Some(1), Some(2), None]))],
         )?;
         let byte_size = batch1.get_array_memory_size() + batch2.get_array_memory_size();
         let actual =
@@ -719,14 +714,12 @@ mod tests {
         let expected = Statistics {
             num_rows: Precision::Exact(6),
             total_byte_size: Precision::Exact(byte_size),
-            column_statistics: vec![
-                ColumnStatistics {
-                    distinct_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    null_count: Precision::Exact(3),
-                },
-            ],
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                null_count: Precision::Exact(3),
+            }],
         };
 
         assert_eq!(actual, expected);
