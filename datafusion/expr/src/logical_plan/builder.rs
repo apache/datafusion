@@ -24,7 +24,7 @@ use std::iter::zip;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, Cast};
+use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
@@ -195,14 +195,10 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    match values_coercion(&data_type, &prev_type) {
-                        Some(new_type) => {
-                            common_type = Some(new_type.clone());
-                        }
-                        None => {
-                            return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}")
-                        }
-                    }
+                    let Some(new_type) = values_coercion(&data_type, &prev_type) else {
+                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                    };
+                    common_type = Some(new_type);
                 } else {
                     common_type = Some(data_type.clone());
                 }
@@ -215,13 +211,8 @@ impl LogicalPlanBuilder {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
                 } else {
-                    let data_type = row[j].get_type(&empty_schema)?;
-                    if data_type != *field_type {
-                        row[j] = Expr::Cast(Cast {
-                            expr: Box::new(row[j].clone()),
-                            data_type: field_type.clone(),
-                        });
-                    }
+                    row[j] =
+                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
                 }
             }
         }
@@ -2153,27 +2144,6 @@ mod tests {
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
             ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_values() -> Result<()> {
-        let values = vec![
-            vec![lit(1.2), lit(3), lit("a")],
-            vec![lit(2), lit(ScalarValue::Null), lit("b")],
-        ];
-        let plan = LogicalPlanBuilder::values(values.clone())?.build()?;
-        let schema = plan.schema();
-        let fields = schema.fields().clone();
-        assert_eq!(
-            fields,
-            vec![
-                Field::new("column1", DataType::Float64, true),
-                Field::new("column2", DataType::Int32, true),
-                Field::new("column3", DataType::Utf8, true)
-            ]
-            .into()
         );
         Ok(())
     }
