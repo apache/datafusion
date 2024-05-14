@@ -69,6 +69,7 @@ pub fn check_finiteness_requirements(
     input: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    println!("{:?}", input);
     if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))

@@ -97,7 +97,10 @@ impl PartitionStream for KafkaStreamRead {
         // Create Kafka consumer with rebalance callback
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", self.config.consumer_group_id.to_string()) // Replace with your group ID
-            .set("bootstrap.servers", self.config.bootstrap_servers.to_string()) // Replace with your Kafka bootstrap servers
+            .set(
+                "bootstrap.servers",
+                self.config.bootstrap_servers.to_string(),
+            )
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
             .set("auto.offset.reset", self.config.offset_reset.to_string())
             .create()

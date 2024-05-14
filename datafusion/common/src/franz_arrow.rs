@@ -1,8 +1,8 @@
 use core::slice;
 use std::io::Cursor;
-use std::{collections::HashMap, io::BufWriter, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-use apache_avro::{from_avro_datum, types::Value, Error, Schema as AvSchema, Writer};
+use apache_avro::{types::Value, Error, Schema as AvSchema};
 use arrow::array::{Array, ListArray, StringBuilder, StructArray};
 use arrow::array::{
     BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,

@@ -119,14 +119,14 @@ impl AggregateMode {
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
-    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    pub expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Corresponding NULL expressions for expr
-    null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    pub null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Null mask for each group in this grouping set. Each group is
     /// composed of either one of the group expressions in expr or a null
     /// expression in null_expr. If `groups[i][j]` is true, then the the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
-    groups: Vec<Vec<bool>>,
+    pub groups: Vec<Vec<bool>>,
 }
 
 impl PhysicalGroupBy {
@@ -910,7 +910,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
-fn get_finer_aggregate_exprs_requirement(
+pub fn get_finer_aggregate_exprs_requirement(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -983,7 +983,7 @@ fn get_finer_aggregate_exprs_requirement(
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
-fn aggregate_expressions(
+pub fn aggregate_expressions(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     mode: &AggregateMode,
     col_idx_base: usize,
@@ -1023,7 +1023,7 @@ fn aggregate_expressions(
 /// AggregateExpr' accumulator's state.
 ///
 /// `index_base` is the starting physical column index for the next expanded state field.
-fn merge_expressions(
+pub(crate) fn merge_expressions(
     index_base: usize,
     expr: &Arc<dyn AggregateExpr>,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
@@ -1038,7 +1038,7 @@ fn merge_expressions(
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
 
-fn create_accumulators(
+pub(crate) fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> Result<Vec<AccumulatorItem>> {
     aggr_expr
@@ -1049,7 +1049,7 @@ fn create_accumulators(
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
-fn finalize_aggregation(
+pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {

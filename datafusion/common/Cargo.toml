@@ -39,7 +39,6 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
-apache-avro = ["dep:apache-avro"]
 
 [dependencies]
 ahash = { workspace = true }
@@ -63,8 +62,7 @@ num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 pyo3 = { version = "0.21.0", optional = true }
-serde_json = "1.0.116"
-sqlparser = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 instant = { version = "0.1", features = ["wasm-bindgen"] }
