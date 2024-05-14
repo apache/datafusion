@@ -25,7 +25,7 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, schema_add_window_fields, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
 };
 use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::{collect, InputOrderMode};
@@ -274,7 +274,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 };
 
                 let extended_schema =
-                    schema_add_window_fields(&args, &schema, &window_fn, fn_name)?;
+                    schema_add_window_field(&args, &schema, &window_fn, fn_name)?;
 
                 let window_expr = create_window_expr(
                     &window_fn,
@@ -681,7 +681,7 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let extended_schema = schema_add_window_fields(&args, &schema, &window_fn, &fn_name)?;
+    let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
 
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(

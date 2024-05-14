@@ -53,9 +53,8 @@ pub use datafusion_physical_expr::window::{
 };
 pub use window_agg_exec::WindowAggExec;
 
-// The planner has fully updated schema before calling the `create_window_expr`
-// Replicate the same for this test
-pub fn schema_add_window_fields(
+/// Build field from window function and add it into schema
+pub fn schema_add_window_field(
     args: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
     window_fn: &WindowFunctionDefinition,
