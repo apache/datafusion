@@ -136,7 +136,7 @@ impl Neg for SortProperties {
     }
 }
 
-/// Represents the properties of a [`PhysicalExpr`], including its sorting and range attributes.
+/// Represents the properties of a `PhysicalExpr`, including its sorting and range attributes.
 #[derive(Debug, Clone)]
 pub struct ExprProperties {
     pub sort_properties: SortProperties,

@@ -122,7 +122,7 @@ pub fn ceil_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(x.sort_properties)
 }
 
-/// Non-increasing on [0,π] and then non-decreasing on [π,2π].
+/// Non-increasing on \[0,π\] and then non-decreasing on \[π,2π\].
 /// This pattern repeats periodically with a period of 2π.
 pub fn cos_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
     // TODO
@@ -245,7 +245,7 @@ pub fn signum_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(x.sort_properties)
 }
 
-/// Non-decreasing on [0,π] and then non-increasing on [π,2π].
+/// Non-decreasing on \[0,π\] and then non-increasing on \[π,2π\].
 /// This pattern repeats periodically with a period of 2π.
 pub fn sin_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
     // TODO
