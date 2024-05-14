@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+use std::vec;
+
 use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -24,6 +30,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
 use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::prelude::*;
@@ -51,16 +58,11 @@ use datafusion_proto::bytes::{
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
+use datafusion_proto::logical_plan::{
+    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-use std::vec;
 
-use datafusion::execution::FunctionRegistry;
 use prost::Message;
 
 #[cfg(feature = "json")]
@@ -580,7 +582,13 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),
             lit(2),
+            Some(lit(1)),
+        ),
+        array_slice(
+            make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),
+            lit(2),
+            None,
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),

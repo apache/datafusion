@@ -31,7 +31,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayExcept,
     array_except,
     first_array second_array,
