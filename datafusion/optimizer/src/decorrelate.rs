@@ -56,6 +56,12 @@ pub struct PullUpCorrelatedExpr {
     pub pull_up_having_expr: Option<Expr>,
 }
 
+impl Default for PullUpCorrelatedExpr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PullUpCorrelatedExpr {
     pub fn new() -> Self {
         Self {
