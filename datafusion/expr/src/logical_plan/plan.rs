@@ -280,7 +280,7 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
-
+    /// A streaming window with an aggregate and duration for continuous computations.
     StreamingWindow(Aggregate, Duration),
 }
 
