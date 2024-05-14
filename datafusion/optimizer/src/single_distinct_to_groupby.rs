@@ -22,7 +22,9 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{qualified_name, Result};
+use datafusion_common::{
+    internal_err, qualified_name, tree_node::Transformed, DataFusionError, Result,
+};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
@@ -106,9 +108,29 @@ fn contains_grouping_set(expr: &[Expr]) -> bool {
 impl OptimizerRule for SingleDistinctToGroupBy {
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
+        _plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        internal_err!("Should have called SingleDistinctToGroupBy::rewrite")
+    }
+
+    fn name(&self) -> &str {
+        "single_distinct_aggregation_to_group_by"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         match plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
@@ -117,7 +139,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 group_expr,
                 ..
             }) => {
-                if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
+                if is_single_distinct_agg(&plan)? && !contains_grouping_set(&group_expr) {
                     // alias all original group_by exprs
                     let (mut inner_group_exprs, out_group_expr_with_alias): (
                         Vec<Expr>,
@@ -261,21 +283,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         outer_group_exprs,
                         outer_aggr_exprs,
                     )?);
-                    Ok(Some(project(outer_aggr, alias_expr)?))
+                    Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
                 } else {
-                    Ok(None)
+                    Ok(Transformed::no(plan))
                 }
             }
-            _ => Ok(None),
+            _ => Ok(Transformed::no(plan)),
         }
-    }
-
-    fn name(&self) -> &str {
-        "single_distinct_aggregation_to_group_by"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
     }
 }
 
