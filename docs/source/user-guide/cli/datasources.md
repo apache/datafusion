@@ -166,8 +166,8 @@ Register a single file csv datasource with a header row.
 ```sql
 CREATE EXTERNAL TABLE test
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '/path/to/aggregate_test_100.csv';
+LOCATION '/path/to/aggregate_test_100.csv'
+OPTIONS ('has_header' 'true');
 ```
 
 Register a single file csv datasource with explicitly defined schema.
