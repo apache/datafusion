@@ -939,7 +939,7 @@ impl EquivalenceProperties {
     /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
         ExprPropertiesNode::new_unknown(expr.clone())
-            .transform_up(|expr| update_ordering(expr, self))
+            .transform_up(|expr| update_properties(expr, self))
             .data()
             .map(|node| node.data)
             .unwrap_or(ExprProperties::new_unknown())
@@ -966,7 +966,7 @@ impl EquivalenceProperties {
 /// cannot limit an interval for the range, yet.
 /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
 /// and operator has its own rules on how to propagate the children range.
-fn update_ordering(
+fn update_properties(
     mut node: ExprPropertiesNode,
     eq_properties: &EquivalenceProperties,
 ) -> Result<Transformed<ExprPropertiesNode>> {
@@ -1815,7 +1815,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_ordering() -> Result<()> {
+    fn test_update_properties() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
