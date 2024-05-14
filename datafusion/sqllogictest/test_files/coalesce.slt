@@ -310,6 +310,12 @@ select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 ----
 34
 
+# numeric string coercion
+query RT
+select coalesce(2.0, 1, '3'), arrow_typeof(coalesce(2.0, 1, '3'));
+----
+2 Float64
+
 # explicitly cast to Int8, and it will implicitly cast to Int64
 query IT
 select

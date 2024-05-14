@@ -476,7 +476,7 @@ fn type_union_resolution_coercion(
             // numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
-                .or_else(|| pure_string_coercion(lhs_type, rhs_type))
+                .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
         }
     }
@@ -493,7 +493,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
-        .or_else(|| pure_string_coercion(lhs_type, rhs_type))
+        .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -927,23 +927,6 @@ fn string_concat_internal_coercion(
 /// a string type and both arguments can be coerced into a string type, coerce
 /// to string type.
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-
-    if let Some(t) = pure_string_coercion(lhs_type, rhs_type) {
-        return Some(t);
-    }
-
-    // TODO: Move out to a separate function or remove it. Review the need for this.
-    match (lhs_type, rhs_type) {
-        // TODO: cast between array elements (#6558)
-        (List(_), List(_)) => Some(lhs_type.clone()),
-        (List(_), _) => Some(lhs_type.clone()),
-        (_, List(_)) => Some(rhs_type.clone()),
-        _ => None,
-    }
-}
-
-fn pure_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Utf8, Utf8) => Some(Utf8),
