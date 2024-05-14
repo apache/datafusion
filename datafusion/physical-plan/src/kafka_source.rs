@@ -191,8 +191,8 @@ impl PartitionStream for KafkaStreamRead {
                     RecordBatch::try_new(canonical_schema.clone(), columns).unwrap();
                 let tx_result = tx.send(Ok(timestamped_record_batch)).await;
                 match tx_result {
-                    Ok(m) => println!("result ok {:?}", m),
-                    Err(err) => println!("result err {:?}", err),
+                    Ok(m) => debug!("result ok {:?}", m),
+                    Err(err) => error!("result err {:?}", err),
                 }
             }
         });
