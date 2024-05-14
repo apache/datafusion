@@ -498,6 +498,8 @@ impl<'a> DFParser<'a> {
     pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
         let next_token = self.parser.next_token();
         match next_token.token {
+            // e.g. things like "snappy" or "gzip" that may be keywords
+            Token::Word(word) => Ok(Value::SingleQuotedString(word.value)),
             Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
@@ -1580,7 +1582,7 @@ mod tests {
             ),
             (
                 "format.compression".to_string(),
-                Value::UnQuotedString("snappy".to_string()),
+                Value::SingleQuotedString("snappy".to_string()),
             ),
         ];
 

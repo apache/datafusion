@@ -46,7 +46,7 @@ statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c
 SELECT CAST(c1 AS INT) FROM aggregate_test_100
 
 # aggregation_with_bad_arguments
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'COUNT\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tCOUNT\(Any, .., Any\)
+statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
 SELECT COUNT(DISTINCT) FROM aggregate_test_100
 
 # query_cte_incorrect

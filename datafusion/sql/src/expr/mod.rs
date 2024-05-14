@@ -24,11 +24,10 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    col, expr, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
+    col, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
     GetFieldAccess, GetIndexedField, Like, Literal, Operator, TryCast,
 };
 
@@ -488,10 +487,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
             ),
 
-            SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
-                self.sql_agg_with_filter_to_expr(*expr, *filter, schema, planner_context)
-            }
-
             SQLExpr::Function(function) => {
                 self.sql_function_to_expr(function, schema, planner_context)
             }
@@ -541,10 +536,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLExpr::Subquery(subquery) => {
                 self.parse_scalar_subquery(*subquery, schema, planner_context)
-            }
-
-            SQLExpr::ArrayAgg(array_agg) => {
-                self.parse_array_agg(array_agg, schema, planner_context)
             }
 
             SQLExpr::Struct { values, fields } => {
@@ -668,55 +659,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             struct_func,
             args,
         )))
-    }
-
-    fn parse_array_agg(
-        &self,
-        array_agg: ArrayAgg,
-        input_schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
-        let ArrayAgg {
-            distinct,
-            expr,
-            order_by,
-            limit,
-            within_group,
-        } = array_agg;
-        let order_by = if let Some(order_by) = order_by {
-            Some(self.order_by_to_sort_expr(
-                &order_by,
-                input_schema,
-                planner_context,
-                true,
-                None,
-            )?)
-        } else {
-            None
-        };
-
-        if let Some(limit) = limit {
-            return not_impl_err!("LIMIT not supported in ARRAY_AGG: {limit}");
-        }
-
-        if within_group {
-            return not_impl_err!("WITHIN GROUP not supported in ARRAY_AGG");
-        }
-
-        let args =
-            vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
-
-        // next, aggregate built-ins
-        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::ArrayAgg,
-            args,
-            distinct,
-            None,
-            order_by,
-            None,
-        )))
-        // see if we can rewrite it into NTH-VALUE
     }
 
     fn sql_in_list_to_expr(
@@ -902,41 +844,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let args = vec![fullstr, substr];
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
-    fn sql_agg_with_filter_to_expr(
-        &self,
-        expr: SQLExpr,
-        filter: SQLExpr,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
-            Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: AggregateFunctionDefinition::BuiltIn(fun),
-                args,
-                distinct,
-                order_by,
-                null_treatment,
-                filter: _, // filter is passed in
-            }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun,
-                args,
-                distinct,
-                Some(Box::new(self.sql_expr_to_logical_expr(
-                    filter,
-                    schema,
-                    planner_context,
-                )?)),
-                order_by,
-                null_treatment,
-            ))),
-            Expr::AggregateFunction(..) => {
-                internal_err!("Expected null filter clause in aggregate function")
-            }
-            _ => internal_err!(
-                "AggregateExpressionWithFilter expression was not an AggregateFunction"
-            ),
-        }
-    }
 
     fn plan_indices(
         &self,
@@ -947,11 +854,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match expr.clone() {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => {
-                return Ok(GetFieldAccess::NamedStructField {
-                    name: ScalarValue::from(s),
-                })
-            }
+            ) => Ok(GetFieldAccess::NamedStructField {
+                name: ScalarValue::from(s),
+            }),
             SQLExpr::JsonAccess { value, path } => {
                 let start = Box::new(self.sql_expr_to_logical_expr(
                     *value,
@@ -961,7 +866,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 fn json_path_elem_to_expr(expr: JsonPathElem) -> SQLExpr {
                     match expr {
-                        JsonPathElem::Dot { key, .. } => SQLExpr::Value(Value::SingleQuotedString(key)),
+                        JsonPathElem::Dot { key, .. } => {
+                            SQLExpr::Value(Value::SingleQuotedString(key))
+                        }
                         JsonPathElem::Bracket { key } => key,
                     }
                 }

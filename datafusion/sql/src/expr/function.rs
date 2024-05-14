@@ -30,7 +30,9 @@ use datafusion_expr::{
     BuiltInWindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
+    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
+    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
+    WindowType,
 };
 use std::str::FromStr;
 use strum::IntoEnumIterator;
@@ -90,12 +92,62 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             name,
             args,
             over,
-            distinct,
             filter,
-            null_treatment,
-            special: _, // true if not called with trailing parens
-            order_by,
+            mut null_treatment,
+            within_group,
         } = function;
+
+        // todo handle case when args is none (for current_timestamp)
+        let FunctionArguments::List(args) = args else {
+            return not_impl_err!("Unsupported function argument {args:?}");
+        };
+
+        let FunctionArgumentList {
+            duplicate_treatment,
+            args,
+            clauses,
+        } = args;
+
+        let distinct = match duplicate_treatment {
+            Some(DuplicateTreatment::Distinct) => true,
+            Some(DuplicateTreatment::All) => false,
+            None => false,
+        };
+
+        // Pull out argument handling
+        let mut order_by = None;
+        for clause in clauses {
+            match clause {
+                FunctionArgumentClause::IgnoreOrRespectNulls(nt) => {
+                    if null_treatment.is_some() {
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated null treatment clause"
+                        );
+                    }
+                    null_treatment = Some(nt);
+                }
+                FunctionArgumentClause::OrderBy(oby) => {
+                    if order_by.is_some() {
+                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                    }
+                    order_by = Some(oby);
+                }
+                FunctionArgumentClause::Limit(limit) => {
+                    return not_impl_err!(
+                        "Calling {name}: LIMIT not supported in function arguments: {limit}"
+                    )
+                }
+                FunctionArgumentClause::OnOverflow(overflow) => {
+                    return not_impl_err!(
+                        "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
+                    )
+                }
+            }
+        }
+
+        if !within_group.is_empty() {
+            return not_impl_err!("WITHIN GROUP is not supported yet: {within_group:?}");
+        }
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
@@ -128,11 +180,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::Unnest(Unnest::new(expr)));
         }
 
-        if !order_by.is_empty() && is_function_window {
+        if order_by.is_some() && is_function_window {
             return plan_err!(
                 "Aggregate ORDER BY is not implemented for window functions"
             );
         }
+
+        let order_by = order_by.unwrap_or_default();
 
         // then, window function
         if let Some(WindowType::WindowSpec(window)) = over {
