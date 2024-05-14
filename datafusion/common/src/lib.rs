@@ -33,6 +33,7 @@ pub mod config;
 pub mod display;
 pub mod file_options;
 pub mod format;
+#[allow(dead_code)]
 pub mod franz_arrow;
 pub mod hash_utils;
 pub mod instant;

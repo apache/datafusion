@@ -21,7 +21,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
@@ -99,7 +98,6 @@ use datafusion_physical_plan::continuous::window::{
     FranzStreamingWindowExec, FranzStreamingWindowType,
 };
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::windows::{FranzWindowExec, FranzWindowType};
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -935,11 +933,10 @@ impl DefaultPhysicalPlanner {
                         InputOrderMode::Sorted,
                     )?)
                 } else {
-                    Arc::new(FranzWindowExec::try_new(
+                    Arc::new(WindowAggExec::try_new(
                         window_expr,
                         input_exec,
                         physical_partition_keys,
-                        FranzWindowType::Tumbling(Duration::from_millis(5000)),
                     )?)
                 }
             }
@@ -1504,12 +1501,15 @@ impl DefaultPhysicalPlanner {
                     "Unsupported logical plan: Analyze must be root of the plan"
                 )
             }
-            LogicalPlan::StreamingWindow(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                ..
-            }) => {
+            LogicalPlan::StreamingWindow(
+                Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    ..
+                },
+                window_length,
+            ) => {
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
                 let physical_input_schema: Arc<Schema> = input_exec.schema();
@@ -1545,7 +1545,7 @@ impl DefaultPhysicalPlanner {
                     filters.clone(),
                     input_exec,
                     physical_input_schema.clone(),
-                    FranzStreamingWindowType::Tumbling(Duration::from_millis(5000)),
+                    FranzStreamingWindowType::Tumbling(window_length.clone()),
                 )?);
                 initial_aggr
             }

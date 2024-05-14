@@ -375,7 +375,8 @@ fn optimize_projections(
                 rewrite_projection_given_requirements(proj, config, indices)
             };
         }
-        LogicalPlan::Aggregate(aggregate) | LogicalPlan::StreamingWindow(aggregate) => {
+        LogicalPlan::Aggregate(aggregate)
+        | LogicalPlan::StreamingWindow(aggregate, _) => {
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             let (group_by_reqs, mut aggregate_reqs): (Vec<usize>, Vec<usize>) =
@@ -462,9 +463,13 @@ fn optimize_projections(
                 new_group_bys,
                 new_aggr_expr,
             );
-            if let LogicalPlan::StreamingWindow(_) = plan {
-                return inner_agg
-                    .map(|aggregate| Some(LogicalPlan::StreamingWindow(aggregate)));
+            if let LogicalPlan::StreamingWindow(_, window_length) = plan {
+                return inner_agg.map(|aggregate| {
+                    Some(LogicalPlan::StreamingWindow(
+                        aggregate,
+                        window_length.clone(),
+                    ))
+                });
             } else {
                 return inner_agg
                     .map(|aggregate| Some(LogicalPlan::Aggregate(aggregate)));

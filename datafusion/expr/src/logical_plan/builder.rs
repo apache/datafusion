@@ -22,7 +22,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::dml::CopyTo;
 use crate::expr::Alias;

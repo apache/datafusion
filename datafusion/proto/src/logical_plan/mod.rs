@@ -1635,7 +1635,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::RecursiveQuery(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for RecursiveQuery",
             )),
-            LogicalPlan::StreamingWindow(_) => Err(proto_error(
+            LogicalPlan::StreamingWindow(_, _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for StreamingWindow",
             )),
         }

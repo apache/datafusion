@@ -17,10 +17,6 @@
 
 use std::time::Duration;
 
-use datafusion_expr::builder::add_group_by_exprs_from_dependencies;
-use datafusion_expr::expr_rewriter::normalize_cols;
-use datafusion_expr::{Aggregate, LogicalPlan};
-
 use super::{DataFrame, LogicalPlanBuilder};
 use crate::error::Result;
 use crate::logical_expr::Expr;

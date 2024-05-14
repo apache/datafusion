@@ -30,8 +30,8 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };
 use datafusion_expr::{
-    col, create_udwf, ident, Expr, LogicalPlanBuilder, PartitionEvaluator, TableType,
-    Volatility, WindowFrame,
+    col, create_udwf, ident, max, min, Expr, LogicalPlanBuilder, PartitionEvaluator,
+    TableType, Volatility, WindowFrame,
 };
 
 use datafusion_common::Result;
@@ -43,7 +43,7 @@ use tracing_subscriber::{fmt::format::FmtSpan, FmtSubscriber};
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::WARN)
         .with_span_events(FmtSpan::CLOSE | FmtSpan::ENTER)
         .finish();
     tracing::subscriber::set_global_default(subscriber)
@@ -108,7 +108,7 @@ async fn main() {
         order: vec![],
         partitions: 1_i32,
         timestamp_column: String::from("occurred_at_ms"),
-        timestamp_unit: TimestampUnit::Int64_Millis,
+        timestamp_unit: TimestampUnit::Int64Millis,
         offset_reset: String::from("earliest"),
     };
 
@@ -118,17 +118,6 @@ async fn main() {
     let _ = config.set("datafusion.execution.batch_size", "32");
 
     let ctx = SessionContext::new_with_config(config.into());
-
-    // here is where we define the UDWF. We also declare its signature:
-    let smooth_it = create_udwf(
-        "smooth_it",
-        DataType::Float64,
-        Arc::new(DataType::Float64),
-        Volatility::Immutable,
-        Arc::new(make_partition_evaluator),
-    );
-
-    ctx.register_udwf(smooth_it.clone());
 
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
@@ -142,45 +131,22 @@ async fn main() {
     .unwrap();
 
     let df = DataFrame::new(ctx.state(), logical_plan);
-
-    println!("");
-    println!(
-        "{:?}",
-        vec![col("imu_measurement").field("gps").field("speed")]
-    );
-    println!("{:?}", vec![col("driver_id")]);
-    println!("");
-
-    let window_expr = smooth_it.call(
-        vec![col("imu_measurement").field("gps").field("speed")], // Column to average
-        vec![col("driver_id")],                                   // PARTITION BY car
-        vec![col("franz_canonical_timestamp").sort(true, true)],  // ORDER BY time ASC
-        WindowFrame::new(None),
-    );
-
     let windowed_df = df
         .clone()
-        .franz_window(vec![], vec![], Duration::from_millis(5000))
+        .franz_window(
+            vec![],
+            vec![
+                max(col("imu_measurement").field("gps").field("speed")),
+                min(col("imu_measurement").field("gps").field("altitude")),
+            ],
+            Duration::from_millis(2000),
+        )
         .unwrap();
 
-    print_plan(&windowed_df).await;
-
-    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
-        windowed_df.execute_stream().await.unwrap();
-
-    loop {
-        let rb = stream.next().await.transpose();
-        if let Ok(Some(batch)) = rb {
-            println!(
-                "{}",
-                arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-            );
-        }
-        println!("<<<<< window end >>>>>>");
-    }
+    print_stream(&windowed_df).await;
 }
 
-async fn print_plan(windowed_df: &DataFrame) {
+async fn print_stream(windowed_df: &DataFrame) {
     let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
         windowed_df.clone().execute_stream().await.unwrap();
 
@@ -189,12 +155,13 @@ async fn print_plan(windowed_df: &DataFrame) {
         let rb = stream.next().await.transpose();
         // println!("{:?}", rb);
         if let Ok(Some(batch)) = rb {
-            println!(
-                "{}",
-                arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-            );
+            if batch.num_rows() > 0 {
+                println!(
+                    "{}",
+                    arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
+                );
+            }
         }
-        println!("<<<<< window end >>>>>>");
     }
 }
 
@@ -302,64 +269,5 @@ impl TableProvider for StreamTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         return self.create_physical_plan(projection).await;
-    }
-}
-
-fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
-    Ok(Box::new(MyPartitionEvaluator::new()))
-}
-
-/// This implements the lowest level evaluation for a window function
-///
-/// It handles calculating the value of the window function for each
-/// distinct values of `PARTITION BY` (each car type in our example)
-#[derive(Clone, Debug)]
-struct MyPartitionEvaluator {}
-
-impl MyPartitionEvaluator {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-/// Different evaluation methods are called depending on the various
-/// settings of WindowUDF. This example uses the simplest and most
-/// general, `evaluate`. See `PartitionEvaluator` for the other more
-/// advanced uses.
-impl PartitionEvaluator for MyPartitionEvaluator {
-    /// Tell DataFusion the window function varies based on the value
-    /// of the window frame.
-    fn uses_window_frame(&self) -> bool {
-        true
-    }
-
-    /// This function is called once per input row.
-    ///
-    /// `range`specifies which indexes of `values` should be
-    /// considered for the calculation.
-    ///
-    /// Note this is the SLOWEST, but simplest, way to evaluate a
-    /// window function. It is much faster to implement
-    /// evaluate_all or evaluate_all_with_rank, if possible
-    fn evaluate(
-        &mut self,
-        values: &[ArrayRef],
-        range: &std::ops::Range<usize>,
-    ) -> Result<ScalarValue> {
-        // Again, the input argument is an array of floating
-        // point numbers to calculate a moving average
-        let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
-
-        let range_len = range.end - range.start;
-
-        // our smoothing function will average all the values in the
-        let output = if range_len > 0 {
-            let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
-            Some(sum / range_len as f64)
-        } else {
-            None
-        };
-
-        Ok(ScalarValue::Float64(output))
     }
 }

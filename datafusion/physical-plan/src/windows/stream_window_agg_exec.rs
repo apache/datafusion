@@ -44,7 +44,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 use futures::{Stream, StreamExt};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::time::RecordBatchWatermark;
 use crate::{
@@ -64,7 +64,6 @@ pub struct FranzWindowFrame {
     batches: Vec<RecordBatch>,
     window_start_time: SystemTime,
     window_end_time: SystemTime,
-    finished: bool,
     timestamp_column: String,
 }
 
@@ -102,7 +101,6 @@ impl FranzWindowFrame {
             window_start_time,
             window_end_time,
             batches: Vec::new(),
-            finished: false,
             timestamp_column,
         };
         res

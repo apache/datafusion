@@ -365,18 +365,24 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
-            LogicalPlan::StreamingWindow(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                schema,
-            }) => rewrite_arc(input, f)?.update_data(|input| {
-                LogicalPlan::StreamingWindow(Aggregate {
+            LogicalPlan::StreamingWindow(
+                Aggregate {
                     input,
                     group_expr,
                     aggr_expr,
                     schema,
-                })
+                },
+                window_length,
+            ) => rewrite_arc(input, f)?.update_data(|input| {
+                LogicalPlan::StreamingWindow(
+                    Aggregate {
+                        input,
+                        group_expr,
+                        aggr_expr,
+                        schema,
+                    },
+                    window_length,
+                )
             }),
         })
     }
@@ -538,11 +544,14 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(TreeNodeRecursion::Continue),
-            LogicalPlan::StreamingWindow(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => group_expr
+            LogicalPlan::StreamingWindow(
+                Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                },
+                _,
+            ) => group_expr
                 .iter()
                 .chain(aggr_expr.iter())
                 .apply_until_stop(f),
@@ -751,23 +760,29 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Transformed::no(self),
-            LogicalPlan::StreamingWindow(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                schema,
-            }) => map_until_stop_and_collect!(
+            LogicalPlan::StreamingWindow(
+                Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                },
+                window_length,
+            ) => map_until_stop_and_collect!(
                 group_expr.into_iter().map_until_stop_and_collect(&mut f),
                 aggr_expr,
                 aggr_expr.into_iter().map_until_stop_and_collect(&mut f)
             )?
             .update_data(|(group_expr, aggr_expr)| {
-                LogicalPlan::StreamingWindow(Aggregate {
-                    input,
-                    group_expr,
-                    aggr_expr,
-                    schema,
-                })
+                LogicalPlan::StreamingWindow(
+                    Aggregate {
+                        input,
+                        group_expr,
+                        aggr_expr,
+                        schema,
+                    },
+                    window_length,
+                )
             }),
         })
     }

@@ -12,16 +12,12 @@ use arrow::{
     array::PrimitiveBuilder,
     compute::{concat_batches, filter_record_batch},
     datatypes::TimestampMillisecondType,
-    record_batch,
-    util::pretty::pretty_format_batches,
 };
 
 use arrow_array::{Array, PrimitiveArray, RecordBatch, TimestampMillisecondArray};
 use arrow_ord::cmp;
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit};
-use datafusion_common::{
-    internal_err, stats::Precision, Column, DataFusionError, Statistics,
-};
+use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef, TimeUnit};
+use datafusion_common::{internal_err, stats::Precision, DataFusionError, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
@@ -29,7 +25,7 @@ use datafusion_physical_expr::{
     AggregateExpr, Partitioning, PhysicalExpr, PhysicalSortRequirement,
 };
 use futures::{Stream, StreamExt};
-use tracing::{debug, error, info};
+use tracing::debug;
 
 use crate::{
     aggregates::{
@@ -47,7 +43,7 @@ use crate::{
     PlanProperties,
 };
 
-use crate::windows::{get_ordered_partition_by_indices, get_partition_by_sort_exprs};
+use crate::windows::get_ordered_partition_by_indices;
 pub struct FranzWindowFrame {
     pub window_start_time: SystemTime,
     window_end_time: SystemTime,
@@ -156,7 +152,7 @@ impl FranzWindowFrame {
         )?;
         let final_batch = filter_record_batch(&filtered_batch, &lt_cmp_filter)?;
 
-        let result = aggregate_batch(
+        let _ = aggregate_batch(
             &self.aggregation_mode,
             final_batch,
             &mut self.accumulators,
@@ -256,7 +252,7 @@ impl FranzStreamingWindowExec {
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-        let mut new_requirement = indices
+        let mut _new_requirement = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
                 expr: groupby_exprs[idx].clone(),
@@ -270,8 +266,8 @@ impl FranzStreamingWindowExec {
             input_eq_properties,
             &mode,
         )?;
-        new_requirement.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        _new_requirement.extend(req);
+        _new_requirement = collapse_lex_req(_new_requirement);
 
         let input_order_mode =
             if indices.len() == groupby_exprs.len() && !indices.is_empty() {
@@ -325,7 +321,7 @@ impl FranzStreamingWindowExec {
         schema: SchemaRef,
         projection_mapping: &ProjectionMapping,
         mode: &AggregateMode,
-        input_order_mode: &InputOrderMode,
+        _input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
         let eq_properties = input
@@ -354,10 +350,7 @@ impl FranzStreamingWindowExec {
             }
         }
 
-        // Determine execution mode:
-        let mut exec_mode = input.execution_mode();
-        exec_mode = ExecutionMode::Unbounded;
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(eq_properties, output_partitioning, ExecutionMode::Unbounded)
     }
     /// Aggregate expressions
     pub fn aggr_expr(&self) -> &[Arc<dyn AggregateExpr>] {
@@ -412,8 +405,6 @@ impl ExecutionPlan for FranzStreamingWindowExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input: Pin<Box<dyn RecordBatchStream + Send>> =
-            self.input.execute(partition, context.clone())?;
         let stream: Pin<Box<FranzWindowAggStream>> = Box::pin(FranzWindowAggStream::new(
             self,
             context,
@@ -551,6 +542,7 @@ impl DisplayAs for FranzStreamingWindowExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
+                write!(f, ", window_type=[{:?}]", self.window_type)?;
                 //if let Some(limit) = self.limit {
                 //    write!(f, ", lim=[{limit}]")?;
                 //}
