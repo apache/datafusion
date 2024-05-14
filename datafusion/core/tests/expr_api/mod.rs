@@ -60,9 +60,8 @@ fn test_eq_with_coercion() {
 
 #[test]
 fn test_get_field() {
-    // field access Expr::field() requires a rewrite to work
     evaluate_expr_test(
-        col("props").field("a"),
+        get_field(col("props"), lit("a")),
         vec![
             "+------------+",
             "| expr       |",
@@ -77,11 +76,8 @@ fn test_get_field() {
 
 #[test]
 fn test_nested_get_field() {
-    // field access Expr::field() requires a rewrite to work, test when it is
-    // not the root expression
     evaluate_expr_test(
-        col("props")
-            .field("a")
+        get_field(col("props"), lit("a"))
             .eq(lit("2021-02-02"))
             .or(col("id").eq(lit(1))),
         vec![
@@ -98,9 +94,8 @@ fn test_nested_get_field() {
 
 #[test]
 fn test_list() {
-    // list access also requires a rewrite to work
     evaluate_expr_test(
-        col("list").index(lit(1i64)),
+        array_element(col("list"), lit(1i64)),
         vec![
             "+------+", "| expr |", "+------+", "| one  |", "| two  |", "| five |",
             "+------+",
@@ -110,9 +105,8 @@ fn test_list() {
 
 #[test]
 fn test_list_range() {
-    // range access also requires a rewrite to work
     evaluate_expr_test(
-        col("list").range(lit(1i64), lit(2i64)),
+        array_slice(col("list"), lit(1i64), lit(2i64), None),
         vec![
             "+--------------+",
             "| expr         |",
