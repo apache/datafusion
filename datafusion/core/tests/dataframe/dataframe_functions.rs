@@ -639,7 +639,7 @@ async fn test_fn_regexp_match() -> Result<()> {
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_replace() -> Result<()> {
-    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), lit("g"));
+    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), Some(lit("g")));
 
     let expected = [
         "+----------------------------------------------------------+",
@@ -650,6 +650,21 @@ async fn test_fn_regexp_replace() -> Result<()> {
         "| CBAxxx                                                   |",
         "| 123AxxDxx                                                |",
         "+----------------------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), None);
+
+    let expected = [
+        "+------------------------------------------------+",
+        "| regexp_replace(test.a,Utf8(\"[a-z]\"),Utf8(\"x\")) |",
+        "+------------------------------------------------+",
+        "| xbcDEF                                         |",
+        "| xbc123                                         |",
+        "| CBAxef                                         |",
+        "| 123AxcDef                                      |",
+        "+------------------------------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);

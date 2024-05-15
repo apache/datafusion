@@ -53,12 +53,15 @@ pub mod expr_fn {
     #[doc = "Replaces substrings in a string that match"]
     #[doc = r" Return $name(arg)"]
     pub fn regexp_replace(
-        arg1: datafusion_expr::Expr,
-        arg2: datafusion_expr::Expr,
-        arg3: datafusion_expr::Expr,
-        arg4: datafusion_expr::Expr,
+        string: datafusion_expr::Expr,
+        pattern: datafusion_expr::Expr,
+        replacement: datafusion_expr::Expr,
+        flags: Option<datafusion_expr::Expr>,
     ) -> datafusion_expr::Expr {
-        let args = vec![arg1, arg2, arg3, arg4];
+        let mut args = vec![string, pattern, replacement];
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
         super::regexp_replace().call(args)
     }
 }
