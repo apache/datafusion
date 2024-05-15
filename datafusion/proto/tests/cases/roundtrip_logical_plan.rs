@@ -622,8 +622,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
-        covar_samp(lit(1.5), lit(2.2), false, None, None, None),
-        covar_pop(lit(1.5), lit(2.2), true, None, None, None),
+        covar_samp(lit(1.5), lit(2.2)),
+        covar_pop(lit(1.5), lit(2.2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
