@@ -22,18 +22,20 @@ use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Int32Array, StringArray};
 use arrow_schema::{DataType, SchemaRef};
-use object_store::ObjectMeta;
-use object_store::path::Path;
 use datafusion::assert_batches_sorted_eq;
+use object_store::path::Path;
+use object_store::ObjectMeta;
 
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec, SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
+use datafusion::datasource::physical_plan::{
+    FileScanConfig, ParquetExec, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+};
 use datafusion::physical_plan::{collect, Statistics};
 use datafusion::prelude::SessionContext;
 
+use datafusion::datasource::listing::PartitionedFile;
 use parquet::arrow::ArrowWriter;
 use tempfile::TempDir;
-use datafusion::datasource::listing::PartitionedFile;
 
 #[tokio::test]
 async fn can_override_schema_adapter() {
@@ -41,9 +43,7 @@ async fn can_override_schema_adapter() {
     // same schema but different metadata
     let tmp_dir = TempDir::new().unwrap();
     let table_dir = tmp_dir.path().join("parquet_test");
-    fs::DirBuilder::new()
-        .create(table_dir.as_path())
-        .unwrap();
+    fs::DirBuilder::new().create(table_dir.as_path()).unwrap();
     let f1 = Field::new("id", DataType::Int32, true);
 
     let file_schema = Arc::new(Schema::new(vec![f1.clone()]));
@@ -97,7 +97,7 @@ async fn can_override_schema_adapter() {
         None,
         Default::default(),
     )
-   .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
+    .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -143,22 +143,17 @@ impl SchemaAdapter for TestSchemaAdapter {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
 
         for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some(_) = self.table_schema.fields().find(file_field.name())
-            {
+            if let Some(_) = self.table_schema.fields().find(file_field.name()) {
                 projection.push(file_idx);
             }
         }
 
-        Ok((
-            Arc::new(TestSchemaMapping {}),
-            projection,
-        ))
+        Ok((Arc::new(TestSchemaMapping {}), projection))
     }
 }
 
 #[derive(Debug)]
-struct TestSchemaMapping {
-}
+struct TestSchemaMapping {}
 
 impl SchemaMapper for TestSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
@@ -174,5 +169,3 @@ impl SchemaMapper for TestSchemaMapping {
         Ok(RecordBatch::try_new(schema, new_columns).unwrap())
     }
 }
-
-

@@ -35,6 +35,15 @@ pub use self::parquet::{
     ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory, SchemaAdapter,
     SchemaAdapterFactory, SchemaMapper,
 };
+#[cfg(feature = "parquet")]
+use arrow::{
+    array::new_null_array,
+    compute::{can_cast_types, cast},
+    datatypes::Schema,
+    record_batch::{RecordBatch, RecordBatchOptions},
+};
+#[cfg(feature = "parquet")]
+use datafusion_common::plan_err;
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
@@ -64,13 +73,7 @@ use crate::{
     physical_plan::display::{display_orderings, ProjectSchemaDisplay},
 };
 
-use arrow::{
-    array::new_null_array,
-    compute::{can_cast_types, cast},
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::{RecordBatch, RecordBatchOptions},
-};
-use datafusion_common::plan_err;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -244,21 +247,25 @@ where
     Ok(())
 }
 
+#[cfg(feature = "parquet")]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DefaultSchemaAdapterFactory {}
 
+#[cfg(feature = "parquet")]
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
         Box::new(DefaultSchemaAdapter { table_schema })
     }
 }
 
+#[cfg(feature = "parquet")]
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// Schema for the table
     table_schema: SchemaRef,
 }
 
+#[cfg(feature = "parquet")]
 impl SchemaAdapter for DefaultSchemaAdapter {
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
@@ -317,6 +324,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table schema
 /// and any necessary type conversions that need to be applied.
+#[cfg(feature = "parquet")]
 #[derive(Debug)]
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
@@ -325,6 +333,7 @@ pub struct SchemaMapping {
     field_mappings: Vec<Option<usize>>,
 }
 
+#[cfg(feature = "parquet")]
 impl SchemaMapper for SchemaMapping {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
