@@ -670,6 +670,10 @@ mod tests {
             parse_timestamp_formatted("09-08-2020 13/42/29", "%m-%d-%Y %H/%M/%S")
                 .unwrap()
         );
+        assert_eq!(
+            1642896000000000000,
+            parse_timestamp_formatted("2022-01-23", "%Y-%m-%d").unwrap()
+        );
     }
 
     fn parse_timestamp_formatted(s: &str, format: &str) -> Result<i64, DataFusionError> {
