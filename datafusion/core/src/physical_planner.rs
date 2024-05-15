@@ -252,31 +252,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             func_def,
             distinct,
             args,
-            filter,
+            filter: _,
             order_by,
             null_treatment: _,
-        }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn(..) => create_function_physical_name(
-                func_def.name(),
-                *distinct,
-                args,
-                order_by.as_ref(),
-            ),
-            AggregateFunctionDefinition::UDF(fun) => {
-                // TODO: Add support for filter by in AggregateUDF
-                if filter.is_some() {
-                    return exec_err!(
-                        "aggregate expression with filter is not supported"
-                    );
-                }
-
-                let names = args
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(format!("{}({})", fun.name(), names.join(",")))
-            }
-        },
+        }) => create_function_physical_name(
+            func_def.name(),
+            *distinct,
+            args,
+            order_by.as_ref(),
+        ),
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",
@@ -1941,6 +1925,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         physical_input_schema,
                         name,
                         ignore_nulls,
+                        *distinct,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
                 }
