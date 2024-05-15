@@ -131,8 +131,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        match plan.clone() {
-            // TODO chunchun: remove clone
+        match &plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 aggr_expr,
@@ -140,7 +139,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 group_expr,
                 ..
             }) => {
-                if is_single_distinct_agg(&plan)? && !contains_grouping_set(&group_expr) {
+                if is_single_distinct_agg(&plan)? && !contains_grouping_set(group_expr) {
                     // alias all original group_by exprs
                     let (mut inner_group_exprs, out_group_expr_with_alias): (
                         Vec<Expr>,
