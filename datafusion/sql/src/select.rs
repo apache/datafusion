@@ -26,9 +26,7 @@ use crate::utils::{
 
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, ExprSchema, Result,
-};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{Column, UnnestOptions};
 use datafusion_expr::builder::projection_after_unnest;
 use datafusion_expr::expr::{Alias, Unnest};
@@ -40,7 +38,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    Partitioning,
 };
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, OrderByExpr, ReplaceSelectItem,
@@ -316,11 +315,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // will need to be rewritten into (struct_col.field1, struct_col,
                     //field2 ...)
                     let column_name = expr.display_name()?;
-                    let col_in_unnest = match arg.try_into_col() {
-                        Ok(col) => col,
-                        Err(err) => return internal_err!("failed to convert expression inside unnest into column {},unnest only support expression representing column for now",
-                         err)
-                    };
+
                     unnest_columns.push(column_name.clone());
                     // Add alias for the argument expression, to avoid naming conflicts 
                     // with other expressions
@@ -329,8 +324,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     inner_projection_exprs.push(arg.clone().alias(column_name.clone()));
                     let schema = input.schema();
 
+                    let (data_type,_) = expr.data_type_and_nullable(schema)?;
+
                 let (outer_projection_columns ,_)= projection_after_unnest(
-                    &col_in_unnest, schema)?;
+                    &column_name, &data_type)?;
                     let expr =   outer_projection_columns
                     .iter()
  .map(|col| Expr::Column(col.0.clone()))
@@ -343,21 +340,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     tnr: _,
                 } = expr.transform_up(|expr: Expr| {
                     if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                        // TODO: an expr like (unnest(struct_col))
-                        // will need to be rewritten into (struct_col.field1, struct_col,field2 ...)
-                        let column_name = expr.display_name()?;
-                        unnest_columns.push(column_name.clone());
-                        let col = Column::from_name(&column_name);
-                        // Add alias for the argument expression, to avoid naming conflicts with other expressions
-                        // in the select list. For example: `select unnest(col1), col1 from t`.
+                        // This column is the copy of the column that will be unnested
+                        // it will be replaced by the unnested columns
+                        let intermediate_col_name = expr.display_name()?;
+                        unnest_columns.push(intermediate_col_name.clone());
                         let schema = input.schema();
-                        if let DataType::Struct(_)=  schema.data_type(&col)? {
+                        let (data_type,_) = arg.data_type_and_nullable(schema)?;
+
+                        // TODO: things like unnest(struct_col) as alias/unnest(struct_col) > 0 does not make sense
+                        // or do they?
+                        if let DataType::Struct(_)=  data_type {
                             return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                         }
+                        // because unnest logical plan will call the same function
+                        // to transform the column_name into new column(s)
+                let (outer_projection_columns ,_)= projection_after_unnest(
+                    &intermediate_col_name, &data_type)?;
+                    let unnested_child_exprs =   outer_projection_columns
+                    .iter()
+ .map(|col| Expr::Column(col.0.clone()))
+ .collect::<Vec<_>>();
 
+
+                        // Add alias for the argument expression, to avoid naming conflicts with other expressions
+                        // in the select list. For example: `select unnest(col1), col1 from t`.
+                        // TODO: this does not work with case like unnest(col1) + unnest(col1)
                         inner_projection_exprs
-                            .push(arg.clone().alias(column_name.clone()));
-                        Ok(Transformed::yes(Expr::Column(col)))
+                            .push(arg.clone().alias(intermediate_col_name.clone()));
+                        Ok(Transformed::yes(unnested_child_exprs[0].clone()))
                     } else {
                         Ok(Transformed::no(expr))
                     }
@@ -391,8 +401,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
             let plan = LogicalPlanBuilder::from(input)
-                .project(inner_projection_exprs)?
+                .project(inner_projection_exprs.clone())?
                 .unnest_columns_with_options(columns, unnest_options)?;
+            println!("unnesting over columns {:?}", inner_projection_exprs);
+            println!(
+                "running projection fields {:?}\non plan\n{:?}\n
+                with schema {:?}",
+                outer_projection_exprs,
+                plan,
+                plan.schema(),
+            );
+            // plan.build()
             let plan = plan.project(outer_projection_exprs)?.build();
             plan
         }

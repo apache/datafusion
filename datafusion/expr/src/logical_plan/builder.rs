@@ -1553,40 +1553,45 @@ pub enum UnnestType {
 }
 
 pub fn projection_after_unnest(
-    c: &Column,
-    schema: &DFSchemaRef,
+    // c: &Column,
+    col_name: &String,
+    data_type: &DataType,
 ) -> Result<(Vec<(Column, Arc<Field>)>, UnnestType)> {
     let mut qualified_columns = Vec::with_capacity(1);
-    let schema_idx = schema.index_of_column(c)?;
-    let (_, unnest_field) = schema.qualified_field(schema_idx);
-    let unnest_type = match unnest_field.data_type() {
+    // let schema_idx: usize = schema.index_of_column(c)?;
+    // let (_, unnest_field) = schema.qualified_field(schema_idx);
+    let unnest_type = match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
+            let name = format!("{}.element", col_name);
             let new_field = Arc::new(Field::new(
                 // TODO: append field name by original name + .fieldname
-                unnest_field.name(),
+                name.clone(),
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
                 // For example: unnset([1], []) -> 1, null
                 true,
             ));
-            let column = Column::from((None, &new_field));
+            let column = Column::from_name(name);
+            // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
             UnnestType::List
         }
         DataType::Struct(fields) => {
-            let new_fields = fields.to_vec();
-            qualified_columns.extend(new_fields.into_iter().map(|f| {
-                let column = Column::from((None, &f));
-                (column, f)
+            qualified_columns.extend(fields.iter().map(|f| {
+                let new_name = format!("{}.{}", col_name, f.name());
+                let column = Column::from_name(&new_name);
+                let new_field = f.as_ref().clone().with_name(new_name);
+                // let column = Column::from((None, &f));
+                (column, Arc::new(new_field))
             }));
             UnnestType::Struct
         }
         _ => {
             return internal_err!(
                 "trying to unnest on invalid data type {:?}",
-                unnest_field.data_type()
+                data_type
             );
         }
     };
@@ -1623,8 +1628,10 @@ pub fn unnest_with_options(
         .map(|(index, (original_qualifier, original_field))| {
             match column_by_original_index.get(&index) {
                 Some(&column_to_unnest) => {
-                    let (flatten_columns, unnest_type) =
-                        projection_after_unnest(column_to_unnest, input_schema)?;
+                    let (flatten_columns, unnest_type) = projection_after_unnest(
+                        &column_to_unnest.name,
+                        original_field.data_type(),
+                    )?;
                     // new columns dependent on the same original index
                     dependency_indices
                         .extend(std::iter::repeat(index).take(flatten_columns.len()));

@@ -1553,7 +1553,7 @@ impl LogicalPlan {
                     LogicalPlan::Unnest(Unnest { 
                         list_type_columns,
                         struct_type_columns, .. }) => {
-                        write!(f, "Unnest: {}{}", expr_vec_fmt!(list_type_columns),expr_vec_fmt!(struct_type_columns))
+                        write!(f, "Unnest: TODO:i'm ugly{}{}", expr_vec_fmt!(list_type_columns),expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }

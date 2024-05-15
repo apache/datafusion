@@ -27,7 +27,12 @@ AS VALUES
 
 
 
-query II?
-select unnest(column1), column1, unnest(column2) from unnest_table;
+query III
+select unnest(column1), unnest(column2) + (unnest(column2) as alias) as some_alias from unnest_table;
 ----
-1 2 {name0: 1, name1: 2}
+1 2 2
+1 2 3
+1 2 4
+
+
+

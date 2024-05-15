@@ -49,7 +49,7 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -1157,7 +1157,7 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
-                output_columns: columns,
+                // output_columns: columns,
                 list_type_columns,
                 struct_type_columns,
                 schema,
@@ -1165,14 +1165,14 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                let list_column_exec = list_type_columns
-                    .iter()
-                    .map(|idx| {
-                        let column = &columns[*idx];
-                        let schema_idx = schema.index_of_column(column)?;
-                        Ok(Column::new(&column.name, schema_idx))
-                    })
-                    .collect::<Result<_>>()?;
+                // let list_column_exec = list_type_columns
+                //     .iter()
+                //     .map(|idx| {
+                //         let column = &columns[*idx];
+                //         let schema_idx = schema.index_of_column(column)?;
+                //         Ok(Column::new(&column.name, schema_idx))
+                //     })
+                //     .collect::<Result<_>>()?;
 
                 let struct_columns_set: HashSet<usize> =
                     struct_type_columns.iter().copied().collect();
@@ -1183,7 +1183,8 @@ impl DefaultPhysicalPlanner {
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(
                     input,
-                    list_column_exec,
+                    list_type_columns.clone(),
+                    // list_column_exec,
                     struct_columns_set,
                     schema,
                     options.clone(),
