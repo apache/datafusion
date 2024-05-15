@@ -44,7 +44,7 @@ impl FileSink {
 
 #[async_trait]
 impl FranzSink for FileSink {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<()> {
+    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
         let mut file = self.file.lock().await;
 
         file.write(&batch).map_err(DataFusionError::from)?;

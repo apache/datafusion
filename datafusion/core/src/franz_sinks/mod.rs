@@ -23,4 +23,4 @@ pub mod stdout_sink;
 pub use sink::FranzSink;
 pub use file_sink::FileSink;
 pub use kafka_sink::KafkaSink;
-pub use stdout_sink::StdoutSink;
+pub use stdout_sink::{StdoutSink, PrettyPrinter};
