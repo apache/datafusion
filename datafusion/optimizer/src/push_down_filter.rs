@@ -535,8 +535,8 @@ fn push_down_join(
             .on
             .iter()
             .filter_map(|(l, r)| {
-                let left_col = l.try_into_col().ok()?;
-                let right_col = r.try_into_col().ok()?;
+                let left_col = l.try_as_col().cloned()?;
+                let right_col = r.try_as_col().cloned()?;
                 Some((left_col, right_col))
             })
             .collect::<Vec<_>>();

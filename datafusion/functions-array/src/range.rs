@@ -27,15 +27,13 @@ use arrow_schema::DataType::{Date32, Int64, Interval, List};
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
 use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     Range,
     range,
     start stop step,
@@ -106,7 +104,7 @@ impl ScalarUDFImpl for Range {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     GenSeries,
     gen_series,
     start stop step,

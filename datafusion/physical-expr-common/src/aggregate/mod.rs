@@ -78,7 +78,6 @@ pub fn create_aggregate_expr(
         ignore_nulls,
         ordering_fields,
         is_distinct,
-        input_type: input_exprs_types[0].clone(),
     }))
 }
 
@@ -171,7 +170,6 @@ pub struct AggregateFunctionExpr {
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
     is_distinct: bool,
-    input_type: DataType,
 }
 
 impl AggregateFunctionExpr {
@@ -180,6 +178,7 @@ impl AggregateFunctionExpr {
         &self.fun
     }
 
+    /// Return if the aggregation is distinct
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
     }

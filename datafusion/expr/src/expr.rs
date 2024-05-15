@@ -833,15 +833,16 @@ impl GroupingSet {
     /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
     /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
     /// the exprs in the underlying sets.
-    pub fn distinct_expr(&self) -> Vec<Expr> {
+    pub fn distinct_expr(&self) -> Vec<&Expr> {
         match self {
-            GroupingSet::Rollup(exprs) => exprs.clone(),
-            GroupingSet::Cube(exprs) => exprs.clone(),
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => {
+                exprs.iter().collect()
+            }
             GroupingSet::GroupingSets(groups) => {
-                let mut exprs: Vec<Expr> = vec![];
+                let mut exprs: Vec<&Expr> = vec![];
                 for exp in groups.iter().flatten() {
-                    if !exprs.contains(exp) {
-                        exprs.push(exp.clone());
+                    if !exprs.contains(&exp) {
+                        exprs.push(exp);
                     }
                 }
                 exprs
@@ -1264,10 +1265,33 @@ impl Expr {
         })
     }
 
+    #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
             _ => plan_err!("Could not coerce '{self}' into Column!"),
+        }
+    }
+
+    /// Return a reference to the inner `Column` if any
+    ///
+    /// returns `None` if the expression is not a `Column`
+    ///
+    /// Example
+    /// ```
+    /// # use datafusion_common::Column;
+    /// use datafusion_expr::{col, Expr};
+    /// let expr = col("foo");
+    /// assert_eq!(expr.try_as_col(), Some(&Column::from("foo")));
+    ///
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.try_as_col(), None);
+    /// ```
+    pub fn try_as_col(&self) -> Option<&Column> {
+        if let Expr::Column(it) = self {
+            Some(it)
+        } else {
+            None
         }
     }
 
