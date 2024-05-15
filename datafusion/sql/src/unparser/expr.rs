@@ -391,7 +391,9 @@ impl Unparser<'_> {
             Expr::ScalarVariable(_, _) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::IsNull(expr) => {
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
@@ -863,7 +865,7 @@ mod tests {
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, wildcard, ColumnarValue, ScalarUDF,
+        lit, not, not_exists, table_scan, when, wildcard, ColumnarValue, ScalarUDF,
         ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
@@ -934,6 +936,14 @@ mod tests {
                 r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
             ),
             (
+                when(col("a").is_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NULL THEN true ELSE false END"#,
+            ),
+            (
+                when(col("a").is_not_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NOT NULL THEN true ELSE false END"#,
+            ),
+            (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
@@ -958,6 +968,18 @@ mod tests {
             (
                 ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
                 r#"dummy_udf("a", "b")"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_null(),
+                r#"dummy_udf("a", "b") IS NULL"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_not_null(),
+                r#"dummy_udf("a", "b") IS NOT NULL"#,
             ),
             (
                 Expr::Like(Like {
@@ -1081,6 +1103,7 @@ mod tests {
                 r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
+            (col("a").is_null(), r#""a" IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
                 r#"(("a" + "b") > 4) IS TRUE"#,
