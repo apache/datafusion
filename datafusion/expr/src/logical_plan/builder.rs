@@ -36,7 +36,7 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::comparison_coercion;
+use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
@@ -173,13 +173,6 @@ impl LogicalPlanBuilder {
         if n_cols == 0 {
             return plan_err!("Values list cannot be zero length");
         }
-        let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<Option<DataType>> = Vec::with_capacity(n_cols);
-        for _ in 0..n_cols {
-            field_types.push(None);
-        }
-        // hold all the null holes so that we can correct their data types later
-        let mut nulls: Vec<(usize, usize)> = Vec::new();
         for (i, row) in values.iter().enumerate() {
             if row.len() != n_cols {
                 return plan_err!(
@@ -189,24 +182,40 @@ impl LogicalPlanBuilder {
                     n_cols
                 );
             }
-            field_types = row
-                .iter()
-                .enumerate()
-                .map(|(j, expr)| {
-                    if let Expr::Literal(ScalarValue::Null) = expr {
-                        nulls.push((i, j));
-                        Ok(field_types[j].clone())
-                    } else {
-                        let data_type = expr.get_type(&empty_schema)?;
-                        if let Some(prev_data_type) = &field_types[j] {
-                            if prev_data_type != &data_type {
-                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_data_type} but found {data_type}")
-                            }
-                        }
-                        Ok(Some(data_type))
-                    }
-                })
-                .collect::<Result<Vec<Option<DataType>>>>()?;
+        }
+
+        let empty_schema = DFSchema::empty();
+        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        for j in 0..n_cols {
+            let mut common_type: Option<DataType> = None;
+            for (i, row) in values.iter().enumerate() {
+                let value = &row[j];
+                let data_type = value.get_type(&empty_schema)?;
+                if data_type == DataType::Null {
+                    continue;
+                }
+                if let Some(prev_type) = common_type {
+                    // get common type of each column values.
+                    let Some(new_type) = values_coercion(&data_type, &prev_type) else {
+                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                    };
+                    common_type = Some(new_type);
+                } else {
+                    common_type = Some(data_type.clone());
+                }
+            }
+            field_types.push(common_type.unwrap_or(DataType::Utf8));
+        }
+        // wrap cast if data type is not same as common type.
+        for row in &mut values {
+            for (j, field_type) in field_types.iter().enumerate() {
+                if let Expr::Literal(ScalarValue::Null) = row[j] {
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
+                } else {
+                    row[j] =
+                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
+                }
+            }
         }
         let fields = field_types
             .iter()
@@ -214,12 +223,9 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone().unwrap_or(DataType::Utf8), true)
+                Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        for (i, j) in nulls {
-            values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
-        }
         let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
@@ -1141,22 +1147,34 @@ impl LogicalPlanBuilder {
 }
 
 /// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
-/// fn employee_schema() -> Schema {
-///     Schema::new(vec![
-///         Field::new("id", DataType::Int32, false),
-///         Field::new("first_name", DataType::Utf8, false),
-///         Field::new("last_name", DataType::Utf8, false),
-///         Field::new("state", DataType::Utf8, false),
-///         Field::new("salary", DataType::Int32, false),
-///     ])
-/// }
+/// ```
+/// # use datafusion_expr::{Expr, expr, col, LogicalPlanBuilder, logical_plan::table_scan};
+/// # use datafusion_common::Result;
+/// # use arrow::datatypes::{Schema, DataType, Field};
+/// # fn main() -> Result<()> {
+/// #
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("id", DataType::Int32, false),
+/// #           Field::new("first_name", DataType::Utf8, false),
+/// #           Field::new("last_name", DataType::Utf8, false),
+/// #           Field::new("state", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// #
+/// // Create the plan
 /// let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
 ///     .sort(vec![
 ///         Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
 ///         Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
 ///      ])?
 ///     .build()?;
-/// let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
+/// // Convert LogicalPlan into LogicalPlanBuilder
+/// let plan_builder: LogicalPlanBuilder = std::sync::Arc::new(plan).into();
+/// # Ok(())
+/// # }
+/// ```
 
 impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     fn from(plan: Arc<LogicalPlan>) -> Self {
@@ -2146,6 +2164,7 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
     fn test_change_redundant_column() -> Result<()> {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
