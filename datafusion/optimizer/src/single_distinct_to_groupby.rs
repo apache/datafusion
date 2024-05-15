@@ -131,7 +131,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        match plan {
+        match plan.clone() {
+            // TODO chunchun: remove clone
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 aggr_expr,
