@@ -66,23 +66,32 @@ ideas with the community to get feedback on implementation.
 
 ## Pull Request Overview
 
-We welcome pull requests (PRs) from anyone from the community.
+We welcome pull requests (PRs) from anyone in the community.
 
-DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [committers] will merge your PR.
+DataFusion is a very active fast-moving project and we try to review and merge PRs quickly.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
+
+The lifecycle of a PR is:
+1. Create a PR targeting the `main` branch.
+2. For returning contributors, CI tests are automatically run. For new contributors a committer must first trigger the tests.
+3. Your PR will be reviewed. Please respond to all feedback on the PR: you don't have to change the code, but you should acknowledge the feedback.
+4. Once the PR is approved, one of the [committers] will merge your PR, typically within 24 hours. We leave approved PRs open for some time to allow for additional feedback from the community.
+
 
 [committers]: https://people.apache.org/phonebook.html?unix=datafusion
 
 ## Creating Pull Requests
 
-We recommend splitting your contributions into smaller PRs rather than large PRs (500+ lines) because:
+We recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:
 
 1. The PR is more likely to be reviewed quickly -- our reviewers struggle to find the contiguous time needed to review large PRs.
 2. The PR discussions tend to be more focused and less likely to get lost among several different threads.
 3. It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.
 
 If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.
+
+Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR.
 
 # Reviewing Pull Requests
 
@@ -182,7 +191,7 @@ or run them all at once:
 
 - [dev/rust_lint.sh](../../../dev/rust_lint.sh)
 
-## Testing
+## Test Organization
 
 Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
@@ -190,7 +199,9 @@ should have test coverage.
 
 DataFusion has several levels of tests in its [Test
 Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-and tries to follow the Rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+and tries to follow the Rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in [The Rust Book].
+
+[The Rust Book]: https://doc.rust-lang.org/book/
 
 ### Unit tests
 
