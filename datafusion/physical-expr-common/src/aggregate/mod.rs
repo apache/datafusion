@@ -34,6 +34,7 @@ use self::utils::{down_cast_any_ref, ordering_fields};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+#[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
@@ -42,6 +43,7 @@ pub fn create_aggregate_expr(
     schema: &Schema,
     name: impl Into<String>,
     ignore_nulls: bool,
+    is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
@@ -71,6 +73,7 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
+        is_distinct,
     }))
 }
 
@@ -162,12 +165,18 @@ pub struct AggregateFunctionExpr {
     ordering_req: LexOrdering,
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
+    is_distinct: bool,
 }
 
 impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
+    }
+
+    /// Return if the aggregation is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
     }
 }
 
