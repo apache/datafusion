@@ -63,6 +63,7 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 use tokio::task::JoinSet;
 
+mod arrow_statistics;
 mod metrics;
 mod page_filter;
 mod row_filter;
