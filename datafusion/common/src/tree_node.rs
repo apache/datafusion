@@ -172,7 +172,7 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ChildNode2)
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
-    fn rewrite<R: TreeNodeRewriter<Node = Self> + ?Sized>(
+    fn rewrite<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
     ) -> Result<Transformed<Self>> {
@@ -503,7 +503,7 @@ pub trait TreeNodeVisitor<'n>: Sized {
 ///
 /// # See Also:
 /// * [`TreeNode::visit`] to inspect borrowed `TreeNode`s
-pub trait TreeNodeRewriter {
+pub trait TreeNodeRewriter: Sized {
     /// The node type which is rewritable.
     type Node: TreeNode;
 

@@ -37,10 +37,6 @@ use datafusion_common::{
 /// [TreeNode::rewrite] in a loop - passing the output of one rewrite as the input to the next
 /// rewrite - until [RewriteCycle::max_cycles] is reached or until every [TreeNode::rewrite]
 /// returns a [Transformed::no] result in a consecutive sequence.
-///
-/// There are two methods to execute a rewrite cycle:
-/// * Static dispatch API: [Self::each_cycle]
-/// * Dynamic dispatch API: [Self::fold_rewrites]
 #[derive(Debug)]
 pub struct RewriteCycle {
     max_cycles: usize,
@@ -77,9 +73,6 @@ impl RewriteCycle {
 
     /// Runs a rewrite cycle on the given [TreeNode] using the given callback function to
     /// explicitly handle the cycle iterations.
-    ///
-    /// This API allows for static dispatch at the cost of some extra code complexity. For a
-    /// simpler API that uses dynamic dispatch, use [Self::fold_rewrites]
     ///
     /// The callback function is given a [RewriteCycleState], which manages the short-circuiting
     /// logic of the loop. The function is expected to call [RewriteCycleState::rewrite] for each
@@ -158,34 +151,6 @@ impl RewriteCycle {
             ControlFlow::Continue(state) => state.finish(),
         }
     }
-
-    /// Runs a rewrite cycle on the given tree node by applying the given sequence of [TreeNodeRewriter] trait objects.
-    ///
-    /// [TreeNode::rewrite] will be called for each [TreeNodeRewriter], with the
-    /// output [TreeNode] of each call being passed as the input to the next.
-    ///
-    /// This process repeats until either [Self::max_cycles] is reached or until a consecutive
-    /// sequence of [Transformed::no] results is returned for each [TreeNodeRewriter],
-    /// indicating that there is no more work to be done.
-    ///
-    /// For an API that avoids dynamic dispatch, see [Self::each_cycle]
-    ///
-    pub fn fold_rewrites<Node: TreeNode>(
-        &self,
-        node: Node,
-        rewriters: &mut [Box<dyn TreeNodeRewriter<Node = Node>>],
-    ) -> Result<(Node, RewriteCycleInfo)> {
-        let mut state = RewriteCycleState::new(node);
-        state.with_cycle_length(rewriters.len());
-        match (0..self.max_cycles).try_fold(state, |state, _| {
-            rewriters
-                .iter_mut()
-                .try_fold(state, |state, rewriter| state.rewrite(rewriter.as_mut()))
-        }) {
-            ControlFlow::Break(result) => result?.finish(),
-            ControlFlow::Continue(state) => state.finish(),
-        }
-    }
 }
 
 /// Iteration state of a rewrite cycle. See [RewriteCycle::each_cycle] for usage examples and information.
@@ -205,12 +170,6 @@ impl<Node: TreeNode> RewriteCycleState<Node> {
             consecutive_unchanged_count: 0,
             rewrite_count: 0,
         }
-    }
-
-    /// Explicitly specify the cycle length. Can be used to set the cycle length when the sequence of rewriters is given as
-    /// a slice, such as with [RewriteCycle::fold_rewrites]
-    fn with_cycle_length(&mut self, cycle_length: usize) {
-        self.cycle_length = Some(cycle_length);
     }
 
     /// Records the rewrite cycle length based on the current iteration count
