@@ -30,12 +30,10 @@ make_udf_function!(
 );
 
 pub mod expr_fn {
+    use datafusion_expr::Expr;
+
     /// Returns a list of regular expression matches in a string.
-    pub fn regexp_match(
-        values: datafusion_expr::Expr,
-        regex: datafusion_expr::Expr,
-        flags: Option<datafusion_expr::Expr>,
-    ) -> datafusion_expr::Expr {
+    pub fn regexp_match(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
@@ -44,11 +42,7 @@ pub mod expr_fn {
     }
 
     /// Returns true if a has at least one match in a string, false otherwise.
-    pub fn regexp_like(
-        values: datafusion_expr::Expr,
-        regex: datafusion_expr::Expr,
-        flags: Option<datafusion_expr::Expr>,
-    ) -> datafusion_expr::Expr {
+    pub fn regexp_like(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
             args.push(flags);
@@ -58,11 +52,11 @@ pub mod expr_fn {
 
     /// Replaces substrings in a string that match.
     pub fn regexp_replace(
-        string: datafusion_expr::Expr,
-        pattern: datafusion_expr::Expr,
-        replacement: datafusion_expr::Expr,
-        flags: Option<datafusion_expr::Expr>,
-    ) -> datafusion_expr::Expr {
+        string: Expr,
+        pattern: Expr,
+        replacement: Expr,
+        flags: Option<Expr>,
+    ) -> Expr {
         let mut args = vec![string, pattern, replacement];
         if let Some(flags) = flags {
             args.push(flags);
