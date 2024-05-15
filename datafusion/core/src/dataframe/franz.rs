@@ -46,22 +46,14 @@ impl DataFrame {
 
     /// TODO
     pub async fn sink(self, mut sink: Box<dyn FranzSink>) -> Result<DataFusionError> {
+        // todo: replace with execute_stream_partitioned()
         let mut stream: SendableRecordBatchStream = self.execute_stream().await.unwrap();
 
         loop {
             let rb = stream.next().await.transpose();
             if let Ok(Some(batch)) = rb {
-                // println!(
-                //     "{}",
-                //     arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-                // );
-
-                // let mut writer = LineDelimitedWriter::new(std::io::stdout().lock());
-                // let _ = writer.write(&batch);
-
                 let _ = sink.write_record(batch).await;
             }
-            // println!("<<<<< window end >>>>>>");
         }
     }
 }

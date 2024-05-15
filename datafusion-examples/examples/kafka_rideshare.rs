@@ -164,13 +164,24 @@ async fn main() {
 
     // print_stream(&windowed_df).await;
 
-    use datafusion::franz_sinks::FileSink;
     use datafusion::franz_sinks::FranzSink;
+    use datafusion::franz_sinks::FileSink;
+    use datafusion::franz_sinks::{PrettyPrinter,StdoutSink};
 
-    let writer = FileSink::new("/tmp/out.jsonl").unwrap();
-    let file_writer = Box::new(writer) as Box<dyn FranzSink>;
+    // let fname = "/tmp/out.jsonl";
+    // println!("Writing results to file {}", fname);
+    // let writer = FileSink::new(fname).unwrap();
+    // let file_writer = Box::new(writer) as Box<dyn FranzSink>;
+    // let _ = windowed_df.sink(file_writer).await;
 
-    let _ = windowed_df.sink(file_writer).await;
+
+    let writer = StdoutSink::new().unwrap();
+    let sink = Box::new(writer) as Box<dyn FranzSink>;
+    let _ = windowed_df.sink(sink).await;
+
+    // let writer = PrettyPrinter::new().unwrap();
+    // let sink = Box::new(writer) as Box<dyn FranzSink>;
+    // let _ = windowed_df.sink(sink).await;
 
 }
 

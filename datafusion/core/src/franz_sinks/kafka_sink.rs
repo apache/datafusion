@@ -32,8 +32,8 @@ impl KafkaSink {
 
 #[async_trait]
 impl FranzSink for KafkaSink {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<()> {
-        todo!()
+    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
+        Ok(())
     }
 }
 
