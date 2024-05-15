@@ -24,37 +24,36 @@
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
 - Add the actual implementation of the function to a new module file within:
-  - [here](../../../datafusion/functions-array/src) for array functions
-  - [here](../../../datafusion/functions/src/crypto) for crypto functions
-  - [here](../../../datafusion/functions/src/datetime) for datetime functions
-  - [here](../../../datafusion/functions/src/encoding) for encoding functions
-  - [here](../../../datafusion/functions/src/math) for math functions
-  - [here](../../../datafusion/functions/src/regex) for regex functions
-  - [here](../../../datafusion/functions/src/string) for string functions
-  - [here](../../../datafusion/functions/src/unicode) for unicode functions
-  - create a new module [here](../../../datafusion/functions/src) for other functions.
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions-array) for array functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto) for crypto functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime) for datetime functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for encoding functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for math functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/regex) for regex functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/string) for string functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/unicode) for unicode functions
+  - create a new module [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/) for other functions.
 - New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
   users to enable or disable the new module as desired.
 - The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
-  - See the [advanced_udf.rs](../../../datafusion-examples/examples/advanced_udf.rs) example for an example implementation
+  - See the [advanced_udf.rs] example for an example implementation
   - Add tests for the new function
 - To connect the implementation of the function add to the mod.rs file:
   - a `mod xyz;` where xyz is the new module file
   - a call to `make_udf_function!(..);`
   - an item in `export_functions!(..);`
-- In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
-  - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
-- Add SQL reference documentation [here](../../../docs/source/user-guide/sql/scalar_functions.md)
+- In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
+- Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md)
+
+[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[sqllogictest/test_files]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files
 
 ## How to add a new aggregate function
 
 Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
 
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
-  - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
-  - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/functions/src/datetime/mod.rs) for datetime functions
-  - create a new module [here](../../../datafusion/physical-expr/src) for other functions
 - In [datafusion/expr/src](../../../datafusion/expr/src/aggregate_function.rs), add:
   - a new variant to `AggregateFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
@@ -62,9 +61,9 @@ Below is a checklist of what you need to do to add a new aggregate function to D
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_aggregate_expr` mapping the built-in to the implementation
   - tests to the function.
-- In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
-  - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
-- Add SQL reference documentation [here](../../../docs/source/user-guide/sql/aggregate_functions.md)
+- In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
+- Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md)
 
 ## How to display plans graphically
 
