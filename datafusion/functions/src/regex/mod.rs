@@ -47,10 +47,14 @@ pub mod expr_fn {
     #[doc = "Returns true if a has at least one match in a string,false otherwise."]
     #[doc = r" Return $name(arg)"]
     pub fn regexp_like(
-        input_arg1: datafusion_expr::Expr,
-        input_arg2: datafusion_expr::Expr,
+        values: datafusion_expr::Expr,
+        regex: datafusion_expr::Expr,
+        flags: Option<datafusion_expr::Expr>,
     ) -> datafusion_expr::Expr {
-        let args = vec![input_arg1, input_arg2];
+        let mut args = vec![values, regex];
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
         super::regexp_like().call(args)
     }
 
