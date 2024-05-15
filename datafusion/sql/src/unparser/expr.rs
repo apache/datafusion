@@ -863,9 +863,9 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, exists, when,
+        case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, wildcard, ColumnarValue, ScalarUDF,
+        lit, not, not_exists, table_scan, when, wildcard, ColumnarValue, ScalarUDF,
         ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
@@ -970,11 +970,15 @@ mod tests {
                 r#"dummy_udf("a", "b")"#,
             ),
             (
-                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]).is_null(),
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_null(),
                 r#"dummy_udf("a", "b") IS NULL"#,
             ),
             (
-                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]).is_not_null(),
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_not_null(),
                 r#"dummy_udf("a", "b") IS NOT NULL"#,
             ),
             (
