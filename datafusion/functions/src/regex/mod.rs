@@ -30,8 +30,7 @@ make_udf_function!(
 );
 
 pub mod expr_fn {
-    #[doc = "returns a list of regular expression matches in a string. "]
-    #[doc = r" Return $name(arg)"]
+    /// Returns a list of regular expression matches in a string.
     pub fn regexp_match(
         values: datafusion_expr::Expr,
         regex: datafusion_expr::Expr,
@@ -44,8 +43,7 @@ pub mod expr_fn {
         super::regexp_match().call(args)
     }
 
-    #[doc = "Returns true if a has at least one match in a string,false otherwise."]
-    #[doc = r" Return $name(arg)"]
+    /// Returns true if a has at least one match in a string, false otherwise.
     pub fn regexp_like(
         values: datafusion_expr::Expr,
         regex: datafusion_expr::Expr,
@@ -58,8 +56,7 @@ pub mod expr_fn {
         super::regexp_like().call(args)
     }
 
-    #[doc = "Replaces substrings in a string that match"]
-    #[doc = r" Return $name(arg)"]
+    /// Replaces substrings in a string that match.
     pub fn regexp_replace(
         string: datafusion_expr::Expr,
         pattern: datafusion_expr::Expr,
