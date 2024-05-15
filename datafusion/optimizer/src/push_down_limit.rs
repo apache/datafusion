@@ -241,7 +241,7 @@ fn combine_limit(
     child_skip: usize,
     child_fetch: Option<usize>,
 ) -> (usize, Option<usize>) {
-    let combined_skip = child_skip + parent_skip;
+    let combined_skip = child_skip.saturating_add(parent_skip);
 
     let combined_fetch = match (parent_fetch, child_fetch) {
         (Some(parent_fetch), Some(child_fetch)) => {
