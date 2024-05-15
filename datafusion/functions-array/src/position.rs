@@ -19,8 +19,6 @@
 
 use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
