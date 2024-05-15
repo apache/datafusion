@@ -47,12 +47,12 @@ async fn can_override_schema_adapter() {
     let f1 = Field::new("id", DataType::Int32, true);
 
     let file_schema = Arc::new(Schema::new(vec![f1.clone()]));
-    let filename = format!("part.parquet");
+    let filename = "part.parquet".to_string();
     let path = table_dir.as_path().join(filename.clone());
     let file = fs::File::create(path.clone()).unwrap();
     let mut writer = ArrowWriter::try_new(file, file_schema.clone(), None).unwrap();
 
-    let ids = Arc::new(Int32Array::from(vec![1 as i32]));
+    let ids = Arc::new(Int32Array::from(vec![1i32]));
     let rec_batch = RecordBatch::try_new(file_schema.clone(), vec![ids]).unwrap();
 
     writer.write(&rec_batch).unwrap();
@@ -143,7 +143,7 @@ impl SchemaAdapter for TestSchemaAdapter {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
 
         for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some(_) = self.table_schema.fields().find(file_field.name()) {
+            if self.table_schema.fields().find(file_field.name()).is_some() {
                 projection.push(file_idx);
             }
         }
