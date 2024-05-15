@@ -18,8 +18,7 @@
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
 use crate::function::{
-    AccumulatorArgs, AggregateFunctionSimplification, GroupsAccumulatorSupportedArgs,
-    StateFieldsArgs,
+    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
@@ -185,10 +184,7 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
-    pub fn groups_accumulator_supported(
-        &self,
-        args: GroupsAccumulatorSupportedArgs,
-    ) -> bool {
+    pub fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         self.inner.groups_accumulator_supported(args)
     }
 
@@ -343,10 +339,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(
-        &self,
-        _args: GroupsAccumulatorSupportedArgs,
-    ) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
     }
 

@@ -20,7 +20,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::function::{GroupsAccumulatorSupportedArgs, StateFieldsArgs};
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -217,6 +217,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
+            args_num: self.args.len(),
         };
 
         self.fun.accumulator(acc_args)
@@ -282,9 +283,14 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        let args = GroupsAccumulatorSupportedArgs {
-            args_num: self.args.len(),
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
         };
         self.fun.groups_accumulator_supported(args)
     }

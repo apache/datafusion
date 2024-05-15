@@ -71,22 +71,23 @@ pub struct AccumulatorArgs<'a> {
     pub sort_exprs: &'a [Expr],
 
     /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
     pub is_distinct: bool,
 
     /// The input type of the aggregate function.
     pub input_type: &'a DataType,
-}
 
-/// [`GroupsAccumulatorSupportedArgs`] contains information to determine if an
-/// aggregate function supports the groups accumulator.
-pub struct GroupsAccumulatorSupportedArgs {
     /// The number of arguments the aggregate function takes.
     pub args_num: usize,
-
-    /// Whether the aggregate function is distinct.
-    pub is_distinct: bool,
 }
 
+/// [`StateFieldsArgs`] contains information about the fields that an
+/// aggregate function's accumulator should have. Used for [`AggregateUDFImpl::state_fields`].
+///
+/// [`AggregateUDFImpl::state_fields`]: crate::udaf::AggregateUDFImpl::state_fields
 pub struct StateFieldsArgs<'a> {
     /// The name of the aggregate function.
     pub name: &'a str,
