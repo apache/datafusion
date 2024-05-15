@@ -208,10 +208,43 @@ impl ScalarUDF {
         self.inner.short_circuits()
     }
 
+    /// Computes the output interval for a [`ScalarUDF`], given the input
+    /// intervals.
+    ///
+    /// # Arguments
+    ///
+    /// * `children` are the intervals for the children (inputs) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
     pub fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
         self.inner.evaluate_bounds(input)
     }
 
+    /// Updates bounds for child expressions, given a known interval for this function.
+    ///
+    /// This is used to propagate constraints down through an expression tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` is the currently known interval for this ScalarUDFImpl.
+    /// * `children` are the current intervals for the children of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// may return an empty vector instead of cloning `children`. This is the default
+    /// (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, -6]`, then propagation would would return `[-5, 5]`.
     pub fn propagate_constraints(
         &self,
         interval: &Interval,
@@ -220,6 +253,7 @@ impl ScalarUDF {
         self.inner.propagate_constraints(interval, input)
     }
 
+    /// Calculates the [`SortProperties`] of this function based on its children's properties.
     pub fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         self.inner.monotonicity(input)
     }
@@ -431,11 +465,44 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         false
     }
 
+    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// intervals.
+    ///
+    /// # Arguments
+    ///
+    /// * `children` are the intervals for the children (inputs) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
     }
 
+    /// Updates bounds for child expressions, given a known interval for this function.
+    ///
+    /// This is used to propagate constraints down through an expression tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` is the currently known interval for this ScalarUDFImpl.
+    /// * `children` are the current intervals for the children of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// may return an empty vector instead of cloning `children`. This is the default
+    /// (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, -6]`, then propagation would would return `[-5, 5]`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
@@ -444,6 +511,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(Some(input.iter().map(|&i| i.clone()).collect()))
     }
 
+    /// Calculates the [`SortProperties`] of this function based on its children's properties.
     fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }
