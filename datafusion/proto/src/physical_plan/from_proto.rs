@@ -40,7 +40,7 @@ use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{
     ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
@@ -155,14 +155,18 @@ pub fn parse_physical_window_expr(
             )
         })?;
 
+    let fun: WindowFunctionDefinition = convert_required!(proto.window_function)?;
+    let name = proto.name.clone();
+    let extended_schema =
+        schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
     create_window_expr(
-        &convert_required!(proto.window_function)?,
-        proto.name.clone(),
+        &fun,
+        name,
         &window_node_expr,
         &partition_by,
         &order_by,
         Arc::new(window_frame),
-        input_schema,
+        &extended_schema,
         false,
     )
 }
