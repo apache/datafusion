@@ -73,11 +73,11 @@ DataFusion is a very active fast-moving project and we try to review and merge P
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
 
 The lifecycle of a PR is:
+
 1. Create a PR targeting the `main` branch.
 2. For returning contributors, CI tests are automatically run. For new contributors a committer must first trigger the tests.
 3. Your PR will be reviewed. Please respond to all feedback on the PR: you don't have to change the code, but you should acknowledge the feedback.
 4. Once the PR is approved, one of the [committers] will merge your PR, typically within 24 hours. We leave approved PRs open for some time to allow for additional feedback from the community.
-
 
 [committers]: https://people.apache.org/phonebook.html?unix=datafusion
 
@@ -201,7 +201,7 @@ DataFusion has several levels of tests in its [Test
 Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
 and tries to follow the Rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in [The Rust Book].
 
-[The Rust Book]: https://doc.rust-lang.org/book/
+[the rust book]: https://doc.rust-lang.org/book/
 
 ### Unit tests
 
