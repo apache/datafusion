@@ -47,7 +47,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, FileType,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -285,10 +285,6 @@ impl FileFormat for ParquetFormat {
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::PARQUET
     }
 }
 

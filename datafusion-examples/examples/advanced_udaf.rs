@@ -31,7 +31,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    function::{AccumulatorArgs, GroupsAccumulatorSupportedArgs, StateFieldsArgs},
+    function::{AccumulatorArgs, StateFieldsArgs},
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
@@ -101,10 +101,7 @@ impl AggregateUDFImpl for GeoMeanUdaf {
 
     /// Tell DataFusion that this aggregate supports the more performant `GroupsAccumulator`
     /// which is used for cases when there are grouping columns in the query
-    fn groups_accumulator_supported(
-        &self,
-        _args: GroupsAccumulatorSupportedArgs,
-    ) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 

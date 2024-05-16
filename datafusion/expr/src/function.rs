@@ -45,8 +45,10 @@ pub type ReturnTypeFunction =
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
     pub data_type: &'a DataType,
+
     /// The schema of the input arguments
     pub schema: &'a Schema,
+
     /// Whether to ignore nulls.
     ///
     /// SQL allows the user to specify `IGNORE NULLS`, for example:
@@ -67,42 +69,39 @@ pub struct AccumulatorArgs<'a> {
     ///
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
+
+    /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
     pub is_distinct: bool,
+
+    /// The input type of the aggregate function.
     pub input_type: &'a DataType,
-}
 
-impl<'a> AccumulatorArgs<'a> {
-    pub fn new(
-        data_type: &'a DataType,
-        schema: &'a Schema,
-        ignore_nulls: bool,
-        sort_exprs: &'a [Expr],
-        is_distinct: bool,
-        input_type: &'a DataType,
-    ) -> Self {
-        Self {
-            data_type,
-            schema,
-            ignore_nulls,
-            sort_exprs,
-            is_distinct,
-            input_type,
-        }
-    }
-}
-
-/// [`GroupsAccumulatorSupportedArgs`] contains information to determine if an
-/// aggregate function supports the groups accumulator.
-pub struct GroupsAccumulatorSupportedArgs {
+    /// The number of arguments the aggregate function takes.
     pub args_num: usize,
-    pub is_distinct: bool,
 }
 
+/// [`StateFieldsArgs`] contains information about the fields that an
+/// aggregate function's accumulator should have. Used for [`AggregateUDFImpl::state_fields`].
+///
+/// [`AggregateUDFImpl::state_fields`]: crate::udaf::AggregateUDFImpl::state_fields
 pub struct StateFieldsArgs<'a> {
+    /// The name of the aggregate function.
     pub name: &'a str,
+
+    /// The input type of the aggregate function.
     pub input_type: &'a DataType,
+
+    /// The return type of the aggregate function.
     pub return_type: &'a DataType,
+
+    /// The ordering fields of the aggregate function.
     pub ordering_fields: &'a [Field],
+
+    /// Whether the aggregate function is distinct.
     pub is_distinct: bool,
 }
 

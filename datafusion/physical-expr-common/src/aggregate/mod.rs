@@ -22,7 +22,7 @@ pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::function::{GroupsAccumulatorSupportedArgs, StateFieldsArgs};
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
@@ -198,7 +198,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let args = StateFieldsArgs {
-            name: self.name(),
+            name: &self.name,
             input_type: &self.input_type,
             return_type: &self.data_type,
             ordering_fields: &self.ordering_fields,
@@ -213,14 +213,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let acc_args = AccumulatorArgs::new(
-            &self.data_type,
-            &self.schema,
-            self.ignore_nulls,
-            &self.sort_exprs,
-            self.is_distinct,
-            &self.input_type,
-        );
+        let acc_args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
+        };
 
         self.fun.accumulator(acc_args)
     }
@@ -285,11 +286,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        let args = GroupsAccumulatorSupportedArgs {
-            args_num: self.args.len(),
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
         };
-
         self.fun.groups_accumulator_supported(args)
     }
 
