@@ -125,6 +125,20 @@ impl DFSchema {
         }
     }
 
+    /// Return a reference to the inner Arrow [`Schema`]
+    ///
+    /// Note this does not have the qualifier information
+    pub fn as_arrow(&self) -> &Schema {
+        self.inner.as_ref()
+    }
+
+    /// Return a reference to the inner Arrow [`SchemaRef`]
+    ///
+    /// Note this does not have the qualifier information
+    pub fn inner(&self) -> &SchemaRef {
+        &self.inner
+    }
+
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
@@ -347,9 +361,22 @@ impl DFSchema {
         matches.next()
     }
 
-    /// Find the index of the column with the given qualifier and name
-    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `None` if not found
+    ///
+    /// See [Self::index_of_column] for a version that returns an error if the
+    /// column is not found
+    pub fn maybe_index_of_column(&self, col: &Column) -> Option<usize> {
         self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+    }
+
+    /// Find the index of the column with the given qualifier and name,
+    /// returning `Err` if not found
+    ///
+    /// See [Self::maybe_index_of_column] for a version that returns `None` if
+    /// the column is not found
+    pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        self.maybe_index_of_column(col)
             .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
@@ -793,13 +820,35 @@ impl From<&DFSchema> for Schema {
     }
 }
 
+/// Allow DFSchema to be converted into an Arrow `&Schema`
+impl AsRef<Schema> for DFSchema {
+    fn as_ref(&self) -> &Schema {
+        self.as_arrow()
+    }
+}
+
+/// Allow DFSchema to be converted into an Arrow `&SchemaRef` (to clone, for
+/// example)
+impl AsRef<SchemaRef> for DFSchema {
+    fn as_ref(&self) -> &SchemaRef {
+        self.inner()
+    }
+}
+
 /// Create a `DFSchema` from an Arrow schema
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> Result<Self, Self::Error> {
+        Self::try_from(Arc::new(schema))
+    }
+}
+
+impl TryFrom<SchemaRef> for DFSchema {
+    type Error = DataFusionError;
+    fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         let field_count = schema.fields.len();
         let dfschema = Self {
-            inner: schema.into(),
+            inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -843,12 +892,7 @@ impl ToDFSchema for Schema {
 
 impl ToDFSchema for SchemaRef {
     fn to_dfschema(self) -> Result<DFSchema> {
-        // Attempt to use the Schema directly if there are no other
-        // references, otherwise clone
-        match Self::try_unwrap(self) {
-            Ok(schema) => DFSchema::try_from(schema),
-            Err(schemaref) => DFSchema::try_from(schemaref.as_ref().clone()),
-        }
+        DFSchema::try_from(self)
     }
 }
 

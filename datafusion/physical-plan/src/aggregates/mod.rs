@@ -502,17 +502,13 @@ impl AggregateExec {
         }
     }
 
-    pub fn group_by(&self) -> &PhysicalGroupBy {
-        &self.group_by
-    }
-
     /// true, if this Aggregate has a group-by with no required or explicit ordering,
     /// no filtering and no aggregate expressions
     /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         // ensure there is a group by
-        if self.group_by().is_empty() {
+        if self.group_expr().is_empty() {
             return false;
         }
         // ensure there are no aggregate expressions
@@ -1800,6 +1796,7 @@ mod tests {
             col("a", &input_schema)?,
             "MEDIAN(a)".to_string(),
             DataType::UInt32,
+            false,
         ))];
 
         // use slow-path in `hash.rs`

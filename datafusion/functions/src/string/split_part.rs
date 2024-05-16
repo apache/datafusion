@@ -34,6 +34,12 @@ pub struct SplitPartFunc {
     signature: Signature,
 }
 
+impl Default for SplitPartFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SplitPartFunc {
     pub fn new() -> Self {
         use DataType::*;

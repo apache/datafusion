@@ -16,13 +16,11 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
 
-use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, FuncMonotonicity, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
@@ -62,12 +60,14 @@ impl ScalarUDFImpl for PiFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if !matches!(&args[0], ColumnarValue::Array(_)) {
-            return exec_err!("Expect pi function to take no param");
-        }
-        let array = Float64Array::from_value(std::f64::consts::PI, 1);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
+    }
+
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+            std::f64::consts::PI,
+        ))))
     }
 
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {

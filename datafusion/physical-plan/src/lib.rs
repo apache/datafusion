@@ -30,7 +30,6 @@ use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::utils::DataPtr;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
@@ -117,7 +116,19 @@ pub mod udaf {
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str
+    where
+        Self: Sized,
+    {
+        Self::static_name()
+    }
+
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
+    fn static_name() -> &'static str
+    where
+        Self: Sized,
+    {
         let full_name = std::any::type_name::<Self>();
         let maybe_start_idx = full_name.rfind(':');
         match maybe_start_idx {
@@ -125,6 +136,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             None => "UNKNOWN",
         }
     }
+
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -671,7 +683,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         plan.with_new_children(children)
     } else {
@@ -873,7 +885,10 @@ mod tests {
     }
 
     impl ExecutionPlan for RenamedEmptyExec {
-        fn name(&self) -> &'static str {
+        fn static_name() -> &'static str
+        where
+            Self: Sized,
+        {
             "MyRenamedEmptyExec"
         }
 
@@ -918,6 +933,7 @@ mod tests {
         let schema2 = Arc::new(Schema::empty());
         let renamed_exec = RenamedEmptyExec::new(schema2);
         assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
+        assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
     }
 }
 

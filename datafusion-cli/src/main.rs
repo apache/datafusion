@@ -83,7 +83,8 @@ struct Args {
         short = 'c',
         long,
         multiple_values = true,
-        help = "Execute the given command string(s), then exit"
+        help = "Execute the given command string(s), then exit. Commands are expected to be non empty.",
+        validator(is_valid_command)
     )]
     command: Vec<String>,
 
@@ -282,6 +283,14 @@ fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
     match extract_memory_pool_size(size) {
         Ok(_) => Ok(()),
         Err(e) => Err(e),
+    }
+}
+
+fn is_valid_command(command: &str) -> Result<(), String> {
+    if !command.is_empty() {
+        Ok(())
+    } else {
+        Err("-c flag expects only non empty commands".to_string())
     }
 }
 

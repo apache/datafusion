@@ -35,6 +35,12 @@ pub struct RightFunc {
     signature: Signature,
 }
 
+impl Default for RightFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RightFunc {
     pub fn new() -> Self {
         use DataType::*;

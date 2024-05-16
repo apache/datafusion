@@ -17,26 +17,23 @@
 
 //! [`ScalarUDFImpl`] definitions for range and gen_series functions.
 
+use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, Int64Array, ListArray};
 use arrow::datatypes::{DataType, Field};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use std::any::Any;
-
-use crate::utils::make_scalar_function;
 use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
-use arrow_array::Date32Array;
+use arrow_array::{Date32Array, NullArray};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::DataType::{Date32, Int64, Interval, List};
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
 use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     Range,
     range,
     start stop step,
@@ -57,6 +54,7 @@ impl Range {
                     TypeSignature::Exact(vec![Int64, Int64]),
                     TypeSignature::Exact(vec![Int64, Int64, Int64]),
                     TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
             ),
@@ -77,14 +75,21 @@ impl ScalarUDFImpl for Range {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new(
-            "item",
-            arg_types[0].clone(),
-            true,
-        ))))
+        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
+            Ok(DataType::Null)
+        } else {
+            Ok(List(Arc::new(Field::new(
+                "item",
+                arg_types[0].clone(),
+                true,
+            ))))
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+            return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
+        }
         match args[0].data_type() {
             Int64 => make_scalar_function(|args| gen_range_inner(args, false))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, false))(args),
@@ -99,7 +104,7 @@ impl ScalarUDFImpl for Range {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     GenSeries,
     gen_series,
     start stop step,
@@ -120,6 +125,7 @@ impl GenSeries {
                     TypeSignature::Exact(vec![Int64, Int64]),
                     TypeSignature::Exact(vec![Int64, Int64, Int64]),
                     TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
             ),
@@ -140,14 +146,21 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new(
-            "item",
-            arg_types[0].clone(),
-            true,
-        ))))
+        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
+            Ok(DataType::Null)
+        } else {
+            Ok(List(Arc::new(Field::new(
+                "item",
+                arg_types[0].clone(),
+                true,
+            ))))
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+            return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
+        }
         match args[0].data_type() {
             Int64 => make_scalar_function(|args| gen_range_inner(args, true))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, true))(args),

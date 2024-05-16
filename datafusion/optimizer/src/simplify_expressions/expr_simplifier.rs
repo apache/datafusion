@@ -31,14 +31,11 @@ use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::expr::{InList, InSubquery};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::{AggregateFunctionDefinition, InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator,
-    ScalarFunctionDefinition, Volatility,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -94,9 +91,12 @@ pub struct ExprSimplifier<S> {
     /// Should expressions be canonicalized before simplification? Defaults to
     /// true
     canonicalize: bool,
+    /// Maximum number of simplifier cycles
+    max_simplifier_cycles: u32,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -109,10 +109,11 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             info,
             guarantees: vec![],
             canonicalize: true,
+            max_simplifier_cycles: DEFAULT_MAX_SIMPLIFIER_CYCLES,
         }
     }
 
-    /// Simplifies this [`Expr`]`s as much as possible, evaluating
+    /// Simplifies this [`Expr`] as much as possible, evaluating
     /// constants and applying algebraic simplifications.
     ///
     /// The types of the expression must match what operators expect,
@@ -173,7 +174,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = simplifier.simplify(expr).unwrap();
     /// assert_eq!(expr, b_lt_2);
     /// ```
-    pub fn simplify(&self, mut expr: Expr) -> Result<Expr> {
+    pub fn simplify(&self, expr: Expr) -> Result<Expr> {
+        Ok(self.simplify_with_cycle_count(expr)?.0)
+    }
+
+    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
+    /// constants and applying algebraic simplifications. Additionally returns a `u32`
+    /// representing the number of simplification cycles performed, which can be useful for testing
+    /// optimizations.
+    ///
+    /// See [Self::simplify] for details and usage examples.
+    ///
+    pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -183,24 +195,26 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
         }
 
-        // TODO iterate until no changes are made during rewrite
-        // (evaluating constants can enable new simplifications and
-        // simplifications can enable new constant evaluation)
-        // https://github.com/apache/datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)
-            .data()?
-            .rewrite(&mut simplifier)
-            .data()?
-            .rewrite(&mut guarantee_rewriter)
-            .data()?
-            // run both passes twice to try an minimize simplifications that we missed
-            .rewrite(&mut const_evaluator)
-            .data()?
-            .rewrite(&mut simplifier)
-            .data()?
-            // shorten inlist should be started after other inlist rules are applied
-            .rewrite(&mut shorten_in_list_simplifier)
-            .data()
+        // Evaluating constants can enable new simplifications and
+        // simplifications can enable new constant evaluation
+        // see `Self::with_max_cycles`
+        let mut num_cycles = 0;
+        loop {
+            let Transformed {
+                data, transformed, ..
+            } = expr
+                .rewrite(&mut const_evaluator)?
+                .transform_data(|expr| expr.rewrite(&mut simplifier))?
+                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
+            expr = data;
+            num_cycles += 1;
+            if !transformed || num_cycles >= self.max_simplifier_cycles {
+                break;
+            }
+        }
+        // shorten inlist should be started after other inlist rules are applied
+        expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+        Ok((expr, num_cycles))
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -208,14 +222,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
-    ///
-    // Would be nice if this API could use the SimplifyInfo
-    // rather than creating an DFSchemaRef coerces rather than doing
-    // it manually.
-    // https://github.com/apache/datafusion/issues/3793
-    pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
+    pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
-
         expr.rewrite(&mut expr_rewrite).data()
     }
 
@@ -331,6 +339,63 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self.canonicalize = canonicalize;
         self
     }
+
+    /// Specifies the maximum number of simplification cycles to run.
+    ///
+    /// The simplifier can perform multiple passes of simplification. This is
+    /// because the output of one simplification step can allow more optimizations
+    /// in another simplification step. For example, constant evaluation can allow more
+    /// expression simplifications, and expression simplifications can allow more constant
+    /// evaluations.
+    ///
+    /// This method specifies the maximum number of allowed iteration cycles before the simplifier
+    /// returns an [Expr] output. However, it does not always perform the maximum number of cycles.
+    /// The simplifier will attempt to detect when an [Expr] is unchanged by all the simplification
+    /// passes, and return early. This avoids wasting time on unnecessary [Expr] tree traversals.
+    ///
+    /// If no maximum is specified, the value of [DEFAULT_MAX_SIMPLIFIER_CYCLES] is used
+    /// instead.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
+    ///
+    /// // Expression: a IS NOT NULL
+    /// let expr = col("a").is_not_null();
+    ///
+    /// // When using default maximum cycles, 2 cycles will be performed.
+    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count(expr.clone()).unwrap();
+    /// assert_eq!(simplified_expr, lit(true));
+    /// // 2 cycles were executed, but only 1 was needed
+    /// assert_eq!(count, 2);
+    ///
+    /// // Only 1 simplification pass is necessary here, so we can set the maximum cycles to 1.
+    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count(expr.clone()).unwrap();
+    /// // Expression has been rewritten to: (c = a AND b = 1)
+    /// assert_eq!(simplified_expr, lit(true));
+    /// // Only 1 cycle was executed
+    /// assert_eq!(count, 1);
+    ///
+    /// ```
+    pub fn with_max_cycles(mut self, max_simplifier_cycles: u32) -> Self {
+        self.max_simplifier_cycles = max_simplifier_cycles;
+        self
+    }
 }
 
 /// Canonicalize any BinaryExprs that are not in canonical form
@@ -412,6 +477,8 @@ struct ConstEvaluator<'a> {
 enum ConstSimplifyResult {
     // Expr was simplifed and contains the new expression
     Simplified(ScalarValue),
+    // Expr was not simplified and original value is returned
+    NotSimplified(ScalarValue),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
@@ -457,6 +524,9 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
                 match result {
                     ConstSimplifyResult::Simplified(s) => {
                         Ok(Transformed::yes(Expr::Literal(s)))
+                    }
+                    ConstSimplifyResult::NotSimplified(s) => {
+                        Ok(Transformed::no(Expr::Literal(s)))
                     }
                     ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
                         Ok(Transformed::yes(expr))
@@ -524,12 +594,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    Self::volatility_ok(fun.signature().volatility)
-                }
-                ScalarFunctionDefinition::Name(_) => false,
-            },
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+                Self::volatility_ok(func.signature().volatility)
+            }
             Expr::Literal(_)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
@@ -557,7 +624,7 @@ impl<'a> ConstEvaluator<'a> {
     /// Internal helper to evaluates an Expr
     pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
-            return ConstSimplifyResult::Simplified(s);
+            return ConstSimplifyResult::NotSimplified(s);
         }
 
         let phys_expr =
@@ -1303,17 +1370,26 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
             }
-            Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(udf),
-                args,
-            }) => match udf.simplify(args, info)? {
-                ExprSimplifyResult::Original(args) => {
-                    Transformed::no(Expr::ScalarFunction(ScalarFunction {
-                        func_def: ScalarFunctionDefinition::UDF(udf),
-                        args,
-                    }))
+            Expr::ScalarFunction(ScalarFunction { func: udf, args }) => {
+                match udf.simplify(args, info)? {
+                    ExprSimplifyResult::Original(args) => {
+                        Transformed::no(Expr::ScalarFunction(ScalarFunction {
+                            func: udf,
+                            args,
+                        }))
+                    }
+                    ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
                 }
-                ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
+            }
+
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                func_def: AggregateFunctionDefinition::UDF(ref udaf),
+                ..
+            }) => match (udaf.simplify(), expr) {
+                (Some(simplify_function), Expr::AggregateFunction(af)) => {
+                    Transformed::yes(simplify_function(af, info)?)
+                }
+                (_, expr) => Transformed::no(expr),
             },
 
             //
@@ -1681,14 +1757,17 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
+    use datafusion_expr::{
+        function::{AccumulatorArgs, AggregateFunctionSimplification},
+        interval_arithmetic::Interval,
+        *,
+    };
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use datafusion_common::{assert_contains, ToDFSchema};
-    use datafusion_expr::{interval_arithmetic::Interval, *};
 
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
@@ -1722,11 +1801,7 @@ mod tests {
         // should fully simplify to 3 < i (though i has been coerced to i64)
         let expected = lit(3i64).lt(col("i"));
 
-        // Would be nice if this API could use the SimplifyInfo
-        // rather than creating an DFSchemaRef coerces rather than doing
-        // it manually.
-        // https://github.com/apache/datafusion/issues/3793
-        let expr = simplifier.coerce(expr, schema).unwrap();
+        let expr = simplifier.coerce(expr, &schema).unwrap();
 
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }
@@ -2881,6 +2956,19 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
+    fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        );
+        simplifier.simplify_with_cycle_count(expr)
+    }
+
+    fn simplify_with_cycle_count(expr: Expr) -> (Expr, u32) {
+        try_simplify_with_cycle_count(expr).unwrap()
+    }
+
     fn simplify_with_guarantee(
         expr: Expr,
         guarantees: Vec<(Expr, NullableInterval)>,
@@ -3587,5 +3675,130 @@ mod tests {
         let expected = lit(false);
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_cycles() {
+        // TRUE
+        let expr = lit(true);
+        let expected = lit(true);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 1);
+
+        // (true != NULL) OR (5 > 10)
+        let expr = lit(true).not_eq(lit_bool_null()).or(lit(5).gt(lit(10)));
+        let expected = lit_bool_null();
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 2);
+
+        // NOTE: this currently does not simplify
+        // (((c4 - 10) + 10) *100) / 100
+        let expr = (((col("c4") - lit(10)) + lit(10)) * lit(100)) / lit(100);
+        let expected = expr.clone();
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 1);
+
+        // ((c4<1 or c3<2) and c3_non_null<3) and false
+        let expr = col("c4")
+            .lt(lit(1))
+            .or(col("c3").lt(lit(2)))
+            .and(col("c3_non_null").lt(lit(3)))
+            .and(lit(false));
+        let expected = lit(false);
+        let (expr, num_iter) = simplify_with_cycle_count(expr);
+        assert_eq!(expr, expected);
+        assert_eq!(num_iter, 2);
+    }
+    #[test]
+    fn test_simplify_udaf() {
+        let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
+        let aggregate_function_expr =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                udaf.into(),
+                vec![],
+                false,
+                None,
+                None,
+                None,
+            ));
+
+        let expected = col("result_column");
+        assert_eq!(simplify(aggregate_function_expr), expected);
+
+        let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
+        let aggregate_function_expr =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                udaf.into(),
+                vec![],
+                false,
+                None,
+                None,
+                None,
+            ));
+
+        let expected = aggregate_function_expr.clone();
+        assert_eq!(simplify(aggregate_function_expr), expected);
+    }
+
+    /// A Mock UDAF which defines `simplify` to be used in tests
+    /// related to UDAF simplification
+    #[derive(Debug, Clone)]
+    struct SimplifyMockUdaf {
+        simplify: bool,
+    }
+
+    impl SimplifyMockUdaf {
+        /// make simplify method return new expression
+        fn new_with_simplify() -> Self {
+            Self { simplify: true }
+        }
+        /// make simplify method return no change
+        fn new_without_simplify() -> Self {
+            Self { simplify: false }
+        }
+    }
+
+    impl AggregateUDFImpl for SimplifyMockUdaf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "mock_simplify"
+        }
+
+        fn signature(&self) -> &Signature {
+            unimplemented!()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: function::AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            unimplemented!("not needed for testing")
+        }
+
+        fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+            unimplemented!("not needed for testing")
+        }
+
+        fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+            if self.simplify {
+                Some(Box::new(|_, _| Ok(col("result_column"))))
+            } else {
+                None
+            }
+        }
     }
 }

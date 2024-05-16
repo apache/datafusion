@@ -27,7 +27,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(*s, planner_context),
+            SetExpr::Select(s) => self.select_to_plan(*s, vec![], planner_context),
             SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
             SetExpr::SetOperation {
                 op,

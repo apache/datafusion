@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::iter;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
@@ -24,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -64,45 +63,14 @@ impl ScalarUDFImpl for RandomFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        random(args)
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("{} function does not accept arguments", self.name())
     }
-}
 
-/// Random SQL function
-fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let len: usize = match &args[0] {
-        ColumnarValue::Array(array) => array.len(),
-        _ => return exec_err!("Expect random function to take no param"),
-    };
-    let mut rng = thread_rng();
-    let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-    let array = Float64Array::from_iter_values(values);
-    Ok(ColumnarValue::Array(Arc::new(array)))
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use arrow::array::NullArray;
-
-    use datafusion_common::cast::as_float64_array;
-    use datafusion_expr::ColumnarValue;
-
-    use crate::math::random::random;
-
-    #[test]
-    fn test_random_expression() {
-        let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
-        let array = random(&args)
-            .expect("failed to initialize function random")
-            .into_array(1)
-            .expect("Failed to convert to array");
-        let floats =
-            as_float64_array(&array).expect("failed to initialize function random");
-
-        assert_eq!(floats.len(), 1);
-        assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
+    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
+        let mut rng = thread_rng();
+        let values = std::iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(num_rows);
+        let array = Float64Array::from_iter_values(values);
+        Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }

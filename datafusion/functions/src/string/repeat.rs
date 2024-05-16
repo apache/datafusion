@@ -34,6 +34,12 @@ pub struct RepeatFunc {
     signature: Signature,
 }
 
+impl Default for RepeatFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RepeatFunc {
     pub fn new() -> Self {
         use DataType::*;

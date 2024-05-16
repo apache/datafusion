@@ -27,8 +27,6 @@ use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{
     type_coercion::binary::get_wider_type, ColumnarValue, ScalarUDFImpl, Signature,
     Volatility,
@@ -36,7 +34,7 @@ use datafusion_expr::{
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayAppend,
     array_append,
     array element,                                // arg name
@@ -96,7 +94,7 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPrepend,
     array_prepend,
     element array,
@@ -156,7 +154,7 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayConcat,
     array_concat,
     "Concatenates arrays.",

@@ -32,24 +32,23 @@
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Neg;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionDefinition,
-};
+use datafusion_common::{internal_err, DFSchema, Result};
+use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, FuncMonotonicity, ScalarUDF};
 
-use crate::functions::out_ordering;
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionDefinition,
+    fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -58,8 +57,6 @@ pub struct ScalarFunctionExpr {
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
-    // Whether this function can be invoked with zero arguments
-    supports_zero_argument: bool,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -70,7 +67,6 @@ impl Debug for ScalarFunctionExpr {
             .field("args", &self.args)
             .field("return_type", &self.return_type)
             .field("monotonicity", &self.monotonicity)
-            .field("supports_zero_argument", &self.supports_zero_argument)
             .finish()
     }
 }
@@ -79,11 +75,10 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionDefinition,
+        fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
-        supports_zero_argument: bool,
     ) -> Self {
         Self {
             fun,
@@ -91,12 +86,11 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             monotonicity,
-            supports_zero_argument,
         }
     }
 
     /// Get the scalar function implementation
-    pub fn fun(&self) -> &ScalarFunctionDefinition {
+    pub fn fun(&self) -> &ScalarUDF {
         &self.fun
     }
 
@@ -142,31 +136,25 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
-        // indicating the batch size (as a convention)
-        let inputs = match self.args.is_empty() {
-            // If the function supports zero argument, we pass in a null array indicating the batch size.
-            // This is for user-defined functions.
-            // MakeArray support zero argument but has the different behavior from the array with one null.
-            true if self.supports_zero_argument && self.name != "make_array" => {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            _ => self
-                .args
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
-        };
+        let inputs = self
+            .args
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
-        match self.fun {
-            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
-            ScalarFunctionDefinition::Name(_) => {
-                internal_err!(
-                    "Name function must be resolved to one of the other variants prior to physical planning"
-                )
+        let output = match self.args.is_empty() {
+            true => self.fun.invoke_no_args(batch.num_rows()),
+            false => self.fun.invoke(&inputs),
+        }?;
+
+        if let ColumnarValue::Array(array) = &output {
+            if array.len() != batch.num_rows() {
+                return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
+                        batch.num_rows(), array.len());
             }
         }
+        Ok(output)
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -183,7 +171,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             children,
             self.return_type().clone(),
             self.monotonicity.clone(),
-            self.supports_zero_argument,
         )))
     }
 
@@ -214,5 +201,93 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
                     && self.return_type == x.return_type
             })
             .unwrap_or(false)
+    }
+}
+
+/// Create a physical expression for the UDF.
+///
+/// Arguments:
+pub fn create_physical_expr(
+    fun: &ScalarUDF,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    args: &[Expr],
+    input_dfschema: &DFSchema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let input_expr_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types_with_scalar_udf(&input_expr_types, fun)?;
+
+    // Since we have arg_types, we dont need args and schema.
+    let return_type =
+        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
+
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        fun.name(),
+        Arc::new(fun.clone()),
+        input_phy_exprs.to_vec(),
+        return_type,
+        fun.monotonicity()?,
+    )))
+}
+
+/// Determines a [ScalarFunctionExpr]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    func.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort,
+            }
+        },
+    )
+}
+
+/// This function decides the monotonicity property of a [ScalarFunctionExpr] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+///
+/// [ScalarFunctionExpr]: crate::scalar_function::ScalarFunctionExpr
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+        }
     }
 }

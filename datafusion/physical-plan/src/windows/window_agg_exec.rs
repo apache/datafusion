@@ -22,7 +22,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -41,7 +40,7 @@ use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;

@@ -22,8 +22,6 @@ use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use itertools::Itertools;
@@ -34,19 +32,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(ArrayHas,
+make_udf_expr_and_func!(ArrayHas,
     array_has,
     first_array second_array, // arg name
     "returns true, if the element appears in the first array, otherwise false.", // doc
     array_has_udf // internal function name
 );
-make_udf_function!(ArrayHasAll,
+make_udf_expr_and_func!(ArrayHasAll,
     array_has_all,
     first_array second_array, // arg name
     "returns true if each element of the second array appears in the first array; otherwise, it returns false.", // doc
     array_has_all_udf // internal function name
 );
-make_udf_function!(ArrayHasAny,
+make_udf_expr_and_func!(ArrayHasAny,
     array_has_any,
     first_array second_array, // arg name
     "returns true if at least one element of the second array appears in the first array; otherwise, it returns false.", // doc
@@ -288,36 +286,40 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
     } else {
         array
     };
-
     for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = if comparison_type != ComparisonType::Single {
-                converter.convert_columns(&[sub_arr])?
-            } else {
-                converter.convert_columns(&[element.clone()])?
-            };
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let arr_values = converter.convert_columns(&[arr])?;
+                let sub_arr_values = if comparison_type != ComparisonType::Single {
+                    converter.convert_columns(&[sub_arr])?
+                } else {
+                    converter.convert_columns(&[element.clone()])?
+                };
 
-            let mut res = match comparison_type {
-                ComparisonType::All => sub_arr_values
-                    .iter()
-                    .dedup()
-                    .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                ComparisonType::Any => sub_arr_values
-                    .iter()
-                    .dedup()
-                    .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                ComparisonType::Single => arr_values
-                    .iter()
-                    .dedup()
-                    .any(|x| x == sub_arr_values.row(row_idx)),
-            };
+                let mut res = match comparison_type {
+                    ComparisonType::All => sub_arr_values
+                        .iter()
+                        .dedup()
+                        .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                    ComparisonType::Any => sub_arr_values
+                        .iter()
+                        .dedup()
+                        .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                    ComparisonType::Single => arr_values
+                        .iter()
+                        .dedup()
+                        .any(|x| x == sub_arr_values.row(row_idx)),
+                };
 
-            if comparison_type == ComparisonType::Any {
-                res |= res;
+                if comparison_type == ComparisonType::Any {
+                    res |= res;
+                }
+                boolean_builder.append_value(res);
             }
-
-            boolean_builder.append_value(res);
+            // respect null input
+            (_, _) => {
+                boolean_builder.append_null();
+            }
         }
     }
     Ok(Arc::new(boolean_builder.finish()))

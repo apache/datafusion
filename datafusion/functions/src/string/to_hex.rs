@@ -63,6 +63,13 @@ where
 pub struct ToHexFunc {
     signature: Signature,
 }
+
+impl Default for ToHexFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToHexFunc {
     pub fn new() -> Self {
         use DataType::*;

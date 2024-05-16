@@ -270,7 +270,7 @@ async fn sort_spill_reservation() {
                 "+---------------+--------------------------------------------------------------------------------------------------------+",
                 "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
                 "|               |   TableScan: t projection=[a, b]                                                                       |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC], preserve_partitioning=[false]                            |",
                 "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
                 "|               |                                                                                                        |",
                 "+---------------+--------------------------------------------------------------------------------------------------------+",

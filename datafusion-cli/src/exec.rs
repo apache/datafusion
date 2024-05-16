@@ -81,7 +81,7 @@ pub async fn exec_from_lines(
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
-                    query = "".to_owned();
+                    query = "".to_string();
                 } else {
                     query.push('\n');
                 }
@@ -203,7 +203,7 @@ pub async fn exec_from_repl(
     rl.save_history(".history")
 }
 
-async fn exec_and_print(
+pub(super) async fn exec_and_print(
     ctx: &mut SessionContext,
     print_options: &PrintOptions,
     sql: String,
@@ -235,8 +235,9 @@ async fn exec_and_print(
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
+            let schema = physical_plan.schema();
             let results = collect(physical_plan, task_ctx.clone()).await?;
-            adjusted.into_inner().print_batches(&results, now)?;
+            adjusted.into_inner().print_batches(schema, &results, now)?;
         }
     }
 

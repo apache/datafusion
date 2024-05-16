@@ -32,6 +32,12 @@ pub struct ReverseFunc {
     signature: Signature,
 }
 
+impl Default for ReverseFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReverseFunc {
     pub fn new() -> Self {
         use DataType::*;

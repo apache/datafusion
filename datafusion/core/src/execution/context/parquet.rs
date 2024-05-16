@@ -84,7 +84,6 @@ mod tests {
     use datafusion_common::config::TableParquetOptions;
     use datafusion_execution::config::SessionConfig;
 
-    use async_trait::async_trait;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -330,24 +329,5 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
         Ok(())
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_parquet(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_parquet(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_parquet("dummy", ParquetReadOptions::default())
-                .await
-                .unwrap()
-        }
     }
 }

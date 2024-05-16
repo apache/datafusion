@@ -70,12 +70,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                         AggregateMode::Partial
                                     ) && can_combine(
                                         (
-                                            agg_exec.group_by(),
+                                            agg_exec.group_expr(),
                                             agg_exec.aggr_expr(),
                                             agg_exec.filter_expr(),
                                         ),
                                         (
-                                            input_agg_exec.group_by(),
+                                            input_agg_exec.group_expr(),
                                             input_agg_exec.aggr_expr(),
                                             input_agg_exec.filter_expr(),
                                         ),
@@ -88,7 +88,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             };
                                         AggregateExec::try_new(
                                             mode,
-                                            input_agg_exec.group_by().clone(),
+                                            input_agg_exec.group_expr().clone(),
                                             input_agg_exec.aggr_expr().to_vec(),
                                             input_agg_exec.filter_expr().to_vec(),
                                             input_agg_exec.input().clone(),

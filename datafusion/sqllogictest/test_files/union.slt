@@ -105,8 +105,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query I
 select COUNT(*) from (
@@ -392,11 +392,11 @@ physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--SortPreservingMergeExec: [c9@1 DESC], fetch=5
 03)----UnionExec
-04)------SortExec: expr=[c9@1 DESC]
+04)------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
 05)--------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
-08)------SortExec: expr=[c9@1 DESC]
+08)------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
 09)--------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
 10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 11)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
@@ -475,9 +475,9 @@ CREATE EXTERNAL TABLE t1 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE t2 (
@@ -496,9 +496,9 @@ CREATE EXTERNAL TABLE t2 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1a ASC)
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain

@@ -28,6 +28,12 @@ pub struct UpperFunc {
     signature: Signature,
 }
 
+impl Default for UpperFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UpperFunc {
     pub fn new() -> Self {
         use DataType::*;

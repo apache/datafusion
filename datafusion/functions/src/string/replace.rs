@@ -34,6 +34,12 @@ pub struct ReplaceFunc {
     signature: Signature,
 }
 
+impl Default for ReplaceFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplaceFunc {
     pub fn new() -> Self {
         use DataType::*;

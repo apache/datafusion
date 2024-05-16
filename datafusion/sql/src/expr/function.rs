@@ -150,6 +150,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
+                None,
             )?;
 
             let func_deps = schema.functional_dependencies();
@@ -219,16 +220,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                let order_by =
-                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
+                let order_by = self.order_by_to_sort_expr(
+                    &order_by,
+                    schema,
+                    planner_context,
+                    true,
+                    None,
+                )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                // TODO: Support filter and distinct for UDAFs
+                let filter: Option<Box<Expr>> = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                     fm,
                     args,
-                    false,
-                    None,
+                    distinct,
+                    filter,
                     order_by,
                     null_treatment,
                 )));
@@ -236,8 +245,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
-                let order_by =
-                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
+                let order_by = self.order_by_to_sort_expr(
+                    &order_by,
+                    schema,
+                    planner_context,
+                    true,
+                    None,
+                )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
                 let filter: Option<Box<Expr>> = filter

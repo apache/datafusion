@@ -99,7 +99,7 @@ logical_plan
 03)----TableScan: parquet_table projection=[column1], partial_filters=[parquet_table.column1 != Int32(42)]
 physical_plan
 01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
-02)--SortExec: expr=[column1@0 ASC NULLS LAST]
+02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: column1@0 != 42
 05)--------ParquetExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:0..205], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/1.parquet:205..405, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:0..5], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:5..210], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/parquet_table/2.parquet:210..414]]}, projection=[column1], predicate=column1@0 != 42, pruning_predicate=CASE WHEN column1_null_count@2 = column1_row_count@3 THEN false ELSE column1_min@0 != 42 OR 42 != column1_max@1 END, required_guarantees=[column1 not in (42)]
@@ -158,13 +158,13 @@ DROP TABLE parquet_table_with_order;
 # create a single csv file
 statement ok
 COPY  (VALUES (1), (2), (3), (4), (5)) TO 'test_files/scratch/repartition_scan/csv_table/1.csv'
-STORED AS CSV WITH HEADER ROW;
+STORED AS CSV OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE csv_table(column1 int)
 STORED AS csv
-WITH HEADER ROW
-LOCATION 'test_files/scratch/repartition_scan/csv_table/';
+LOCATION 'test_files/scratch/repartition_scan/csv_table/'
+OPTIONS ('format.has_header' 'true');
 
 query I
 select * from csv_table ORDER BY column1;
@@ -277,8 +277,7 @@ DROP TABLE arrow_table;
 statement ok
 CREATE EXTERNAL TABLE avro_table
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/simple_enum.avro'
+LOCATION '../../testing/data/avro/simple_enum.avro';
 
 
 # It would be great to see the file read as "4" groups with even sizes (offsets) eventually

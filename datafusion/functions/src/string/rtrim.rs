@@ -40,6 +40,12 @@ pub struct RtrimFunc {
     signature: Signature,
 }
 
+impl Default for RtrimFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RtrimFunc {
     pub fn new() -> Self {
         use DataType::*;

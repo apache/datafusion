@@ -35,7 +35,6 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -44,7 +43,7 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayElement,
     array_element,
     array element,
@@ -52,15 +51,9 @@ make_udf_function!(
     array_element_udf
 );
 
-make_udf_function!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array.",
-    array_slice_udf
-);
+create_func!(ArraySlice, array_slice_udf);
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopFront,
     array_pop_front,
     array,
@@ -68,7 +61,7 @@ make_udf_function!(
     array_pop_front_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopBack,
     array_pop_back,
     array,
@@ -222,6 +215,15 @@ where
 
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
+}
+
+#[doc = "returns a slice of the array."]
+pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
+    let args = match stride {
+        Some(stride) => vec![array, begin, end, stride],
+        None => vec![array, begin, end],
+    };
+    array_slice_udf().call(args)
 }
 
 #[derive(Debug)]

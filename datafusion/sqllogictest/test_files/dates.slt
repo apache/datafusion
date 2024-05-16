@@ -224,5 +224,11 @@ SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z',
 query error function unsupported data type at index 1:
 SELECT to_date(t.ts, make_array('%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+')) from ts_utf8_data as t
 
+# verify to_date with format
+query D
+select to_date('2022-01-23', '%Y-%m-%d');
+----
+2022-01-23
+
 statement ok
 drop table ts_utf8_data

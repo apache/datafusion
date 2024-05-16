@@ -65,6 +65,12 @@ pub struct ChrFunc {
     signature: Signature,
 }
 
+impl Default for ChrFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChrFunc {
     pub fn new() -> Self {
         Self {

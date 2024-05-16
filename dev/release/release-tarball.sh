@@ -21,10 +21,10 @@
 # Adapted from https://github.com/apache/arrow-rs/tree/master/dev/release/release-tarball.sh
 
 # This script copies a tarball from the "dev" area of the
-# dist.apache.arrow repository to the "release" area
+# dist.apache.datafusion repository to the "release" area
 #
 # This script should only be run after the release has been approved
-# by the arrow PMC committee.
+# by the Apache DataFusion PMC committee.
 #
 # See release/README.md for full release instructions
 #
@@ -43,7 +43,7 @@ fi
 version=$1
 rc=$2
 
-tmp_dir=tmp-apache-arrow-datafusion-dist
+tmp_dir=tmp-apache-datafusion-dist
 
 echo "Recreate temporary directory: ${tmp_dir}"
 rm -rf ${tmp_dir}
@@ -52,14 +52,14 @@ mkdir -p ${tmp_dir}
 echo "Clone dev dist repository"
 svn \
   co \
-  https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-${version}-rc${rc} \
+  https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-${version}-rc${rc} \
   ${tmp_dir}/dev
 
 echo "Clone release dist repository"
-svn co https://dist.apache.org/repos/dist/release/arrow ${tmp_dir}/release
+svn co https://dist.apache.org/repos/dist/release/datafusion ${tmp_dir}/release
 
 echo "Copy ${version}-rc${rc} to release working copy"
-release_version=arrow-datafusion-${version}
+release_version=datafusion-${version}
 mkdir -p ${tmp_dir}/release/${release_version}
 cp -r ${tmp_dir}/dev/* ${tmp_dir}/release/${release_version}/
 svn add ${tmp_dir}/release/${release_version}
@@ -71,4 +71,4 @@ echo "Clean up"
 rm -rf ${tmp_dir}
 
 echo "Success! The release is available here:"
-echo "  https://dist.apache.org/repos/dist/release/arrow/${release_version}"
+echo "  https://dist.apache.org/repos/dist/release/datafusion/${release_version}"

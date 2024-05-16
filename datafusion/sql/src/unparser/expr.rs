@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use core::fmt;
+use std::fmt::Display;
+
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
-    expr::{
-        AggregateFunctionDefinition, Alias, Exists, InList, ScalarFunction, Sort,
-        WindowFunction,
-    },
+    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
 use sqlparser::ast::{
@@ -33,10 +34,38 @@ use sqlparser::ast::{
 
 use super::Unparser;
 
+/// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
+pub enum Unparsed {
+    // SQL Expression
+    Expr(ast::Expr),
+    // SQL ORDER BY expression (e.g. `col ASC NULLS FIRST`)
+    OrderByExpr(ast::OrderByExpr),
+}
+
+impl Unparsed {
+    pub fn into_order_by_expr(self) -> Result<ast::OrderByExpr> {
+        if let Unparsed::OrderByExpr(order_by_expr) = self {
+            Ok(order_by_expr)
+        } else {
+            internal_err!("Expected Sort expression to be converted an OrderByExpr")
+        }
+    }
+}
+
+impl Display for Unparsed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Unparsed::Expr(expr) => write!(f, "{}", expr),
+            Unparsed::OrderByExpr(order_by_expr) => write!(f, "{}", order_by_expr),
+        }
+    }
+}
+
 /// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
 ///
 /// This function is the opposite of `SqlToRel::sql_to_expr` and can
-/// be used to, among other things, convert `Expr`s to strings.
+/// be used to, among other things, convert [`Expr`]s to strings.
+/// Throws an error if [`Expr`] can not be represented by an `sqlparser::ast::Expr`
 ///
 /// # Example
 /// ```
@@ -50,6 +79,15 @@ use super::Unparser;
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
     unparser.expr_to_sql(expr)
+}
+
+/// Convert a DataFusion [`Expr`] to [`Unparsed`]
+///
+/// This function is similar to expr_to_sql, but it supports converting more [`Expr`] types like
+/// `Sort` expressions to `OrderByExpr` expressions.
+pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
+    let unparser = Unparser::default();
+    unparser.expr_to_unparsed(expr)
 }
 
 impl Unparser<'_> {
@@ -70,8 +108,8 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                let func_name = func_def.name();
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                let func_name = func.name();
 
                 let args = args
                     .iter()
@@ -170,14 +208,62 @@ impl Unparser<'_> {
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql(expr),
             Expr::WindowFunction(WindowFunction {
-                fun: _,
-                args: _,
-                partition_by: _,
-                order_by: _,
-                window_frame: _,
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
                 null_treatment: _,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let func_name = fun.name();
+
+                let args = self.function_args_to_sql(args)?;
+
+                let units = match window_frame.units {
+                    datafusion_expr::window_frame::WindowFrameUnits::Rows => {
+                        ast::WindowFrameUnits::Rows
+                    }
+                    datafusion_expr::window_frame::WindowFrameUnits::Range => {
+                        ast::WindowFrameUnits::Range
+                    }
+                    datafusion_expr::window_frame::WindowFrameUnits::Groups => {
+                        ast::WindowFrameUnits::Groups
+                    }
+                };
+                let order_by: Vec<ast::OrderByExpr> = order_by
+                    .iter()
+                    .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
+                    .collect::<Result<Vec<_>>>()?;
+
+                let start_bound = self.convert_bound(&window_frame.start_bound);
+                let end_bound = self.convert_bound(&window_frame.end_bound);
+                let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
+                    window_name: None,
+                    partition_by: partition_by
+                        .iter()
+                        .map(|e| self.expr_to_sql(e))
+                        .collect::<Result<Vec<_>>>()?,
+                    order_by,
+                    window_frame: Some(ast::WindowFrame {
+                        units,
+                        start_bound,
+                        end_bound: Option::from(end_bound),
+                    }),
+                }));
+
+                Ok(ast::Expr::Function(Function {
+                    name: ast::ObjectName(vec![Ident {
+                        value: func_name.to_string(),
+                        quote_style: None,
+                    }]),
+                    args,
+                    filter: None,
+                    null_treatment: None,
+                    over,
+                    distinct: false,
+                    special: false,
+                    order_by: vec![],
+                }))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -199,37 +285,20 @@ impl Unparser<'_> {
                 escape_char: *escape_char,
             }),
             Expr::AggregateFunction(agg) => {
-                let func_name = if let AggregateFunctionDefinition::BuiltIn(built_in) =
-                    &agg.func_def
-                {
-                    built_in.name()
-                } else {
-                    return not_impl_err!(
-                        "Only built in agg functions are supported, got {agg:?}"
-                    );
+                let func_name = agg.func_def.name();
+
+                let args = self.function_args_to_sql(&agg.args)?;
+                let filter = match &agg.filter {
+                    Some(filter) => Some(Box::new(self.expr_to_sql(filter)?)),
+                    None => None,
                 };
-
-                let args = agg
-                    .args
-                    .iter()
-                    .map(|e| {
-                        if matches!(e, Expr::Wildcard { qualifier: None }) {
-                            Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
-                        } else {
-                            self.expr_to_sql(e).map(|e| {
-                                FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
-                            })
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
                 Ok(ast::Expr::Function(Function {
                     name: ast::ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
                     args,
-                    filter: None,
+                    filter,
                     null_treatment: None,
                     over: None,
                     distinct: agg.distinct,
@@ -283,10 +352,10 @@ impl Unparser<'_> {
                 })
             }
             Expr::Sort(Sort {
-                expr,
+                expr: _,
                 asc: _,
                 nulls_first: _,
-            }) => self.expr_to_sql(expr),
+            }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -322,7 +391,9 @@ impl Unparser<'_> {
             Expr::ScalarVariable(_, _) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::IsNull(expr) => {
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
@@ -344,6 +415,29 @@ impl Unparser<'_> {
         }
     }
 
+    /// This function can convert more [`Expr`] types than `expr_to_sql`, returning an [`Unparsed`]
+    /// like `Sort` expressions to `OrderByExpr` expressions.
+    pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
+        match expr {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(Unparsed::OrderByExpr(ast::OrderByExpr {
+                    expr: sql_parser_expr,
+                    asc: Some(*asc),
+                    nulls_first: Some(*nulls_first),
+                }))
+            }
+            _ => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(Unparsed::Expr(sql_parser_expr))
+            }
+        }
+    }
+
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = table_ref.to_vec();
@@ -353,6 +447,40 @@ impl Unparser<'_> {
             ));
         }
         Ok(ast::Expr::Identifier(self.new_ident(col.name.to_string())))
+    }
+
+    fn convert_bound(
+        &self,
+        bound: &datafusion_expr::window_frame::WindowFrameBound,
+    ) -> ast::WindowFrameBound {
+        match bound {
+            datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
+                ast::WindowFrameBound::Preceding(
+                    self.scalar_to_sql(val).map(Box::new).ok(),
+                )
+            }
+            datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
+                ast::WindowFrameBound::Following(
+                    self.scalar_to_sql(val).map(Box::new).ok(),
+                )
+            }
+            datafusion_expr::window_frame::WindowFrameBound::CurrentRow => {
+                ast::WindowFrameBound::CurrentRow
+            }
+        }
+    }
+
+    fn function_args_to_sql(&self, args: &[Expr]) -> Result<Vec<ast::FunctionArg>> {
+        args.iter()
+            .map(|e| {
+                if matches!(e, Expr::Wildcard { qualifier: None }) {
+                    Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
+                } else {
+                    self.expr_to_sql(e)
+                        .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
+                }
+            })
+            .collect::<Result<Vec<_>>>()
     }
 
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
@@ -735,8 +863,10 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, exists, expr::AggregateFunction, lit, not, not_exists, table_scan,
-        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        case, col, exists,
+        expr::{AggregateFunction, AggregateFunctionDefinition},
+        lit, not, not_exists, table_scan, when, wildcard, ColumnarValue, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -806,6 +936,14 @@ mod tests {
                 r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
             ),
             (
+                when(col("a").is_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NULL THEN true ELSE false END"#,
+            ),
+            (
+                when(col("a").is_not_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NOT NULL THEN true ELSE false END"#,
+            ),
+            (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
@@ -830,6 +968,18 @@ mod tests {
             (
                 ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
                 r#"dummy_udf("a", "b")"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_null(),
+                r#"dummy_udf("a", "b") IS NULL"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_not_null(),
+                r#"dummy_udf("a", "b") IS NOT NULL"#,
             ),
             (
                 Expr::Like(Like {
@@ -901,7 +1051,59 @@ mod tests {
                 }),
                 "COUNT(DISTINCT *)",
             ),
+            (
+                Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::BuiltIn(
+                        datafusion_expr::AggregateFunction::Count,
+                    ),
+                    args: vec![Expr::Wildcard { qualifier: None }],
+                    distinct: false,
+                    filter: Some(Box::new(lit(true))),
+                    order_by: None,
+                    null_treatment: None,
+                }),
+                "COUNT(*) FILTER (WHERE true)",
+            ),
+            (
+                Expr::WindowFunction(WindowFunction {
+                    fun: WindowFunctionDefinition::BuiltInWindowFunction(
+                        datafusion_expr::BuiltInWindowFunction::RowNumber,
+                    ),
+                    args: vec![col("col")],
+                    partition_by: vec![],
+                    order_by: vec![],
+                    window_frame: WindowFrame::new(None),
+                    null_treatment: None,
+                }),
+                r#"ROW_NUMBER("col") OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
+            ),
+            (
+                Expr::WindowFunction(WindowFunction {
+                    fun: WindowFunctionDefinition::AggregateFunction(
+                        datafusion_expr::AggregateFunction::Count,
+                    ),
+                    args: vec![wildcard()],
+                    partition_by: vec![],
+                    order_by: vec![Expr::Sort(Sort::new(
+                        Box::new(col("a")),
+                        false,
+                        true,
+                    ))],
+                    window_frame: WindowFrame::new_bounds(
+                        datafusion_expr::WindowFrameUnits::Range,
+                        datafusion_expr::WindowFrameBound::Preceding(
+                            ScalarValue::UInt32(Some(6)),
+                        ),
+                        datafusion_expr::WindowFrameBound::Following(
+                            ScalarValue::UInt32(Some(2)),
+                        ),
+                    ),
+                    null_treatment: None,
+                }),
+                r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+            ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
+            (col("a").is_null(), r#""a" IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
                 r#"(("a" + "b") > 4) IS TRUE"#,
@@ -936,7 +1138,6 @@ mod tests {
                 not_exists(Arc::new(dummy_logical_plan.clone())),
                 r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
             ),
-            (col("a").sort(true, true), r#""a""#),
         ];
 
         for (expr, expected) in tests {
@@ -950,6 +1151,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn expr_to_unparsed_ok() -> Result<()> {
+        let tests: Vec<(Expr, &str)> = vec![
+            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
+            (col("a").sort(true, true), r#""a" ASC NULLS FIRST"#),
+        ];
+
+        for (expr, expected) in tests {
+            let ast = expr_to_unparsed(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
     #[test]
     fn custom_dialect() -> Result<()> {
         let dialect = CustomDialect::new(Some('\''));

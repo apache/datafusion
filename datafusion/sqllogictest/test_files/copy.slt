@@ -271,7 +271,7 @@ OPTIONS (
 'format.created_by' 'DF copy.slt',
 'format.column_index_truncate_length' 123,
 'format.data_page_row_count_limit' 1234,
-'format.bloom_filter_enabled' true,
+'format.bloom_filter_on_read' true,
 'format.bloom_filter_enabled::col1' false,
 'format.bloom_filter_fpp::col2' 0.456,
 'format.bloom_filter_ndv::col2' 456,
@@ -283,10 +283,72 @@ OPTIONS (
 'format.statistics_enabled::col2' none,
 'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
-'format.bloom_filter_ndv' 100
+'format.bloom_filter_ndv' 100,
+'format.metadata::key' 'value'
 )
 ----
 2
+
+# valid vs invalid metadata
+
+# accepts map with a single entry
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key' 'value'
+)
+
+# accepts multiple entries (on different keys)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' '',
+    'format.metadata::key2' 'value',
+    'format.metadata::key3' 'value with spaces',
+    'format.metadata::key4' 'value with special chars :: :'
+)
+
+# accepts multiple entries with the same key (will overwrite)
+statement ok
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key1' 'value',
+    'format.metadata::key1' 'value'
+)
+
+# errors if key is missing
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, missing key in metadata::<key>
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::' 'value'
+)
+
+# errors if key contains internal '::'
+statement error DataFusion error: Invalid or Unsupported Configuration: Invalid metadata key provided, found too many '::' in "metadata::key::extra"
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.metadata::key::extra' 'value'
+)
+
+# errors for invalid property (not stating `format.metadata`)
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ColumnOptions
+COPY source_table
+TO 'test_files/scratch/copy/table_with_metadata/'
+STORED AS PARQUET
+OPTIONS (
+    'format.wrong-metadata::key' 'value'
+)
+
 
 # validate multiple parquet file output with all options set
 statement ok
@@ -322,7 +384,7 @@ COPY source_table  to 'test_files/scratch/copy/table_json_gz' STORED AS JSON OPT
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_json_gz STORED AS json COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_json_gz';
+CREATE EXTERNAL TABLE validate_json_gz STORED AS json LOCATION 'test_files/scratch/copy/table_json_gz' OPTIONS ('format.compression' 'gzip');
 
 query IT
 select * from validate_json_gz;
@@ -338,7 +400,7 @@ COPY source_table  to 'test_files/scratch/copy/table_csv' STORED AS CSV OPTIONS 
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_csv';
+CREATE EXTERNAL TABLE validate_csv STORED AS csv LOCATION 'test_files/scratch/copy/table_csv' OPTIONS ('format.compression' 'gzip');
 
 query IT
 select * from validate_csv;
@@ -354,7 +416,7 @@ COPY source_table  to 'test_files/scratch/copy/table.csv';
 
 # Validate single csv output
 statement ok
-CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/copy/table.csv';
+CREATE EXTERNAL TABLE validate_single_csv STORED AS csv LOCATION 'test_files/scratch/copy/table.csv' OPTIONS ('format.has_header' 'false');
 
 query IT
 select * from validate_single_csv;

@@ -39,7 +39,7 @@ itertools = { workspace = true }
 object_store = { workspace = true }
 prost = "0.12"
 prost-types = "0.12"
-substrait = "0.31.0"
+substrait = "0.33.3"
 
 [dev-dependencies]
 tokio = { workspace = true }

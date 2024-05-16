@@ -30,7 +30,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use datafusion::assert_batches_eq;
-use datafusion_common::DFSchema;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
 
@@ -154,6 +154,181 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
         "| CBAdef                   |",
         "| 123AbcDef                |",
         "+--------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_nullif() -> Result<()> {
+    let expr = nullif(col("a"), lit("abcDEF"));
+
+    let expected = [
+        "+-------------------------------+",
+        "| nullif(test.a,Utf8(\"abcDEF\")) |",
+        "+-------------------------------+",
+        "|                               |",
+        "| abc123                        |",
+        "| CBAdef                        |",
+        "| 123AbcDef                     |",
+        "+-------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_arrow_cast() -> Result<()> {
+    let expr = arrow_typeof(arrow_cast(col("b"), lit("Float64")));
+
+    let expected = [
+        "+--------------------------------------------------+",
+        "| arrow_typeof(arrow_cast(test.b,Utf8(\"Float64\"))) |",
+        "+--------------------------------------------------+",
+        "| Float64                                          |",
+        "| Float64                                          |",
+        "| Float64                                          |",
+        "| Float64                                          |",
+        "+--------------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nvl() -> Result<()> {
+    let lit_null = lit(ScalarValue::Utf8(None));
+    // nvl(CASE WHEN a = 'abcDEF' THEN NULL ELSE a END, 'TURNED_NULL')
+    let expr = nvl(
+        when(col("a").eq(lit("abcDEF")), lit_null)
+            .otherwise(col("a"))
+            .unwrap(),
+        lit("TURNED_NULL"),
+    )
+    .alias("nvl_expr");
+
+    let expected = [
+        "+-------------+",
+        "| nvl_expr    |",
+        "+-------------+",
+        "| TURNED_NULL |",
+        "| abc123      |",
+        "| CBAdef      |",
+        "| 123AbcDef   |",
+        "+-------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_nvl2() -> Result<()> {
+    let lit_null = lit(ScalarValue::Utf8(None));
+    // nvl2(CASE WHEN a = 'abcDEF' THEN NULL ELSE a END, 'NON_NUll', 'TURNED_NULL')
+    let expr = nvl2(
+        when(col("a").eq(lit("abcDEF")), lit_null)
+            .otherwise(col("a"))
+            .unwrap(),
+        lit("NON_NULL"),
+        lit("TURNED_NULL"),
+    )
+    .alias("nvl2_expr");
+
+    let expected = [
+        "+-------------+",
+        "| nvl2_expr   |",
+        "+-------------+",
+        "| TURNED_NULL |",
+        "| NON_NULL    |",
+        "| NON_NULL    |",
+        "| NON_NULL    |",
+        "+-------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_fn_arrow_typeof() -> Result<()> {
+    let expr = arrow_typeof(col("l"));
+
+    let expected = [
+        "+------------------------------------------------------------------------------------------------------------------+",
+        "| arrow_typeof(test.l)                                                                                             |",
+        "+------------------------------------------------------------------------------------------------------------------+",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
+        "+------------------------------------------------------------------------------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_struct() -> Result<()> {
+    let expr = r#struct(vec![col("a"), col("b")]);
+
+    let expected = [
+        "+--------------------------+",
+        "| struct(test.a,test.b)    |",
+        "+--------------------------+",
+        "| {c0: abcDEF, c1: 1}      |",
+        "| {c0: abc123, c1: 10}     |",
+        "| {c0: CBAdef, c1: 10}     |",
+        "| {c0: 123AbcDef, c1: 100} |",
+        "+--------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_named_struct() -> Result<()> {
+    let expr = named_struct(vec![lit("column_a"), col("a"), lit("column_b"), col("b")]);
+
+    let expected = [
+        "+---------------------------------------------------------------+",
+        "| named_struct(Utf8(\"column_a\"),test.a,Utf8(\"column_b\"),test.b) |",
+        "+---------------------------------------------------------------+",
+        "| {column_a: abcDEF, column_b: 1}                               |",
+        "| {column_a: abc123, column_b: 10}                              |",
+        "| {column_a: CBAdef, column_b: 10}                              |",
+        "| {column_a: 123AbcDef, column_b: 100}                          |",
+        "+---------------------------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_coalesce() -> Result<()> {
+    let expr = coalesce(vec![lit(ScalarValue::Utf8(None)), lit("ab")]);
+
+    let expected = [
+        "+---------------------------------+",
+        "| coalesce(Utf8(NULL),Utf8(\"ab\")) |",
+        "+---------------------------------+",
+        "| ab                              |",
+        "| ab                              |",
+        "| ab                              |",
+        "| ab                              |",
+        "+---------------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -422,7 +597,7 @@ async fn test_fn_md5() -> Result<()> {
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_like() -> Result<()> {
-    let expr = regexp_like(col("a"), lit("[a-z]"));
+    let expr = regexp_like(col("a"), lit("[a-z]"), None);
 
     let expected = [
         "+-----------------------------------+",
@@ -437,13 +612,28 @@ async fn test_fn_regexp_like() -> Result<()> {
 
     assert_fn_batches!(expr, expected);
 
+    let expr = regexp_like(col("a"), lit("abc"), Some(lit("i")));
+
+    let expected = [
+        "+-------------------------------------------+",
+        "| regexp_like(test.a,Utf8(\"abc\"),Utf8(\"i\")) |",
+        "+-------------------------------------------+",
+        "| true                                      |",
+        "| true                                      |",
+        "| false                                     |",
+        "| true                                      |",
+        "+-------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
     Ok(())
 }
 
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
-    let expr = regexp_match(col("a"), lit("[a-z]"));
+    let expr = regexp_match(col("a"), lit("[a-z]"), None);
 
     let expected = [
         "+------------------------------------+",
@@ -458,13 +648,28 @@ async fn test_fn_regexp_match() -> Result<()> {
 
     assert_fn_batches!(expr, expected);
 
+    let expr = regexp_match(col("a"), lit("[A-Z]"), Some(lit("i")));
+
+    let expected = [
+        "+----------------------------------------------+",
+        "| regexp_match(test.a,Utf8(\"[A-Z]\"),Utf8(\"i\")) |",
+        "+----------------------------------------------+",
+        "| [a]                                          |",
+        "| [a]                                          |",
+        "| [C]                                          |",
+        "| [A]                                          |",
+        "+----------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
     Ok(())
 }
 
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_replace() -> Result<()> {
-    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), lit("g"));
+    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), Some(lit("g")));
 
     let expected = [
         "+----------------------------------------------------------+",
@@ -475,6 +680,21 @@ async fn test_fn_regexp_replace() -> Result<()> {
         "| CBAxxx                                                   |",
         "| 123AxxDxx                                                |",
         "+----------------------------------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), None);
+
+    let expected = [
+        "+------------------------------------------------+",
+        "| regexp_replace(test.a,Utf8(\"[a-z]\"),Utf8(\"x\")) |",
+        "+------------------------------------------------+",
+        "| xbcDEF                                         |",
+        "| xbc123                                         |",
+        "| CBAxef                                         |",
+        "| 123AxcDef                                      |",
+        "+------------------------------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);

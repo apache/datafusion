@@ -20,14 +20,14 @@
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
     Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
+    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, map_until_stop_and_collect, Result};
+use datafusion_common::{map_until_stop_and_collect, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -281,14 +281,11 @@ impl TreeNode for Expr {
                 nulls_first,
             }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                transform_vec(args, &mut f)?.map_data(|new_args| {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        func, new_args,
+                    )))
                 })?
             }
             Expr::WindowFunction(WindowFunction {
@@ -350,9 +347,6 @@ impl TreeNode for Expr {
                             new_order_by,
                             null_treatment,
                         )))
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 },
             )?,

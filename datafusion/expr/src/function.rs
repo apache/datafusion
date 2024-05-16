@@ -19,7 +19,7 @@
 
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -41,11 +41,14 @@ pub type ReturnTypeFunction =
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
 /// ordering expressions.
+#[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
     pub data_type: &'a DataType,
+
     /// The schema of the input arguments
     pub schema: &'a Schema,
+
     /// Whether to ignore nulls.
     ///
     /// SQL allows the user to specify `IGNORE NULLS`, for example:
@@ -66,22 +69,40 @@ pub struct AccumulatorArgs<'a> {
     ///
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
+
+    /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
+    pub is_distinct: bool,
+
+    /// The input type of the aggregate function.
+    pub input_type: &'a DataType,
+
+    /// The number of arguments the aggregate function takes.
+    pub args_num: usize,
 }
 
-impl<'a> AccumulatorArgs<'a> {
-    pub fn new(
-        data_type: &'a DataType,
-        schema: &'a Schema,
-        ignore_nulls: bool,
-        sort_exprs: &'a [Expr],
-    ) -> Self {
-        Self {
-            data_type,
-            schema,
-            ignore_nulls,
-            sort_exprs,
-        }
-    }
+/// [`StateFieldsArgs`] contains information about the fields that an
+/// aggregate function's accumulator should have. Used for [`AggregateUDFImpl::state_fields`].
+///
+/// [`AggregateUDFImpl::state_fields`]: crate::udaf::AggregateUDFImpl::state_fields
+pub struct StateFieldsArgs<'a> {
+    /// The name of the aggregate function.
+    pub name: &'a str,
+
+    /// The input type of the aggregate function.
+    pub input_type: &'a DataType,
+
+    /// The return type of the aggregate function.
+    pub return_type: &'a DataType,
+
+    /// The ordering fields of the aggregate function.
+    pub ordering_fields: &'a [Field],
+
+    /// Whether the aggregate function is distinct.
+    pub is_distinct: bool,
 }
 
 /// Factory that returns an accumulator for the given aggregate function.
@@ -97,3 +118,16 @@ pub type PartitionEvaluatorFactory =
 /// its state, given its return datatype.
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
+
+/// [crate::udaf::AggregateUDFImpl::simplify] simplifier closure
+/// A closure with two arguments:
+/// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
+/// * 'info': [crate::simplify::SimplifyInfo]
+///
+/// closure returns simplified [Expr] or an error.
+pub type AggregateFunctionSimplification = Box<
+    dyn Fn(
+        crate::expr::AggregateFunction,
+        &dyn crate::simplify::SimplifyInfo,
+    ) -> Result<Expr>,
+>;

@@ -31,6 +31,12 @@ pub struct OctetLengthFunc {
     signature: Signature,
 }
 
+impl Default for OctetLengthFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OctetLengthFunc {
     pub fn new() -> Self {
         use DataType::*;

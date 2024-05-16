@@ -1323,7 +1323,9 @@ impl SMJStream {
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.
-        if record_batch.num_rows() > self.output_size {
+        // If `record_batch` is empty, we should reset `self.output_size` to 0. It could be happened
+        // when the join filter is applied and all rows are filtered out.
+        if record_batch.num_rows() == 0 || record_batch.num_rows() > self.output_size {
             self.output_size = 0;
         } else {
             self.output_size -= record_batch.num_rows();
@@ -1517,9 +1519,10 @@ fn compare_join_arrays(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
@@ -1583,9 +1586,10 @@ fn is_join_arrays_equal(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }

@@ -23,7 +23,6 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::FileType;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
@@ -88,10 +87,6 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::AVRO
     }
 }
 

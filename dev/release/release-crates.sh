@@ -21,7 +21,7 @@
 # This script publishes datafusion crates to crates.io.
 #
 # This script should only be run after the release has been approved
-# by the arrow PMC committee.
+# by the Apache DataFusion PMC committee.
 #
 # See release/README.md for full release instructions
 

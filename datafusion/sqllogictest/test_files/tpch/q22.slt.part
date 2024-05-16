@@ -75,7 +75,7 @@ logical_plan
 17)--------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2) AS customer.c_acctbal > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]
 physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
-02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST]
+02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, COUNT(*)@1 as numcust, SUM(custsale.c_acctbal)@2 as totacctbal]
 04)------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(*), SUM(custsale.c_acctbal)]
 05)--------CoalesceBatchesExec: target_batch_size=8192

@@ -295,6 +295,13 @@ impl NamePreserver {
         }
     }
 
+    /// Create a new NamePreserver for rewriting the `expr`s in `Projection`
+    ///
+    /// This will use aliases
+    pub fn new_for_projection() -> Self {
+        Self { use_alias: true }
+    }
+
     pub fn save(&self, expr: &Expr) -> Result<SavedName> {
         let original_name = if self.use_alias {
             Some(expr.name_for_alias()?)

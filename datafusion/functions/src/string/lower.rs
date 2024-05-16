@@ -31,6 +31,12 @@ pub struct LowerFunc {
     signature: Signature,
 }
 
+impl Default for LowerFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LowerFunc {
     pub fn new() -> Self {
         use DataType::*;

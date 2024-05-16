@@ -34,6 +34,12 @@ pub struct OverlayFunc {
     signature: Signature,
 }
 
+impl Default for OverlayFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OverlayFunc {
     pub fn new() -> Self {
         use DataType::*;

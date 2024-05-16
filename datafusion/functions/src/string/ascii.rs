@@ -47,6 +47,13 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub struct AsciiFunc {
     signature: Signature,
 }
+
+impl Default for AsciiFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsciiFunc {
     pub fn new() -> Self {
         use DataType::*;
