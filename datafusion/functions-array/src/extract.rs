@@ -418,12 +418,7 @@ where
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
-            // array_slice with stride in duckdb, return empty array if stride is not supported and from > to.
-            if stride.is_none() && from > to {
-                // return empty array
-                offsets.push(offsets[row_index]);
-                continue;
-            }
+            // Default stride is 1 if not provided
             let stride = stride.unwrap_or(1);
             if stride.is_zero() {
                 return exec_err!(
@@ -432,6 +427,10 @@ where
                 );
             } else if from <= to && stride.is_negative() {
                 // return empty array
+                offsets.push(offsets[row_index]);
+                continue;
+            } else if from > to && stride.is_positive() {
+                // return empty array if from > to and stride is positive
                 offsets.push(offsets[row_index]);
                 continue;
             }
