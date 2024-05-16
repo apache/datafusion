@@ -1627,7 +1627,9 @@ pub fn unnest_with_options(
                         .iter()
                         .map(|col| {
                             match original_field.data_type() {
-                                DataType::List(_) => list_columns.push(index),
+                                DataType::List(_) 
+                                | DataType::FixedSizeList(_,_)
+                                | DataType::LargeList(_) => list_columns.push(index),
                                 DataType::Struct(_) => struct_columns.push(index),
                                 _ => {panic!("not reachable, should be caught by get_unnested_columns")}
                             }

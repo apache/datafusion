@@ -38,13 +38,33 @@ select unnest([1,2,3]);
 2
 3
 
-## Basic unnest expression in from clause
+## Basic unnest expression in select struct
+query III
+select unnest(struct(1,2,3));
+----
+1 2 3
+
+## Basic unnest list expression in from clause
 query I
 select * from unnest([1,2,3]);
 ----
 1
 2
 3
+
+## Basic unnest struct expression in from clause
+query III
+select * from unnest(struct(1,2,3));
+----
+1 2 3
+
+## Multiple unnest expression in from clause 
+query IIII
+select * from unnest(struct(1,2,3)),unnest([4,5,6]);
+----
+1 2 3 4
+1 2 3 5
+1 2 3 6
 
 
 ## Unnest null in select list
@@ -145,10 +165,6 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 [12] NULL NULL
 
 
-## Unnest column with scalars
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
-select unnest(column3) from unnest_table;
-
 ## Unnest doesn't work with untyped nulls
 query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null) from unnest_table;
@@ -233,12 +249,17 @@ select * from unnest([], NULL::int[]);
 
 
 ## Unnest struct expression in select list
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+query ?
 select unnest(struct(null));
+----
+NULL
 
 ## Unnest struct expression in from clause
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+## TODO: unnest a struct col with 2 subfields, with some null rows
+query ?
 select * from unnest(struct(null));
+----
+NULL
 
 
 ## Unnest array expression
