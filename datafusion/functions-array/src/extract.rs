@@ -430,7 +430,7 @@ where
                 offsets.push(offsets[row_index]);
                 continue;
             } else if from > to && stride.is_positive() {
-                // return empty array if from > to and stride is positive
+                // return empty array
                 offsets.push(offsets[row_index]);
                 continue;
             }
