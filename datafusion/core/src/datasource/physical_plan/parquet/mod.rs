@@ -63,13 +63,14 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 use tokio::task::JoinSet;
 
-mod arrow_statistics;
+pub mod arrow_statistics;
 mod metrics;
 mod page_filter;
 mod row_filter;
 mod row_groups;
 mod statistics;
 
+// pub use arrow_statistics::ParquetColumnStatistics;
 pub use metrics::ParquetFileMetrics;
 
 /// Execution plan for scanning one or more Parquet partitions
@@ -458,7 +459,6 @@ struct ParquetOpener {
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
-
         let file_metrics = ParquetFileMetrics::new(
             self.partition_index,
             file_meta.location().as_ref(),
