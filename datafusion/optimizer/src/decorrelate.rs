@@ -44,7 +44,7 @@ pub struct PullUpCorrelatedExpr {
     /// mapping from the plan to its holding correlated columns
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
-    /// Is this an Exists(Not Exists) SubQuery. Defaults to false
+    /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
     pub exists_sub_query: bool,
     /// Can the correlated expressions be pulled up. Defaults to **TRUE**
     pub can_pull_up: bool,
