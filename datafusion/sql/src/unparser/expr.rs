@@ -405,7 +405,7 @@ impl Unparser<'_> {
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
                     format: None,
                 })
-            },
+            }
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
@@ -872,8 +872,9 @@ mod tests {
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, when, wildcard, try_cast, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        lit, not, not_exists, table_scan, try_cast, when, wildcard, ColumnarValue,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
