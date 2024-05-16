@@ -35,7 +35,6 @@ use datafusion_sql::unparser::Unparser;
 /// 4. Create a simple expression [`Exprs`] with fluent API
 /// and convert to sql escaping column names a MySQL style: [`simple_expr_to_sql_demo_escape_mysql_style`]
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // See how to evaluate expressions
