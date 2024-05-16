@@ -16,7 +16,7 @@
 // under the License.
 
 use core::fmt;
-use std::fmt::Display;
+use std::{fmt::Display, vec};
 
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, TryCast,
+    Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -411,9 +411,34 @@ impl Unparser<'_> {
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::GroupingSet(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::GroupingSets(grouping_sets) => {
+                    let expr_ast_sets = grouping_sets
+                        .iter()
+                        .map(|set| {
+                            set.iter()
+                                .map(|e| self.expr_to_sql(e))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Ok(ast::Expr::GroupingSets(expr_ast_sets))
+                }
+                GroupingSet::Cube(cube) => {
+                    let expr_ast_sets = cube
+                        .iter()
+                        .map(|e| vec![self.expr_to_sql(e).unwrap()])
+                        .collect::<Vec<_>>();
+                    Ok(ast::Expr::Cube(expr_ast_sets))
+                }
+                GroupingSet::Rollup(rollup) => {
+                    let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
+                        .iter()
+                        .map(|e| vec![self.expr_to_sql(e).unwrap()])
+                        .collect::<Vec<_>>();
+                    Ok(ast::Expr::Rollup(expr_ast_sets))
+                }
+            },
             Expr::Placeholder(p) => {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
@@ -870,11 +895,11 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, exists,
+        case, col, cube, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, out_ref_col, placeholder, table_scan, try_cast, when,
-        wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-        WindowFrame, WindowFunctionDefinition,
+        grouping_set, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
+        try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -1163,6 +1188,12 @@ mod tests {
                 out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
                 r#"("t"."a" > 1)"#,
             ),
+            (
+                grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
+                r#"GROUPING SETS (("a", "b"), ("a"))"#,
+            ),
+            (cube(vec![col("a"), col("b")]), r#"CUBE ("a", "b")"#),
+            (rollup(vec![col("a"), col("b")]), r#"ROLLUP ("a", "b")"#),
         ];
 
         for (expr, expected) in tests {
