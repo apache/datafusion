@@ -69,8 +69,8 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::count::count;
     pub use super::count::count_distinct;
-    pub use super::covariance::covar_samp;
     pub use super::covariance::covar_pop;
+    pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
 }
 
