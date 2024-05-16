@@ -414,8 +414,8 @@ impl Unparser<'_> {
             Expr::GroupingSet(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::Placeholder(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::Placeholder(p) => {
+                Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
             Expr::OuterReferenceColumn(_, _) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
@@ -874,8 +874,8 @@ mod tests {
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, try_cast, when, wildcard, ColumnarValue,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
+        lit, not, not_exists, placeholder, table_scan, try_cast, when, wildcard,
+        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
         WindowFunctionDefinition,
     };
 
@@ -1160,6 +1160,7 @@ mod tests {
                 try_cast(col("a"), DataType::UInt32),
                 r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
             ),
+            (col("x").eq(placeholder("$1")), r#"("x" = $1)"#),
         ];
 
         for (expr, expected) in tests {
