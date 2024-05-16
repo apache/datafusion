@@ -2483,6 +2483,7 @@ drop table t;
 #################
 # Min_Max Begin #
 #################
+# min_decimal, max_decimal
 statement ok
 CREATE TABLE decimals (value DECIMAL(10, 2));
 
@@ -2522,6 +2523,7 @@ NULL NULL
 statement ok
 DROP TABLE decimals_empty;
 
+# min_decimal_all_nulls, max_decimal_all_nulls
 statement ok
 CREATE TABLE decimals_all_nulls (value DECIMAL(10, 0));
 
@@ -2536,6 +2538,7 @@ NULL NULL
 statement ok
 DROP TABLE decimals_all_nulls;
 
+# min_decimal_with_nulls, max_decimal_with_nulls
 statement ok
 CREATE TABLE decimals_with_nulls (value DECIMAL(10, 0));
 
@@ -2578,6 +2581,7 @@ SELECT MIN(value), MAX(value) FROM decimals_agg;
 statement ok
 DROP TABLE decimals_agg;
 
+# min_i32, max_i32
 statement ok
 CREATE TABLE integers (value INT);
 
@@ -2592,6 +2596,7 @@ SELECT MIN(value), MAX(value) FROM integers
 statement ok
 DROP TABLE integers;
 
+# min_utf8, max_utf8
 statement ok
 CREATE TABLE strings (value TEXT);
 
@@ -2606,6 +2611,7 @@ a d
 statement ok
 DROP TABLE strings;
 
+# min_i32_with_nulls, max_i32_with_nulls
 statement ok
 CREATE TABLE integers_with_nulls (value INT);
 
@@ -2620,6 +2626,7 @@ SELECT MIN(value), MAX(value) FROM integers_with_nulls
 statement ok
 DROP TABLE integers_with_nulls;
 
+# min_i32_all_nulls, max_i32_all_nulls
 statement ok
 CREATE TABLE integers_all_nulls (value INT);
 
@@ -2631,6 +2638,7 @@ NULL NULL
 statement ok
 DROP TABLE integers_all_nulls;
 
+# min_u32, max_u32
 statement ok
 CREATE TABLE uintegers (value INT UNSIGNED);
 
@@ -2645,6 +2653,7 @@ SELECT MIN(value), MAX(value) FROM uintegers
 statement ok
 DROP TABLE uintegers;
 
+# min_f32, max_f32
 statement ok
 CREATE TABLE floats (value FLOAT);
 
@@ -2659,6 +2668,7 @@ SELECT MIN(value), MAX(value) FROM floats
 statement ok
 DROP TABLE floats;
 
+# min_f64, max_f64
 statement ok
 CREATE TABLE doubles (value DOUBLE);
 
@@ -2673,6 +2683,7 @@ SELECT MIN(value), MAX(value) FROM doubles
 statement ok
 DROP TABLE doubles;
 
+# min_date, max_date
 statement ok
 CREATE TABLE dates (value DATE);
 
@@ -2687,6 +2698,7 @@ SELECT MIN(value), MAX(value) FROM dates
 statement ok
 DROP TABLE dates;
 
+# min_seconds, max_seconds
 statement ok
 CREATE TABLE times (value TIME);
 
@@ -2701,6 +2713,7 @@ SELECT MIN(value), MAX(value) FROM times
 statement ok
 DROP TABLE times;
 
+# min_milliseconds, max_milliseconds
 statement ok
 CREATE TABLE time32millisecond (value TIME);
 
@@ -2715,6 +2728,7 @@ SELECT MIN(value), MAX(value) FROM time32millisecond
 statement ok
 DROP TABLE time32millisecond;
 
+# min_microseconds, max_microseconds
 statement ok
 CREATE TABLE time64microsecond (value TIME);
 
@@ -2729,6 +2743,7 @@ SELECT MIN(value), MAX(value) FROM time64microsecond
 statement ok
 DROP TABLE time64microsecond;
 
+# min_nanoseconds, max_nanoseconds
 statement ok
 CREATE TABLE time64nanosecond (value TIME);
 
@@ -2743,6 +2758,7 @@ SELECT MIN(value), MAX(value) FROM time64nanosecond
 statement ok
 DROP TABLE time64nanosecond;
 
+# min_timestamp, max_timestamp
 statement ok
 CREATE TABLE timestampmicrosecond (value TIMESTAMP);
 
@@ -2757,6 +2773,7 @@ SELECT MIN(value), MAX(value) FROM timestampmicrosecond
 statement ok
 DROP TABLE timestampmicrosecond;
 
+# max_bool
 statement ok
 CREATE TABLE max_bool (value BOOLEAN);
 
@@ -2813,6 +2830,7 @@ true
 statement ok
 DROP TABLE max_bool;
 
+# min_bool
 statement ok
 CREATE TABLE min_bool (value BOOLEAN);
 
