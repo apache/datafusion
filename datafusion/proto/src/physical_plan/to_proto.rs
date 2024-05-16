@@ -25,12 +25,11 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
     ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
-    DistinctCount, DistinctSum, FirstValue, Grouping, InListExpr, IsNotNullExpr,
-    IsNullExpr, LastValue, Literal, Max, Median, Min, NegativeExpr, NotExpr, NthValue,
-    NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType,
-    RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr, Variance, VariancePop,
-    WindowShift,
+    CastExpr, Column, Correlation, CumeDist, DistinctArrayAgg, DistinctBitXor,
+    DistinctSum, FirstValue, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, LastValue,
+    Literal, Max, Median, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
+    OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop,
+    StringAgg, Sum, TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -247,12 +246,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
     let mut distinct = false;
 
-    let inner = if aggr_expr.downcast_ref::<Count>().is_some() {
-        protobuf::AggregateFunction::Count
-    } else if aggr_expr.downcast_ref::<DistinctCount>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::Count
-    } else if aggr_expr.downcast_ref::<Grouping>().is_some() {
+    let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
         protobuf::AggregateFunction::Grouping
     } else if aggr_expr.downcast_ref::<BitAnd>().is_some() {
         protobuf::AggregateFunction::BitAnd

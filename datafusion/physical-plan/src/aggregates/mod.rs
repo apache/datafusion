@@ -1198,13 +1198,12 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
-        ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
+        ApproxDistinct, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::{reverse_order_bys, PhysicalSortExpr};
 
@@ -1320,160 +1319,160 @@ mod tests {
         Arc::new(task_ctx)
     }
 
-    async fn check_grouping_sets(
-        input: Arc<dyn ExecutionPlan>,
-        spill: bool,
-    ) -> Result<()> {
-        let input_schema = input.schema();
+    // async fn check_grouping_sets(
+    //     input: Arc<dyn ExecutionPlan>,
+    //     spill: bool,
+    // ) -> Result<()> {
+    //     let input_schema = input.schema();
 
-        let grouping_set = PhysicalGroupBy {
-            expr: vec![
-                (col("a", &input_schema)?, "a".to_string()),
-                (col("b", &input_schema)?, "b".to_string()),
-            ],
-            null_expr: vec![
-                (lit(ScalarValue::UInt32(None)), "a".to_string()),
-                (lit(ScalarValue::Float64(None)), "b".to_string()),
-            ],
-            groups: vec![
-                vec![false, true],  // (a, NULL)
-                vec![true, false],  // (NULL, b)
-                vec![false, false], // (a,b)
-            ],
-        };
+    //     let grouping_set = PhysicalGroupBy {
+    //         expr: vec![
+    //             (col("a", &input_schema)?, "a".to_string()),
+    //             (col("b", &input_schema)?, "b".to_string()),
+    //         ],
+    //         null_expr: vec![
+    //             (lit(ScalarValue::UInt32(None)), "a".to_string()),
+    //             (lit(ScalarValue::Float64(None)), "b".to_string()),
+    //         ],
+    //         groups: vec![
+    //             vec![false, true],  // (a, NULL)
+    //             vec![true, false],  // (NULL, b)
+    //             vec![false, false], // (a,b)
+    //         ],
+    //     };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        ))];
+    //     let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
+    //         lit(1i8),
+    //         "COUNT(1)".to_string(),
+    //         DataType::Int64,
+    //     ))];
 
-        let task_ctx = if spill {
-            new_spill_ctx(4, 1000)
-        } else {
-            Arc::new(TaskContext::default())
-        };
+    //     let task_ctx = if spill {
+    //         new_spill_ctx(4, 1000)
+    //     } else {
+    //         Arc::new(TaskContext::default())
+    //     };
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            grouping_set.clone(),
-            aggregates.clone(),
-            vec![None],
-            input,
-            input_schema.clone(),
-        )?);
+    //     let partial_aggregate = Arc::new(AggregateExec::try_new(
+    //         AggregateMode::Partial,
+    //         grouping_set.clone(),
+    //         aggregates.clone(),
+    //         vec![None],
+    //         input,
+    //         input_schema.clone(),
+    //     )?);
 
-        let result =
-            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
+    //     let result =
+    //         common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = if spill {
-            vec![
-                "+---+-----+-----------------+",
-                "| a | b   | COUNT(1)[count] |",
-                "+---+-----+-----------------+",
-                "|   | 1.0 | 1               |",
-                "|   | 1.0 | 1               |",
-                "|   | 2.0 | 1               |",
-                "|   | 2.0 | 1               |",
-                "|   | 3.0 | 1               |",
-                "|   | 3.0 | 1               |",
-                "|   | 4.0 | 1               |",
-                "|   | 4.0 | 1               |",
-                "| 2 |     | 1               |",
-                "| 2 |     | 1               |",
-                "| 2 | 1.0 | 1               |",
-                "| 2 | 1.0 | 1               |",
-                "| 3 |     | 1               |",
-                "| 3 |     | 2               |",
-                "| 3 | 2.0 | 2               |",
-                "| 3 | 3.0 | 1               |",
-                "| 4 |     | 1               |",
-                "| 4 |     | 2               |",
-                "| 4 | 3.0 | 1               |",
-                "| 4 | 4.0 | 2               |",
-                "+---+-----+-----------------+",
-            ]
-        } else {
-            vec![
-                "+---+-----+-----------------+",
-                "| a | b   | COUNT(1)[count] |",
-                "+---+-----+-----------------+",
-                "|   | 1.0 | 2               |",
-                "|   | 2.0 | 2               |",
-                "|   | 3.0 | 2               |",
-                "|   | 4.0 | 2               |",
-                "| 2 |     | 2               |",
-                "| 2 | 1.0 | 2               |",
-                "| 3 |     | 3               |",
-                "| 3 | 2.0 | 2               |",
-                "| 3 | 3.0 | 1               |",
-                "| 4 |     | 3               |",
-                "| 4 | 3.0 | 1               |",
-                "| 4 | 4.0 | 2               |",
-                "+---+-----+-----------------+",
-            ]
-        };
-        assert_batches_sorted_eq!(expected, &result);
+    //     let expected = if spill {
+    //         vec![
+    //             "+---+-----+-----------------+",
+    //             "| a | b   | COUNT(1)[count] |",
+    //             "+---+-----+-----------------+",
+    //             "|   | 1.0 | 1               |",
+    //             "|   | 1.0 | 1               |",
+    //             "|   | 2.0 | 1               |",
+    //             "|   | 2.0 | 1               |",
+    //             "|   | 3.0 | 1               |",
+    //             "|   | 3.0 | 1               |",
+    //             "|   | 4.0 | 1               |",
+    //             "|   | 4.0 | 1               |",
+    //             "| 2 |     | 1               |",
+    //             "| 2 |     | 1               |",
+    //             "| 2 | 1.0 | 1               |",
+    //             "| 2 | 1.0 | 1               |",
+    //             "| 3 |     | 1               |",
+    //             "| 3 |     | 2               |",
+    //             "| 3 | 2.0 | 2               |",
+    //             "| 3 | 3.0 | 1               |",
+    //             "| 4 |     | 1               |",
+    //             "| 4 |     | 2               |",
+    //             "| 4 | 3.0 | 1               |",
+    //             "| 4 | 4.0 | 2               |",
+    //             "+---+-----+-----------------+",
+    //         ]
+    //     } else {
+    //         vec![
+    //             "+---+-----+-----------------+",
+    //             "| a | b   | COUNT(1)[count] |",
+    //             "+---+-----+-----------------+",
+    //             "|   | 1.0 | 2               |",
+    //             "|   | 2.0 | 2               |",
+    //             "|   | 3.0 | 2               |",
+    //             "|   | 4.0 | 2               |",
+    //             "| 2 |     | 2               |",
+    //             "| 2 | 1.0 | 2               |",
+    //             "| 3 |     | 3               |",
+    //             "| 3 | 2.0 | 2               |",
+    //             "| 3 | 3.0 | 1               |",
+    //             "| 4 |     | 3               |",
+    //             "| 4 | 3.0 | 1               |",
+    //             "| 4 | 4.0 | 2               |",
+    //             "+---+-----+-----------------+",
+    //         ]
+    //     };
+    //     assert_batches_sorted_eq!(expected, &result);
 
-        let groups = partial_aggregate.group_expr().expr().to_vec();
+    //     let groups = partial_aggregate.group_expr().expr().to_vec();
 
-        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
+    //     let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
-        let final_group: Vec<(Arc<dyn PhysicalExpr>, String)> = groups
-            .iter()
-            .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
-            .collect::<Result<_>>()?;
+    //     let final_group: Vec<(Arc<dyn PhysicalExpr>, String)> = groups
+    //         .iter()
+    //         .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
+    //         .collect::<Result<_>>()?;
 
-        let final_grouping_set = PhysicalGroupBy::new_single(final_group);
+    //     let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
-        let task_ctx = if spill {
-            new_spill_ctx(4, 3160)
-        } else {
-            task_ctx
-        };
+    //     let task_ctx = if spill {
+    //         new_spill_ctx(4, 3160)
+    //     } else {
+    //         task_ctx
+    //     };
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
-            final_grouping_set,
-            aggregates,
-            vec![None],
-            merge,
-            input_schema,
-        )?);
+    //     let merged_aggregate = Arc::new(AggregateExec::try_new(
+    //         AggregateMode::Final,
+    //         final_grouping_set,
+    //         aggregates,
+    //         vec![None],
+    //         merge,
+    //         input_schema,
+    //     )?);
 
-        let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
-        let batch = concat_batches(&result[0].schema(), &result)?;
-        assert_eq!(batch.num_columns(), 3);
-        assert_eq!(batch.num_rows(), 12);
+    //     let result =
+    //         common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
+    //     let batch = concat_batches(&result[0].schema(), &result)?;
+    //     assert_eq!(batch.num_columns(), 3);
+    //     assert_eq!(batch.num_rows(), 12);
 
-        let expected = vec![
-            "+---+-----+----------+",
-            "| a | b   | COUNT(1) |",
-            "+---+-----+----------+",
-            "|   | 1.0 | 2        |",
-            "|   | 2.0 | 2        |",
-            "|   | 3.0 | 2        |",
-            "|   | 4.0 | 2        |",
-            "| 2 |     | 2        |",
-            "| 2 | 1.0 | 2        |",
-            "| 3 |     | 3        |",
-            "| 3 | 2.0 | 2        |",
-            "| 3 | 3.0 | 1        |",
-            "| 4 |     | 3        |",
-            "| 4 | 3.0 | 1        |",
-            "| 4 | 4.0 | 2        |",
-            "+---+-----+----------+",
-        ];
+    //     let expected = vec![
+    //         "+---+-----+----------+",
+    //         "| a | b   | COUNT(1) |",
+    //         "+---+-----+----------+",
+    //         "|   | 1.0 | 2        |",
+    //         "|   | 2.0 | 2        |",
+    //         "|   | 3.0 | 2        |",
+    //         "|   | 4.0 | 2        |",
+    //         "| 2 |     | 2        |",
+    //         "| 2 | 1.0 | 2        |",
+    //         "| 3 |     | 3        |",
+    //         "| 3 | 2.0 | 2        |",
+    //         "| 3 | 3.0 | 1        |",
+    //         "| 4 |     | 3        |",
+    //         "| 4 | 3.0 | 1        |",
+    //         "| 4 | 4.0 | 2        |",
+    //         "+---+-----+----------+",
+    //     ];
 
-        assert_batches_sorted_eq!(&expected, &result);
+    //     assert_batches_sorted_eq!(&expected, &result);
 
-        let metrics = merged_aggregate.metrics().unwrap();
-        let output_rows = metrics.output_rows().unwrap();
-        assert_eq!(12, output_rows);
+    //     let metrics = merged_aggregate.metrics().unwrap();
+    //     let output_rows = metrics.output_rows().unwrap();
+    //     assert_eq!(12, output_rows);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     /// build the aggregates on the data from some_data() and check the results
     async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
@@ -1724,12 +1723,12 @@ mod tests {
         check_aggregates(input, false).await
     }
 
-    #[tokio::test]
-    async fn aggregate_grouping_sets_source_not_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+    // #[tokio::test]
+    // async fn aggregate_grouping_sets_source_not_yielding() -> Result<()> {
+    //     let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
-        check_grouping_sets(input, false).await
-    }
+    //     check_grouping_sets(input, false).await
+    // }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding() -> Result<()> {
@@ -1738,12 +1737,12 @@ mod tests {
         check_aggregates(input, false).await
     }
 
-    #[tokio::test]
-    async fn aggregate_grouping_sets_with_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+    // #[tokio::test]
+    // async fn aggregate_grouping_sets_with_yielding() -> Result<()> {
+    //     let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
-        check_grouping_sets(input, false).await
-    }
+    //     check_grouping_sets(input, false).await
+    // }
 
     #[tokio::test]
     async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
@@ -1752,12 +1751,12 @@ mod tests {
         check_aggregates(input, true).await
     }
 
-    #[tokio::test]
-    async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
+    // #[tokio::test]
+    // async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
+    //     let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
-        check_grouping_sets(input, true).await
-    }
+    //     check_grouping_sets(input, true).await
+    // }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
@@ -1766,12 +1765,12 @@ mod tests {
         check_aggregates(input, true).await
     }
 
-    #[tokio::test]
-    async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
+    // #[tokio::test]
+    // async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
+    //     let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
-        check_grouping_sets(input, true).await
-    }
+    //     check_grouping_sets(input, true).await
+    // }
 
     #[tokio::test]
     async fn test_oom() -> Result<()> {

@@ -25,8 +25,6 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
 
 use datafusion_expr::EmitTo;
 
-pub use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
-
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -375,6 +373,7 @@ mod test {
     use super::*;
 
     use arrow_array::UInt32Array;
+    use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
     use hashbrown::HashSet;
     use rand::{rngs::ThreadRng, Rng};
 

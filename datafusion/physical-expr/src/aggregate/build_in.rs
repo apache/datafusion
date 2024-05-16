@@ -406,18 +406,15 @@ mod tests {
 
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
-        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, Max, Min,
-        Stddev, Sum, Variance,
+        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, DistinctArrayAgg, Max, Min, Stddev, Sum,
+        Variance,
     };
-
-    use crate::aggregate::count_distinct::DistinctCount;
 
     use super::*;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {
         let funcs = vec![
-            AggregateFunction::Count,
             AggregateFunction::ArrayAgg,
             AggregateFunction::ApproxDistinct,
         ];
@@ -444,14 +441,6 @@ mod tests {
                     "c1",
                 )?;
                 match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_agg_phy_exprs.as_any().is::<Count>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
                     AggregateFunction::ApproxDistinct => {
                         assert!(result_agg_phy_exprs.as_any().is::<ApproxDistinct>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
@@ -483,14 +472,6 @@ mod tests {
                     "c1",
                 )?;
                 match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_distinct.as_any().is::<DistinctCount>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_distinct.field().unwrap()
-                        );
-                    }
                     AggregateFunction::ApproxDistinct => {
                         assert!(result_distinct.as_any().is::<ApproxDistinct>());
                         assert_eq!("c1", result_distinct.name());
