@@ -425,11 +425,9 @@ where
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if from <= to && stride.is_negative() {
-                // return empty array
-                offsets.push(offsets[row_index]);
-                continue;
-            } else if from > to && stride.is_positive() {
+            } else if (from <= to && stride.is_negative())
+                || (from > to && stride.is_positive())
+            {
                 // return empty array
                 offsets.push(offsets[row_index]);
                 continue;
