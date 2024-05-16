@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::result::Result as RResult;
+use std::sync::Arc;
+
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
-use datafusion_expr::simplify::ExprSimplifyResult;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{CreateFunction, Expr, ScalarUDF, ScalarUDFImpl, Signature};
-use std::result::Result as RResult;
-use std::sync::Arc;
 
 /// This example shows how to utilize [FunctionFactory] to implement simple
 /// SQL-macro like functions using a `CREATE FUNCTION` statement. The same

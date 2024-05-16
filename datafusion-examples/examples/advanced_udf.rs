@@ -15,24 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::{
-    arrow::{
-        array::{ArrayRef, Float32Array, Float64Array},
-        datatypes::DataType,
-        record_batch::RecordBatch,
-    },
-    logical_expr::Volatility,
-};
 use std::any::Any;
+use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, AsArray};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, AsArray, Float32Array, Float64Array,
+};
 use arrow::compute;
-use arrow::datatypes::Float64Type;
+use arrow::datatypes::{DataType, Float64Type};
+use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
+use datafusion::logical_expr::Volatility;
 use datafusion::prelude::*;
 use datafusion_common::{internal_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature};
-use std::sync::Arc;
 
 /// This example shows how to use the full ScalarUDFImpl API to implement a user
 /// defined function. As in the `simple_udf.rs` example, this struct implements

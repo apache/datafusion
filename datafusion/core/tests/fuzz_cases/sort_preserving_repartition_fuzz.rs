@@ -39,12 +39,12 @@ mod sp_repartition_fuzz_tests {
         config::SessionConfig, memory_pool::MemoryConsumer, SendableRecordBatchStream,
     };
     use datafusion_physical_expr::{
+        equivalence::{EquivalenceClass, EquivalenceProperties},
         expressions::{col, Column},
-        EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        PhysicalExpr, PhysicalSortExpr,
     };
     use test_utils::add_empty_batches;
 
-    use datafusion_physical_expr::equivalence::EquivalenceClass;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
