@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
+    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, TryCast,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -400,7 +400,14 @@ impl Unparser<'_> {
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::TryCast(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let inner_expr = self.expr_to_sql(expr)?;
+                Ok(ast::Expr::TryCast {
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                })
+            }
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
@@ -867,8 +874,9 @@ mod tests {
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, when, wildcard, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        lit, not, not_exists, table_scan, try_cast, when, wildcard, ColumnarValue,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -1143,6 +1151,14 @@ mod tests {
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
                 r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (
+                try_cast(col("a"), DataType::Date64),
+                r#"TRY_CAST("a" AS DATETIME)"#,
+            ),
+            (
+                try_cast(col("a"), DataType::UInt32),
+                r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
             ),
         ];
 
