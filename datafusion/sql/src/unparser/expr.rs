@@ -417,9 +417,7 @@ impl Unparser<'_> {
             Expr::Placeholder(p) => {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::OuterReferenceColumn(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
+            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
         }
     }
@@ -874,9 +872,9 @@ mod tests {
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, placeholder, table_scan, try_cast, when, wildcard,
-        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        lit, not, not_exists, out_ref_col, placeholder, table_scan, try_cast, when,
+        wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -1161,6 +1159,10 @@ mod tests {
                 r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
             ),
             (col("x").eq(placeholder("$1")), r#"("x" = $1)"#),
+            (
+                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
+                r#"("t"."a" > 1)"#,
+            ),
         ];
 
         for (expr, expected) in tests {
