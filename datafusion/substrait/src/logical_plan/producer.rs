@@ -722,7 +722,10 @@ pub fn to_substrait_agg_measure(
                             arguments,
                             sorts,
                             output_type: None,
-                            invocation: AggregationInvocation::All as i32,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
                             phase: AggregationPhase::Unspecified as i32,
                             args: vec![],
                             options: vec![],

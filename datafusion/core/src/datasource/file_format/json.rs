@@ -43,7 +43,7 @@ use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow_array::RecordBatch;
 use datafusion_common::config::JsonOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::{not_impl_err, FileType};
+use datafusion_common::not_impl_err;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -183,10 +183,6 @@ impl FileFormat for JsonFormat {
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::JSON
     }
 }
 
