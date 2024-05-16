@@ -433,13 +433,12 @@ pub type EqualAndNonEqual<'a> =
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::empty::EmptyExec;
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
-    use crate::empty::EmptyExec;
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::{UnionFields, UnionMode};
     use datafusion_common::ScalarValue;

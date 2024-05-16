@@ -24,14 +24,13 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, DataType::*, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
-use DataType::*;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: false,
@@ -164,7 +163,8 @@ impl PhysicalExpr for CastExpr {
         self.cast_options.hash(&mut s);
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child if the cast is done under the same datatype family.
+    /// A [`CastExpr`] preserves the ordering of its child if the cast is done
+    /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let source_datatype = children[0].range.data_type();
         let target_type = &self.cast_type;

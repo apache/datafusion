@@ -21,30 +21,24 @@ use crate::{
     physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr, tree_node::ExprContext,
 };
 
-use arrow::{
-    array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
-    compute::{and_kleene, is_not_null, SlicesIterator},
-    datatypes::DataType,
-};
+use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
+use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use datafusion_common::Result;
-use datafusion_expr::{
-    interval_arithmetic::Interval,
-    sort_properties::{ExprProperties, SortProperties},
-};
+use datafusion_expr::sort_properties::ExprProperties;
 
-/// Represents a [`PhysicalExpr`] node with associated properties in a context where properties are tracked.
+/// Represents a [`PhysicalExpr`] node with associated properties (order and
+/// range) in a context where properties are tracked.
 pub type ExprPropertiesNode = ExprContext<ExprProperties>;
+
 impl ExprPropertiesNode {
-    /// Constructs a new `ExprPropertiesNode` with unknown properties for a given physical expression.
-    /// This node initializes with default properties and recursively applies this to all child expressions.
+    /// Constructs a new `ExprPropertiesNode` with unknown properties for a
+    /// given physical expression. This node initializes with default properties
+    /// and recursively applies this to all child expressions.
     pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
         let children = expr.children().into_iter().map(Self::new_unknown).collect();
         Self {
             expr,
-            data: ExprProperties {
-                sort_properties: SortProperties::default(),
-                range: Interval::make_unbounded(&DataType::Null).unwrap(),
-            },
+            data: ExprProperties::new_unknown(),
             children,
         }
     }

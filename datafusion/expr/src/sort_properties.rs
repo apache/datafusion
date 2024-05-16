@@ -17,10 +17,10 @@
 
 use std::ops::Neg;
 
-use arrow::compute::SortOptions;
-use datafusion_common::ScalarValue;
-
 use crate::interval_arithmetic::Interval;
+
+use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
 
 /// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -121,18 +121,11 @@ impl SortProperties {
 impl Neg for SortProperties {
     type Output = Self;
 
-    fn neg(self) -> Self::Output {
-        match self {
-            SortProperties::Ordered(SortOptions {
-                descending,
-                nulls_first,
-            }) => SortProperties::Ordered(SortOptions {
-                descending: !descending,
-                nulls_first,
-            }),
-            SortProperties::Singleton => SortProperties::Singleton,
-            SortProperties::Unordered => SortProperties::Unordered,
+    fn neg(mut self) -> Self::Output {
+        if let SortProperties::Ordered(SortOptions { descending, .. }) = &mut self {
+            *descending = !*descending;
         }
+        self
     }
 }
 
@@ -148,7 +141,7 @@ impl ExprProperties {
     pub fn new_unknown() -> Self {
         Self {
             sort_properties: SortProperties::default(),
-            range: Interval::try_new(ScalarValue::Null, ScalarValue::Null).unwrap(),
+            range: Interval::make_unbounded(&DataType::Null).unwrap(),
         }
     }
 

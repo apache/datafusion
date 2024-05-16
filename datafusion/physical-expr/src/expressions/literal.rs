@@ -119,6 +119,7 @@ pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_int32_array;

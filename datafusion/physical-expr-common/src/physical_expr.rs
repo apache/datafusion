@@ -20,6 +20,8 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::utils::scatter;
+
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
@@ -28,8 +30,6 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
-
-use crate::utils::scatter;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
 /// for examples of creating `PhysicalExpr` from `Expr`
@@ -154,12 +154,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
-    /// Calculates the properties of this [`PhysicalExpr`] based on its children's properties.
-    ///
-    /// This function uses the properties of the [`PhysicalExpr`]'s children to determine its own properties,
-    /// i.e. order and range. It aggregates the information recursively from its children.
-    /// In cases where the [`PhysicalExpr`] has no children (e.g., `Literal` or `Column`), these properties
-    /// should be specified externally, as the function defaults to unknown properties.
+    /// Calculates the properties of this [`PhysicalExpr`] based on its
+    /// children's properties (i.e. order and range), recursively aggregating
+    /// the information from its children. In cases where the [`PhysicalExpr`]
+    /// has no children (e.g., `Literal` or `Column`), these properties should
+    /// be specified externally, as the function defaults to unknown properties.
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }

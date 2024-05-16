@@ -89,7 +89,6 @@ macro_rules! make_udf_function {
 /// The rationale for providing stub functions is to help users to configure datafusion
 /// properly (so they get an error telling them why a function is not available)
 /// instead of getting a cryptic "no function found" message at runtime.
-
 macro_rules! make_stub_package {
     ($name:ident, $feature:literal) => {
         #[cfg(not(feature = $feature))]
@@ -115,7 +114,6 @@ macro_rules! make_stub_package {
 /// $ARGS_TYPE: the type of array to cast the argument to
 /// $RETURN_TYPE: the type of array to return
 /// $FUNC: the function to apply to each element of $ARG
-///
 macro_rules! make_function_scalar_inputs_return_type {
     ($ARG: expr, $NAME:expr, $ARG_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
         let arg = downcast_arg!($ARG, $NAME, $ARG_TYPE);
@@ -162,13 +160,14 @@ macro_rules! make_math_unary_udf {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
+            use std::any::Any;
+            use std::sync::Arc;
+
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-            use std::any::Any;
-            use std::sync::Arc;
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -268,14 +267,15 @@ macro_rules! make_math_binary_udf {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
+            use std::any::Any;
+            use std::sync::Arc;
+
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature::*;
             use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-            use std::any::Any;
-            use std::sync::Arc;
 
             #[derive(Debug)]
             pub struct $UDF {

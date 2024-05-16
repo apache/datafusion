@@ -18,17 +18,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::utils::ExprPropertiesNode;
-use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, Result};
-
+use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -39,7 +29,16 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use super::ordering::collapse_lex_ordering;
+use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_physical_expr_common::utils::ExprPropertiesNode;
+
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -219,19 +218,19 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for ordering in self.normalized_oeq_class().iter() {
             let expressions = if left.eq(&ordering[0].expr) {
-                // left expression is leading ordering
+                // Left expression is leading ordering
                 Some((ordering[0].options, right))
             } else if right.eq(&ordering[0].expr) {
-                // right expression is leading ordering
+                // Right expression is leading ordering
                 Some((ordering[0].options, left))
             } else {
                 None
             };
             if let Some((leading_ordering, other_expr)) = expressions {
-                // Only handle expressions with exactly one child
-                // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
-                // if f is monotonic in all arguments
-                // First Expression after leading ordering
+                // Currently, we only handle expressions with a single child.
+                // TODO: It should be possible to handle expressions orderings like
+                //       f(a, b, c), a, b, c if f is monotonic in all arguments.
+                // First expression after leading ordering
                 if let Some(next_expr) = ordering.get(1) {
                     let children = other_expr.children();
                     if children.len() == 1
@@ -924,11 +923,11 @@ impl EquivalenceProperties {
 
     /// Retrieves the properties for a given physical expression.
     ///
-    /// This function constructs an [`ExprPropertiesNode`] object for the provided
+    /// This function constructs an [`ExprProperties`] object for the given
     /// expression, which encapsulates information about the expression's
     /// properties, including its [`SortProperties`] and [`Interval`].
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `expr`: An `Arc<dyn PhysicalExpr>` representing the physical expression
     ///   for which ordering information is sought.
@@ -938,7 +937,7 @@ impl EquivalenceProperties {
     /// Returns an [`ExprProperties`] object containing the ordering and range
     /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        ExprPropertiesNode::new_unknown(expr.clone())
+        ExprPropertiesNode::new_unknown(expr)
             .transform_up(|expr| update_properties(expr, self))
             .data()
             .map(|node| node.data)
@@ -961,9 +960,9 @@ impl EquivalenceProperties {
 /// result coming from its children.
 ///
 /// Range information is calculated as:
-/// - If it is a `Literal` node, we set the range as a point value.
-/// If it is a `Column` node, we set the datatype of the range, but
-/// cannot limit an interval for the range, yet.
+/// - If it is a `Literal` node, we set the range as a point value. If it is a
+/// `Column` node, we set the datatype of the range, but cannot give an interval
+/// for the range, yet.
 /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
 /// and operator has its own rules on how to propagate the children range.
 fn update_properties(
@@ -1406,12 +1405,7 @@ impl Hash for ExprWrapper {
 mod tests {
     use std::ops::Not;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, TimeUnit};
-
-    use datafusion_common::DFSchema;
-    use datafusion_expr::{Operator, ScalarUDF};
-
+    use super::*;
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, convert_to_sort_reqs,
@@ -1421,7 +1415,10 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
 
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::{Fields, TimeUnit};
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{Operator, ScalarUDF};
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {

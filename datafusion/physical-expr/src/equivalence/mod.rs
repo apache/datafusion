@@ -20,16 +20,17 @@ use std::sync::Arc;
 use crate::expressions::Column;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 
-pub use class::{EquivalenceClass, EquivalenceGroup};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-pub use ordering::OrderingEquivalenceClass;
-pub use projection::ProjectionMapping;
-pub use properties::{join_equivalence_properties, EquivalenceProperties};
 
 mod class;
 mod ordering;
 mod projection;
 mod properties;
+
+pub use class::{EquivalenceClass, EquivalenceGroup};
+pub use ordering::OrderingEquivalenceClass;
+pub use projection::ProjectionMapping;
+pub use properties::{join_equivalence_properties, EquivalenceProperties};
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
@@ -69,7 +70,6 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;

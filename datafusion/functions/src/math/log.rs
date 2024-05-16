@@ -17,7 +17,11 @@
 
 //! Math function: `log()`.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use super::power::PowerFunc;
+
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::{
@@ -29,9 +33,6 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{lit, ColumnarValue, Expr, ScalarUDF, TypeSignature::*};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-
-use std::any::Any;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct LogFunc {
@@ -81,21 +82,19 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        match (&input[0].sort_properties, &input[1].sort_properties) {
-            (SortProperties::Ordered(value), SortProperties::Ordered(base))
+        match (input[0].sort_properties, input[1].sort_properties) {
+            (first @ SortProperties::Ordered(value), SortProperties::Ordered(base))
                 if !value.descending && base.descending
                     || value.descending && !base.descending =>
             {
-                Ok(SortProperties::Ordered(*value))
+                Ok(first)
             }
-            (SortProperties::Ordered(_), SortProperties::Singleton) => {
-                Ok(input[0].sort_properties)
-            }
-            (SortProperties::Singleton, SortProperties::Ordered(_)) => {
-                Ok(-input[1].sort_properties)
-            }
-            (SortProperties::Singleton, SortProperties::Singleton) => {
-                Ok(SortProperties::Singleton)
+            (
+                first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
+                SortProperties::Singleton,
+            ) => Ok(first),
+            (SortProperties::Singleton, second @ SortProperties::Ordered(_)) => {
+                Ok(-second)
             }
             _ => Ok(SortProperties::Unordered),
         }
@@ -229,13 +228,12 @@ fn is_pow(func: &ScalarUDF) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use datafusion_common::{
-        cast::{as_float32_array, as_float64_array},
-        DFSchema,
-    };
-    use datafusion_expr::{execution_props::ExecutionProps, simplify::SimplifyContext};
-
     use super::*;
+
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::DFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
     fn test_log_f64() {

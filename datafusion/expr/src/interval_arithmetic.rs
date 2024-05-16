@@ -273,24 +273,34 @@ impl Interval {
                 unreachable!();
             };
             // Standardize boolean interval endpoints:
-            Self {
+            return Self {
                 lower: ScalarValue::Boolean(Some(lower_bool.unwrap_or(false))),
                 upper: ScalarValue::Boolean(Some(upper_bool.unwrap_or(true))),
-            }
+            };
         }
-        // Standardize floating-point endpoints:
-        else if lower.data_type() == DataType::Float32 {
-            handle_float_intervals!(Float32, f32, lower, upper)
-        } else if lower.data_type() == DataType::Float64 {
-            handle_float_intervals!(Float64, f64, lower, upper)
-        }
-        // Unsigned null values for lower bounds are set to 0:
-        else if lower.data_type().is_unsigned_integer() && lower.is_null() {
-            let zero = ScalarValue::new_zero(&lower.data_type()).unwrap();
-            Self { lower: zero, upper }
-        } else {
+        match lower.data_type() {
+            // Standardize floating-point endpoints:
+            DataType::Float32 => handle_float_intervals!(Float32, f32, lower, upper),
+            DataType::Float64 => handle_float_intervals!(Float64, f64, lower, upper),
+            // Unsigned null values for lower bounds are set to zero:
+            DataType::UInt8 if lower.is_null() => Self {
+                lower: ScalarValue::UInt8(Some(0)),
+                upper,
+            },
+            DataType::UInt16 if lower.is_null() => Self {
+                lower: ScalarValue::UInt16(Some(0)),
+                upper,
+            },
+            DataType::UInt32 if lower.is_null() => Self {
+                lower: ScalarValue::UInt32(Some(0)),
+                upper,
+            },
+            DataType::UInt64 if lower.is_null() => Self {
+                lower: ScalarValue::UInt64(Some(0)),
+                upper,
+            },
             // Other data types do not require standardization:
-            Self { lower, upper }
+            _ => Self { lower, upper },
         }
     }
 
@@ -302,6 +312,12 @@ impl Interval {
         ScalarValue: From<Option<T>>,
     {
         Self::try_new(ScalarValue::from(lower), ScalarValue::from(upper))
+    }
+
+    /// Creates a singleton zero interval if the datatype supported.
+    pub fn make_zero(data_type: &DataType) -> Result<Self> {
+        let zero_endpoint = ScalarValue::new_zero(data_type)?;
+        Ok(Self::new(zero_endpoint.clone(), zero_endpoint))
     }
 
     /// Creates an unbounded interval from both sides if the datatype supported.

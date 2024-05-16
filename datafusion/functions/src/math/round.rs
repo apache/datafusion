@@ -18,16 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::utils::make_scalar_function;
+
 use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-
-use crate::utils::make_scalar_function;
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct RoundFunc {
@@ -86,16 +85,14 @@ impl ScalarUDFImpl for RoundFunc {
         let value = &input[0];
         let precision = input.get(1);
 
-        Ok(
-            if precision
-                .map(|r| SortProperties::Singleton.eq(&r.sort_properties))
-                .unwrap_or(true)
-            {
-                value.sort_properties
-            } else {
-                SortProperties::Unordered
-            },
-        )
+        if precision
+            .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
+            .unwrap_or(true)
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 }
 
@@ -193,10 +190,12 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::math::round::round;
+
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use std::sync::Arc;
 
     #[test]
     fn test_round_f32() {

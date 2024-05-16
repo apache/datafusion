@@ -19,11 +19,9 @@ use std::any::Any;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct PiFunc {
@@ -72,7 +70,7 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
-        // pi function returns a constant value
+        // This function returns a constant value.
         Ok(SortProperties::Singleton)
     }
 }

@@ -17,6 +17,10 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+
 use crate::expr::create_name;
 use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -24,13 +28,9 @@ use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
+
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
-use std::any::Any;
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -211,51 +211,53 @@ impl ScalarUDF {
     /// Computes the output interval for a [`ScalarUDF`], given the input
     /// intervals.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `children` are the intervals for the children (inputs) of this function.
+    /// * `inputs` are the intervals for the inputs (children) of this function.
     ///
     /// # Example
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
-    pub fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
-        self.inner.evaluate_bounds(input)
+    pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(inputs)
     }
 
-    /// Updates bounds for child expressions, given a known interval for this function.
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
     ///
-    /// This is used to propagate constraints down through an expression tree.
+    /// # Parameters
     ///
-    /// # Arguments
-    ///
-    /// * `interval` is the currently known interval for this ScalarUDFImpl.
-    /// * `children` are the current intervals for the children of this function.
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
     ///
     /// # Returns
     ///
     /// A `Vec` of new intervals for the children, in order.
     ///
     /// If constraint propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of propagation,
-    /// may return an empty vector instead of cloning `children`. This is the default
-    /// (and conservative) return value.
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
     ///
     /// # Example
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
-    /// input `a` is given as `[-7, -6]`, then propagation would would return `[-5, 5]`.
+    /// input `a` is given as `[-7, -6]`, then propagation would would return
+    /// `[-5, 5]`.
     pub fn propagate_constraints(
         &self,
         interval: &Interval,
-        input: &[&Interval],
+        inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        self.inner.propagate_constraints(interval, input)
+        self.inner.propagate_constraints(interval, inputs)
     }
 
-    /// Calculates the [`SortProperties`] of this function based on its children's properties.
-    pub fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        self.inner.monotonicity(input)
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    pub fn monotonicity(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.monotonicity(inputs)
     }
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
@@ -468,7 +470,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Computes the output interval for a [`ScalarUDFImpl`], given the input
     /// intervals.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `children` are the intervals for the children (inputs) of this function.
     ///
@@ -481,38 +483,40 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Interval::make_unbounded(&DataType::Null)
     }
 
-    /// Updates bounds for child expressions, given a known interval for this function.
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
     ///
-    /// This is used to propagate constraints down through an expression tree.
+    /// # Parameters
     ///
-    /// # Arguments
-    ///
-    /// * `interval` is the currently known interval for this ScalarUDFImpl.
-    /// * `children` are the current intervals for the children of this function.
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
     ///
     /// # Returns
     ///
     /// A `Vec` of new intervals for the children, in order.
     ///
     /// If constraint propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of propagation,
-    /// may return an empty vector instead of cloning `children`. This is the default
-    /// (and conservative) return value.
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
     ///
     /// # Example
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
-    /// input `a` is given as `[-7, -6]`, then propagation would would return `[-5, 5]`.
+    /// input `a` is given as `[-7, -6]`, then propagation would would return
+    /// `[-5, 5]`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
-        input: &[&Interval],
+        _inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        Ok(Some(input.iter().map(|&i| i.clone()).collect()))
+        Ok(Some(vec![]))
     }
 
-    /// Calculates the [`SortProperties`] of this function based on its children's properties.
-    fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    fn monotonicity(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }
 

@@ -33,12 +33,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow_array::Array;
-
-pub use crate::scalar_function::create_physical_expr;
+use arrow::array::{Array, ArrayRef};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+
+pub use crate::scalar_function::create_physical_expr;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {

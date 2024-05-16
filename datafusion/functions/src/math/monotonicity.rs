@@ -15,139 +15,121 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{
-    interval_arithmetic::Interval,
-    sort_properties::{ExprProperties, SortProperties},
-};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
-/// Non-increasing on the interval [−1,1]. Undefined outside this interval.
+fn symmetric_unit_interval(data_type: &DataType) -> Result<Interval> {
+    Interval::try_new(
+        ScalarValue::new_negative_one(data_type)?,
+        ScalarValue::new_one(data_type)?,
+    )
+}
+
+/// Non-increasing on the interval \[−1, 1\], undefined otherwise.
 pub fn acos_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let valid_domain = Interval::try_new(
-        ScalarValue::new_negative_one(&x.range.lower().data_type())?,
-        ScalarValue::new_one(&x.range.upper().data_type())?,
-    )?;
+    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(&x.range)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => -SortProperties::Ordered(opt),
-            other => other,
-        })
+    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+        Ok(-arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of ACOS()")
+        exec_err!("Input range of ACOS contains out-of-domain values")
     }
 }
 
-/// Non-decreasing for x≥1. Undefined for x<1.
+/// Non-decreasing for x ≥ 1, undefined otherwise.
 pub fn acosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
     let valid_domain = Interval::try_new(
-        ScalarValue::new_one(&x.range.lower().data_type())?,
-        ScalarValue::try_from(&x.range.upper().data_type())?,
+        ScalarValue::new_one(&range.lower().data_type())?,
+        ScalarValue::try_from(&range.upper().data_type())?,
     )?;
 
-    if valid_domain.contains(&x.range)? == Interval::CERTAINLY_TRUE {
-        Ok(x.sort_properties)
+    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of ACOSH()")
+        exec_err!("Input range of ACOSH contains out-of-domain values")
     }
 }
 
-/// Non-decreasing on the interval [−1,1]. Undefined outside this interval.
+/// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
 pub fn asin_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let valid_domain = Interval::try_new(
-        ScalarValue::new_negative_one(&x.range.lower().data_type())?,
-        ScalarValue::new_one(&x.range.upper().data_type())?,
-    )?;
+    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(&x.range)? == Interval::CERTAINLY_TRUE {
-        Ok(x.sort_properties)
+    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of ASIN()")
+        exec_err!("Input range of ASIN contains out-of-domain values")
     }
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn asinh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn atan_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing on the interval [−1,1]. Undefined outside this interval.
+/// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
 pub fn atanh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let valid_domain = Interval::try_new(
-        ScalarValue::new_negative_one(&x.range.lower().data_type())?,
-        ScalarValue::new_one(&x.range.upper().data_type())?,
-    )?;
+    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
 
-    if valid_domain.contains(&x.range)? == Interval::CERTAINLY_TRUE {
-        Ok(x.sort_properties)
+    if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of ATANH()")
+        exec_err!("Input range of ATANH contains out-of-domain values")
     }
 }
 
-/// Non-decreasing for all real numbers x.
+/// Monotonicity depends on the quadrant.
+// TODO: Implement monotonicity of the ATAN2 function.
 pub fn atan2_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
-    // TODO
     Ok(SortProperties::Unordered)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn cbrt_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn ceil_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-increasing on \[0,π\] and then non-decreasing on \[π,2π\].
+/// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
+// TODO: Implement monotonicity of the ATAN2 function.
 pub fn cos_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
-    // TODO
     Ok(SortProperties::Unordered)
 }
 
-/// Non-decreasing for x≥0 and symmetrically non-increasing for x≤0.
+/// Non-decreasing for x ≥ 0 and symmetrically non-increasing for x ≤ 0.
 pub fn cosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let zero_point = Interval::try_new(
-        ScalarValue::new_zero(&x.range.lower().data_type())?,
-        ScalarValue::new_zero(&x.range.upper().data_type())?,
-    )?;
+    let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if x.range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
-            other => other,
-        })
-    } else if x.range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => -SortProperties::Ordered(opt),
-            other => other,
-        })
+    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
+    } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(-arg.sort_properties)
     } else {
         Ok(SortProperties::Unordered)
     }
@@ -155,139 +137,105 @@ pub fn cosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 
 /// Non-decreasing function that converts radians to degrees.
 pub fn degrees_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn exp_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn floor_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for x>0. Undefined for x≤0.
+/// Non-decreasing for x ≥ 0, undefined otherwise.
 pub fn ln_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let zero_point = Interval::try_new(
-        ScalarValue::new_zero(&x.range.lower().data_type())?,
-        ScalarValue::new_zero(&x.range.upper().data_type())?,
-    )?;
+    let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if x.range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
-            other => other,
-        })
+    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of LN()")
+        exec_err!("Input range of LN contains out-of-domain values")
     }
 }
 
-/// Non-decreasing for x>0. Undefined for x≤0.
+/// Non-decreasing for x ≥ 0, undefined otherwise.
 pub fn log2_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let zero_point = Interval::try_new(
-        ScalarValue::new_zero(&x.range.lower().data_type())?,
-        ScalarValue::new_zero(&x.range.upper().data_type())?,
-    )?;
+    let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if x.range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
-            other => other,
-        })
+    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of LOG2()")
+        exec_err!("Input range of LOG2 contains out-of-domain values")
     }
 }
 
-/// Non-decreasing for x>0. Undefined for x≤0.
+/// Non-decreasing for x ≥ 0, undefined otherwise.
 pub fn log10_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let zero_point = Interval::try_new(
-        ScalarValue::new_zero(&x.range.lower().data_type())?,
-        ScalarValue::new_zero(&x.range.upper().data_type())?,
-    )?;
+    let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if x.range.gt(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
-            other => other,
-        })
+    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of LOG10()")
+        exec_err!("Input range of LOG10 contains out-of-domain values")
     }
 }
 
 /// Non-decreasing for all real numbers x.
 pub fn radians_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers x.
 pub fn signum_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing on \[0,π\] and then non-increasing on \[π,2π\].
+/// Non-decreasing on \[0, π\] and then non-increasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
+// TODO: Implement monotonicity of the SIN function.
 pub fn sin_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
-    // TODO
     Ok(SortProperties::Unordered)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn sinh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for x≥0. Undefined for x<0.
+/// Non-decreasing for x ≥ 0, undefined otherwise.
 pub fn sqrt_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
+    let arg = &input[0];
+    let range = &arg.range;
 
-    let zero_point = Interval::try_new(
-        ScalarValue::new_zero(&x.range.lower().data_type())?,
-        ScalarValue::new_zero(&x.range.upper().data_type())?,
-    )?;
+    let zero_point = Interval::make_zero(&range.lower().data_type())?;
 
-    if x.range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
-        Ok(match x.sort_properties {
-            SortProperties::Ordered(opt) => SortProperties::Ordered(opt),
-            other => other,
-        })
+    if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+        Ok(arg.sort_properties)
     } else {
-        exec_err!("A value from undefined range is the input of SQRT()")
+        exec_err!("Input range of SQRT contains out-of-domain values")
     }
 }
 
-/// Non-decreasing between its vertical asymptotes at x=π2+kπ for any integer k, where it is undefined.
-///
+/// Non-decreasing between vertical asymptotes at x = k * π ± π / 2 for any
+/// integer k.
+// TODO: Implement monotonicity of the TAN function.
 pub fn tan_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
-    // TODO
     Ok(SortProperties::Unordered)
 }
 
-/// Non-decreasing for all real numbers x.
+/// Non-decreasing for all real numbers.
 pub fn tanh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
-    let x = &input[0];
-
-    Ok(x.sort_properties)
+    Ok(input[0].sort_properties)
 }
