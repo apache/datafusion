@@ -394,8 +394,18 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::ScalarVariable(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::ScalarVariable(_, ids) => {
+                if ids.is_empty() {
+                    return internal_err!("Not a valid ScalarVariable");
+                }
+
+                Ok(if ids.len() == 1 {
+                    ast::Expr::Identifier(self.new_ident(ids[0].to_string()))
+                } else {
+                    ast::Expr::CompoundIdentifier(
+                        ids.iter().map(|i| self.new_ident(i.to_string())).collect(),
+                    )
+                })
             }
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
@@ -870,6 +880,7 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
+    use arrow_schema::DataType::Int8;
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, exists,
@@ -1159,6 +1170,17 @@ mod tests {
             (
                 try_cast(col("a"), DataType::UInt32),
                 r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
+            ),
+            (
+                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                r#""@a""#,
+            ),
+            (
+                Expr::ScalarVariable(
+                    Int8,
+                    vec![String::from("@root"), String::from("foo")],
+                ),
+                r#""@root"."foo""#,
             ),
         ];
 
