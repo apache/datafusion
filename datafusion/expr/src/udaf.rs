@@ -67,6 +67,12 @@ pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
 }
 
+impl std::fmt::Display for AggregateUDF {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 impl PartialEq for AggregateUDF {
     fn eq(&self, other: &Self) -> bool {
         self.name() == other.name() && self.signature() == other.signature()

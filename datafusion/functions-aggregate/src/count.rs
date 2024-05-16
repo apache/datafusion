@@ -40,6 +40,7 @@ use datafusion_common::{
     downcast_value, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
@@ -250,6 +251,10 @@ impl AggregateUDFImpl for Count {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
         Ok(Box::new(CountGroupsAccumulator::new()))
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
     }
 }
 

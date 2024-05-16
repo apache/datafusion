@@ -59,7 +59,7 @@ version = "38.0.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
-ahash = { version = "0.8", default-features = false, features = [
+ahash = { version = "0.8.11", default-features = false, features = [
     "runtime-rng",
 ] }
 arrow = { version = "51.0.0", features = ["prettyprint"] }
