@@ -77,7 +77,7 @@ unicode_expressions = [
 ]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { workspace = true }
 apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
@@ -111,7 +111,7 @@ flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
 half = { workspace = true }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }

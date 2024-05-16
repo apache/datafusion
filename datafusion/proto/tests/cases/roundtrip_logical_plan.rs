@@ -626,8 +626,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         count(lit(1)),
-        // TODO: Distinct is missing
-        // count_distinct(lit(2)),
+        count_distinct(lit(1)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

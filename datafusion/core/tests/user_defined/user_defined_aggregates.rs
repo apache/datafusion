@@ -45,9 +45,8 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf,
-    function::{AccumulatorArgs, GroupsAccumulatorSupportedArgs},
-    AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
+    create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
+    SimpleAggregateUDF,
 };
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
