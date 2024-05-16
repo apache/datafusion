@@ -1894,7 +1894,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     };
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,

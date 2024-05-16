@@ -50,24 +50,6 @@ macro_rules! make_udaf_expr_and_func {
         }
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $distinct:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
-        // "fluent expr_fn" style function
-        #[doc = $DOC]
-        pub fn $EXPR_FN(
-            $($arg: datafusion_expr::Expr,)*
-            distinct: bool,
-        ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                $AGGREGATE_UDF_FN(),
-                vec![$($arg),*],
-                distinct,
-                None,
-                None,
-                None
-            ))
-        }
-        create_func!($UDAF, $AGGREGATE_UDF_FN);
-    };
     ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
@@ -87,6 +69,45 @@ macro_rules! make_udaf_expr_and_func {
                 null_treatment,
             ))
         }
+        create_func!($UDAF, $AGGREGATE_UDF_FN);
+    };
+}
+
+macro_rules! make_distinct_udaf_expr_and_func {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+        // "fluent expr_fn" style function
+        #[doc = $DOC]
+        pub fn $EXPR_FN(
+            $($arg: datafusion_expr::Expr,)*
+        ) -> datafusion_expr::Expr {
+            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                $AGGREGATE_UDF_FN(),
+                vec![$($arg),*],
+                false,
+                None,
+                None,
+                None
+            ))
+        }
+
+        // build distinct version of the function
+        // The name is the same as the original function with `_distinct` appended
+        concat_idents::concat_idents!(distinct_fn_name = $EXPR_FN, _distinct {
+            #[doc = $DOC]
+            pub fn distinct_fn_name(
+                $($arg: datafusion_expr::Expr,)*
+            ) -> datafusion_expr::Expr {
+                datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                    $AGGREGATE_UDF_FN(),
+                    vec![$($arg),*],
+                    true,
+                    None,
+                    None,
+                    None
+                ))
+            }
+        });
+
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
 }

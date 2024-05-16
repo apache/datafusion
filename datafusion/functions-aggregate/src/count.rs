@@ -39,9 +39,7 @@ use arrow::{
 use datafusion_common::{
     downcast_value, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::AggregateFunction;
-use datafusion_expr::function::{GroupsAccumulatorSupportedArgs, StateFieldsArgs};
-use datafusion_expr::Expr;
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
@@ -55,25 +53,13 @@ use datafusion_physical_expr_common::{
     binary_map::OutputType,
 };
 
-make_udaf_expr_and_func!(
+make_distinct_udaf_expr_and_func!(
     Count,
     count,
     expression,
     "Returns the number of non-null values in the group.",
     count_udaf
 );
-
-/// Create an expression to represent the count(distinct) aggregate function
-pub fn count_distinct(expression: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
-        count_udaf(),
-        vec![expression],
-        true,
-        None,
-        None,
-        None,
-    ))
-}
 
 pub struct Count {
     signature: Signature,
@@ -252,7 +238,7 @@ impl AggregateUDFImpl for Count {
         &self.aliases
     }
 
-    fn groups_accumulator_supported(&self, args: GroupsAccumulatorSupportedArgs) -> bool {
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
         if args.is_distinct {

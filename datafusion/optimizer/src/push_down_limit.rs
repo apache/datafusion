@@ -49,8 +49,6 @@ impl OptimizerRule for PushDownLimit {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        use std::cmp::min;
-
         let LogicalPlan::Limit(limit) = plan else {
             return Ok(None);
         };

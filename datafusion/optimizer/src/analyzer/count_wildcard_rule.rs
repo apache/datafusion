@@ -120,10 +120,9 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::count;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
         out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };

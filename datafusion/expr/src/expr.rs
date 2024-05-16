@@ -1869,6 +1869,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             null_treatment,
         }) => {
             write_function_name(w, &fun.to_string(), false, args)?;
+
             if let Some(nt) = null_treatment {
                 w.write_str(" ")?;
                 write!(w, "{}", nt)?;

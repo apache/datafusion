@@ -56,7 +56,6 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = partial_agg_exec.input().statistics()?;
             let mut projections = vec![];
-
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
                     take_optimizable_column_and_table_count(&**expr, &stats)
