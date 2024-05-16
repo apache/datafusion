@@ -2480,6 +2480,399 @@ Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
 statement ok
 drop table t;
 
+#################
+# Min_Max Begin #
+#################
+statement ok
+CREATE TABLE decimals (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals VALUES (123.0001), (124.00);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals;
+----
+123 124
+
+statement ok
+DROP TABLE decimals;
+
+statement ok
+CREATE TABLE decimals_batch (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_batch VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_batch;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_batch;
+
+statement ok
+CREATE TABLE decimals_empty (value DECIMAL(10, 0));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_empty;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_empty;
+
+statement ok
+CREATE TABLE decimals_all_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_all_nulls VALUES (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_all_nulls;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_all_nulls;
+
+statement ok
+CREATE TABLE decimals_with_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_with_nulls;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_with_nulls;
+
+statement ok
+CREATE TABLE decimals_error (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals_error VALUES (123.00), (arrow_cast(124.001, 'Decimal128(10, 3)'));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_error;
+----
+123 124
+
+statement ok
+DROP TABLE decimals_error;
+
+statement ok
+CREATE TABLE decimals_agg (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_agg VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_agg;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_agg;
+
+statement ok
+CREATE TABLE integers (value INT);
+
+statement ok
+INSERT INTO integers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers
+----
+1 5
+
+statement ok
+DROP TABLE integers;
+
+statement ok
+CREATE TABLE strings (value TEXT);
+
+statement ok
+INSERT INTO strings VALUES ('d'), ('a'), ('c'), ('b');
+
+query TT
+SELECT MIN(value), MAX(value) FROM strings
+----
+a d
+
+statement ok
+DROP TABLE strings;
+
+statement ok
+CREATE TABLE integers_with_nulls (value INT);
+
+statement ok
+INSERT INTO integers_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_with_nulls
+----
+1 5
+
+statement ok
+DROP TABLE integers_with_nulls;
+
+statement ok
+CREATE TABLE integers_all_nulls (value INT);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_all_nulls
+----
+NULL NULL
+
+statement ok
+DROP TABLE integers_all_nulls;
+
+statement ok
+CREATE TABLE uintegers (value INT UNSIGNED);
+
+statement ok
+INSERT INTO uintegers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM uintegers
+----
+1 5
+
+statement ok
+DROP TABLE uintegers;
+
+statement ok
+CREATE TABLE floats (value FLOAT);
+
+statement ok
+INSERT INTO floats VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM floats
+----
+1 5
+
+statement ok
+DROP TABLE floats;
+
+statement ok
+CREATE TABLE doubles (value DOUBLE);
+
+statement ok
+INSERT INTO doubles VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM doubles
+----
+1 5
+
+statement ok
+DROP TABLE doubles;
+
+statement ok
+CREATE TABLE dates (value DATE);
+
+statement ok
+INSERT INTO dates VALUES ('1970-01-02'), ('1970-01-03'), ('1970-01-04'), ('1970-01-05'), ('1970-01-06');
+
+query DD
+SELECT MIN(value), MAX(value) FROM dates
+----
+1970-01-02 1970-01-06
+
+statement ok
+DROP TABLE dates;
+
+statement ok
+CREATE TABLE times (value TIME);
+
+statement ok
+INSERT INTO times VALUES ('00:00:01'), ('00:00:02'), ('00:00:03'), ('00:00:04'), ('00:00:05');
+
+query DD
+SELECT MIN(value), MAX(value) FROM times
+----
+00:00:01 00:00:05
+
+statement ok
+DROP TABLE times;
+
+statement ok
+CREATE TABLE time32millisecond (value TIME);
+
+statement ok
+INSERT INTO time32millisecond VALUES ('00:00:00.001'), ('00:00:00.002'), ('00:00:00.003'), ('00:00:00.004'), ('00:00:00.005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time32millisecond
+----
+00:00:00.001 00:00:00.005
+
+statement ok
+DROP TABLE time32millisecond;
+
+statement ok
+CREATE TABLE time64microsecond (value TIME);
+
+statement ok
+INSERT INTO time64microsecond VALUES ('00:00:00.000001'), ('00:00:00.000002'), ('00:00:00.000003'), ('00:00:00.000004'), ('00:00:00.000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64microsecond
+----
+00:00:00.000001 00:00:00.000005
+
+statement ok
+DROP TABLE time64microsecond;
+
+statement ok
+CREATE TABLE time64nanosecond (value TIME);
+
+statement ok
+INSERT INTO time64nanosecond VALUES ('00:00:00.000000001'), ('00:00:00.000000002'), ('00:00:00.000000003'), ('00:00:00.000000004'), ('00:00:00.000000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64nanosecond
+----
+00:00:00.000000001 00:00:00.000000005
+
+statement ok
+DROP TABLE time64nanosecond;
+
+statement ok
+CREATE TABLE timestampmicrosecond (value TIMESTAMP);
+
+statement ok
+INSERT INTO timestampmicrosecond VALUES ('1970-01-01 00:00:00.000001'), ('1970-01-01 00:00:00.000002'), ('1970-01-01 00:00:00.000003'), ('1970-01-01 00:00:00.000004'), ('1970-01-01 00:00:00.000005');
+
+query PP
+SELECT MIN(value), MAX(value) FROM timestampmicrosecond
+----
+1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000005
+
+statement ok
+DROP TABLE timestampmicrosecond;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+false
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (true), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (false), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+true
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (true), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (false), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+#################
+# Min_Max End #
+#################
+
 statement ok
 create table bool_aggregate_functions (
   c1 boolean not null,
