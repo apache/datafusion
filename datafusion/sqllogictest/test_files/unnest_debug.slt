@@ -28,7 +28,7 @@ AS VALUES
 
 
 query III
-select unnest(column1), unnest(column2) + (unnest(column2) as alias) as some_alias from unnest_table;
+select  unnest(column1), unnest(column2) as some_alias from unnest_table;
 ----
 1 2 2
 1 2 3

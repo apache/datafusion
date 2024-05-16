@@ -123,7 +123,8 @@ impl ExprSchemable for Expr {
                         Ok(field.data_type().clone())
                     }
                     DataType::Struct(_) => {
-                        Ok(arg_data_type.clone())
+                        // TODO: this is not correct, because unnest(struct) wll result into multiple data_type
+                        Ok(arg_data_type)
                     }
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")
@@ -422,9 +423,6 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                if let Err(_) = self.metadata(input_schema) {
-                    panic!("here");
-                }
                 Ok((
                     c.relation.clone(),
                     Field::new(&c.name, data_type, nullable)
@@ -434,9 +432,6 @@ impl ExprSchemable for Expr {
             }
             Expr::Alias(Alias { relation, name, .. }) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                if let Err(_) = self.metadata(input_schema) {
-                    panic!("here");
-                }
                 Ok((
                     relation.clone(),
                     Field::new(name, data_type, nullable)
@@ -444,25 +439,8 @@ impl ExprSchemable for Expr {
                         .into(),
                 ))
             }
-            Expr::Unnest(Unnest { expr }) => {
-                let st = self.data_type_and_nullable(input_schema);
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                if let Err(_) = st {
-                    panic!("here");
-                }
-                Ok((
-                    None,
-                    Field::new(self.display_name()?, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
             _ => {
-                let st = self.data_type_and_nullable(input_schema);
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                if let Err(_) = self.metadata(input_schema) {
-                    panic!("here");
-                }
                 Ok((
                     None,
                     Field::new(self.display_name()?, data_type, nullable)

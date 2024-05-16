@@ -28,7 +28,7 @@ use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{Column, UnnestOptions};
-use datafusion_expr::builder::projection_after_unnest;
+use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, Unnest};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
@@ -294,6 +294,100 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(plan)
     }
 
+    fn recursive_transform_unnest_expr(
+        &self,
+        input: &LogicalPlan,
+        unnest_columns: &mut Vec<String>,
+        inner_projection_exprs: &mut Vec<Expr>,
+        expr: Expr,
+    ) -> Result<Vec<Expr>> {
+        // expr returned here maybe different from the originals in inner_projection_exprs
+        // for example:
+        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+        // - unnest(array_col) will be transformed into unnest(array_col).element
+        // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
+
+        // Specifically handle root level unnest expr, this is the only place
+        // unnest(struct_col) can be handled
+        if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+            // will need to be rewritten into (struct_col.field1, struct_col,
+            //field2 ...)
+            let column_name = expr.display_name()?;
+
+            unnest_columns.push(column_name.clone());
+            // Add alias for the argument expression, to avoid naming conflicts
+            // with other expressions
+            // in the select list. For example: `select unnest(col1), col1 from t`.
+            // this extra projection is used to unnest transforming
+            inner_projection_exprs.push(arg.clone().alias(column_name.clone()));
+            let schema = input.schema();
+
+            let (data_type, _) = expr.data_type_and_nullable(schema)?;
+
+            let outer_projection_columns =
+                get_unnested_columns(&column_name, &data_type)?;
+            let expr = outer_projection_columns
+                .iter()
+                .map(|col| Expr::Column(col.0.clone()))
+                .collect::<Vec<_>>();
+            return Ok(expr);
+        }
+        let Transformed {
+            data: transformed_expr,
+            transformed,
+            tnr: _,
+        } = expr.transform_up(|expr: Expr| {
+            if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+                // This column is the copy of the column that will be unnested
+                // it will be replaced by the unnested columns
+                let intermediate_col_name = expr.display_name()?;
+                unnest_columns.push(intermediate_col_name.clone());
+                let schema = input.schema();
+                let (data_type, _) = arg.data_type_and_nullable(schema)?;
+
+                // TODO: things like unnest(struct_col) as alias/unnest(struct_col) > 0
+                // does not make sense
+                // or do they?
+                if let DataType::Struct(_) = data_type {
+                    return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                }
+                // because unnest logical plan will call the same function
+                // to transform the column_name into new column(s)
+                let outer_projection_columns =
+                    get_unnested_columns(&intermediate_col_name, &data_type)?;
+                let unnested_child_exprs = outer_projection_columns
+                    .iter()
+                    .map(|col| Expr::Column(col.0.clone()))
+                    .collect::<Vec<_>>();
+
+                // Add alias for the argument expression, to avoid naming conflicts with other expressions
+                // in the select list. For example: `select unnest(col1), col1 from t`.
+                // TODO: this does not work with case like unnest(col1) + unnest(col1)
+                inner_projection_exprs
+                    .push(arg.clone().alias(intermediate_col_name.clone()));
+                // because unnest on list expr will only transform into 1 expr
+                Ok(Transformed::yes(unnested_child_exprs[0].clone()))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?;
+
+        if !transformed {
+            if matches!(&transformed_expr, Expr::Column(_)) {
+                inner_projection_exprs.push(transformed_expr.clone());
+                Ok(vec![transformed_expr])
+            } else {
+                // We need to evaluate the expr in the inner projection,
+                // outer projection just select its name
+                let column_name = transformed_expr.display_name()?;
+                inner_projection_exprs.push(transformed_expr);
+                Ok(vec![Expr::Column(Column::from_name(column_name))])
+            }
+        } else {
+            Ok(vec![transformed_expr])
+        }
+    }
+
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
     pub(super) fn try_process_unnest(
         &self,
@@ -305,91 +399,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // including non unnest column and unnest column
         let mut inner_projection_exprs = vec![];
 
-        let outer_projection_exprs:Vec<Expr> = select_exprs
+        // expr returned here maybe different from the originals in inner_projection_exprs
+        // for example:
+        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+        // - unnest(array_col) will be transformed into unnest(array_col).element
+        // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
+        let outer_projection_exprs: Vec<Expr> = select_exprs
             .into_iter()
             .map(|expr| {
-                // For expr at root level, we need to check if it is an unnest on struct 
-                // column to transform the expr unnest(struct(field1, field2)) 
-                // into struct.field1, struct.field2
-            if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                    // will need to be rewritten into (struct_col.field1, struct_col,
-                    //field2 ...)
-                    let column_name = expr.display_name()?;
-
-                    unnest_columns.push(column_name.clone());
-                    // Add alias for the argument expression, to avoid naming conflicts 
-                    // with other expressions
-                    // in the select list. For example: `select unnest(col1), col1 from t`.
-                    // this extra projection is used to unnest transforming
-                    inner_projection_exprs.push(arg.clone().alias(column_name.clone()));
-                    let schema = input.schema();
-
-                    let (data_type,_) = expr.data_type_and_nullable(schema)?;
-
-                let (outer_projection_columns ,_)= projection_after_unnest(
-                    &column_name, &data_type)?;
-                    let expr =   outer_projection_columns
-                    .iter()
- .map(|col| Expr::Column(col.0.clone()))
- .collect::<Vec<_>>();
-                    return Ok(expr);
-                }
-                let Transformed {
-                    data: transformed_expr,
-                    transformed,
-                    tnr: _,
-                } = expr.transform_up(|expr: Expr| {
-                    if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                        // This column is the copy of the column that will be unnested
-                        // it will be replaced by the unnested columns
-                        let intermediate_col_name = expr.display_name()?;
-                        unnest_columns.push(intermediate_col_name.clone());
-                        let schema = input.schema();
-                        let (data_type,_) = arg.data_type_and_nullable(schema)?;
-
-                        // TODO: things like unnest(struct_col) as alias/unnest(struct_col) > 0 does not make sense
-                        // or do they?
-                        if let DataType::Struct(_)=  data_type {
-                            return internal_err!("unnest on struct can ony be applied at the root level of select expression");
-                        }
-                        // because unnest logical plan will call the same function
-                        // to transform the column_name into new column(s)
-                let (outer_projection_columns ,_)= projection_after_unnest(
-                    &intermediate_col_name, &data_type)?;
-                    let unnested_child_exprs =   outer_projection_columns
-                    .iter()
- .map(|col| Expr::Column(col.0.clone()))
- .collect::<Vec<_>>();
-
-
-                        // Add alias for the argument expression, to avoid naming conflicts with other expressions
-                        // in the select list. For example: `select unnest(col1), col1 from t`.
-                        // TODO: this does not work with case like unnest(col1) + unnest(col1)
-                        inner_projection_exprs
-                            .push(arg.clone().alias(intermediate_col_name.clone()));
-                        Ok(Transformed::yes(unnested_child_exprs[0].clone()))
-                    } else {
-                        Ok(Transformed::no(expr))
-                    }
-                })?;
-
-                if !transformed {
-                    if matches!(&transformed_expr, Expr::Column(_)) {
-                        inner_projection_exprs.push(transformed_expr.clone());
-                        Ok(vec![transformed_expr])
-                    } else {
-                        // We need to evaluate the expr in the inner projection,
-                        // outer projection just select its name
-                        let column_name = transformed_expr.display_name()?;
-                        inner_projection_exprs.push(transformed_expr);
-                        Ok(vec![Expr::Column(Column::from_name(column_name))])
-                    }
-                } else {
-                    Ok(vec![transformed_expr])
-                }
+                self.recursive_transform_unnest_expr(
+                    &input,
+                    &mut unnest_columns,
+                    &mut inner_projection_exprs,
+                    expr,
+                )
             })
             .collect::<Result<Vec<_>>>()?
-            .into_iter().flatten().collect();
+            .into_iter()
+            .flatten()
+            .collect();
 
         // Do the final projection
         if unnest_columns.is_empty() {
@@ -400,20 +428,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
             // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            let plan = LogicalPlanBuilder::from(input)
+            LogicalPlanBuilder::from(input)
                 .project(inner_projection_exprs.clone())?
-                .unnest_columns_with_options(columns, unnest_options)?;
-            println!("unnesting over columns {:?}", inner_projection_exprs);
-            println!(
-                "running projection fields {:?}\non plan\n{:?}\n
-                with schema {:?}",
-                outer_projection_exprs,
-                plan,
-                plan.schema(),
-            );
-            // plan.build()
-            let plan = plan.project(outer_projection_exprs)?.build();
-            plan
+                .unnest_columns_with_options(columns, unnest_options)?
+                .project(outer_projection_exprs)?.build()
         }
     }
 

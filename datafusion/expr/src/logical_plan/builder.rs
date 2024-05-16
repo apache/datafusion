@@ -1547,20 +1547,14 @@ impl TableSource for LogicalTableSource {
 pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     unnest_with_options(input, columns, UnnestOptions::default())
 }
-pub enum UnnestType {
-    Struct,
-    List,
-}
 
-pub fn projection_after_unnest(
-    // c: &Column,
+pub fn get_unnested_columns(
     col_name: &String,
     data_type: &DataType,
-) -> Result<(Vec<(Column, Arc<Field>)>, UnnestType)> {
+) -> Result<Vec<(Column, Arc<Field>)>> {
     let mut qualified_columns = Vec::with_capacity(1);
-    // let schema_idx: usize = schema.index_of_column(c)?;
-    // let (_, unnest_field) = schema.qualified_field(schema_idx);
-    let unnest_type = match data_type {
+
+    match data_type {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
@@ -1576,7 +1570,6 @@ pub fn projection_after_unnest(
             let column = Column::from_name(name);
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
-            UnnestType::List
         }
         DataType::Struct(fields) => {
             qualified_columns.extend(fields.iter().map(|f| {
@@ -1585,8 +1578,7 @@ pub fn projection_after_unnest(
                 let new_field = f.as_ref().clone().with_name(new_name);
                 // let column = Column::from((None, &f));
                 (column, Arc::new(new_field))
-            }));
-            UnnestType::Struct
+            }))
         }
         _ => {
             return internal_err!(
@@ -1595,7 +1587,7 @@ pub fn projection_after_unnest(
             );
         }
     };
-    Ok((qualified_columns, unnest_type))
+    Ok(qualified_columns)
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
@@ -1604,10 +1596,6 @@ pub fn unnest_with_options(
     columns: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    // Extract the type of the nested field in the list.
-    // let mut unnested_fields_map: HashMap<usize, _> =
-    //     HashMap::with_capacity(columns.len());
-    // Add qualifiers to the columns.
     let mut qualified_columns = Vec::with_capacity(columns.len());
     let mut list_columns = Vec::with_capacity(columns.len());
     let mut struct_columns = Vec::with_capacity(columns.len());
@@ -1628,7 +1616,7 @@ pub fn unnest_with_options(
         .map(|(index, (original_qualifier, original_field))| {
             match column_by_original_index.get(&index) {
                 Some(&column_to_unnest) => {
-                    let (flatten_columns, unnest_type) = projection_after_unnest(
+                    let flatten_columns = get_unnested_columns(
                         &column_to_unnest.name,
                         original_field.data_type(),
                     )?;
@@ -1638,9 +1626,10 @@ pub fn unnest_with_options(
                     Ok(flatten_columns
                         .iter()
                         .map(|col| {
-                            match unnest_type {
-                                UnnestType::List => list_columns.push(index),
-                                UnnestType::Struct => struct_columns.push(index),
+                            match original_field.data_type() {
+                                DataType::List(_) => list_columns.push(index),
+                                DataType::Struct(_) => struct_columns.push(index),
+                                _ => {panic!("not reachable, should be caught by get_unnested_columns")}
                             }
                             qualified_columns.push(col.0.to_owned());
                             (col.0.relation.to_owned(), col.1.to_owned())
