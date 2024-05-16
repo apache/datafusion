@@ -394,7 +394,9 @@ impl Unparser<'_> {
             Expr::IsNull(expr) => {
                 Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
             }
-            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::IsNotFalse(expr) => {
+                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
@@ -1115,6 +1117,10 @@ mod tests {
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
                 r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_false(),
+                r#"(("a" + "b") > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
