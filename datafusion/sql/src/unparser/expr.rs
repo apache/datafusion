@@ -356,6 +356,9 @@ impl Unparser<'_> {
                 asc: _,
                 nulls_first: _,
             }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
+            Expr::IsNull(expr) => {
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -367,6 +370,9 @@ impl Unparser<'_> {
             }
             Expr::IsFalse(expr) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotFalse(expr) => {
+                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
@@ -391,10 +397,6 @@ impl Unparser<'_> {
             Expr::ScalarVariable(_, _) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::IsNull(expr) => {
-                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
-            }
-            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
@@ -1115,6 +1117,10 @@ mod tests {
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
                 r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_false(),
+                r#"(("a" + "b") > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
