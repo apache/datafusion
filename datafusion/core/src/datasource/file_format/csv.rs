@@ -42,7 +42,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -279,10 +279,6 @@ impl FileFormat for CsvFormat {
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::CSV
     }
 }
 
@@ -549,8 +545,9 @@ mod tests {
 
     use arrow::compute::concat_batches;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{internal_err, GetExt};
+    use datafusion_common::{FileType, GetExt};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 

@@ -17,7 +17,7 @@
 
 use arrow_schema::{Field, Schema};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use datafusion_expr::function::AggregateFunctionSimplification;
+use datafusion_expr::function::{AggregateFunctionSimplification, StateFieldsArgs};
 use datafusion_expr::simplify::SimplifyInfo;
 
 use std::{any::Any, sync::Arc};
@@ -70,16 +70,11 @@ impl AggregateUDFImpl for BetterAvgUdaf {
         unimplemented!("should not be invoked")
     }
 
-    fn state_fields(
-        &self,
-        _name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<arrow_schema::Field>,
-    ) -> Result<Vec<arrow_schema::Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<arrow_schema::Field>> {
         unimplemented!("should not be invoked")
     }
 
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 
