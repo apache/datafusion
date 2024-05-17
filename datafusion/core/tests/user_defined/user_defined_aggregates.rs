@@ -725,7 +725,7 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         panic!("accumulator shouldn't invoke");
     }
 
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 
