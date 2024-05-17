@@ -219,13 +219,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
             match field {
                 GetFieldAccess::NamedStructField { name: _ } => {
-                    unreachable!(
-                        "NamedStructField should have been rewritten in ArrayFunctionRewriter"
+                    return internal_err!(
+                        "NamedStructField is no longer supported. Should use the get_field function instead",
                     )
                 }
                 GetFieldAccess::ListIndex { key: _ } => {
-                    unreachable!(
-                        "ListIndex should have been rewritten in ArrayFunctionRewriter"
+                    return internal_err!(
+                        "ListIndex is no longer supported. Should use the get_field function instead",
                     )
                 }
                 GetFieldAccess::ListRange {
@@ -233,8 +233,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     stop: _,
                     stride: _,
                 } => {
-                    unreachable!(
-                        "ListRange should have been rewritten in ArrayFunctionRewriter"
+                    return internal_err!(
+                        "ListRange is no longer supported. Should use the get_field function instead",
                     )
                 }
             };
