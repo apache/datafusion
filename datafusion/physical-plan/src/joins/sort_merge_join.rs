@@ -2790,9 +2790,10 @@ mod tests {
                 UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
                 &BooleanArray::from(vec![false, true, true, true, true, true])
             ),
-            Some((BooleanArray::from(vec![
-                false, true, false, true, false, false
-            ]), vec![0, 1]))
+            Some((
+                BooleanArray::from(vec![false, true, false, true, false, false]),
+                vec![0, 1]
+            ))
         );
 
         assert_eq!(
@@ -2801,9 +2802,10 @@ mod tests {
                 UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
                 &BooleanArray::from(vec![false, false, false, false, false, true])
             ),
-            Some((BooleanArray::from(vec![
-                false, false, false, false, false, true
-            ]), vec![1]))
+            Some((
+                BooleanArray::from(vec![false, false, false, false, false, true]),
+                vec![1]
+            ))
         );
 
         Ok(())
