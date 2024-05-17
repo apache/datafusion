@@ -73,19 +73,8 @@ macro_rules! make_udaf_expr_and_func {
         #[doc = $DOC]
         pub fn $EXPR_FN(
             args: Vec<datafusion_expr::Expr>,
-            distinct: bool,
-            filter: Option<Box<datafusion_expr::Expr>>,
-            order_by: Option<Vec<datafusion_expr::Expr>>,
-            null_treatment: Option<sqlparser::ast::NullTreatment>
-        ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                $AGGREGATE_UDF_FN(),
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            ))
+        ) -> crate::expr_builder::ExprBuilder {
+            crate::expr_builder::ExprBuilder::new($AGGREGATE_UDF_FN(), args)
         }
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };

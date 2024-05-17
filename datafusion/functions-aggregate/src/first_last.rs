@@ -925,8 +925,6 @@ fn replace_order_by_clause(order_by: &mut String) {
 mod tests {
     use arrow::array::Int64Array;
 
-    use crate::expr_builder::new_first_value;
-
     use super::*;
 
     #[test]
@@ -1035,10 +1033,8 @@ mod tests {
 
     #[test]
     fn test_123() {
-        let first = first_value(vec![], true, None, None, None);
+        let first = first_value(vec![]).build();
         println!("first: {:?}\n", first);
 
-        let new_first = new_first_value(vec![]).build();
-        println!("new first: {:?}\n", new_first);
     }
 }
