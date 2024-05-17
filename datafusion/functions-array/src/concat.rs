@@ -27,8 +27,6 @@ use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{
     type_coercion::binary::get_wider_type, ColumnarValue, ScalarUDFImpl, Signature,
     Volatility,

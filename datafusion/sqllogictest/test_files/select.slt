@@ -351,8 +351,11 @@ VALUES (1),(1,2)
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
 VALUES (1),('2')
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+query R
 VALUES (1),(2.0)
+----
+1
+2
 
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
 VALUES (1,2), (1,'2')
@@ -472,6 +475,13 @@ CREATE TABLE foo AS VALUES
 (1, 2),
 (3, 4),
 (5, 6);
+
+# multiple rows and columns need type coercion
+statement ok
+CREATE TABLE foo2(c1 double, c2 double) AS VALUES
+(1.1, 4.1),
+(2, 5),
+(3, 6);
 
 # foo distinct
 query T
