@@ -27,6 +27,17 @@ impl ExprBuilder {
             null_treatment: None,
         }
     }
+
+    pub fn new_distinct(udf: Arc<crate::AggregateUDF>, args: Vec<Expr>) -> Self {
+        Self {
+            udf,
+            args,
+            distinct: true,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        }
+    }
 }
 
 impl ExprBuilder {
@@ -41,8 +52,18 @@ impl ExprBuilder {
         ))
     }
 
-    pub fn distinct(mut self) -> Self {
-        self.distinct = true;
+    pub fn order_by(mut self, order_by: Vec<Expr>) -> Self {
+        self.order_by = Some(order_by);
+        self
+    }
+
+    pub fn filter(mut self, filter: Box<Expr>) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    pub fn null_treatment(mut self, null_treatment: NullTreatment) -> Self {
+        self.null_treatment = Some(null_treatment);
         self
     }
 }

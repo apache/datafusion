@@ -47,6 +47,8 @@ use std::sync::Arc;
 make_udaf_expr_and_func!(
     FirstValue,
     first_value,
+    expression,
+    order_by,
     "Returns the first value in a group of values.",
     first_value_udaf
 );
@@ -1029,12 +1031,5 @@ mod tests {
         assert_eq!(merged_state.len(), state1.len());
 
         Ok(())
-    }
-
-    #[test]
-    fn test_123() {
-        let first = first_value(vec![]).build();
-        println!("first: {:?}\n", first);
-
     }
 }

@@ -32,7 +32,8 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::expr_fn::{
-    count, covar_pop, covar_samp, first_value,
+    count, count_builder, count_distinct, count_distinct_builder, covar_pop,
+    covar_pop_builder, covar_samp, covar_samp_builder, first_value, first_value_builder,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -622,11 +623,16 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
-        first_value(vec![lit(1)], false, None, None, None),
+        first_value(lit(1), Some(vec![lit(2)])),
+        first_value_builder(lit(1)).order_by(vec![lit(3)]).build(),
         covar_samp(lit(1.5), lit(2.2)),
+        covar_samp_builder(lit(1.5), lit(2.3)).build(),
         covar_pop(lit(1.5), lit(2.2)),
+        covar_pop_builder(lit(1.5), lit(2.3)).build(),
         count(lit(1)),
-        count_distinct(lit(1)),
+        count_builder(lit(3)).build(),
+        count_distinct(lit(2)),
+        count_distinct_builder(lit(4)).build(),
     ];
 
     // ensure expressions created with the expr api can be round tripped
