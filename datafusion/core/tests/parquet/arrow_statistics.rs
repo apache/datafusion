@@ -21,7 +21,7 @@
 use std::fs::File;
 use std::sync::Arc;
 
-use arrow_array::{make_array, Array, ArrayRef, Int64Array, RecordBatch, UInt64Array};
+use arrow_array::{make_array, Array, ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
     RequestedStatistics, StatisticsConverter,
@@ -29,6 +29,10 @@ use datafusion::datasource::physical_plan::parquet::{
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
+use crate::parquet::Scenario;
+
+use super:: make_test_file_rg;
 
 // TEST HELPERS
 
@@ -79,8 +83,7 @@ pub fn parquet_file(
         .build();
 
     let batches = vec![
-        make_int64_batches_with_null(num_null, no_null_values_start, no_null_values_end), // TODO: likely make this more general using
-                                                                                          // create_data_batch(scenario); where scenario is the respective enum data type
+        make_int64_batches_with_null(num_null, no_null_values_start, no_null_values_end),
     ];
 
     let schema = batches[0].schema();
@@ -99,6 +102,23 @@ pub fn parquet_file(
     ArrowReaderBuilder::try_new(file).unwrap()
 }
 
+
+// Create a parquet file with many columns each has different data type
+//  - Data types are specified by the given scenario
+//  - Row group sizes are withe the same or different depending on the provided row_per_group & data created in the scenario
+pub async fn create_parquet_file(
+    scenario: super::Scenario,
+    row_per_group: usize,
+) -> ParquetRecordBatchReaderBuilder<File> {
+
+    let file = make_test_file_rg(scenario, row_per_group).await;
+
+    // open the file & get the reader
+    let file = file.reopen().unwrap();
+    ArrowReaderBuilder::try_new(file).unwrap()
+}
+
+
 struct Test {
     reader: ParquetRecordBatchReaderBuilder<File>,
     expected_min: ArrayRef,
@@ -108,7 +128,7 @@ struct Test {
 }
 
 impl Test {
-    fn run(self) {
+    fn run(self, col_name: &str) {
         let Self {
             reader,
             expected_min,
@@ -118,17 +138,18 @@ impl Test {
         } = self;
 
         let min = StatisticsConverter::try_new(
-            "i64",
+            col_name,
             RequestedStatistics::Min,
             reader.schema(),
         )
         .unwrap()
         .extract(reader.metadata())
         .unwrap();
+
         assert_eq!(&min, &expected_min, "Mismatch with expected minimums");
 
         let max = StatisticsConverter::try_new(
-            "i64",
+            col_name,
             RequestedStatistics::Max,
             reader.schema(),
         )
@@ -138,7 +159,7 @@ impl Test {
         assert_eq!(&max, &expected_max, "Mismatch with expected maximum");
 
         let null_counts = StatisticsConverter::try_new(
-            "i64",
+            col_name,
             RequestedStatistics::NullCount,
             reader.schema(),
         )
@@ -157,14 +178,32 @@ impl Test {
             "Mismatch with expected row counts"
         );
     }
+
+    fn run_col_not_found(self, col_name: &str) {
+        let Self {
+            reader,
+            expected_min: _,
+            expected_max: _,
+            expected_null_counts: _,
+            expected_row_counts: _,
+        } = self;
+
+        let min = StatisticsConverter::try_new(
+            col_name,
+            RequestedStatistics::Min,
+            reader.schema(),
+        );
+
+        assert!(min.is_err());
+    }
 }
 
 // TESTS
 //
 // Remaining cases
 // - Create parquet files / metadata with missing statistic values
-// - Create parquet files / metadata with different data types
-// - Create parquet files / metadata with different row group sizes
+// - Create parquet files / metadata with different data types       -- included but not all data types yet
+// - Create parquet files / metadata with different row group sizes  -- done
 // - Using truncated statistics  ("exact min value" and "exact max value" https://docs.rs/parquet/latest/parquet/file/statistics/enum.Statistics.html#method.max_is_exact)
 
 #[tokio::test]
@@ -181,8 +220,8 @@ async fn test_one_row_group_without_null() {
         expected_null_counts: UInt64Array::from(vec![0]),
         // 3 rows
         expected_row_counts: UInt64Array::from(vec![3]),
-    }
-    .run()
+}
+    .run("i64")
 }
 
 #[tokio::test]
@@ -201,7 +240,7 @@ async fn test_one_row_group_with_null_and_negative() {
         // 8 rows
         expected_row_counts: UInt64Array::from(vec![8]),
     }
-    .run()
+    .run("i64")
 }
 
 #[tokio::test]
@@ -220,7 +259,7 @@ async fn test_two_row_group_with_null() {
         // row counts are [10, 5]
         expected_row_counts: UInt64Array::from(vec![10, 5]),
     }
-    .run()
+    .run("i64")
 }
 
 #[tokio::test]
@@ -239,5 +278,312 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
         // row counts are [5, 3]
         expected_row_counts: UInt64Array::from(vec![5, 3]),
     }
-    .run()
+    .run("i64")
+}
+
+/////////////// MORE GENERAL TESTS //////////////////////
+// . Many columns in a file
+// . Differnet data types
+// . Different row group sizes
+
+// Four different integer types
+#[tokio::test]
+async fn test_int_64() {
+    let row_per_group = 5;
+    // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
+    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Int64Array::from(vec![-5, -4, 0, 5])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int64Array::from(vec![-1, 0, 4, 9])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("i64");
+}
+
+#[tokio::test]
+async fn test_int_32() {
+    let row_per_group = 5;
+    // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
+    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Int32Array::from(vec![-5, -4, 0, 5])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int32Array::from(vec![-1, 0, 4, 9])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("i32");
+}
+
+// BUG: ignore this test for now
+// Note that the file has 4 columns named "i8", "i16", "i32", "i64".
+//   - The tests on column i32 and i64 passed.
+//   - The tests on column i8 and i16 failed.
+#[ignore]
+#[tokio::test]
+async fn test_int_16() {
+    let row_per_group = 5;
+    // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
+    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [-5, -4, 0, 5]
+        // BUG: not sure why this returns same data but in Int32Array type even though I debugged and the columns name is "i16" an its data is Int16
+        // My debugging tells me the bug is either at:
+        //   1. The new code to get "iter". See the code in this PR with
+                // // Get an iterator over the column statistics
+                // let iter = row_groups
+                // .iter()
+                // .map(|x| x.column(parquet_idx).statistics());
+        //    OR
+        //   2. in the function (and/or its marco) `pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>` here
+        //      https://github.com/apache/datafusion/blob/ea023e2d4878240eece870cf4b346c7a0667aeed/datafusion/core/src/datasource/physical_plan/parquet/statistics.rs#L179
+        expected_min: Arc::new(Int16Array::from(vec![-5, -4, 0, 5])),   // panic here because the actual data is Int32Array
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int16Array::from(vec![-1, 0, 4, 9])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("i16");
+}
+
+// BUG (same as above): ignore this test for now
+#[ignore]
+#[tokio::test]
+async fn test_int_8() {
+    let row_per_group = 5;
+    // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
+    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [-5, -4, 0, 5]
+        // BUG: not sure why this returns same data but in Int32Array even though I debugged and the columns name is "i8" an its data is Int8
+        expected_min: Arc::new(Int8Array::from(vec![-5, -4, 0, 5])), // panic here because the actual data is Int32Array
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int8Array::from(vec![-1, 0, 4, 9])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("i8");
+}
+
+// timestamp
+#[tokio::test]
+async fn test_timestamp() {
+    let row_per_group = 5;
+
+    // This creates a parquet files of 5 columns named "nanos", "micros", "millis", "seconds", "names"
+    // "nanos" --> TimestampNanosecondArray
+    // "micros" --> TimestampMicrosecondArray
+    // "millis" --> TimestampMillisecondArray
+    // "seconds" --> TimestampSecondArray
+    // "names" --> StringArray
+    //
+    // The file is created by 4 record batches, each has 5 rowws.
+    // Since the row group isze is set to 5, those 4 batches will go into 4 row groups
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,]
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,])),
+        // maxes are [1577926861000000000, 1577926871000000000, 1577927461000000000, 1578790861000000000,]
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000000000, 1577926871000000000, 1577927461000000000, 1578790861000000000,])),
+        // nulls are [1, 1, 1, 1]
+        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("nanos");
+
+    // micros
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000000, 1577840471000000, 1577841061000000, 1578704461000000,])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000000, 1577926871000000, 1577927461000000, 1578790861000000,])),
+        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("micros");
+
+    // millis
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000, 1577840471000, 1577841061000, 1578704461000,])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000, 1577926871000, 1577927461000, 1578790861000,])),
+        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("millis");
+
+    // seconds
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461, 1577840471, 1577841061, 1578704461,])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861, 1577926871, 1577927461, 1578790861,])),
+        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+    }
+    .run("seconds");
+}
+
+
+// timestamp with different row group sizes
+#[tokio::test]
+async fn test_timestamp_diff_rg_sizes() {
+    let row_per_group = 8;
+
+    // This creates a parquet files of 5 columns named "nanos", "micros", "millis", "seconds", "names"
+    // "nanos" --> TimestampNanosecondArray
+    // "micros" --> TimestampMicrosecondArray
+    // "millis" --> TimestampMillisecondArray
+    // "seconds" --> TimestampSecondArray
+    // "names" --> StringArray
+    //
+    // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 3 row groups with size 8, 8, 4
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [1577840461000000000, 1577841061000000000, 1578704521000000000]
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000000000, 1577841061000000000, 1578704521000000000])),
+        // maxes are [1577926861000000000, 1578704461000000000, 157879086100000000]
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000000000, 1578704461000000000, 1578790861000000000])),
+        // nulls are [1, 2, 1]
+        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        // row counts are [8, 8, 4]
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+    }
+    .run("nanos");
+
+    // micros
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000000, 1577841061000000, 1578704521000000])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000000, 1578704461000000, 1578790861000000])),
+        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+    }
+    .run("micros");
+
+    // millis
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461000, 1577841061000, 1578704521000])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861000, 1578704461000, 1578790861000])),
+        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+    }
+    .run("millis");
+
+    // seconds
+    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![1577840461, 1577841061, 1578704521])),
+        expected_max: Arc::new(Int64Array::from(vec![1577926861, 1578704461, 1578790861])),
+        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+    }
+    .run("seconds");
+}
+
+// date with different row group sizes
+#[tokio::test]
+async fn test_dates_32_diff_rg_sizes() {
+    let row_per_group = 13;
+
+    // This creates a parquet files of 3 columns named "date32", "date64", "names"
+    // "date32" --> Date32Array
+    // "date64" --> Date64Array
+    // "names" --> StringArray
+    //
+    // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
+    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+
+    Test {
+        reader,
+        // mins are [18262, 18565,]
+        expected_min: Arc::new(Int32Array::from(vec![18262, 18565])),
+        // maxes are [18564, 21865,]
+        expected_max: Arc::new(Int32Array::from(vec![18564, 21865])),
+        // nulls are [2, 2]
+        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        // row counts are [13, 7]
+        expected_row_counts: UInt64Array::from(vec![13, 7]),
+    }
+    .run("date32");
+}
+
+// BUG: same as above. Expect to return Int64Array (for Date64Array) but returns Int32Array
+// test date with different row group sizes
+#[tokio::test]
+async fn test_dates_64_diff_rg_sizes() {
+    let row_per_group = 13;
+    // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
+    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![18262, 18565])), // panic here because the actual data is Int32Array
+        expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
+        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        expected_row_counts: UInt64Array::from(vec![13, 7]),
+    }
+    .run("date64");
+}
+
+// TODO:
+// Other data types to tests
+    // Int32Range,
+    // UInt,
+    // UInt32Range,
+    // Float64,
+    // Decimal,
+    // DecimalBloomFilterInt32,
+    // DecimalBloomFilterInt64,
+    // DecimalLargePrecision,
+    // DecimalLargePrecisionBloomFilter,
+    // ByteArray,
+    // PeriodsInColumnNames,
+    // WithNullValuesPageLevel,
+    // WITHOUT Stats
+
+
+/////// NEGATIVE TESTS ///////
+// column not found
+#[tokio::test]
+async fn test_column_not_found() {
+    let row_per_group = 5;
+    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![18262, 18565])),
+        expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
+        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        expected_row_counts: UInt64Array::from(vec![13, 7]),
+    }
+    .run_col_not_found("not_a_column");
 }
