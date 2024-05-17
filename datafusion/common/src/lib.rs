@@ -35,7 +35,6 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod instant;
-pub mod memory_pool;
 pub mod parsers;
 pub mod rounding;
 pub mod scalar;
