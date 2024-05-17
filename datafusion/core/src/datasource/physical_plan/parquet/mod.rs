@@ -63,15 +63,14 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 use tokio::task::JoinSet;
 
-pub mod arrow_statistics;
 mod metrics;
 mod page_filter;
 mod row_filter;
 mod row_groups;
 mod statistics;
 
-// pub use arrow_statistics::ParquetColumnStatistics;
 pub use metrics::ParquetFileMetrics;
+pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
