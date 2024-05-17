@@ -400,10 +400,14 @@ impl Unparser<'_> {
                 }
 
                 Ok(if ids.len() == 1 {
-                    ast::Expr::Identifier(self.new_ident(ids[0].to_string()))
+                    ast::Expr::Identifier(
+                        self.new_ident_without_quote_style(ids[0].to_string()),
+                    )
                 } else {
                     ast::Expr::CompoundIdentifier(
-                        ids.iter().map(|i| self.new_ident(i.to_string())).collect(),
+                        ids.iter()
+                            .map(|i| self.new_ident_without_quote_style(i.to_string()))
+                            .collect(),
                     )
                 })
             }
@@ -504,6 +508,13 @@ impl Unparser<'_> {
         ast::Ident {
             value: str,
             quote_style: self.dialect.identifier_quote_style(),
+        }
+    }
+
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
+        ast::Ident {
+            value: str,
+            quote_style: None,
         }
     }
 
@@ -1171,14 +1182,14 @@ mod tests {
             ),
             (
                 Expr::ScalarVariable(Int8, vec![String::from("@a")]),
-                r#""@a""#,
+                r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
                     Int8,
                     vec![String::from("@root"), String::from("foo")],
                 ),
-                r#""@root"."foo""#,
+                r#"@root.foo"#,
             ),
             (col("x").eq(placeholder("$1")), r#"("x" = $1)"#),
             (
