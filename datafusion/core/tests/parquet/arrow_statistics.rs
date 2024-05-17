@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use arrow_array::{make_array, Array, ArrayRef, Int64Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::parquet::arrow_statistics::{
-    self, parquet_stats_to_arrow,
+use datafusion::datasource::physical_plan::parquet::{
+    RequestedStatistics, StatisticsConverter,
 };
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
@@ -99,46 +99,90 @@ pub fn parquet_file(
     ArrowReaderBuilder::try_new(file).unwrap()
 }
 
+struct Test {
+    reader: ParquetRecordBatchReaderBuilder<File>,
+    expected_min: ArrayRef,
+    expected_max: ArrayRef,
+    expected_null_counts: UInt64Array,
+    expected_row_counts: UInt64Array,
+}
+
+impl Test {
+    fn run(self) {
+        let Self {
+            reader,
+            expected_min,
+            expected_max,
+            expected_null_counts,
+            expected_row_counts,
+        } = self;
+
+        let min = StatisticsConverter::try_new(
+            "i64",
+            RequestedStatistics::Min,
+            reader.schema(),
+        )
+        .unwrap()
+        .extract(reader.metadata())
+        .unwrap();
+        assert_eq!(&min, &expected_min, "Mismatch with expected minimums");
+
+        let max = StatisticsConverter::try_new(
+            "i64",
+            RequestedStatistics::Max,
+            reader.schema(),
+        )
+        .unwrap()
+        .extract(reader.metadata())
+        .unwrap();
+        assert_eq!(&max, &expected_max, "Mismatch with expected maximum");
+
+        let null_counts = StatisticsConverter::try_new(
+            "i64",
+            RequestedStatistics::NullCount,
+            reader.schema(),
+        )
+        .unwrap()
+        .extract(reader.metadata())
+        .unwrap();
+        let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
+        assert_eq!(
+            &null_counts, &expected_null_counts,
+            "Mismatch with expected null counts"
+        );
+
+        let row_counts = StatisticsConverter::row_counts(reader.metadata()).unwrap();
+        assert_eq!(
+            row_counts, expected_row_counts,
+            "Mismatch with expected row counts"
+        );
+    }
+}
+
 // TESTS
+//
+// Remaining cases
+// - Create parquet files / metadata with missing statistic values
+// - Create parquet files / metadata with different data types
+// - Create parquet files / metadata with different row group sizes
+// - Using truncated statistics  ("exact min value" and "exact max value" https://docs.rs/parquet/latest/parquet/file/statistics/enum.Statistics.html#method.max_is_exact)
 
 #[tokio::test]
 async fn test_one_row_group_without_null() {
     let row_per_group = 20;
     let reader = parquet_file(0, 4, 7, row_per_group);
-
-    let statistics =
-        arrow_statistics::ParquetColumnStatistics::from_parquet_statistics(&reader)
-            .expect("getting statistics");
-
-    // only 1 column
-    assert_eq!(statistics.len(), 1, "expected 1 column");
-
-    let arrow_stats = parquet_stats_to_arrow(&DataType::Int64, &statistics[0]).unwrap();
-    println!("Arrow statistics:\n {arrow_stats:#?}");
-
-    // only one row group
-    let min = arrow_stats.min();
-    assert_eq!(arrow_stats.min().len(), 1, "expected 1 row group");
-
-    // min is 4
-    let expect = Int64Array::from(vec![4]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(min, &expect);
-
-    // max is 6
-    let expect = Int64Array::from(vec![6]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.max(), &expect);
-
-    // no nulls
-    let expect = UInt64Array::from(vec![0]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.null_count(), &expect);
-
-    // 3 rows
-    let expect = UInt64Array::from(vec![3]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.row_count(), &expect);
+    Test {
+        reader,
+        // min is 4
+        expected_min: Arc::new(Int64Array::from(vec![4])),
+        // max is 6
+        expected_max: Arc::new(Int64Array::from(vec![6])),
+        // no nulls
+        expected_null_counts: UInt64Array::from(vec![0]),
+        // 3 rows
+        expected_row_counts: UInt64Array::from(vec![3]),
+    }
+    .run()
 }
 
 #[tokio::test]
@@ -146,39 +190,18 @@ async fn test_one_row_group_with_null_and_negative() {
     let row_per_group = 20;
     let reader = parquet_file(2, -1, 5, row_per_group);
 
-    let statistics =
-        arrow_statistics::ParquetColumnStatistics::from_parquet_statistics(&reader)
-            .expect("getting statistics");
-
-    // only 1 column
-    assert_eq!(statistics.len(), 1, "expected 1 column");
-
-    let arrow_stats = parquet_stats_to_arrow(&DataType::Int64, &statistics[0]).unwrap();
-    println!("Arrow statistics:\n {arrow_stats:#?}");
-
-    // only one row group
-    let min = arrow_stats.min();
-    assert_eq!(arrow_stats.min().len(), 1, "expected 1 row group");
-
-    // min is -1
-    let expect = Int64Array::from(vec![-1]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(min, &expect);
-
-    // max is 4
-    let expect = Int64Array::from(vec![4]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.max(), &expect);
-
-    // 2 nulls
-    let expect = UInt64Array::from(vec![2]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.null_count(), &expect);
-
-    // 8 rows
-    let expect = UInt64Array::from(vec![8]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(arrow_stats.row_count(), &expect);
+    Test {
+        reader,
+        // min is -1
+        expected_min: Arc::new(Int64Array::from(vec![-1])),
+        // max is 4
+        expected_max: Arc::new(Int64Array::from(vec![4])),
+        // 2 nulls
+        expected_null_counts: UInt64Array::from(vec![2]),
+        // 8 rows
+        expected_row_counts: UInt64Array::from(vec![8]),
+    }
+    .run()
 }
 
 #[tokio::test]
@@ -186,42 +209,18 @@ async fn test_two_row_group_with_null() {
     let row_per_group = 10;
     let reader = parquet_file(2, 4, 17, row_per_group);
 
-    let statistics =
-        arrow_statistics::ParquetColumnStatistics::from_parquet_statistics(&reader)
-            .expect("getting statistics");
-
-    // only 1 column
-    assert_eq!(statistics.len(), 1, "expected 1 column");
-
-    let arrow_stats = parquet_stats_to_arrow(&DataType::Int64, &statistics[0]).unwrap();
-    println!("Arrow statistics:\n {arrow_stats:#?}");
-
-    // 2 row groups
-    let mins = arrow_stats.min();
-    assert_eq!(mins.len(), 2, "expected 2 row groups");
-
-    // mins are [4, 14]
-    let expect = Int64Array::from(vec![4, 14]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(mins, &expect);
-
-    // maxs are [13, 16]
-    let maxs = arrow_stats.max();
-    let expect = Int64Array::from(vec![13, 16]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(maxs, &expect);
-
-    // nuls are [0, 2]
-    let nulls = arrow_stats.null_count();
-    let expect = UInt64Array::from(vec![0, 2]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(nulls, &expect);
-
-    // row counts are [10, 5]
-    let row_counts = arrow_stats.row_count();
-    let expect = UInt64Array::from(vec![10, 5]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(row_counts, &expect);
+    Test {
+        reader,
+        // mins are [4, 14]
+        expected_min: Arc::new(Int64Array::from(vec![4, 14])),
+        // maxes are [13, 16]
+        expected_max: Arc::new(Int64Array::from(vec![13, 16])),
+        // nulls are [0, 2]
+        expected_null_counts: UInt64Array::from(vec![0, 2]),
+        // row counts are [10, 5]
+        expected_row_counts: UInt64Array::from(vec![10, 5]),
+    }
+    .run()
 }
 
 #[tokio::test]
@@ -229,42 +228,16 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
     let row_per_group = 5;
     let reader = parquet_file(4, -2, 2, row_per_group);
 
-    let statistics =
-        arrow_statistics::ParquetColumnStatistics::from_parquet_statistics(&reader)
-            .expect("getting statistics");
-
-    // only 1 column
-    assert_eq!(statistics.len(), 1, "expected 1 column");
-
-    let arrow_stats = parquet_stats_to_arrow(&DataType::Int64, &statistics[0]).unwrap();
-    println!("Arrow statistics:\n {arrow_stats:#?}");
-
-    // 2 row groups
-    let mins = arrow_stats.min();
-    assert_eq!(mins.len(), 2, "expected 2 row groups");
-
-    // mins are [-2, null]
-    assert!(mins.is_null(1));
-    // check the first value -2
-    // let expect = Int64Array::from(vec![-2]);
-    // let expect = Arc::new(expect) as ArrayRef;
-    // assert_eq!(mins, &expect);
-
-    // maxs are [1, null
-    assert!(arrow_stats.max().is_null(1));
-    // let expect = Int64Array::from(vec![1]);
-    // let expect = Arc::new(expect) as ArrayRef;
-    // assert_eq!(arrow_stats.max(), &expect);
-
-    // nuls are [1, 3]
-    let nulls = arrow_stats.null_count();
-    let expect = UInt64Array::from(vec![1, 3]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(nulls, &expect);
-
-    // row counts are [5, 3]
-    let row_counts = arrow_stats.row_count();
-    let expect = UInt64Array::from(vec![5, 3]);
-    let expect = Arc::new(expect) as ArrayRef;
-    assert_eq!(row_counts, &expect);
+    Test {
+        reader,
+        // mins are [-2, null]
+        expected_min: Arc::new(Int64Array::from(vec![Some(-2), None])),
+        // maxes are [1, null]
+        expected_max: Arc::new(Int64Array::from(vec![Some(1), None])),
+        // nulls are [1, 3]
+        expected_null_counts: UInt64Array::from(vec![1, 3]),
+        // row counts are [5, 3]
+        expected_row_counts: UInt64Array::from(vec![5, 3]),
+    }
+    .run()
 }
