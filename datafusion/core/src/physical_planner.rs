@@ -216,29 +216,27 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
-            match field {
-                GetFieldAccess::NamedStructField { name: _ } => {
-                    return internal_err!(
-                        "NamedStructField is no longer supported. Should use the get_field function instead",
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
+            GetFieldAccess::NamedStructField { name: _ } => {
+                internal_err!(
+                        "NamedStructField is no longer supported. Should use the get_field function instead"
                     )
-                }
-                GetFieldAccess::ListIndex { key: _ } => {
-                    return internal_err!(
-                        "ListIndex is no longer supported. Should use the get_field function instead",
+            }
+            GetFieldAccess::ListIndex { key: _ } => {
+                internal_err!(
+                        "ListIndex is no longer supported. Should use the get_field function instead"
                     )
-                }
-                GetFieldAccess::ListRange {
-                    start: _,
-                    stop: _,
-                    stride: _,
-                } => {
-                    return internal_err!(
-                        "ListRange is no longer supported. Should use the get_field function instead",
+            }
+            GetFieldAccess::ListRange {
+                start: _,
+                stop: _,
+                stride: _,
+            } => {
+                internal_err!(
+                        "ListRange is no longer supported. Should use the get_field function instead"
                     )
-                }
-            };
-        }
+            }
+        },
         Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
