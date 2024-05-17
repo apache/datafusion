@@ -25,8 +25,7 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 

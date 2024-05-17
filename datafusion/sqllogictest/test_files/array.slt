@@ -1963,6 +1963,18 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), co
 [1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
 [5] [, 54, 55, 56, 57, 58, 59, 60] [55]
 
+# Test issue: https://github.com/apache/datafusion/issues/10425
+# `from` may be larger than `to` and `stride` is positive
+query ????
+select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
+       array_slice(a, 3, 2, 1), array_slice(a, 3, 2) 
+  from (values ([1.0, 2.0, 3.0, 3.0]), ([4.0, 5.0, 3.0]), ([6.0])) t(a);
+----
+[] [] [] []
+[] [] [] []
+[6.0] [6.0] [] []
+
+
 # make_array with nulls
 query ???????
 select make_array(make_array('a','b'), null),

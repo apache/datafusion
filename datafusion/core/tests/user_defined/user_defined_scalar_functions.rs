@@ -15,26 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
+use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
-    cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
+    not_impl_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{assert_contains, exec_err, internal_err, DataFusionError};
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, ExprSchemable, LogicalPlanBuilder,
     ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use std::any::Any;
-use std::sync::Arc;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -775,10 +776,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn aliases(&self) -> &[String] {
         &[]
-    }
-
-    fn monotonicity(&self) -> Result<Option<datafusion_expr::FuncMonotonicity>> {
-        Ok(None)
     }
 }
 

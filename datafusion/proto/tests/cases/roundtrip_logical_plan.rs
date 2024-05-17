@@ -622,8 +622,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
-        covar_samp(lit(1.5), lit(2.2), false, None, None, None),
-        covar_pop(lit(1.5), lit(2.2), true, None, None, None),
+        covar_samp(lit(1.5), lit(2.2)),
+        covar_pop(lit(1.5), lit(2.2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1104,9 +1104,58 @@ fn round_trip_scalar_values() {
             )
             .build()
             .unwrap(),
+        ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
+                Field::new("b", DataType::Boolean, false),
+                ScalarValue::from(false),
+            )
+            .with_scalar(
+                Field::new(
+                    "c",
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Utf8),
+                    ),
+                    false,
+                ),
+                ScalarValue::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new("value".into()),
+                ),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
+        ])))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+            Field::new(
+                "c",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Binary),
+                ),
+                false,
+            ),
+            Field::new(
+                "d",
+                DataType::new_list(
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Binary),
+                    ),
+                    false,
+                ),
+                false,
+            ),
         ])))
         .unwrap(),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),

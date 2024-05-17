@@ -31,7 +31,8 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
+    DefaultSchemaAdapterFactory, FileGroupDisplay, FileSinkConfig, ParquetExec,
+    SchemaAdapterFactory,
 };
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -47,7 +48,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, FileType,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -286,10 +287,6 @@ impl FileFormat for ParquetFormat {
             order_requirements,
         )) as _)
     }
-
-    fn file_type(&self) -> FileType {
-        FileType::PARQUET
-    }
 }
 
 fn summarize_min_max(
@@ -474,7 +471,8 @@ async fn fetch_statistics(
     let mut null_counts = vec![Precision::Exact(0); num_fields];
     let mut has_statistics = false;
 
-    let schema_adapter = SchemaAdapter::new(table_schema.clone());
+    let schema_adapter =
+        DefaultSchemaAdapterFactory::default().create(table_schema.clone());
 
     let (mut max_values, mut min_values) = create_max_min_accs(&table_schema);
 
