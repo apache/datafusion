@@ -86,7 +86,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             aggregate_count += 1;
             if *distinct {
                 for e in args {
-                    fields_set.insert(e.canonical_name());
+                    fields_set.insert(e);
                 }
             } else if !matches!(fun, Sum | Min | Max) {
                 return Ok(false);
@@ -106,7 +106,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             aggregate_count += 1;
             if *distinct {
                 for e in args {
-                    fields_set.insert(e.canonical_name());
+                    fields_set.insert(e);
                 }
             } else if fun.name() != "SUM" && fun.name() != "MIN" && fun.name() != "MAX" {
                 return Ok(false);
