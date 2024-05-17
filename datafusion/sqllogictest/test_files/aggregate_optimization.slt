@@ -78,5 +78,80 @@ physical_plan
 06)----------FilterExec: a@0 > 2
 07)------------MemoryExec: partitions=1, partition_sizes=[1]
 
+# Limited Distinct Aggregate
+
+# Limit is not pushed to AggregateExec
+query TT
+explain select count(*) from t group by a limit 1;
+----
+logical_plan
+01)Projection: COUNT(*)
+02)--Limit: skip=0, fetch=1
+03)----Aggregate: groupBy=[[t.a]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+04)------TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
+02)--GlobalLimitExec: skip=0, fetch=1
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(*)]
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# filter is applied in the AggregateExec
+query TT
+explain select count(*) from t where a > 1 group by a limit 1;
+----
+logical_plan
+01)Projection: COUNT(*)
+02)--Limit: skip=0, fetch=1
+03)----Aggregate: groupBy=[[t.a]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+04)------Filter: t.a > Int32(1)
+05)--------TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
+02)--GlobalLimitExec: skip=0, fetch=1
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(*)]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------FilterExec: a@0 > 1
+11)--------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Partial / Final not combined
+
+query TT
+explain select count(1) from t group by a;
+----
+logical_plan
+01)Projection: COUNT(Int64(1))
+02)--Aggregate: groupBy=[[t.a]], aggr=[[COUNT(Int64(1))]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[COUNT(Int64(1))@1 as COUNT(Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(Int64(1))]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(Int64(1))]
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Aggregate Combined
+
+query TT
+explain select count(1), count(2) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)), COUNT(Int64(2))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[COUNT(Int64(1)), COUNT(Int64(2))]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table t;

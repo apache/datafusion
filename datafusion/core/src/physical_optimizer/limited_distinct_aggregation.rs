@@ -193,7 +193,6 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 mod tests {
 
     use super::*;
-    use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
@@ -209,8 +208,7 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow_schema::SchemaRef;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{cast, col};
+    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{expressions, PhysicalExpr, PhysicalSortExpr};
     use datafusion_physical_plan::aggregates::AggregateMode;
     use datafusion_physical_plan::displayable;
@@ -500,74 +498,6 @@ mod tests {
         let expected = [
             "LocalLimitExec: fetch=10",
             "AggregateExec: mode=Single, gby=[], aggr=[]",
-            "MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-        assert_plan_matches_expected(&plan, &expected)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_has_aggregate_expression() -> Result<()> {
-        let source = mock_data()?;
-        let schema = source.schema();
-        let agg = TestAggregate::new_count_star();
-
-        // `SELECT <aggregate with no expressions> FROM MemoryExec LIMIT 10;`, Single AggregateExec
-        let single_agg = AggregateExec::try_new(
-            AggregateMode::Single,
-            build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![None],             /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
-        )?;
-        let limit_exec = LocalLimitExec::new(
-            Arc::new(single_agg),
-            10, // fetch
-        );
-        // expected not to push the limit to the AggregateExec
-        let expected = [
-            "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
-            "MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-        assert_plan_matches_expected(&plan, &expected)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_has_filter() -> Result<()> {
-        let source = mock_data()?;
-        let schema = source.schema();
-
-        // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
-        // the `a > 1` filter is applied in the AggregateExec
-        let filter_expr = Some(expressions::binary(
-            expressions::col("a", &schema)?,
-            Operator::Gt,
-            cast(expressions::lit(1u32), &schema, DataType::Int32)?,
-            &schema,
-        )?);
-        let agg = TestAggregate::new_count_star();
-        let single_agg = AggregateExec::try_new(
-            AggregateMode::Single,
-            build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![filter_expr],      /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
-        )?;
-        let limit_exec = LocalLimitExec::new(
-            Arc::new(single_agg),
-            10, // fetch
-        );
-        // expected not to push the limit to the AggregateExec
-        // TODO(msirek): open an issue for `filter_expr` of `AggregateExec` not printing out
-        let expected = [
-            "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
             "MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
