@@ -305,16 +305,7 @@ fn build_join(
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr {
-        join_filters: vec![],
-        correlated_subquery_cols_map: Default::default(),
-        in_predicate_opt: None,
-        exists_sub_query: false,
-        can_pull_up: true,
-        need_handle_count_bug: true,
-        collected_count_expr_map: Default::default(),
-        pull_up_having_expr: None,
-    };
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
