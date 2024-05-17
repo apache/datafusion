@@ -62,13 +62,6 @@ pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::split_conjunction;
 
 // For backwards compatibility
-pub mod sort_properties {
-    pub use datafusion_physical_expr_common::sort_properties::{
-        ExprOrdering, SortProperties,
-    };
-}
-
-// For backwards compatibility
 pub mod tree_node {
     pub use datafusion_physical_expr_common::tree_node::ExprContext;
 }
