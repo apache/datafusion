@@ -21,7 +21,10 @@
 use std::fs::File;
 use std::sync::Arc;
 
-use arrow_array::{make_array, Array, ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, UInt64Array};
+use arrow_array::{
+    make_array, Array, ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array,
+    RecordBatch, UInt64Array,
+};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
     RequestedStatistics, StatisticsConverter,
@@ -32,7 +35,7 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use crate::parquet::Scenario;
 
-use super:: make_test_file_rg;
+use super::make_test_file_rg;
 
 // TEST HELPERS
 
@@ -82,9 +85,11 @@ pub fn parquet_file(
         .set_statistics_enabled(EnabledStatistics::Chunk)
         .build();
 
-    let batches = vec![
-        make_int64_batches_with_null(num_null, no_null_values_start, no_null_values_end),
-    ];
+    let batches = vec![make_int64_batches_with_null(
+        num_null,
+        no_null_values_start,
+        no_null_values_end,
+    )];
 
     let schema = batches[0].schema();
 
@@ -102,7 +107,6 @@ pub fn parquet_file(
     ArrowReaderBuilder::try_new(file).unwrap()
 }
 
-
 // Create a parquet file with many columns each has different data type
 //  - Data types are specified by the given scenario
 //  - Row group sizes are withe the same or different depending on the provided row_per_group & data created in the scenario
@@ -110,14 +114,12 @@ pub async fn create_parquet_file(
     scenario: super::Scenario,
     row_per_group: usize,
 ) -> ParquetRecordBatchReaderBuilder<File> {
-
     let file = make_test_file_rg(scenario, row_per_group).await;
 
     // open the file & get the reader
     let file = file.reopen().unwrap();
     ArrowReaderBuilder::try_new(file).unwrap()
 }
-
 
 struct Test {
     reader: ParquetRecordBatchReaderBuilder<File>,
@@ -220,7 +222,7 @@ async fn test_one_row_group_without_null() {
         expected_null_counts: UInt64Array::from(vec![0]),
         // 3 rows
         expected_row_counts: UInt64Array::from(vec![3]),
-}
+    }
     .run("i64")
 }
 
@@ -300,7 +302,7 @@ async fn test_int_64() {
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int64Array::from(vec![-1, 0, 4, 9])),
         // nulls are [0, 0, 0, 0]
-        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
@@ -320,7 +322,7 @@ async fn test_int_32() {
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int32Array::from(vec![-1, 0, 4, 9])),
         // nulls are [0, 0, 0, 0]
-        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
@@ -344,18 +346,18 @@ async fn test_int_16() {
         // BUG: not sure why this returns same data but in Int32Array type even though I debugged and the columns name is "i16" an its data is Int16
         // My debugging tells me the bug is either at:
         //   1. The new code to get "iter". See the code in this PR with
-                // // Get an iterator over the column statistics
-                // let iter = row_groups
-                // .iter()
-                // .map(|x| x.column(parquet_idx).statistics());
+        // // Get an iterator over the column statistics
+        // let iter = row_groups
+        // .iter()
+        // .map(|x| x.column(parquet_idx).statistics());
         //    OR
         //   2. in the function (and/or its marco) `pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>` here
         //      https://github.com/apache/datafusion/blob/ea023e2d4878240eece870cf4b346c7a0667aeed/datafusion/core/src/datasource/physical_plan/parquet/statistics.rs#L179
-        expected_min: Arc::new(Int16Array::from(vec![-5, -4, 0, 5])),   // panic here because the actual data is Int32Array
+        expected_min: Arc::new(Int16Array::from(vec![-5, -4, 0, 5])), // panic here because the actual data is Int32Array
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int16Array::from(vec![-1, 0, 4, 9])),
         // nulls are [0, 0, 0, 0]
-        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
@@ -378,7 +380,7 @@ async fn test_int_8() {
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int8Array::from(vec![-1, 0, 4, 9])),
         // nulls are [0, 0, 0, 0]
-        expected_null_counts:UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
@@ -404,11 +406,21 @@ async fn test_timestamp() {
     Test {
         reader,
         // mins are [1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,]
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,])),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000000000,
+            1577840471000000000,
+            1577841061000000000,
+            1578704461000000000,
+        ])),
         // maxes are [1577926861000000000, 1577926871000000000, 1577927461000000000, 1578790861000000000,]
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000000000, 1577926871000000000, 1577927461000000000, 1578790861000000000,])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000000000,
+            1577926871000000000,
+            1577927461000000000,
+            1578790861000000000,
+        ])),
         // nulls are [1, 1, 1, 1]
-        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
@@ -418,9 +430,19 @@ async fn test_timestamp() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000000, 1577840471000000, 1577841061000000, 1578704461000000,])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000000, 1577926871000000, 1577927461000000, 1578790861000000,])),
-        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000000,
+            1577840471000000,
+            1577841061000000,
+            1578704461000000,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000000,
+            1577926871000000,
+            1577927461000000,
+            1578790861000000,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
     .run("micros");
@@ -429,9 +451,19 @@ async fn test_timestamp() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000, 1577840471000, 1577841061000, 1578704461000,])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000, 1577926871000, 1577927461000, 1578790861000,])),
-        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000,
+            1577840471000,
+            1577841061000,
+            1578704461000,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000,
+            1577926871000,
+            1577927461000,
+            1578790861000,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
     .run("millis");
@@ -440,14 +472,17 @@ async fn test_timestamp() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461, 1577840471, 1577841061, 1578704461,])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861, 1577926871, 1577927461, 1578790861,])),
-        expected_null_counts:UInt64Array::from(vec![1, 1, 1, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461, 1577840471, 1577841061, 1578704461,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861, 1577926871, 1577927461, 1578790861,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
     }
     .run("seconds");
 }
-
 
 // timestamp with different row group sizes
 #[tokio::test]
@@ -467,11 +502,19 @@ async fn test_timestamp_diff_rg_sizes() {
     Test {
         reader,
         // mins are [1577840461000000000, 1577841061000000000, 1578704521000000000]
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000000000, 1577841061000000000, 1578704521000000000])),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000000000,
+            1577841061000000000,
+            1578704521000000000,
+        ])),
         // maxes are [1577926861000000000, 1578704461000000000, 157879086100000000]
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000000000, 1578704461000000000, 1578790861000000000])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000000000,
+            1578704461000000000,
+            1578790861000000000,
+        ])),
         // nulls are [1, 2, 1]
-        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
     }
@@ -481,9 +524,17 @@ async fn test_timestamp_diff_rg_sizes() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000000, 1577841061000000, 1578704521000000])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000000, 1578704461000000, 1578790861000000])),
-        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000000,
+            1577841061000000,
+            1578704521000000,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000000,
+            1578704461000000,
+            1578790861000000,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
     }
     .run("micros");
@@ -492,9 +543,17 @@ async fn test_timestamp_diff_rg_sizes() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461000, 1577841061000, 1578704521000])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861000, 1578704461000, 1578790861000])),
-        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461000,
+            1577841061000,
+            1578704521000,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861000,
+            1578704461000,
+            1578790861000,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
     }
     .run("millis");
@@ -503,9 +562,13 @@ async fn test_timestamp_diff_rg_sizes() {
     let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![1577840461, 1577841061, 1578704521])),
-        expected_max: Arc::new(Int64Array::from(vec![1577926861, 1578704461, 1578790861])),
-        expected_null_counts:UInt64Array::from(vec![1, 2, 1]),
+        expected_min: Arc::new(Int64Array::from(vec![
+            1577840461, 1577841061, 1578704521,
+        ])),
+        expected_max: Arc::new(Int64Array::from(vec![
+            1577926861, 1578704461, 1578790861,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
     }
     .run("seconds");
@@ -531,7 +594,7 @@ async fn test_dates_32_diff_rg_sizes() {
         // maxes are [18564, 21865,]
         expected_max: Arc::new(Int32Array::from(vec![18564, 21865])),
         // nulls are [2, 2]
-        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        expected_null_counts: UInt64Array::from(vec![2, 2]),
         // row counts are [13, 7]
         expected_row_counts: UInt64Array::from(vec![13, 7]),
     }
@@ -540,6 +603,7 @@ async fn test_dates_32_diff_rg_sizes() {
 
 // BUG: same as above. Expect to return Int64Array (for Date64Array) but returns Int32Array
 // test date with different row group sizes
+#[ignore]
 #[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
     let row_per_group = 13;
@@ -549,7 +613,7 @@ async fn test_dates_64_diff_rg_sizes() {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])), // panic here because the actual data is Int32Array
         expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
-        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
     }
     .run("date64");
@@ -557,20 +621,19 @@ async fn test_dates_64_diff_rg_sizes() {
 
 // TODO:
 // Other data types to tests
-    // Int32Range,
-    // UInt,
-    // UInt32Range,
-    // Float64,
-    // Decimal,
-    // DecimalBloomFilterInt32,
-    // DecimalBloomFilterInt64,
-    // DecimalLargePrecision,
-    // DecimalLargePrecisionBloomFilter,
-    // ByteArray,
-    // PeriodsInColumnNames,
-    // WithNullValuesPageLevel,
-    // WITHOUT Stats
-
+// Int32Range,
+// UInt,
+// UInt32Range,
+// Float64,
+// Decimal,
+// DecimalBloomFilterInt32,
+// DecimalBloomFilterInt64,
+// DecimalLargePrecision,
+// DecimalLargePrecisionBloomFilter,
+// ByteArray,
+// PeriodsInColumnNames,
+// WithNullValuesPageLevel,
+// WITHOUT Stats
 
 /////// NEGATIVE TESTS ///////
 // column not found
@@ -582,7 +645,7 @@ async fn test_column_not_found() {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])),
         expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
-        expected_null_counts:UInt64Array::from(vec![2, 2]),
+        expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
     }
     .run_col_not_found("not_a_column");

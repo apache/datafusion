@@ -71,8 +71,8 @@ mod schema_adapter;
 mod statistics;
 
 pub use metrics::ParquetFileMetrics;
-pub use statistics::{RequestedStatistics, StatisticsConverter};
 pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
+pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
