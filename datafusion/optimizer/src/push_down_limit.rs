@@ -127,7 +127,9 @@ impl OptimizerRule for PushDownLimit {
             }
 
             LogicalPlan::Join(join) => Ok(push_down_join(join, fetch + skip)
-                .update_data(|join| make_limit(skip, fetch, LogicalPlan::Join(join)))),
+                .update_data(|join| {
+                    make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
+                })),
 
             LogicalPlan::Sort(mut sort) => {
                 let new_fetch = {
@@ -181,11 +183,11 @@ impl OptimizerRule for PushDownLimit {
 /// Limit: skip=skip, fetch=fetch
 ///  input
 /// ```
-fn make_limit(skip: usize, fetch: usize, input: LogicalPlan) -> LogicalPlan {
+fn make_limit(skip: usize, fetch: usize, input: Arc<LogicalPlan>) -> LogicalPlan {
     LogicalPlan::Limit(Limit {
         skip,
         fetch: Some(fetch),
-        input: Arc::new(input),
+        input,
     })
 }
 
@@ -195,11 +197,7 @@ fn make_arc_limit(
     fetch: usize,
     input: Arc<LogicalPlan>,
 ) -> Arc<LogicalPlan> {
-    Arc::new(LogicalPlan::Limit(Limit {
-        skip,
-        fetch: Some(fetch),
-        input,
-    }))
+    Arc::new(make_limit(skip, fetch, input))
 }
 
 /// Returns the original limit (non transformed)
