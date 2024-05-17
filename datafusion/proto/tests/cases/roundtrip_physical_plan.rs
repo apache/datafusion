@@ -624,7 +624,6 @@ fn roundtrip_scalar_udf() -> Result<()> {
         fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
-        None,
     );
 
     let project =
@@ -752,7 +751,6 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         Arc::new(udf.clone()),
         vec![col("text", &schema)?],
         DataType::Int64,
-        None,
     ));
 
     let filter = Arc::new(FilterExec::try_new(

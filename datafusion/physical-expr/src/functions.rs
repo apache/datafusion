@@ -33,13 +33,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow_array::Array;
+use arrow::array::{Array, ArrayRef};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 pub use crate::scalar_function::create_physical_expr;
-use datafusion_common::{Result, ScalarValue};
-pub use datafusion_expr::FuncMonotonicity;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
