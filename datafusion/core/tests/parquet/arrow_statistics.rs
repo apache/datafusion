@@ -103,6 +103,7 @@ struct Test {
     reader: ParquetRecordBatchReaderBuilder<File>,
     expected_min: ArrayRef,
     expected_max: ArrayRef,
+    expected_null_counts: UInt64Array,
     expected_row_counts: UInt64Array,
 }
 
@@ -112,6 +113,7 @@ impl Test {
             reader,
             expected_min,
             expected_max,
+            expected_null_counts,
             expected_row_counts,
         } = self;
 
@@ -135,6 +137,20 @@ impl Test {
         .unwrap();
         assert_eq!(&max, &expected_max, "Mismatch with expected maximum");
 
+        let null_counts = StatisticsConverter::try_new(
+            "i64",
+            RequestedStatistics::NullCount,
+            reader.schema(),
+        )
+        .unwrap()
+        .extract(reader.metadata())
+        .unwrap();
+        let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
+        assert_eq!(
+            &null_counts, &expected_null_counts,
+            "Mismatch with expected null counts"
+        );
+
         let row_counts = StatisticsConverter::row_counts(reader.metadata()).unwrap();
         assert_eq!(
             row_counts, expected_row_counts,
@@ -144,6 +160,12 @@ impl Test {
 }
 
 // TESTS
+//
+// Remaining cases
+// - Create parquet files / metadata with missing statistic values
+// - Create parquet files / metadata with different data types
+// - Create parquet files / metadata with different row group sizes
+// - Using truncated statistics  ("exact min value" and "exact max value" https://docs.rs/parquet/latest/parquet/file/statistics/enum.Statistics.html#method.max_is_exact)
 
 #[tokio::test]
 async fn test_one_row_group_without_null() {
@@ -155,15 +177,12 @@ async fn test_one_row_group_without_null() {
         expected_min: Arc::new(Int64Array::from(vec![4])),
         // max is 6
         expected_max: Arc::new(Int64Array::from(vec![6])),
+        // no nulls
+        expected_null_counts: UInt64Array::from(vec![0]),
         // 3 rows
         expected_row_counts: UInt64Array::from(vec![3]),
     }
     .run()
-
-    // no nulls (TBD I don't think the row group metadata has null count)
-    //let expect = UInt64Array::from(vec![0]);
-    //let expect = Arc::new(expect) as ArrayRef;
-    //assert_eq!(arrow_stats.null_count(), &expect);
 }
 /*
 

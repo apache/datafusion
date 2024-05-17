@@ -28,6 +28,7 @@ use datafusion_common::{
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
+use std::sync::Arc;
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
@@ -220,6 +221,8 @@ pub enum RequestedStatistics {
     Min,
     /// Maximum Value
     Max,
+    /// Null Count, returned as a [`UInt64Array`])
+    NullCount,
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -349,6 +352,10 @@ impl<'a> StatisticsConverter<'a> {
         match self.statistics_type {
             RequestedStatistics::Min => min_statistics(data_type, iter),
             RequestedStatistics::Max => max_statistics(data_type, iter),
+            RequestedStatistics::NullCount => {
+                let null_counts = iter.map(|stats| stats.map(|s| s.null_count()));
+                Ok(Arc::new(UInt64Array::from_iter(null_counts)))
+            }
         }
     }
 }
