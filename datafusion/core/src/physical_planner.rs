@@ -220,12 +220,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             match field {
                 GetFieldAccess::NamedStructField { name: _ } => {
                     unreachable!(
-                        "NamedStructField should have been rewritten in OperatorToFunction"
+                        "NamedStructField should have been rewritten in ArrayFunctionRewriter"
                     )
                 }
                 GetFieldAccess::ListIndex { key: _ } => {
                     unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
+                        "ListIndex should have been rewritten in ArrayFunctionRewriter"
                     )
                 }
                 GetFieldAccess::ListRange {
@@ -234,7 +234,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     stride: _,
                 } => {
                     unreachable!(
-                        "ListRange should have been rewritten in OperatorToFunction"
+                        "ListRange should have been rewritten in ArrayFunctionRewriter"
                     )
                 }
             };
