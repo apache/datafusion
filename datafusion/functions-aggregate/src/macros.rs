@@ -48,24 +48,40 @@ macro_rules! make_udaf_expr_and_func {
                 None,
             ))
         }
+
+        create_builder!(
+            $EXPR_FN,
+            $($arg)*,
+            $DOC,
+            $AGGREGATE_UDF_FN
+        );
+
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $distinct:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $order_by: ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(
             $($arg: datafusion_expr::Expr,)*
-            distinct: bool,
+            order_by: Option<Vec<datafusion_expr::Expr>>,
         ) -> datafusion_expr::Expr {
             datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 $AGGREGATE_UDF_FN(),
                 vec![$($arg),*],
-                distinct,
+                false,
                 None,
+                order_by,
                 None,
-                None
             ))
         }
+
+        create_builder!(
+            $EXPR_FN,
+            $($arg)*,
+            $DOC,
+            $AGGREGATE_UDF_FN
+        );
+
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
     ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
@@ -73,21 +89,54 @@ macro_rules! make_udaf_expr_and_func {
         #[doc = $DOC]
         pub fn $EXPR_FN(
             args: Vec<datafusion_expr::Expr>,
-            distinct: bool,
-            filter: Option<Box<datafusion_expr::Expr>>,
-            order_by: Option<Vec<datafusion_expr::Expr>>,
-            null_treatment: Option<sqlparser::ast::NullTreatment>
         ) -> datafusion_expr::Expr {
             datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 $AGGREGATE_UDF_FN(),
                 args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                false,
+                None,
+                None,
+                None,
             ))
         }
+
+        create_builder!(
+            $EXPR_FN,
+            $DOC,
+            $AGGREGATE_UDF_FN
+        );
+
         create_func!($UDAF, $AGGREGATE_UDF_FN);
+    };
+}
+
+macro_rules! create_builder {
+    ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+        concat_idents::concat_idents!(builder_fn_name = $EXPR_FN, _builder {
+            #[doc = $DOC]
+            pub fn builder_fn_name(
+                $($arg: datafusion_expr::Expr,)*
+            ) -> crate::expr_builder::ExprBuilder {
+                crate::expr_builder::ExprBuilder::new(
+                    $AGGREGATE_UDF_FN(),
+                    vec![$($arg),*],
+                )
+            }
+        });
+    };
+
+    ($EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+        concat_idents::concat_idents!(builder_fn_name = $EXPR_FN, _builder {
+            #[doc = $DOC]
+            pub fn builder_fn_name(
+                args: Vec<datafusion_expr::Expr>,
+            ) -> crate::expr_builder::ExprBuilder {
+                crate::expr_builder::ExprBuilder::new(
+                    $AGGREGATE_UDF_FN(),
+                    args,
+                )
+            }
+        });
     };
 }
 

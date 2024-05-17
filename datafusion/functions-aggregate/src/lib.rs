@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod covariance;
+pub mod expr_builder;
 pub mod first_last;
 
 use datafusion_common::Result;
@@ -66,8 +67,13 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+
+    pub use super::covariance::covar_pop_builder;
+    pub use super::covariance::covar_samp_builder;
+    pub use super::first_last::first_value_builder;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
