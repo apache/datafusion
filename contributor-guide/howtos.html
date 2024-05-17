@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Communication &#8212; Apache DataFusion  documentation</title>
+    <title>HOWTOs &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Getting Started" href="getting_started.html" />
-    <link rel="prev" title="Introduction" href="index.html" />
+    <link rel="next" title="Roadmap" href="roadmap.html" />
+    <link rel="prev" title="Testing" href="testing.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -350,8 +350,8 @@
    Introduction
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="communication.html">
    Communication
   </a>
  </li>
@@ -370,8 +370,8 @@
    Testing
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="howtos.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    HOWTOs
   </a>
  </li>
@@ -464,18 +464,40 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#github">
-   GitHub
+  <a class="reference internal nav-link" href="#how-to-add-a-new-scalar-function">
+   How to add a new scalar function
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#slack-and-discord">
-   Slack and Discord
+  <a class="reference internal nav-link" href="#how-to-add-a-new-aggregate-function">
+   How to add a new aggregate function
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#mailing-lists">
-   Mailing Lists
+  <a class="reference internal nav-link" href="#how-to-display-plans-graphically">
+   How to display plans graphically
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-to-format-md-document">
+   How to format
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     .md
+    </span>
+   </code>
+   document
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-to-format-toml-files">
+   How to format
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     .toml
+    </span>
+   </code>
+   files
   </a>
  </li>
 </ul>
@@ -487,7 +509,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/communication.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/howtos.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -524,49 +546,119 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="communication">
-<h1>Communication<a class="headerlink" href="#communication" title="Link to this heading">¶</a></h1>
-<p>We welcome participation from everyone and encourage you to join us, ask
-questions, and get involved.</p>
-<p>All participation in the Apache DataFusion project is governed by the
-Apache Software Foundation’s <a class="reference external" href="https://www.apache.org/foundation/policies/conduct.html">code of
-conduct</a>.</p>
-<section id="github">
-<h2>GitHub<a class="headerlink" href="#github" title="Link to this heading">¶</a></h2>
-<p>The vast majority of communication occurs in the open on our
-<a class="reference external" href="https://github.com/apache/datafusion">github repository</a> in the form of tickets, issues, discussions, and Pull Requests.</p>
-</section>
-<section id="slack-and-discord">
-<h2>Slack and Discord<a class="headerlink" href="#slack-and-discord" title="Link to this heading">¶</a></h2>
-<p>We use the Slack and Discord platforms for informal discussions and coordination. These are great places to
-meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
-decisions are made fully in the open, on GitHub.</p>
-<p>Most of us use the <code class="docutils literal notranslate"><span class="pre">#datafusion</span></code> and <code class="docutils literal notranslate"><span class="pre">#arrow-rust</span></code> channels in the <a class="reference external" href="https://s.apache.org/slack-invite">ASF Slack
-workspace</a> and the <a class="reference external" href="https://discord.gg/Qw5gKqHxUM">Arrow Rust Discord
-server</a> for discussions.</p>
-<p>Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
-to join. We are happy to invite you – please ask for an invitation in the
-Discord server.</p>
-</section>
-<section id="mailing-lists">
-<h2>Mailing Lists<a class="headerlink" href="#mailing-lists" title="Link to this heading">¶</a></h2>
-<p>Like other Apache projects, we use <a class="reference external" href="https://www.apache.org/foundation/mailinglists">mailing lists</a> for certain purposes, most
-importantly release coordination. Other than the release process, most
-DataFusion mailing list traffic will simply link to a GitHub issue or PR where
-the actual discussion occurs. The project mailing lists are:</p>
+<section id="howtos">
+<h1>HOWTOs<a class="headerlink" href="#howtos" title="Link to this heading">¶</a></h1>
+<section id="how-to-add-a-new-scalar-function">
+<h2>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Link to this heading">¶</a></h2>
+<p>Below is a checklist of what you need to do to add a new scalar function to DataFusion:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org"><code class="docutils literal notranslate"><span class="pre">dev&#64;datafusion.apache.org</span></code></a>: the main
-mailing list for release coordination and other project-wide discussions. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;datafusion.apache.org">archives</a>,
-<a class="reference external" href="mailto:dev-subscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">subscribe</a>,
-<a class="reference external" href="mailto:dev-unsubscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">unsubscribe</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">github&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub notifications for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?github&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">commits&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub commits for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?commits&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>: private mailing list for PMC members. This list has very little traffic, almost exclusively discussions on growing the committer and PMC membership. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?private&#64;datafusion.apache.org">archives</a></p></li>
+<li><p>Add the actual implementation of the function to a new module file within:</p>
+<ul>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions-array">here</a> for array functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto">here</a> for crypto functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime">here</a> for datetime functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding">here</a> for encoding functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/math">here</a> for math functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/regex">here</a> for regex functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/string">here</a> for string functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/unicode">here</a> for unicode functions</p></li>
+<li><p>create a new module <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/src/">here</a> for other functions.</p></li>
 </ul>
+</li>
+<li><p>New function modules - for example a <code class="docutils literal notranslate"><span class="pre">vector</span></code> module, should use a <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/features.html">rust feature</a> (for example <code class="docutils literal notranslate"><span class="pre">vector_expressions</span></code>) to allow DataFusion
+users to enable or disable the new module as desired.</p></li>
+<li><p>The implementation of the function is done via implementing <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait for the function struct.</p>
+<ul>
+<li><p>See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs">advanced_udf.rs</a> example for an example implementation</p></li>
+<li><p>Add tests for the new function</p></li>
+</ul>
+</li>
+<li><p>To connect the implementation of the function add to the mod.rs file:</p>
+<ul>
+<li><p>a <code class="docutils literal notranslate"><span class="pre">mod</span> <span class="pre">xyz;</span></code> where xyz is the new module file</p></li>
+<li><p>a call to <code class="docutils literal notranslate"><span class="pre">make_udf_function!(..);</span></code></p></li>
+<li><p>an item in <code class="docutils literal notranslate"><span class="pre">export_functions!(..);</span></code></p></li>
+</ul>
+</li>
+<li><p>In <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
+<ul>
+<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
+</ul>
+</li>
+<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md">here</a></p></li>
+</ul>
+</section>
+<section id="how-to-add-a-new-aggregate-function">
+<h2>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Link to this heading">¶</a></h2>
+<p>Below is a checklist of what you need to do to add a new aggregate function to DataFusion:</p>
+<ul class="simple">
+<li><p>Add the actual implementation of an <code class="docutils literal notranslate"><span class="pre">Accumulator</span></code> and <code class="docutils literal notranslate"><span class="pre">AggregateExpr</span></code>:</p></li>
+<li><p>In <a class="reference download internal" download="" href="../_downloads/f9718f9b04809de030b1693c73858f19/aggregate_function.rs"><span class="xref download myst">datafusion/expr/src</span></a>, add:</p>
+<ul>
+<li><p>a new variant to <code class="docutils literal notranslate"><span class="pre">AggregateFunction</span></code></p></li>
+<li><p>a new entry to <code class="docutils literal notranslate"><span class="pre">FromStr</span></code> with the name of the function as called by SQL</p></li>
+<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">return_type</span></code> with the expected return type of the function, given an incoming type</p></li>
+<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">signature</span></code> with the signature of the function (number and types of its arguments)</p></li>
+<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">create_aggregate_expr</span></code> mapping the built-in to the implementation</p></li>
+<li><p>tests to the function.</p></li>
+</ul>
+</li>
+<li><p>In <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
+<ul>
+<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
+</ul>
+</li>
+<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md">here</a></p></li>
+</ul>
+</section>
+<section id="how-to-display-plans-graphically">
+<h2>How to display plans graphically<a class="headerlink" href="#how-to-display-plans-graphically" title="Link to this heading">¶</a></h2>
+<p>The query plans represented by <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> nodes can be graphically
+rendered using <a class="reference external" href="https://www.graphviz.org/">Graphviz</a>.</p>
+<p>To do so, save the output of the <code class="docutils literal notranslate"><span class="pre">display_graphviz</span></code> function to a file.:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Create plan somehow...</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">File</span><span class="p">::</span><span class="n">create</span><span class="p">(</span><span class="s">&quot;/tmp/plan.dot&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="fm">write!</span><span class="p">(</span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">display_graphviz</span><span class="p">());</span>
+</pre></div>
+</div>
+<p>Then, use the <code class="docutils literal notranslate"><span class="pre">dot</span></code> command line tool to render it into a file that
+can be displayed. For example, the following command creates a
+<code class="docutils literal notranslate"><span class="pre">/tmp/plan.pdf</span></code> file:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dot<span class="w"> </span>-Tpdf<span class="w"> </span>&lt;<span class="w"> </span>/tmp/plan.dot<span class="w"> </span>&gt;<span class="w"> </span>/tmp/plan.pdf
+</pre></div>
+</div>
+</section>
+<section id="how-to-format-md-document">
+<h2>How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document<a class="headerlink" href="#how-to-format-md-document" title="Link to this heading">¶</a></h2>
+<p>We are using <code class="docutils literal notranslate"><span class="pre">prettier</span></code> to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> files.</p>
+<p>You can either use <code class="docutils literal notranslate"><span class="pre">npm</span> <span class="pre">i</span> <span class="pre">-g</span> <span class="pre">prettier</span></code> to install it globally or use <code class="docutils literal notranslate"><span class="pre">npx</span></code> to run it as a standalone binary. Using <code class="docutils literal notranslate"><span class="pre">npx</span></code> required a working node environment. Upgrading to the latest prettier is recommended (by adding <code class="docutils literal notranslate"><span class="pre">--upgrade</span></code> to the <code class="docutils literal notranslate"><span class="pre">npm</span></code> command).</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>prettier<span class="w"> </span>--version
+<span class="m">2</span>.3.0
+</pre></div>
+</div>
+<p>After you’ve confirmed your prettier version, you can format all the <code class="docutils literal notranslate"><span class="pre">.md</span></code> files:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>prettier<span class="w"> </span>-w<span class="w"> </span><span class="o">{</span>datafusion,datafusion-cli,datafusion-examples,dev,docs<span class="o">}</span>/**/*.md
+</pre></div>
+</div>
+</section>
+<section id="how-to-format-toml-files">
+<h2>How to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files<a class="headerlink" href="#how-to-format-toml-files" title="Link to this heading">¶</a></h2>
+<p>We use <code class="docutils literal notranslate"><span class="pre">taplo</span></code> to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files.</p>
+<p>For Rust developers, you can install it via:</p>
+<div class="highlight-sh notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>taplo-cli<span class="w"> </span>--locked
+</pre></div>
+</div>
+<blockquote>
+<div><p>Refer to the <a class="reference external" href="https://taplo.tamasfe.dev/cli/installation/binary.html">Installation section</a> on other ways to install it.</p>
+</div></blockquote>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>taplo<span class="w"> </span>--version
+taplo<span class="w"> </span><span class="m">0</span>.9.0
+</pre></div>
+</div>
+<p>After you’ve confirmed your <code class="docutils literal notranslate"><span class="pre">taplo</span></code> version, you can format all the <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>taplo<span class="w"> </span>fmt
+</pre></div>
+</div>
 </section>
 </section>
 
@@ -576,17 +668,17 @@ mailing list for release coordination and other project-wide discussions. Links:
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="testing.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Introduction</p>
+            <p class="prev-next-title">Testing</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="getting_started.html" title="next page">
+    <a class='right-next' id="next-link" href="roadmap.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Getting Started</p>
+        <p class="prev-next-title">Roadmap</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

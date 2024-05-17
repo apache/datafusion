@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Communication &#8212; Apache DataFusion  documentation</title>
+    <title>Testing &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Getting Started" href="getting_started.html" />
-    <link rel="prev" title="Introduction" href="index.html" />
+    <link rel="next" title="HOWTOs" href="howtos.html" />
+    <link rel="prev" title="Architecture" href="architecture.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -350,8 +350,8 @@
    Introduction
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="communication.html">
    Communication
   </a>
  </li>
@@ -365,8 +365,8 @@
    Architecture
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="testing.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Testing
   </a>
  </li>
@@ -464,19 +464,48 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#github">
-   GitHub
+  <a class="reference internal nav-link" href="#unit-tests">
+   Unit tests
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#slack-and-discord">
-   Slack and Discord
+  <a class="reference internal nav-link" href="#sqllogictests-tests">
+   sqllogictests Tests
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rust-integration-tests">
+     Rust Integration Tests
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#mailing-lists">
-   Mailing Lists
+  <a class="reference internal nav-link" href="#benchmarks">
+   Benchmarks
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#criterion-benchmarks">
+     Criterion Benchmarks
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#parquet-sql-benchmarks">
+     Parquet SQL Benchmarks
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#comparing-baselines">
+     Comparing Baselines
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#upstream-benchmark-suites">
+     Upstream Benchmark Suites
+    </a>
+   </li>
+  </ul>
  </li>
 </ul>
 
@@ -487,7 +516,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/communication.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/testing.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -524,49 +553,74 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="communication">
-<h1>Communication<a class="headerlink" href="#communication" title="Link to this heading">¶</a></h1>
-<p>We welcome participation from everyone and encourage you to join us, ask
-questions, and get involved.</p>
-<p>All participation in the Apache DataFusion project is governed by the
-Apache Software Foundation’s <a class="reference external" href="https://www.apache.org/foundation/policies/conduct.html">code of
-conduct</a>.</p>
-<section id="github">
-<h2>GitHub<a class="headerlink" href="#github" title="Link to this heading">¶</a></h2>
-<p>The vast majority of communication occurs in the open on our
-<a class="reference external" href="https://github.com/apache/datafusion">github repository</a> in the form of tickets, issues, discussions, and Pull Requests.</p>
+<section id="testing">
+<h1>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h1>
+<p>Tests are critical to ensure that DataFusion is working properly and
+is not accidentally broken during refactorings. All new features
+should have test coverage.</p>
+<p>DataFusion has several levels of tests in its <a class="reference external" href="https://martinfowler.com/articles/practical-test-pyramid.html">Test
+Pyramid</a>
+and tries to follow the Rust standard <a class="reference external" href="https://doc.rust-lang.org/book/ch11-03-test-organization.html">Testing Organization</a> in the The Book.</p>
+<section id="unit-tests">
+<h2>Unit tests<a class="headerlink" href="#unit-tests" title="Link to this heading">¶</a></h2>
+<p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.</p>
 </section>
-<section id="slack-and-discord">
-<h2>Slack and Discord<a class="headerlink" href="#slack-and-discord" title="Link to this heading">¶</a></h2>
-<p>We use the Slack and Discord platforms for informal discussions and coordination. These are great places to
-meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
-decisions are made fully in the open, on GitHub.</p>
-<p>Most of us use the <code class="docutils literal notranslate"><span class="pre">#datafusion</span></code> and <code class="docutils literal notranslate"><span class="pre">#arrow-rust</span></code> channels in the <a class="reference external" href="https://s.apache.org/slack-invite">ASF Slack
-workspace</a> and the <a class="reference external" href="https://discord.gg/Qw5gKqHxUM">Arrow Rust Discord
-server</a> for discussions.</p>
-<p>Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
-to join. We are happy to invite you – please ask for an invitation in the
-Discord server.</p>
+<section id="sqllogictests-tests">
+<h2>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Link to this heading">¶</a></h2>
+<p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest">sqllogictest</a> which are run like any other Rust test using <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> tests may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span> <span class="pre">--</span> <span class="pre">--complete</span></code>.</p>
+<p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.</p>
+<section id="rust-integration-tests">
+<h3>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">¶</a></h3>
+<p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
+<p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_exec
+</pre></div>
+</div>
 </section>
-<section id="mailing-lists">
-<h2>Mailing Lists<a class="headerlink" href="#mailing-lists" title="Link to this heading">¶</a></h2>
-<p>Like other Apache projects, we use <a class="reference external" href="https://www.apache.org/foundation/mailinglists">mailing lists</a> for certain purposes, most
-importantly release coordination. Other than the release process, most
-DataFusion mailing list traffic will simply link to a GitHub issue or PR where
-the actual discussion occurs. The project mailing lists are:</p>
-<ul class="simple">
-<li><p><a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org"><code class="docutils literal notranslate"><span class="pre">dev&#64;datafusion.apache.org</span></code></a>: the main
-mailing list for release coordination and other project-wide discussions. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;datafusion.apache.org">archives</a>,
-<a class="reference external" href="mailto:dev-subscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">subscribe</a>,
-<a class="reference external" href="mailto:dev-unsubscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">unsubscribe</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">github&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub notifications for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?github&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">commits&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub commits for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?commits&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>: private mailing list for PMC members. This list has very little traffic, almost exclusively discussions on growing the committer and PMC membership. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?private&#64;datafusion.apache.org">archives</a></p></li>
-</ul>
+</section>
+<section id="benchmarks">
+<h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">¶</a></h2>
+<section id="criterion-benchmarks">
+<h3>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Link to this heading">¶</a></h3>
+<p><a class="reference external" href="https://docs.rs/criterion/latest/criterion/index.html">Criterion</a> is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.</p>
+<p>Criterion integrates with Cargo’s built-in <a class="reference external" href="https://doc.rust-lang.org/cargo/commands/cargo-bench.html">benchmark support</a> and a given benchmark can be run with</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">BENCHMARK_NAME</span>
+</pre></div>
+</div>
+<p>A full list of benchmarks can be found <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/benches">here</a>.</p>
+<p><em><a class="reference external" href="https://github.com/bheisler/cargo-criterion">cargo-criterion</a> may also be used for more advanced reporting.</em></p>
+</section>
+<section id="parquet-sql-benchmarks">
+<h3>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Link to this heading">¶</a></h3>
+<p>The parquet SQL benchmarks can be run with</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">parquet_query_sql</span>
+</pre></div>
+</div>
+<p>These randomly generate a parquet file, and then benchmark queries sourced from <a class="reference download internal" download="" href="../_downloads/ef2c125b8dcc9e4b052e1280935df561/parquet_query_sql.sql"><span class="xref download myst">parquet_query_sql.sql</span></a> against it. This can therefore be a quick way to add coverage of particular query and/or data paths.</p>
+<p>If the environment variable <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.</p>
+<p>The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> in subsequent runs.</p>
+</section>
+<section id="comparing-baselines">
+<h3>Comparing Baselines<a class="headerlink" href="#comparing-baselines" title="Link to this heading">¶</a></h3>
+<p>By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it’s useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">git</span> <span class="n">checkout</span> <span class="n">main</span>
+ <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span> <span class="o">--</span><span class="n">save</span><span class="o">-</span><span class="n">baseline</span> <span class="n">main</span>
+ <span class="n">git</span> <span class="n">checkout</span> <span class="n">YOUR_BRANCH</span>
+ <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span>  <span class="o">--</span><span class="n">baseline</span> <span class="n">main</span>
+</pre></div>
+</div>
+<p>Note: For MacOS it may be required to run <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">bench</span></code> with <code class="docutils literal notranslate"><span class="pre">sudo</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sudo</span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">...</span>
+</pre></div>
+</div>
+<p>More information on <a class="reference external" href="https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines">Baselines</a></p>
+</section>
+<section id="upstream-benchmark-suites">
+<h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Link to this heading">¶</a></h3>
+<p>Instructions and tooling for running upstream benchmark suites against DataFusion can be found in <a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">benchmarks</a>.</p>
+<p>These are valuable for comparative evaluation against alternative Arrow implementations and query engines.</p>
+</section>
 </section>
 </section>
 
@@ -576,17 +630,17 @@ mailing list for release coordination and other project-wide discussions. Links:
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="architecture.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Introduction</p>
+            <p class="prev-next-title">Architecture</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="getting_started.html" title="next page">
+    <a class='right-next' id="next-link" href="howtos.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Getting Started</p>
+        <p class="prev-next-title">HOWTOs</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

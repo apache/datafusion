@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Communication &#8212; Apache DataFusion  documentation</title>
+    <title>Getting Started &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Getting Started" href="getting_started.html" />
-    <link rel="prev" title="Introduction" href="index.html" />
+    <link rel="next" title="Architecture" href="architecture.html" />
+    <link rel="prev" title="Communication" href="communication.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -350,13 +350,13 @@
    Introduction
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="communication.html">
    Communication
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="getting_started.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Getting Started
   </a>
  </li>
@@ -464,18 +464,18 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#github">
-   GitHub
+  <a class="reference internal nav-link" href="#windows-setup">
+   Windows setup
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#slack-and-discord">
-   Slack and Discord
+  <a class="reference internal nav-link" href="#protoc-installation">
+   Protoc Installation
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#mailing-lists">
-   Mailing Lists
+  <a class="reference internal nav-link" href="#bootstrap-environment">
+   Bootstrap environment
   </a>
  </li>
 </ul>
@@ -487,7 +487,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/communication.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/getting_started.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -524,48 +524,67 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="communication">
-<h1>Communication<a class="headerlink" href="#communication" title="Link to this heading">¶</a></h1>
-<p>We welcome participation from everyone and encourage you to join us, ask
-questions, and get involved.</p>
-<p>All participation in the Apache DataFusion project is governed by the
-Apache Software Foundation’s <a class="reference external" href="https://www.apache.org/foundation/policies/conduct.html">code of
-conduct</a>.</p>
-<section id="github">
-<h2>GitHub<a class="headerlink" href="#github" title="Link to this heading">¶</a></h2>
-<p>The vast majority of communication occurs in the open on our
-<a class="reference external" href="https://github.com/apache/datafusion">github repository</a> in the form of tickets, issues, discussions, and Pull Requests.</p>
+<section id="getting-started">
+<h1>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading">¶</a></h1>
+<p>This section describes how you can get started at developing DataFusion.</p>
+<section id="windows-setup">
+<h2>Windows setup<a class="headerlink" href="#windows-setup" title="Link to this heading">¶</a></h2>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
+choco<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span>rustup.install<span class="w"> </span>visualcpp-build-tools
+git-bash.exe
+cargo<span class="w"> </span>build
+</pre></div>
+</div>
 </section>
-<section id="slack-and-discord">
-<h2>Slack and Discord<a class="headerlink" href="#slack-and-discord" title="Link to this heading">¶</a></h2>
-<p>We use the Slack and Discord platforms for informal discussions and coordination. These are great places to
-meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
-decisions are made fully in the open, on GitHub.</p>
-<p>Most of us use the <code class="docutils literal notranslate"><span class="pre">#datafusion</span></code> and <code class="docutils literal notranslate"><span class="pre">#arrow-rust</span></code> channels in the <a class="reference external" href="https://s.apache.org/slack-invite">ASF Slack
-workspace</a> and the <a class="reference external" href="https://discord.gg/Qw5gKqHxUM">Arrow Rust Discord
-server</a> for discussions.</p>
-<p>Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
-to join. We are happy to invite you – please ask for an invitation in the
-Discord server.</p>
+<section id="protoc-installation">
+<h2>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">¶</a></h2>
+<p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
+<p>On most platforms this can be installed from your system’s package manager</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span># Ubuntu
+$ sudo apt install -y protobuf-compiler
+
+# Fedora
+$ dnf install -y protobuf-devel
+
+# Arch Linux
+$ pacman -S protobuf
+
+# macOS
+$ brew install protobuf
+</pre></div>
+</div>
+<p>You will want to verify the version installed is <code class="docutils literal notranslate"><span class="pre">3.12</span></code> or greater, which introduced support for explicit <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/v3.12.0/docs/field_presence.md">field presence</a>. Older versions may fail to compile.</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>protoc<span class="w"> </span>--version
+libprotoc<span class="w"> </span><span class="m">3</span>.12.4
+</pre></div>
+</div>
+<p>Alternatively a binary release can be downloaded from the <a class="reference external" href="https://github.com/protocolbuffers/protobuf/releases">Release Page</a> or <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/main/src/README.md">built from source</a>.</p>
 </section>
-<section id="mailing-lists">
-<h2>Mailing Lists<a class="headerlink" href="#mailing-lists" title="Link to this heading">¶</a></h2>
-<p>Like other Apache projects, we use <a class="reference external" href="https://www.apache.org/foundation/mailinglists">mailing lists</a> for certain purposes, most
-importantly release coordination. Other than the release process, most
-DataFusion mailing list traffic will simply link to a GitHub issue or PR where
-the actual discussion occurs. The project mailing lists are:</p>
+<section id="bootstrap-environment">
+<h2>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">¶</a></h2>
+<p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org"><code class="docutils literal notranslate"><span class="pre">dev&#64;datafusion.apache.org</span></code></a>: the main
-mailing list for release coordination and other project-wide discussions. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;datafusion.apache.org">archives</a>,
-<a class="reference external" href="mailto:dev-subscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">subscribe</a>,
-<a class="reference external" href="mailto:dev-unsubscribe&#37;&#52;&#48;datafusion&#46;apache&#46;org">unsubscribe</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">github&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub notifications for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?github&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">commits&#64;datafusion.apache.org</span></code>: read-only mailing list that receives all GitHub commits for the project. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?commits&#64;datafusion.apache.org">archives</a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>: private mailing list for PMC members. This list has very little traffic, almost exclusively discussions on growing the committer and PMC membership. Links:
-<a class="reference external" href="https://lists.apache.org/list.html?private&#64;datafusion.apache.org">archives</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">fmt</span></code> to format the code</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> to test</p></li>
+<li><p>etc.</p></li>
+</ul>
+<p>Note that running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--</span> <span class="pre">--test-threads=1</span></code>. For more information see <a class="reference external" href="https://github.com/apache/datafusion/issues/5347">this issue</a>.</p>
+<p>Testing setup:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion uses the latest stable release of rust</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">init</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">update</span></code></p></li>
+</ul>
+<p>Formatting instructions:</p>
+<ul class="simple">
+<li><p><a class="reference download internal" download="" href="../_downloads/4a91b8629bd17ce8ae200ee0b5345f19/rust_fmt.sh"><span class="xref download myst">ci/scripts/rust_fmt.sh</span></a></p></li>
+<li><p><a class="reference download internal" download="" href="../_downloads/ca7ec2ded721157172203812bd6e22b2/rust_clippy.sh"><span class="xref download myst">ci/scripts/rust_clippy.sh</span></a></p></li>
+<li><p><a class="reference download internal" download="" href="../_downloads/5b1657e27416274aa54d7579d8b125c3/rust_toml_fmt.sh"><span class="xref download myst">ci/scripts/rust_toml_fmt.sh</span></a></p></li>
+</ul>
+<p>or run them all at once:</p>
+<ul class="simple">
+<li><p><a class="reference download internal" download="" href="../_downloads/1e336e540124589d1e27210fa4f805f6/rust_lint.sh"><span class="xref download myst">dev/rust_lint.sh</span></a></p></li>
 </ul>
 </section>
 </section>
@@ -576,17 +595,17 @@ mailing list for release coordination and other project-wide discussions. Links:
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="communication.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Introduction</p>
+            <p class="prev-next-title">Communication</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="getting_started.html" title="next page">
+    <a class='right-next' id="next-link" href="architecture.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Getting Started</p>
+        <p class="prev-next-title">Architecture</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
