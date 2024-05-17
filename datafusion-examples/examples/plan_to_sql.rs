@@ -97,7 +97,7 @@ async fn simple_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
         .await?
         .select_columns(&["id", "int_col", "double_col", "date_string_col"])?;
 
-    let ast = plan_to_sql(&df.logical_plan())?;
+    let ast = plan_to_sql(df.logical_plan())?;
 
     let sql = format!("{}", ast);
 
@@ -124,7 +124,7 @@ async fn simple_plan_to_sql_csv_dataframe_demo() -> Result<()> {
         .await?
         .select(vec![col("c1"), min(col("c12")), max(col("c12"))])?;
 
-    let ast = plan_to_sql(&df.logical_plan())?;
+    let ast = plan_to_sql(df.logical_plan())?;
 
     let sql = format!("{}", ast);
 
@@ -163,7 +163,7 @@ async fn round_trip_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
                 .and(col("tinyint_col").lt(col("double_col"))),
         )?;
 
-    let ast = plan_to_sql(&df.logical_plan())?;
+    let ast = plan_to_sql(df.logical_plan())?;
 
     let sql = format!("{}", ast);
 
@@ -199,7 +199,7 @@ async fn round_trip_plan_to_sql_csv_dataframe_demo() -> Result<()> {
         .await?
         .filter(col("c1").gt(lit(0.1)).and(col("c1").lt(lit(0.9))))?;
 
-    let ast = plan_to_sql(&df.logical_plan())?;
+    let ast = plan_to_sql(df.logical_plan())?;
 
     let sql = format!("{}", ast);
 
