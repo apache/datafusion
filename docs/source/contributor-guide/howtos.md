@@ -28,7 +28,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto) for crypto functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime) for datetime functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for encoding functions
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for math functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/math) for math functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/regex) for regex functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/string) for string functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/unicode) for unicode functions
