@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod covariance;
+pub mod expr_builder;
 pub mod first_last;
 
 use datafusion_common::Result;
