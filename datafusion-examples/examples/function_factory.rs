@@ -25,6 +25,7 @@ use datafusion::execution::context::{
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{CreateFunction, Expr, ScalarUDF, ScalarUDFImpl, Signature};
 
 /// This example shows how to utilize [FunctionFactory] to implement simple
@@ -154,6 +155,10 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(SortProperties::Unordered)
     }
 }
 

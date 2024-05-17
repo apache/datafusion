@@ -28,6 +28,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
 use datafusion::prelude::*;
 use datafusion_common::{internal_err, ScalarValue};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature};
 
 /// This example shows how to use the full ScalarUDFImpl API to implement a user
@@ -178,6 +179,11 @@ impl ScalarUDFImpl for PowUdf {
     /// We will also add an alias of "my_pow"
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // The POW function preserves the order of its argument.
+        Ok(input[0].sort_properties)
     }
 }
 
