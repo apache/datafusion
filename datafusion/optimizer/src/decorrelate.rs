@@ -48,7 +48,9 @@ pub struct PullUpCorrelatedExpr {
     pub exists_sub_query: bool,
     /// Can the correlated expressions be pulled up. Defaults to **TRUE**
     pub can_pull_up: bool,
-    /// Do we need to handle the Count bug during the pull up process
+    /// Do we need to handle [the Count bug] during the pull up process
+    ///
+    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
     pub need_handle_count_bug: bool,
     /// mapping from the plan to its expressions' evaluation result on empty batch
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
@@ -76,7 +78,9 @@ impl PullUpCorrelatedExpr {
         }
     }
 
-    /// Set if we need to handle the Count bug during the pull up process
+    /// Set if we need to handle [the Count bug] during the pull up process
+    ///
+    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
     pub fn with_need_handle_count_bug(mut self, need_handle_count_bug: bool) -> Self {
         self.need_handle_count_bug = need_handle_count_bug;
         self
@@ -96,7 +100,9 @@ impl PullUpCorrelatedExpr {
 }
 
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
-/// This is used to handle the Count bug
+/// This is used to handle [the Count bug]
+///
+/// [the Count bug]: https://github.com/apache/datafusion/pull/10500
 pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 
 /// Mapping from expr display name to its evaluation result on empty record
