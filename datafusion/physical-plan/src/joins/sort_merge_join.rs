@@ -35,6 +35,7 @@ use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
 
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
@@ -491,6 +492,10 @@ struct StreamedBatch {
     pub output_indices: Vec<StreamedJoinedChunk>,
     /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
+    /// Indices that found a match for the given join filter
+    /// Used for semi joins to keep track the streaming index which got a join filter match
+    /// and already emitted to the output.
+    pub join_filter_matched_idxs: HashSet<u64>,
 }
 
 impl StreamedBatch {
@@ -502,6 +507,7 @@ impl StreamedBatch {
             join_arrays,
             output_indices: vec![],
             buffered_batch_idx: None,
+            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -512,6 +518,7 @@ impl StreamedBatch {
             join_arrays: vec![],
             output_indices: vec![],
             buffered_batch_idx: None,
+            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -989,11 +996,18 @@ impl SMJStream {
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::LeftSemi) {
-                    join_streamed = !self.streamed_joined;
+                if matches!(self.join_type, JoinType::LeftSemi) && self.filter.is_some() {
+                    join_streamed = !self
+                        .streamed_batch
+                        .join_filter_matched_idxs
+                        .contains(&(self.streamed_batch.idx as u64))
+                        && !self.streamed_joined;
                     // if the join filter specified there can be references to buffered columns
                     // so buffered columns are needed to access them
-                    join_buffered = self.filter.is_some();
+                    join_buffered = join_streamed;
+                }
+                if matches!(self.join_type, JoinType::LeftSemi) && self.filter.is_none() {
+                    join_streamed = !self.streamed_joined;
                 }
                 if matches!(
                     self.join_type,
@@ -1208,10 +1222,13 @@ impl SMJStream {
                     let mut mask =
                         datafusion_common::cast::as_boolean_array(&filter_result)?;
 
-                    let maybe_filtered_join_mask: Option<BooleanArray> =
+                    let maybe_filtered_join_mask: Option<(BooleanArray, Vec<u64>)> =
                         get_filtered_join_mask(self.join_type, streamed_indices, mask);
                     if let Some(ref filtered_join_mask) = maybe_filtered_join_mask {
-                        mask = filtered_join_mask;
+                        mask = &filtered_join_mask.0;
+                        self.streamed_batch
+                            .join_filter_matched_idxs
+                            .extend(&filtered_join_mask.1);
                     }
 
                     // Push the filtered batch to the output
@@ -1402,12 +1419,12 @@ fn get_buffered_columns(
 // `mask` - array booleans representing computed join filter expression eval result:
 //      true = the row index matches the join filter
 //      false = the row index doesn't match the join filter
-// `streaned_indices` have the same length as `mask`
+// `streamed_indices` have the same length as `mask`
 fn get_filtered_join_mask(
     join_type: JoinType,
     streamed_indices: UInt64Array,
     mask: &BooleanArray,
-) -> Option<BooleanArray> {
+) -> Option<(BooleanArray, Vec<u64>)> {
     // for LeftSemi Join the filter mask should be calculated in its own way:
     // if we find at least one matching row for specific streaming index
     // we don't need to check any others for the same index
@@ -1418,6 +1435,8 @@ fn get_filtered_join_mask(
         let mut corrected_mask: BooleanBuilder =
             BooleanBuilder::with_capacity(streamed_indices_length);
 
+        let mut filter_matched_indices: Vec<u64> = vec![];
+
         #[allow(clippy::needless_range_loop)]
         for i in 0..streamed_indices_length {
             // LeftSemi respects only first true values for specific streaming index,
@@ -1425,6 +1444,7 @@ fn get_filtered_join_mask(
             if mask.value(i) && !seen_as_true {
                 seen_as_true = true;
                 corrected_mask.append_value(true);
+                filter_matched_indices.push(streamed_indices.value(i));
             } else {
                 corrected_mask.append_value(false);
             }
@@ -1436,7 +1456,7 @@ fn get_filtered_join_mask(
                 seen_as_true = false;
             }
         }
-        Some(corrected_mask.finish())
+        Some((corrected_mask.finish(), filter_matched_indices))
     } else {
         None
     }
@@ -2731,7 +2751,7 @@ mod tests {
                 UInt64Array::from(vec![0, 0, 1, 1]),
                 &BooleanArray::from(vec![true, true, false, false])
             ),
-            Some(BooleanArray::from(vec![true, false, false, false]))
+            Some((BooleanArray::from(vec![true, false, false, false]), vec![0]))
         );
 
         assert_eq!(
@@ -2740,7 +2760,7 @@ mod tests {
                 UInt64Array::from(vec![0, 1]),
                 &BooleanArray::from(vec![true, true])
             ),
-            Some(BooleanArray::from(vec![true, true]))
+            Some((BooleanArray::from(vec![true, true]), vec![0, 1]))
         );
 
         assert_eq!(
@@ -2749,7 +2769,7 @@ mod tests {
                 UInt64Array::from(vec![0, 1]),
                 &BooleanArray::from(vec![false, true])
             ),
-            Some(BooleanArray::from(vec![false, true]))
+            Some((BooleanArray::from(vec![false, true]), vec![1]))
         );
 
         assert_eq!(
@@ -2758,7 +2778,7 @@ mod tests {
                 UInt64Array::from(vec![0, 1]),
                 &BooleanArray::from(vec![true, false])
             ),
-            Some(BooleanArray::from(vec![true, false]))
+            Some((BooleanArray::from(vec![true, false]), vec![0]))
         );
 
         assert_eq!(
@@ -2767,9 +2787,9 @@ mod tests {
                 UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
                 &BooleanArray::from(vec![false, true, true, true, true, true])
             ),
-            Some(BooleanArray::from(vec![
+            Some((BooleanArray::from(vec![
                 false, true, false, true, false, false
-            ]))
+            ]), vec![0, 1]))
         );
 
         assert_eq!(
@@ -2778,9 +2798,9 @@ mod tests {
                 UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
                 &BooleanArray::from(vec![false, false, false, false, false, true])
             ),
-            Some(BooleanArray::from(vec![
+            Some((BooleanArray::from(vec![
                 false, false, false, false, false, true
-            ]))
+            ]), vec![1]))
         );
 
         Ok(())
