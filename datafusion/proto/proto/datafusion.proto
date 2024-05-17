@@ -797,9 +797,15 @@ message Union{
 
 // Used for List/FixedSizeList/LargeList/Struct
 message ScalarNestedValue {
+  message Dictionary {
+    bytes ipc_message = 1;
+    bytes arrow_data = 2;
+  }
+
   bytes ipc_message = 1;
   bytes arrow_data = 2;
   Schema schema = 3;
+  repeated Dictionary dictionaries = 4;
 }
 
 message ScalarTime32Value {
