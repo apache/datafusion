@@ -303,7 +303,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
-            | Expr::GetIndexedField { .. }
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }

@@ -271,9 +271,9 @@ mod tests {
                     values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
             ),
-            // s.y ∈ [1, 3] (not null)
+            // s ∈ [1, 3] (not null)
             (
-                col("s").field("y"),
+                col("s"),
                 NullableInterval::NotNull {
                     values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
@@ -285,7 +285,6 @@ mod tests {
         // (original_expr, expected_simplification)
         let simplified_cases = &[
             (col("x").lt(lit(0)), false),
-            (col("s").field("y").lt(lit(0)), false),
             (col("x").lt_eq(lit(3)), true),
             (col("x").gt(lit(3)), false),
             (col("x").gt(lit(0)), true),

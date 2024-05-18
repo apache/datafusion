@@ -84,7 +84,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
-            | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
             | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
 

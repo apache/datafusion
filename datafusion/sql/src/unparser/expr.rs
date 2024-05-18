@@ -411,9 +411,6 @@ impl Unparser<'_> {
                     )
                 })
             }
-            Expr::GetIndexedField(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
             Expr::TryCast(TryCast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
                 Ok(ast::Expr::TryCast {

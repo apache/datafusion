@@ -237,7 +237,6 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::IsNotFalse(_)
         | Expr::IsNotUnknown(_)
         | Expr::Negative(_)
-        | Expr::GetIndexedField(_)
         | Expr::Between(_)
         | Expr::Case(_)
         | Expr::Cast(_)

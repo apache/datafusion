@@ -1038,29 +1038,6 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_field_push_down() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new_struct(
-                "s",
-                vec![
-                    Field::new("x", DataType::Int64, false),
-                    Field::new("y", DataType::Int64, false),
-                ],
-                false,
-            ),
-        ]));
-
-        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("s").field("x")])?
-            .build()?;
-        let expected = "Projection: (?table?.s)[x]\
-        \n  TableScan: ?table? projection=[s]";
-        assert_optimized_plan_equal(plan, expected)
-    }
-
-    #[test]
     fn test_neg_push_down() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
