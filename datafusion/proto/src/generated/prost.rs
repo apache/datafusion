@@ -1135,6 +1135,19 @@ pub struct ScalarNestedValue {
     pub arrow_data: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "4")]
+    pub dictionaries: ::prost::alloc::vec::Vec<scalar_nested_value::Dictionary>,
+}
+/// Nested message and enum types in `ScalarNestedValue`.
+pub mod scalar_nested_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Dictionary {
+        #[prost(bytes = "vec", tag = "1")]
+        pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "vec", tag = "2")]
+        pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

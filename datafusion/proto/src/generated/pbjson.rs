@@ -22622,6 +22622,9 @@ impl serde::Serialize for ScalarNestedValue {
         if self.schema.is_some() {
             len += 1;
         }
+        if !self.dictionaries.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ScalarNestedValue", len)?;
         if !self.ipc_message.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -22633,6 +22636,9 @@ impl serde::Serialize for ScalarNestedValue {
         }
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
+        }
+        if !self.dictionaries.is_empty() {
+            struct_ser.serialize_field("dictionaries", &self.dictionaries)?;
         }
         struct_ser.end()
     }
@@ -22649,6 +22655,7 @@ impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
             "arrow_data",
             "arrowData",
             "schema",
+            "dictionaries",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22656,6 +22663,7 @@ impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
             IpcMessage,
             ArrowData,
             Schema,
+            Dictionaries,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22680,6 +22688,7 @@ impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
                             "ipcMessage" | "ipc_message" => Ok(GeneratedField::IpcMessage),
                             "arrowData" | "arrow_data" => Ok(GeneratedField::ArrowData),
                             "schema" => Ok(GeneratedField::Schema),
+                            "dictionaries" => Ok(GeneratedField::Dictionaries),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22702,6 +22711,7 @@ impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
                 let mut ipc_message__ = None;
                 let mut arrow_data__ = None;
                 let mut schema__ = None;
+                let mut dictionaries__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::IpcMessage => {
@@ -22726,16 +22736,139 @@ impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
                             }
                             schema__ = map_.next_value()?;
                         }
+                        GeneratedField::Dictionaries => {
+                            if dictionaries__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaries"));
+                            }
+                            dictionaries__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ScalarNestedValue {
                     ipc_message: ipc_message__.unwrap_or_default(),
                     arrow_data: arrow_data__.unwrap_or_default(),
                     schema: schema__,
+                    dictionaries: dictionaries__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("datafusion.ScalarNestedValue", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for scalar_nested_value::Dictionary {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.ipc_message.is_empty() {
+            len += 1;
+        }
+        if !self.arrow_data.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarNestedValue.Dictionary", len)?;
+        if !self.ipc_message.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("ipcMessage", pbjson::private::base64::encode(&self.ipc_message).as_str())?;
+        }
+        if !self.arrow_data.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("arrowData", pbjson::private::base64::encode(&self.arrow_data).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for scalar_nested_value::Dictionary {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "ipc_message",
+            "ipcMessage",
+            "arrow_data",
+            "arrowData",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            IpcMessage,
+            ArrowData,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "ipcMessage" | "ipc_message" => Ok(GeneratedField::IpcMessage),
+                            "arrowData" | "arrow_data" => Ok(GeneratedField::ArrowData),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = scalar_nested_value::Dictionary;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ScalarNestedValue.Dictionary")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<scalar_nested_value::Dictionary, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut ipc_message__ = None;
+                let mut arrow_data__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::IpcMessage => {
+                            if ipc_message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ipcMessage"));
+                            }
+                            ipc_message__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ArrowData => {
+                            if arrow_data__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrowData"));
+                            }
+                            arrow_data__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(scalar_nested_value::Dictionary {
+                    ipc_message: ipc_message__.unwrap_or_default(),
+                    arrow_data: arrow_data__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ScalarNestedValue.Dictionary", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarTime32Value {

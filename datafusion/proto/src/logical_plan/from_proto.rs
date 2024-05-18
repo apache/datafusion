@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::array::ArrayRef;
 use arrow::{
     array::AsArray,
     buffer::Buffer,
@@ -522,6 +524,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let protobuf::ScalarNestedValue {
                     ipc_message,
                     arrow_data,
+                    dictionaries,
                     schema,
                 } = &v;
 
@@ -548,11 +551,55 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     )
                 })?;
 
+                let dict_by_id: HashMap<i64,ArrayRef> = dictionaries.iter().map(|protobuf::scalar_nested_value::Dictionary { ipc_message, arrow_data }| {
+                    let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
+                        Error::General(format!(
+                            "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
+                        ))
+                    })?;
+                    let buffer = Buffer::from(arrow_data);
+
+                    let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
+                        Error::General(
+                            "Unexpected message type deserializing ScalarValue::List dictionary message"
+                                .to_string(),
+                        )
+                    })?;
+
+                    let id = dict_batch.id();
+
+                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
+                        Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
+                    })?;
+
+                    let values: ArrayRef = match first_field.data_type() {
+                        DataType::Dictionary(_, ref value_type) => {
+                            // Make a fake schema for the dictionary batch.
+                            let value = value_type.as_ref().clone();
+                            let schema = Schema::new(vec![Field::new("", value, true)]);
+                            // Read a single column
+                            let record_batch = read_record_batch(
+                                &buffer,
+                                dict_batch.data().unwrap(),
+                                Arc::new(schema),
+                                &Default::default(),
+                                None,
+                                &message.version(),
+                            )?;
+                            Ok(record_batch.column(0).clone())
+                        }
+                        _ => Err(Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())),
+                    }?;
+
+                    Ok((id,values))
+                }).collect::<Result<HashMap<_,_>>>()?;
+
                 let record_batch = read_record_batch(
                     &buffer,
                     ipc_batch,
                     Arc::new(schema),
-                    &Default::default(),
+                    &dict_by_id,
                     None,
                     &message.version(),
                 )

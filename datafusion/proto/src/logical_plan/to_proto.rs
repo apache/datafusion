@@ -1498,7 +1498,7 @@ fn encode_scalar_nested_value(
 
     let gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
-    let (_, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = gen
         .encoded_batch(&batch, &mut dict_tracker, &Default::default())
         .map_err(|e| {
             Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
@@ -1509,6 +1509,13 @@ fn encode_scalar_nested_value(
     let scalar_list_value = protobuf::ScalarNestedValue {
         ipc_message: encoded_message.ipc_message,
         arrow_data: encoded_message.arrow_data,
+        dictionaries: encoded_dictionaries
+            .into_iter()
+            .map(|data| protobuf::scalar_nested_value::Dictionary {
+                ipc_message: data.ipc_message,
+                arrow_data: data.arrow_data,
+            })
+            .collect(),
         schema: Some(schema),
     };
 
