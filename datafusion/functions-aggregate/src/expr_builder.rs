@@ -20,6 +20,9 @@ use std::sync::Arc;
 use datafusion_expr::{expr::AggregateFunction, Expr};
 use sqlparser::ast::NullTreatment;
 
+/// Builder for creating an aggregate function expression
+/// 
+/// Has the same arguments from [AggregateFunction]
 pub struct ExprBuilder {
     udf: Arc<crate::AggregateUDF>,
     /// List of expressions to feed to the functions as arguments
