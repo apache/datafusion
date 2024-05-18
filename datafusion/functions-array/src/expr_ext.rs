@@ -26,6 +26,25 @@ pub trait IndexAccessor {
 }
 
 impl IndexAccessor for Expr {
+    /// Return access to the element field. Example `expr["name"]`
+    ///
+    /// ## Example Access element 2 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value "30" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col, Expr};
+    /// # use datafusion_functions_array::expr_ext::IndexAccessor;
+    /// let expr = col("c1")
+    ///    .index(lit(3));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
+    /// ```
     fn index(self, key: Expr) -> Expr {
         array_element(self, key)
     }
@@ -36,6 +55,26 @@ pub trait SliceAccessor {
 }
 
 impl SliceAccessor for Expr {
+    /// Return elements between `1` based `start` and `stop`, for
+    /// example `expr[1:3]`
+    ///
+    /// ## Example: Access element 2, 3, 4 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value `[20, 30, 40]` with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col};
+    /// # use datafusion_functions_array::expr_ext::SliceAccessor;
+    /// let expr = col("c1")
+    ///    .range(lit(2), lit(4));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// ```
     fn range(self, start: Expr, stop: Expr) -> Expr {
         array_slice(self, start, stop, None)
     }
