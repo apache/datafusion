@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
+use datafusion_functions_aggregate::expr_fn::count;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err};
