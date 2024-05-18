@@ -494,7 +494,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    // use arrow::datatypes::{Fields, SchemaBuilder};
+
     use datafusion_common::{DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
@@ -630,31 +630,6 @@ mod tests {
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
     }
-
-    // #[test]
-    // fn test_nested_schema_nullability() {
-    //     let mut builder = SchemaBuilder::new();
-    //     builder.push(Field::new("foo", DataType::Int32, true));
-    //     builder.push(Field::new(
-    //         "parent",
-    //         DataType::Struct(Fields::from(vec![Field::new(
-    //             "child",
-    //             DataType::Int64,
-    //             false,
-    //         )])),
-    //         true,
-    //     ));
-    //     let schema = builder.finish();
-
-    //     let dfschema = DFSchema::from_field_specific_qualified_schema(
-    //         vec![Some("table_name".into()), None],
-    //         &Arc::new(schema),
-    //     )
-    //     .unwrap();
-
-    //     let expr = col("parent").field("child");
-    //     assert!(expr.nullable(&dfschema).unwrap());
-    // }
 
     #[derive(Debug)]
     struct MockExprSchema {

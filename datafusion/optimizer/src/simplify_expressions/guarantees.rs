@@ -39,7 +39,7 @@ use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 /// See a full example in [`ExprSimplifier::with_guarantees()`].
 ///
 /// [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
-pub(crate) struct GuaranteeRewriter<'a> {
+pub struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
 
