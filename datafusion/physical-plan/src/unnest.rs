@@ -228,7 +228,6 @@ struct UnnestStream {
     schema: Arc<Schema>,
     /// The unnest columns
     list_type_columns: Vec<usize>,
-    ///
     struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
@@ -299,14 +298,13 @@ impl UnnestStream {
     }
 }
 
-
 /// Given a set of struct column indices to flatten
 /// try converting the column in input into multiple subfield columns
 /// For example
 /// ```ignore
-/// struct_col: [a: struct(item: int, name: string), b: int] 
-/// with a batch 
-/// {a: {item: 1, name: "a"}, b: 2}, 
+/// struct_col: [a: struct(item: int, name: string), b: int]
+/// with a batch
+/// {a: {item: 1, name: "a"}, b: 2},
 /// {a: {item: 3, name: "b"}, b: 4]
 /// will be converted into
 /// {a.item: 1, a.name: "a", b: 2},
@@ -392,7 +390,11 @@ fn build_batch(
             let take_indicies = create_take_indicies(unnested_length, total_length);
 
             // vertical expansion because of list unnest
-            let ret = flatten_list_cols_from_indices(batch, &unnested_array_map, &take_indicies)?;
+            let ret = flatten_list_cols_from_indices(
+                batch,
+                &unnested_array_map,
+                &take_indicies,
+            )?;
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
     };

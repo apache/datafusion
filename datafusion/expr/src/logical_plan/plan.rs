@@ -1022,13 +1022,9 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                // TODO: we are not considering new expr rewrite
-                // If this case happen
-                // original plan: column1.field1, column1.field2, column2.field3
-                // input is optimized so that it only gives the schema of column1
                 let input = inputs.swap_remove(0);
-                let new_plan = unnest_with_options(input, 
-                    columns.clone(), options.clone())?;
+                let new_plan =
+                    unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
         }
@@ -1798,9 +1794,9 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { 
+                    LogicalPlan::Unnest(Unnest {
                         input: plan,
-                        list_type_columns: list_col_indices, 
+                        list_type_columns: list_col_indices,
                         struct_type_columns: struct_col_indices, .. }) => {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
@@ -2808,13 +2804,13 @@ pub struct Unnest {
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
     pub exec_columns: Vec<Column>,
-    /// refer to the indices(in the input schema) of columns 
-    /// that have type list to run unnest on 
+    /// refer to the indices(in the input schema) of columns
+    /// that have type list to run unnest on
     pub list_type_columns: Vec<usize>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,
-    /// Having items aligned with the output columns 
+    /// Having items aligned with the output columns
     /// representing which column in the input schema each output column depends on
     pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
