@@ -1596,7 +1596,6 @@ pub fn unnest_with_options(
     columns: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let mut qualified_columns = Vec::with_capacity(columns.len());
     let mut list_columns = Vec::with_capacity(columns.len());
     let mut struct_columns = Vec::with_capacity(columns.len());
     let column_by_original_index = columns
@@ -1620,20 +1619,23 @@ pub fn unnest_with_options(
                         &column_to_unnest.name,
                         original_field.data_type(),
                     )?;
+                    match original_field.data_type() {
+                        DataType::List(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::LargeList(_) => list_columns.push(index),
+                        DataType::Struct(_) => struct_columns.push(index),
+                        _ => {
+                            panic!(
+                                "not reachable, should be caught by get_unnested_columns"
+                            )
+                        }
+                    }
                     // new columns dependent on the same original index
                     dependency_indices
                         .extend(std::iter::repeat(index).take(flatten_columns.len()));
                     Ok(flatten_columns
                         .iter()
-                        .map(|col| {
-                            match original_field.data_type() {
-                                DataType::List(_) 
-                                | DataType::FixedSizeList(_,_)
-                                | DataType::LargeList(_) => list_columns.push(index),
-                                DataType::Struct(_) => struct_columns.push(index),
-                                _ => {panic!("not reachable, should be caught by get_unnested_columns")}
-                            }
-                            qualified_columns.push(col.0.to_owned());
+                        .map(|col: &(Column, Arc<Field>)| {
                             (col.0.relation.to_owned(), col.1.to_owned())
                         })
                         .collect())
@@ -1658,7 +1660,6 @@ pub fn unnest_with_options(
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
         exec_columns: columns,
-        post_exec_columns: qualified_columns,
         list_type_columns: list_columns,
         struct_type_columns: struct_columns,
         dependency_indices,
@@ -2091,12 +2092,12 @@ mod tests {
     #[test]
     fn plan_builder_unnest() -> Result<()> {
         // Unnesting a simple column should return the child plan.
-        let plan = nested_table_scan("test_table")?
-            .unnest_column("scalar")?
-            .build()?;
-
-        let expected = "TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        let err = nested_table_scan("test_table")?
+            .unnest_column("scalar")
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .starts_with("Internal error: trying to unnest on invalid data type UInt32"));
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
@@ -2104,35 +2105,64 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Unnest: test_table.strings\
+        Unnest: lists[test_table.strings] structs[]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 
         // Check unnested field is a scalar
-        let field = plan
-            .schema()
-            .field_with_name(Some(&TableReference::bare("test_table")), "strings")
-            .unwrap();
+        let field = plan.schema().field_with_name(None, "strings").unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
 
-        // Unnesting multiple fields.
+        // Unnesting the singular struct column result into 2 new columns for each subfield
         let plan = nested_table_scan("test_table")?
-            .unnest_column("strings")?
-            .unnest_column("structs")?
+            .unnest_column("struct_singular")?
             .build()?;
 
         let expected = "\
-        Unnest: test_table.structs\
-        \n  Unnest: test_table.strings\
-        \n    TableScan: test_table";
+        Unnest: lists[] structs[test_table.struct_singular]\
+        \n  TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        for field_name in &["a", "b"] {
+            // Check unnested struct field is a scalar
+            let field = plan
+                .schema()
+                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .unwrap();
+            assert_eq!(&DataType::UInt32, field.data_type());
+        }
+
+        // Unnesting multiple fields in separate plans
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("strings")?
+            .unnest_column("structs")?
+            .unnest_column("struct_singular")?
+            .build()?;
+
+        let expected = "\
+        Unnest: lists[] structs[test_table.struct_singular]\
+        \n  Unnest: lists[test_table.structs] structs[]\
+        \n    Unnest: lists[test_table.strings] structs[]\
+        \n      TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 
         // Check unnested struct list field should be a struct.
-        let field = plan
-            .schema()
-            .field_with_name(Some(&TableReference::bare("test_table")), "structs")
-            .unwrap();
+        let field = plan.schema().field_with_name(None, "structs").unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
+
+        // Unnesting multiple fields at the same time
+        let cols = vec!["strings", "structs", "struct_singular"]
+            .into_iter()
+            .map(|c| c.into())
+            .collect();
+        let plan = nested_table_scan("test_table")?
+            .unnest_columns_with_options(cols, UnnestOptions::default())?
+            .build()?;
+
+        let expected = "\
+        Unnest: lists[test_table.strings, test_table.structs] structs[test_table.struct_singular]\
+        \n  TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
 
         // Unnesting missing column should fail.
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
@@ -2142,8 +2172,9 @@ mod tests {
     }
 
     fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
-        // Create a schema with a scalar field, a list of strings, and a list of structs.
-        let struct_field = Field::new_struct(
+        // Create a schema with a scalar field, a list of strings, a list of structs
+        // and a singular struct
+        let struct_field_in_list = Field::new_struct(
             "item",
             vec![
                 Field::new("a", DataType::UInt32, false),
@@ -2155,7 +2186,15 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
             Field::new_list("strings", string_field, false),
-            Field::new_list("structs", struct_field, false),
+            Field::new_list("structs", struct_field_in_list.clone(), false),
+            Field::new(
+                "struct_singular",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::UInt32, false),
+                    Field::new("b", DataType::UInt32, false),
+                ])),
+                false,
+            ),
         ]);
 
         table_scan(Some(table_name), &schema, None)

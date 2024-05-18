@@ -1157,7 +1157,6 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
-                // output_columns: columns,
                 list_type_columns,
                 struct_type_columns,
                 schema,
@@ -1165,27 +1164,11 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                // let list_column_exec = list_type_columns
-                //     .iter()
-                //     .map(|idx| {
-                //         let column = &columns[*idx];
-                //         let schema_idx = schema.index_of_column(column)?;
-                //         Ok(Column::new(&column.name, schema_idx))
-                //     })
-                //     .collect::<Result<_>>()?;
-
-                let struct_columns_set: HashSet<usize> =
-                    struct_type_columns.iter().copied().collect();
-                // .iter()
-                // .map(|idx| schema.index_of_column(&columns[*idx]))
-                // .collect::<Result<_>>()?;
-
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(
                     input,
                     list_type_columns.clone(),
-                    // list_column_exec,
-                    struct_columns_set,
+                    struct_type_columns,
                     schema,
                     options.clone(),
                 ))

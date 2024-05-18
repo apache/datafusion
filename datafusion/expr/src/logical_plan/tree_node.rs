@@ -312,7 +312,6 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns: input_columns,
-                post_exec_columns: columns,
                 list_type_columns,
                 struct_type_columns,
                 dependency_indices,
@@ -322,7 +321,6 @@ impl TreeNode for LogicalPlan {
                 LogicalPlan::Unnest(Unnest {
                     input,
                     exec_columns: input_columns,
-                    post_exec_columns: columns,
                     dependency_indices,
                     list_type_columns,
                     struct_type_columns,
@@ -500,17 +498,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Unnest(unnest) => {
                 let columns = unnest.exec_columns.clone();
-                // we use output_columns instead of input column
-                // let output_exprs = unnest
-                //     .output_columns
-                //     .iter()
-                //     .map(|c| Expr::Column(c.clone()))
-                //     .collect::<Vec<_>>();
-                // let mut columns = unnest.get_list_columns();
-                // columns.extend_from_slice(
-                //     unnest.get_struct_columns().as_ref());
 
-                // TODO: detect struct column
                 let exprs = columns
                     .iter()
                     .map(|c| Expr::Column(c.clone()))

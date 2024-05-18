@@ -2542,13 +2542,6 @@ pub struct Unnest {
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
     pub exec_columns: Vec<Column>,
-    // which index of original column in the input is each new column depend on
-    // e.g original input: (struct_col,list[int])
-    // new column after unnest (struct_col.field1, struct_col,field2, int)
-    // then dependency_map will be {0:0,1:0,2:1} 
-    // TODO: this should be converted into output column
-    // instead of the columns in the input
-    pub post_exec_columns: Vec<Column>,
     /// refer to the indices(in the original input schema) of field columns 
     /// that have type list to run unnest on 
     pub list_type_columns: Vec<usize>,
@@ -2561,19 +2554,6 @@ pub struct Unnest {
     pub schema: DFSchemaRef,
     /// Options
     pub options: UnnestOptions,
-}
-impl Unnest{
-    // reference to columns field indexed by list_type_columns
-    pub fn get_list_columns(&self)-> Vec<Column> {
-        self.list_type_columns.iter().map(
-            |&i| self.post_exec_columns[i].clone()
-        ).collect()
-    }
-    pub fn get_struct_columns(&self) ->Vec<Column>{
-        self.struct_type_columns.iter().map(
-            |&i| self.post_exec_columns[i].clone()
-        ).collect()
-    }
 }
 
 #[cfg(test)]

@@ -76,11 +76,13 @@ impl UnnestExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         list_type_columns: Vec<usize>,
-        struct_column_indices: HashSet<usize>,
+        struct_type_columns: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
         let cache = Self::compute_properties(&input, schema.clone());
+        let struct_column_indices: HashSet<usize> =
+            struct_type_columns.iter().copied().collect();
 
         UnnestExec {
             input,
