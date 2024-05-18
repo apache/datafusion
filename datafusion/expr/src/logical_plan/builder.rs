@@ -1605,9 +1605,7 @@ pub fn get_unnested_columns(
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
-            // let name = format!("{}.element", col_name);
             let new_field = Arc::new(Field::new(
-                // TODO: append field name by original name + .fieldname
                 col_name.clone(),
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
@@ -2138,7 +2136,7 @@ mod tests {
 
     #[test]
     fn plan_builder_unnest() -> Result<()> {
-        // Unnesting a simple column should return the child plan.
+        // Cannot unnest on a scalar column
         let err = nested_table_scan("test_table")?
             .unnest_column("scalar")
             .unwrap_err();

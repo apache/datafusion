@@ -581,7 +581,7 @@ fn unnest_list_array(
     )?)
 }
 
-/// Creates take indicies that will be used to expand all columns except for the unnest [`columns`](UnnestExec::columns).
+/// Creates take indicies that will be used to expand all columns except for the unnest [`columns`](UnnestExec::exec_columns).
 /// Every column value needs to be repeated multiple times according to the length array.
 ///
 /// If the length array looks like this:
