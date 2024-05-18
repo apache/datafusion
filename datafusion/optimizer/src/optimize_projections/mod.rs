@@ -111,7 +111,6 @@ fn optimize_projections(
 ) -> Result<Option<LogicalPlan>> {
     let child_required_indices: Vec<RequiredIndicies> = match plan {
         LogicalPlan::Unnest(Unnest{dependency_indices,..}) => {
-            println!("{:?}",dependency_indices);
             vec![RequiredIndicies::new_from_indices(dependency_indices.clone())]
         }
         LogicalPlan::Sort(_)
@@ -733,10 +732,6 @@ fn rewrite_projection_given_requirements(
     return if let Some(input) =
         optimize_projections(&proj.input, config, required_indices)?
     {
-        if let Err(e) = is_projection_unnecessary(&input, &exprs_used) {
-            println!("==========\n\nerror checking if projection is necessary, input\n{:?}\nwith schema\n{:?}\n project exprs {:?}",
-            input,input.schema(),exprs_used);
-        }
         if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {

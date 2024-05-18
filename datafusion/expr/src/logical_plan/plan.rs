@@ -808,7 +808,7 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                input_columns: columns,
+                exec_columns: columns,
                 options,
                 ..
             }) => {
@@ -1551,9 +1551,22 @@ impl LogicalPlan {
                         write!(f, "DescribeTable")
                     }
                     LogicalPlan::Unnest(Unnest { 
-                        list_type_columns,
-                        struct_type_columns, .. }) => {
-                        write!(f, "Unnest: TODO:i'm ugly{}{}", expr_vec_fmt!(list_type_columns),expr_vec_fmt!(struct_type_columns))
+                        input: plan,
+                        list_type_columns: list_col_indices, 
+                        struct_type_columns: struct_col_indices, .. }) => {
+                        let input_columns = plan.schema().columns();
+                        let list_type_columns = list_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        let struct_type_columns = struct_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        // get items from input_columns indexed by list_col_indices
+                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        expr_vec_fmt!(list_type_columns),
+                        expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }
@@ -2527,14 +2540,15 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    pub input_columns: Vec<Column>,
+    /// Columns to run unnest on, can be a list of (List/Struct) columns
+    pub exec_columns: Vec<Column>,
     // which index of original column in the input is each new column depend on
     // e.g original input: (struct_col,list[int])
     // new column after unnest (struct_col.field1, struct_col,field2, int)
     // then dependency_map will be {0:0,1:0,2:1} 
     // TODO: this should be converted into output column
     // instead of the columns in the input
-    pub output_columns: Vec<Column>,
+    pub post_exec_columns: Vec<Column>,
     /// refer to the indices(in the original input schema) of field columns 
     /// that have type list to run unnest on 
     pub list_type_columns: Vec<usize>,
@@ -2552,12 +2566,12 @@ impl Unnest{
     // reference to columns field indexed by list_type_columns
     pub fn get_list_columns(&self)-> Vec<Column> {
         self.list_type_columns.iter().map(
-            |&i| self.output_columns[i].clone()
+            |&i| self.post_exec_columns[i].clone()
         ).collect()
     }
     pub fn get_struct_columns(&self) ->Vec<Column>{
         self.struct_type_columns.iter().map(
-            |&i| self.output_columns[i].clone()
+            |&i| self.post_exec_columns[i].clone()
         ).collect()
     }
 }

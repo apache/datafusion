@@ -1657,8 +1657,8 @@ pub fn unnest_with_options(
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
-        input_columns: columns,
-        output_columns: qualified_columns,
+        exec_columns: columns,
+        post_exec_columns: qualified_columns,
         list_type_columns: list_columns,
         struct_type_columns: struct_columns,
         dependency_indices,

@@ -1231,11 +1231,11 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .collect()
         .await?;
     let expected = [
-        r#"+--------------------+"#,
-        r#"| COUNT(shapes.tags) |"#,
-        r#"+--------------------+"#,
-        r#"| 9                  |"#,
-        r#"+--------------------+"#,
+        r#"+-------------+"#,
+        r#"| COUNT(tags) |"#,
+        r#"+-------------+"#,
+        r#"| 9           |"#,
+        r#"+-------------+"#,
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -1384,7 +1384,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
-        "  Unnest: shape_id2 [shape_id:UInt32, shape_id2:UInt32;N]",
+        "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
         "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
