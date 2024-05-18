@@ -50,20 +50,21 @@ use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 use log::trace;
 
-/// Unnest the given columns by joining the row with each value in the
-/// nested type.
+/// Unnest the given columns (either with type struct or list)
+/// For list unnesting, each rows is vertically transformed into multiple rows
+/// For struct unnesting, each columns is horizontally transformed into multiple columns,
+/// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
-/// TODO: rename into UnnestListExec
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
     /// The schema once the unnest is applied
     schema: SchemaRef,
-    /// The unnest list type columns
+    /// indices of the list-typed columns in the input schema
     list_column_indices: Vec<usize>,
-    /// The unnest list type columns
+    /// indices of the struct-typed columns in the input schema
     struct_column_indices: Vec<usize>,
     /// Options
     options: UnnestOptions,
@@ -298,7 +299,20 @@ impl UnnestStream {
     }
 }
 
-fn build_batch_vertically(
+
+/// Given a set of struct column indices to flatten
+/// try converting the column in input into multiple subfield columns
+/// For example
+/// ```ignore
+/// struct_col: [a: struct(item: int, name: string), b: int] 
+/// with a batch 
+/// {a: {item: 1, name: "a"}, b: 2}, 
+/// {a: {item: 3, name: "b"}, b: 4]
+/// will be converted into
+/// {a.item: 1, a.name: "a", b: 2},
+/// {a.item: 3, a.name: "b", b: 4}
+/// ```
+fn flatten_struct_cols(
     input_batch: &[Arc<dyn Array>],
     schema: &SchemaRef,
     struct_column_indices: &HashSet<usize>,
@@ -329,21 +343,20 @@ fn build_batch_vertically(
     Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
 }
 
-/// For each row in a `RecordBatch`, some list columns need to be unnested.
-/// We will expand the values in each list into multiple rows,
+/// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
+/// - For list columns: We will expand the values in each list into multiple rows,
 /// taking the longest length among these lists, and shorter lists are padded with NULLs.
-//
+/// - For struct columns: We will expand the struct columns into multiple subfield columns.
 /// For columns that don't need to be unnested, repeat their values until reaching the longest length.
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    // list type column only
     list_type_columns: &[usize],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
     let transformed = match list_type_columns.len() {
-        0 => build_batch_vertically(batch.columns(), schema, struct_column_indices),
+        0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
             let list_arrays: Vec<ArrayRef> = list_type_columns
                 .iter()
@@ -379,8 +392,8 @@ fn build_batch(
             let take_indicies = create_take_indicies(unnested_length, total_length);
 
             // vertical expansion because of list unnest
-            let ret = batch_from_indices(batch, &unnested_array_map, &take_indicies)?;
-            build_batch_vertically(&ret, schema, struct_column_indices)
+            let ret = flatten_list_cols_from_indices(batch, &unnested_array_map, &take_indicies)?;
+            flatten_struct_cols(&ret, schema, struct_column_indices)
         }
     };
     transformed
@@ -632,7 +645,7 @@ fn create_take_indicies(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
-fn batch_from_indices(
+fn flatten_list_cols_from_indices(
     batch: &RecordBatch,
     unnested_list_arrays: &HashMap<usize, ArrayRef>,
     indices: &PrimitiveArray<Int64Type>,

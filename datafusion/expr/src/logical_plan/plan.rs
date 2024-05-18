@@ -2809,13 +2809,14 @@ pub struct Unnest {
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
     pub exec_columns: Vec<Column>,
-    /// refer to the indices(in the original input schema) of field columns 
+    /// refer to the indices(in the input schema) of columns 
     /// that have type list to run unnest on 
     pub list_type_columns: Vec<usize>,
-    /// refer to the indices (in the original input schema) of field columns
+    /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,
-    /// for each column in output schema, which column in the input schema it depends on
+    /// Having items aligned with the output columns 
+    /// representing which column in the input schema each output column depends on
     pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
