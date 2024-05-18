@@ -61,7 +61,7 @@ fn test_eq_with_coercion() {
 #[test]
 fn test_get_field() {
     evaluate_expr_test(
-        get_field(col("props"), lit("a")),
+        get_field(col("props"), "a"),
         vec![
             "+------------+",
             "| expr       |",
@@ -77,7 +77,7 @@ fn test_get_field() {
 #[test]
 fn test_nested_get_field() {
     evaluate_expr_test(
-        get_field(col("props"), lit("a"))
+        get_field(col("props"), "a")
             .eq(lit("2021-02-02"))
             .or(col("id").eq(lit(1))),
         vec![
