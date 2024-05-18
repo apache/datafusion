@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Extension methods for Expr.
+
 use datafusion_expr::Expr;
 
 use crate::extract::{array_element, array_slice};
