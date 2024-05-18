@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub mod arrow_cast;
 pub mod arrowtypeof;
 pub mod coalesce;
+pub mod expr_ext;
 pub mod getfield;
 pub mod named_struct;
 pub mod nullif;

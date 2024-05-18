@@ -21,6 +21,8 @@ use arrow_array::{ArrayRef, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::DFSchema;
+use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
 
@@ -61,7 +63,7 @@ fn test_eq_with_coercion() {
 #[test]
 fn test_get_field() {
     evaluate_expr_test(
-        get_field(col("props"), lit("a")),
+        col("props").field(lit("a")),
         vec![
             "+------------+",
             "| expr       |",
@@ -77,7 +79,7 @@ fn test_get_field() {
 #[test]
 fn test_nested_get_field() {
     evaluate_expr_test(
-        get_field(col("props"), lit("a"))
+        col("props").field(lit("a"))
             .eq(lit("2021-02-02"))
             .or(col("id").eq(lit(1))),
         vec![
@@ -95,7 +97,7 @@ fn test_nested_get_field() {
 #[test]
 fn test_list() {
     evaluate_expr_test(
-        array_element(col("list"), lit(1i64)),
+        col("list").index(lit(1i64)),
         vec![
             "+------+", "| expr |", "+------+", "| one  |", "| two  |", "| five |",
             "+------+",
@@ -106,7 +108,7 @@ fn test_list() {
 #[test]
 fn test_list_range() {
     evaluate_expr_test(
-        array_slice(col("list"), lit(1i64), lit(2i64), None),
+        col("list").range(lit(1i64), lit(2i64)),
         vec![
             "+--------------+",
             "| expr         |",
