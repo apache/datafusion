@@ -320,13 +320,12 @@ fn build_batch_vertically(
                     data_type
                 ),
             },
-            None => {
-                Ok(vec![column_data.clone()])
-            }
+            None => Ok(vec![column_data.clone()]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
-        .flatten().collect();
+        .flatten()
+        .collect();
     Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
 }
 
@@ -647,7 +646,7 @@ fn batch_from_indices(
             None => Ok(kernels::take::take(arr, indices, None)?),
         })
         .collect::<Result<Vec<_>>>()?;
-    return Ok(arrays);
+    Ok(arrays)
 }
 
 #[cfg(test)]

@@ -22,12 +22,12 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3], [7], 1, [13, 14]),
-    ([4,5], [8,9,10], 2, [15, 16]),
-    ([6], [11,12], 3, null),
-    ([12], [null, 42, null], null, null),
+    ([1,2,3], [7], 1, [13, 14], struct(1,2)),
+    ([4,5], [8,9,10], 2, [15, 16], struct(3,4)),
+    ([6], [11,12], 3, null, null),
+    ([12], [null, 42, null], null, null, struct(7,8)),
     -- null array to verify the `preserve_nulls` option
-    (null, null, 4, [17, 18])
+    (null, null, 4, [17, 18], null)
 ;
 
 ## Basic unnest expression in select list
@@ -255,7 +255,6 @@ select unnest(struct(null));
 NULL
 
 ## Unnest struct expression in from clause
-## TODO: unnest a struct col with 2 subfields, with some null rows
 query ?
 select * from unnest(struct(null));
 ----
@@ -308,6 +307,18 @@ select unnest(array_remove(column1, 12)) from unnest_table;
 4
 5
 6
+
+## unnest struct-typed column and list-typed column at the same time
+query I?II?
+select unnest(column1), column1, unnest(column5), column5 from unnest_table;
+----
+1 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+2 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+3 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+4 [4, 5] 3 4 {c0: 3, c1: 4}
+5 [4, 5] 3 4 {c0: 3, c1: 4}
+6 [6] NULL NULL NULL
+12 [12] 7 8 {c0: 7, c1: 8}
 
 
 ## Unnest in from clause with alias

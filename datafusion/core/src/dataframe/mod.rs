@@ -297,7 +297,6 @@ impl DataFrame {
         options: UnnestOptions,
     ) -> Result<DataFrame> {
         let columns = columns.iter().map(|c| Column::from(*c)).collect();
-
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_columns_with_options(columns, options)?
             .build()?;
