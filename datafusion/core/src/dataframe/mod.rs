@@ -296,11 +296,11 @@ impl DataFrame {
         columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
-        // TODO: fix me
         let cols:Vec<Column> = columns.iter().map(|c| Column::from(*c)).collect();
+
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_columns_with_options(cols.clone(), options)?
-            .project(cols)?.build()?;
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

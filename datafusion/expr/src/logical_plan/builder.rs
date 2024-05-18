@@ -1558,16 +1558,16 @@ pub fn get_unnested_columns(
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
-            let name = format!("{}.element", col_name);
+            // let name = format!("{}.element", col_name);
             let new_field = Arc::new(Field::new(
                 // TODO: append field name by original name + .fieldname
-                name.clone(),
+                col_name.clone(),
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
                 // For example: unnset([1], []) -> 1, null
                 true,
             ));
-            let column = Column::from_name(name);
+            let column = Column::from_name(col_name);
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
         }
