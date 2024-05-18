@@ -38,7 +38,9 @@ use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, UnnestOptions};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -60,9 +62,9 @@ pub struct UnnestExec {
     /// The schema once the unnest is applied
     schema: SchemaRef,
     /// The unnest list type columns
-    list_type_columns: Vec<usize>,
-    ///
-    struct_column_indices: HashSet<usize>,
+    list_column_indices: Vec<usize>,
+    /// The unnest list type columns
+    struct_column_indices: Vec<usize>,
     /// Options
     options: UnnestOptions,
     /// Execution metrics
@@ -75,19 +77,17 @@ impl UnnestExec {
     /// Create a new [UnnestExec].
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        list_type_columns: Vec<usize>,
-        struct_type_columns: Vec<usize>,
+        list_column_indices: Vec<usize>,
+        struct_column_indices: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
         let cache = Self::compute_properties(&input, schema.clone());
-        let struct_column_indices: HashSet<usize> =
-            struct_type_columns.iter().copied().collect();
 
         UnnestExec {
             input,
             schema,
-            list_type_columns,
+            list_column_indices,
             struct_column_indices,
             options,
             metrics: Default::default(),
@@ -147,7 +147,7 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(UnnestExec::new(
             children[0].clone(),
-            self.list_type_columns.clone(),
+            self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             self.schema.clone(),
             self.options.clone(),
@@ -169,8 +169,8 @@ impl ExecutionPlan for UnnestExec {
         Ok(Box::pin(UnnestStream {
             input,
             schema: self.schema.clone(),
-            list_type_columns: self.list_type_columns.clone(),
-            struct_column_indices: self.struct_column_indices.clone(),
+            list_type_columns: self.struct_column_indices.clone(),
+            struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             options: self.options.clone(),
             metrics,
         }))
@@ -307,20 +307,26 @@ fn build_batch_vertically(
     let columns_expanded = input_batch
         .iter()
         .enumerate()
-        .flat_map(|(idx, column_data)| match struct_column_indices.get(&idx) {
+        .map(|(idx, column_data)| match struct_column_indices.get(&idx) {
             Some(_) => match column_data.data_type() {
-                DataType::Struct(fields) => {
+                DataType::Struct(_) => {
                     let struct_arr =
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
-                    struct_arr.columns().to_vec()
+                    Ok(struct_arr.columns().to_vec())
                 }
-                other => vec![column_data.clone()],
+                data_type => internal_err!(
+                    "expecting column {} from input plan to be a struct, got {:?}",
+                    idx,
+                    data_type
+                ),
             },
             None => {
-                vec![column_data.clone()]
+                Ok(vec![column_data.clone()])
             }
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten().collect();
     Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
 }
 

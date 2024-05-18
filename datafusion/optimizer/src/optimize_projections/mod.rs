@@ -29,7 +29,7 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
     JoinType, Result,
 };
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
@@ -398,9 +398,13 @@ fn optimize_projections(
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
-        },
-        LogicalPlan::Unnest(Unnest{dependency_indices,..}) => {
-            vec![RequiredIndicies::new_from_indices(dependency_indices.clone())]
+        }
+        LogicalPlan::Unnest(Unnest {
+            dependency_indices, ..
+        }) => {
+            vec![RequiredIndicies::new_from_indices(
+                dependency_indices.clone(),
+            )]
         }
     };
 
@@ -443,7 +447,7 @@ fn optimize_projections(
     }
 }
 
-/// Merges consecutive projectionsDFSchema { inner: Schema { fields: [Field { name: "name0", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "name1", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None, None], functional_dependencies: FunctionalDependencies { deps: [] } }.
+/// Merges consecutive projections.
 ///
 /// Given a projection `proj`, this function attempts to merge it with a previous
 /// projection if it exists and if merging is beneficial. Merging is considered
@@ -486,7 +490,6 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     // them as consecutive projections will benefit from a compute-once approach.
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
-        let a = prev_projection.schema.index_of_column(&col);
         usage > 1
             && !is_expr_trivial(
                 &prev_projection.expr

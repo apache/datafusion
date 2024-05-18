@@ -100,7 +100,6 @@ use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashSet;
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
@@ -1148,7 +1147,7 @@ impl DefaultPhysicalPlanner {
                 Arc::new(UnnestExec::new(
                     input,
                     list_type_columns.clone(),
-                    struct_type_columns,
+                    struct_type_columns.clone(),
                     schema,
                     options.clone(),
                 ))
