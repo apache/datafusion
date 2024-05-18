@@ -42,9 +42,7 @@ async fn main() -> Result<()> {
     simple_expr_to_sql_demo_no_escape()?;
     simple_expr_to_sql_demo_escape_mysql_style()?;
     simple_plan_to_sql_parquest_dataframe_demo().await?;
-    simple_plan_to_sql_csv_dataframe_demo().await?;
     round_trip_plan_to_sql_parquest_dataframe_demo().await?;
-    round_trip_plan_to_sql_csv_dataframe_demo().await?;
     Ok(())
 }
 
