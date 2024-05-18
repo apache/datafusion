@@ -68,7 +68,7 @@ fn make_int64_batches_with_null(
 //   . Number of null rows is the given num_null
 //   . There are non-null values in the range [no_null_values_start, no_null_values_end], one value each row
 //   . The file is divided into row groups of size row_per_group
-pub fn parquet_file(
+pub fn parquet_file_one_column(
     num_null: usize,
     no_null_values_start: i64,
     no_null_values_end: i64,
@@ -110,7 +110,7 @@ pub fn parquet_file(
 // Create a parquet file with many columns each has different data type
 //  - Data types are specified by the given scenario
 //  - Row group sizes are withe the same or different depending on the provided row_per_group & data created in the scenario
-pub async fn create_parquet_file(
+pub async fn parquet_file_many_columns(
     scenario: super::Scenario,
     row_per_group: usize,
 ) -> ParquetRecordBatchReaderBuilder<File> {
@@ -211,7 +211,7 @@ impl Test {
 #[tokio::test]
 async fn test_one_row_group_without_null() {
     let row_per_group = 20;
-    let reader = parquet_file(0, 4, 7, row_per_group);
+    let reader = parquet_file_one_column(0, 4, 7, row_per_group);
     Test {
         reader,
         // min is 4
@@ -229,7 +229,7 @@ async fn test_one_row_group_without_null() {
 #[tokio::test]
 async fn test_one_row_group_with_null_and_negative() {
     let row_per_group = 20;
-    let reader = parquet_file(2, -1, 5, row_per_group);
+    let reader = parquet_file_one_column(2, -1, 5, row_per_group);
 
     Test {
         reader,
@@ -248,7 +248,7 @@ async fn test_one_row_group_with_null_and_negative() {
 #[tokio::test]
 async fn test_two_row_group_with_null() {
     let row_per_group = 10;
-    let reader = parquet_file(2, 4, 17, row_per_group);
+    let reader = parquet_file_one_column(2, 4, 17, row_per_group);
 
     Test {
         reader,
@@ -267,7 +267,7 @@ async fn test_two_row_group_with_null() {
 #[tokio::test]
 async fn test_two_row_groups_with_all_nulls_in_one() {
     let row_per_group = 5;
-    let reader = parquet_file(4, -2, 2, row_per_group);
+    let reader = parquet_file_one_column(4, -2, 2, row_per_group);
 
     Test {
         reader,
@@ -293,7 +293,7 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
 async fn test_int_64() {
     let row_per_group = 5;
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
-    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Int, row_per_group).await;
 
     Test {
         reader,
@@ -313,7 +313,7 @@ async fn test_int_64() {
 async fn test_int_32() {
     let row_per_group = 5;
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
-    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Int, row_per_group).await;
 
     Test {
         reader,
@@ -338,7 +338,7 @@ async fn test_int_32() {
 async fn test_int_16() {
     let row_per_group = 5;
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
-    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Int, row_per_group).await;
 
     Test {
         reader,
@@ -370,7 +370,7 @@ async fn test_int_16() {
 async fn test_int_8() {
     let row_per_group = 5;
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
-    let reader = create_parquet_file(Scenario::Int, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Int, row_per_group).await;
 
     Test {
         reader,
@@ -401,7 +401,7 @@ async fn test_timestamp() {
     //
     // The file is created by 4 record batches, each has 5 rowws.
     // Since the row group isze is set to 5, those 4 batches will go into 4 row groups
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
 
     Test {
         reader,
@@ -427,7 +427,7 @@ async fn test_timestamp() {
     .run("nanos");
 
     // micros
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -448,7 +448,7 @@ async fn test_timestamp() {
     .run("micros");
 
     // millis
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -469,7 +469,7 @@ async fn test_timestamp() {
     .run("millis");
 
     // seconds
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -497,7 +497,7 @@ async fn test_timestamp_diff_rg_sizes() {
     // "names" --> StringArray
     //
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 3 row groups with size 8, 8, 4
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
 
     Test {
         reader,
@@ -521,7 +521,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("nanos");
 
     // micros
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -540,7 +540,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("micros");
 
     // millis
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -559,7 +559,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("millis");
 
     // seconds
-    let reader = create_parquet_file(Scenario::Timestamps, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Timestamps, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![
@@ -585,7 +585,7 @@ async fn test_dates_32_diff_rg_sizes() {
     // "names" --> StringArray
     //
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
-    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Dates, row_per_group).await;
 
     Test {
         reader,
@@ -608,7 +608,7 @@ async fn test_dates_32_diff_rg_sizes() {
 async fn test_dates_64_diff_rg_sizes() {
     let row_per_group = 13;
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
-    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Dates, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])), // panic here because the actual data is Int32Array
@@ -640,7 +640,7 @@ async fn test_dates_64_diff_rg_sizes() {
 #[tokio::test]
 async fn test_column_not_found() {
     let row_per_group = 5;
-    let reader = create_parquet_file(Scenario::Dates, row_per_group).await;
+    let reader = parquet_file_many_columns(Scenario::Dates, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])),
