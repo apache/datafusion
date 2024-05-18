@@ -86,7 +86,7 @@ fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
 /// to SQL, using column name escaping PostgreSQL style.
 async fn simple_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
     // create local execution context
-    let ctx = SessionContext::new(); // define the query using the DataFrame trait
+    let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
     let df = ctx
@@ -109,36 +109,10 @@ async fn simple_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
     Ok(())
 }
 
-/// DataFusion can convert a logic plan created using the DataFrames API to read from a csv file
-/// to SQL, using column name escaping PostgreSQL style.
-async fn simple_plan_to_sql_csv_dataframe_demo() -> Result<()> {
-    // create local execution context
-    let ctx = SessionContext::new(); // define the query using the DataFrame trait
-
-    let testdata = datafusion::test_util::arrow_test_data();
-    let df = ctx
-        .read_csv(
-            &format!("{testdata}/csv/aggregate_test_100.csv"),
-            CsvReadOptions::default(),
-        )
-        .await?
-        .select(vec![col("c1"), min(col("c12")), max(col("c12"))])?;
-
-    let ast = plan_to_sql(df.logical_plan())?;
-
-    let sql = format!("{}", ast);
-
-    assert_eq!(
-        sql,
-        r#"SELECT "?table?"."c1", MIN("?table?"."c12"), MAX("?table?"."c12") FROM "?table?""#
-    );
-
-    Ok(())
-}
-
+// DataFusion could parse a SQL into a DataFrame, adding a Filter, and converting that back to sql.
 async fn round_trip_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
     // create local execution context
-    let ctx = SessionContext::new(); // define the query using the DataFrame trait
+    let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
 
@@ -150,7 +124,7 @@ async fn round_trip_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
     )
     .await?;
 
-    // execute the query
+    // create a logical plan from a SQL string and then programmatically add new filters
     let df = ctx
         .sql(
             "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
@@ -170,42 +144,6 @@ async fn round_trip_plan_to_sql_parquest_dataframe_demo() -> Result<()> {
     assert_eq!(
         sql,
         r#"SELECT "alltypes_plain"."int_col", "alltypes_plain"."double_col", CAST("alltypes_plain"."date_string_col" AS VARCHAR) FROM "alltypes_plain" WHERE (("alltypes_plain"."id" > 1) AND ("alltypes_plain"."tinyint_col" < "alltypes_plain"."double_col"))"#
-    );
-
-    Ok(())
-}
-
-async fn round_trip_plan_to_sql_csv_dataframe_demo() -> Result<()> {
-    // create local execution context
-    let ctx = SessionContext::new(); // define the query using the DataFrame trait
-
-    let testdata = datafusion::test_util::arrow_test_data();
-
-    // register parquet file with the execution context
-    ctx.register_csv(
-        "aggregate_test_100",
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::default(),
-    )
-    .await?;
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT c1, MIN(c12), MAX(c12) \
-        FROM aggregate_test_100
-        GROUP BY c1",
-        )
-        .await?
-        .filter(col("c1").gt(lit(0.1)).and(col("c1").lt(lit(0.9))))?;
-
-    let ast = plan_to_sql(df.logical_plan())?;
-
-    let sql = format!("{}", ast);
-
-    assert_eq!(
-        sql,
-        r#"SELECT "aggregate_test_100"."c1", MIN("aggregate_test_100"."c12"), MAX("aggregate_test_100"."c12") FROM "aggregate_test_100" GROUP BY "aggregate_test_100"."c1" HAVING (("aggregate_test_100"."c1" > 0.1) AND ("aggregate_test_100"."c1" < 0.9))"#
     );
 
     Ok(())
