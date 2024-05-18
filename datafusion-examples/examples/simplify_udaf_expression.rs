@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     assert_batches_eq!(expected, &result);
 
     let df = ctx.table("t").await?;
-    let df = df.aggregate(vec![], vec![better_avg.call(vec![col("a")])])?;
+    let df = df.aggregate(vec![], vec![better_avg.call(vec![col("a")]).build()])?;
 
     let results = df.collect().await?;
     let result = as_float64_array(results[0].column(0))?;

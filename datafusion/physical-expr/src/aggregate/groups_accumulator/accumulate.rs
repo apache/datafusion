@@ -18,6 +18,7 @@
 //! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
 //! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+//! [`accumulate_indices`]: datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices
 
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow_array::{Array, BooleanArray, PrimitiveArray};

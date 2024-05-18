@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     let df = ctx.table("t").await?;
 
     // perform the aggregation
-    let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")])])?;
+    let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")]).build()])?;
 
     // note that "a" is f32, not f64. DataFusion coerces it to match the UDAF's signature.
 
