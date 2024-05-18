@@ -123,7 +123,6 @@ async fn run_tests() -> Result<()> {
     // report on any errors
     if !errors.is_empty() {
         for e in &errors {
-            println!("{e}");
         }
         exec_err!("{} failures", errors.len())
     } else {
