@@ -397,7 +397,6 @@ fn build_batch(
         }
     };
     transformed
-    // Ok(RecordBatch::try_new(schema.clone(), transformed)?)
 }
 
 /// Find the longest list length among the given list arrays for each row.
