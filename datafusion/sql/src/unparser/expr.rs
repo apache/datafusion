@@ -427,15 +427,21 @@ impl Unparser<'_> {
                 GroupingSet::Cube(cube) => {
                     let expr_ast_sets = cube
                         .iter()
-                        .map(|e| vec![self.expr_to_sql(e).unwrap()])
-                        .collect::<Vec<_>>();
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     Ok(ast::Expr::Cube(expr_ast_sets))
                 }
                 GroupingSet::Rollup(rollup) => {
                     let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
                         .iter()
-                        .map(|e| vec![self.expr_to_sql(e).unwrap()])
-                        .collect::<Vec<_>>();
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     Ok(ast::Expr::Rollup(expr_ast_sets))
                 }
             },
