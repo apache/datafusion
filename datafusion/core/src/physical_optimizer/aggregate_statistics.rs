@@ -276,7 +276,7 @@ fn take_optimizable_max(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
- 
+
     use crate::logical_expr::Operator;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -292,8 +292,8 @@ pub(crate) mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_plan::aggregates::AggregateMode;
     use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
+    use datafusion_physical_plan::aggregates::AggregateMode;
 
     /// Mock data using a MemoryExec which has an exact count statistic
     fn mock_data() -> Result<Arc<MemoryExec>> {
