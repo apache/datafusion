@@ -413,7 +413,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_count_arragg_approx_expr() -> Result<()> {
+    fn test_arragg_approx_expr() -> Result<()> {
         let funcs = vec![
             AggregateFunction::ArrayAgg,
             AggregateFunction::ApproxDistinct,
