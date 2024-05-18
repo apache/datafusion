@@ -19,11 +19,11 @@ use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
+    Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::type_coercion::functions::data_types;
+use crate::type_coercion::functions::data_types_with_scalar_udf;
 use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -134,20 +134,19 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                match func_def {
-                    ScalarFunctionDefinition::UDF(fun) => {
                         // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, fun.signature()).map_err(|_| {
+                        data_types_with_scalar_udf(&arg_data_types, func).map_err(|err| {
                             plan_datafusion_err!(
-                                "{}",
+                                "{} and {}",
+                                err,
                                 utils::generate_signature_error_msg(
-                                    fun.name(),
-                                    fun.signature().clone(),
+                                    func.name(),
+                                    func.signature().clone(),
                                     &arg_data_types,
                                 )
                             )
@@ -155,9 +154,7 @@ impl ExprSchemable for Expr {
 
                         // perform additional function arguments validation (due to limited
                         // expressiveness of `TypeSignature`), then infer return type
-                        Ok(fun.return_type_from_exprs(args, schema, &arg_data_types)?)
-                    }
-                }
+                        Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -177,9 +174,6 @@ impl ExprSchemable for Expr {
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
                         Ok(fun.return_type(&data_types)?)
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }

@@ -1137,7 +1137,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # array_element error
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_element\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_element\(array, index\)
+query error
 select array_element(1, 2);
 
 # array_element with null
@@ -1962,6 +1962,18 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), co
 [4, 5] [] []
 [1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
 [5] [, 54, 55, 56, 57, 58, 59, 60] [55]
+
+# Test issue: https://github.com/apache/datafusion/issues/10425
+# `from` may be larger than `to` and `stride` is positive
+query ????
+select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
+       array_slice(a, 3, 2, 1), array_slice(a, 3, 2) 
+  from (values ([1.0, 2.0, 3.0, 3.0]), ([4.0, 5.0, 3.0]), ([6.0])) t(a);
+----
+[] [] [] []
+[] [] [] []
+[6.0] [6.0] [] []
+
 
 # make_array with nulls
 query ???????
@@ -4625,7 +4637,7 @@ NULL 10
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_dims\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_dims\(array\)
+query error
 select array_dims(1);
 
 # array_dims scalar function
@@ -6475,7 +6487,7 @@ create table test_create_array_table(
   d int
 );
 
-query ???I
+query I
 insert into test_create_array_table values
   ([1, 2, 3], ['a', 'b', 'c'], [[4,6], [6,7,8]], 1);
 ----

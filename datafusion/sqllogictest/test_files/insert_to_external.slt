@@ -37,8 +37,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 statement ok
@@ -60,7 +60,7 @@ STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b);
 
-query TT
+query I
 insert into dictionary_encoded_parquet_partitioned
 select * from dictionary_encoded_values
 ----
@@ -81,7 +81,7 @@ STORED AS arrow
 LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
 PARTITIONED BY (b);
 
-query TT
+query I
 insert into dictionary_encoded_arrow_partitioned
 select * from dictionary_encoded_values
 ----
@@ -130,7 +130,7 @@ physical_plan
 03)----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
 04)------ValuesExec
 
-query II
+query I
 INSERT INTO ordered_insert_test values (5, 1), (4, 2), (7,7), (7,8), (7,9), (7,10), (3, 3), (2, 4), (1, 5);
 ----
 9
@@ -158,7 +158,7 @@ LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/'
 PARTITIONED BY (a, b);
 
 #note that partitioned cols are moved to the end so value tuples are (c, a, b)
-query ITT
+query I
 INSERT INTO partitioned_insert_test values (1, 10, 100), (1, 10, 200), (1, 20, 100), (1, 20, 200), (2, 20, 100), (2, 20, 200);
 ----
 6
@@ -192,7 +192,7 @@ STORED AS csv
 LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned'
 PARTITIONED BY (a string, b string);
 
-query ITT
+query I
 INSERT INTO partitioned_insert_test_hive VALUES (3,30,300);
 ----
 1
@@ -216,7 +216,7 @@ STORED AS json
 LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/'
 PARTITIONED BY (a);
 
-query TT
+query I
 INSERT INTO partitioned_insert_test_json values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
 ----
 6
@@ -250,7 +250,7 @@ STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_pq/'
 PARTITIONED BY (a);
 
-query IT
+query I
 INSERT INTO partitioned_insert_test_pq values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
 ----
 6
@@ -296,12 +296,12 @@ single_file_test(a bigint, b bigint)
 STORED AS csv
 LOCATION 'test_files/scratch/insert_to_external/single_csv_table.csv';
 
-query II
+query I
 INSERT INTO single_file_test values (1, 2), (3, 4);
 ----
 2
 
-query II
+query I
 INSERT INTO single_file_test values (4, 5), (6, 7);
 ----
 2
@@ -320,7 +320,7 @@ directory_test(a bigint, b bigint)
 STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q0/';
 
-query II
+query I
 INSERT INTO directory_test values (1, 2), (3, 4);
 ----
 2
@@ -364,7 +364,7 @@ physical_plan
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
-query II
+query I
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
@@ -427,7 +427,7 @@ physical_plan
 
 
 
-query II
+query I
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a1,
 COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a2
@@ -462,7 +462,7 @@ physical_plan
 02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
-query T
+query I
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
 ----
 100
@@ -484,12 +484,12 @@ table_without_values(id BIGINT, name varchar)
 STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q4/';
 
-query IT
+query I
 insert into table_without_values(id, name) values(1, 'foo');
 ----
 1
 
-query IT
+query I
 insert into table_without_values(name, id) values('bar', 2);
 ----
 1
@@ -504,7 +504,7 @@ statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
 # insert NULL values for the missing column (name)
-query IT
+query I
 insert into table_without_values(id) values(4);
 ----
 1
@@ -526,18 +526,18 @@ table_without_values(field1 BIGINT NOT NULL, field2 BIGINT NULL)
 STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q5/';
 
-query II
+query I
 insert into table_without_values values(1, 100);
 ----
 1
 
-query II
+query I
 insert into table_without_values values(2, NULL);
 ----
 1
 
 # insert NULL values for the missing column (field2)
-query II
+query I
 insert into table_without_values(field1) values(3);
 ----
 1
@@ -576,7 +576,7 @@ CREATE EXTERNAL TABLE test_column_defaults(
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q6/';
 
 # fill in all column values
-query IIITP
+query I
 insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 ----
 1
@@ -584,7 +584,7 @@ insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
 insert into test_column_defaults(a) values(2)
 
-query IIITP
+query I
 insert into test_column_defaults(b) values(20)
 ----
 1
@@ -596,7 +596,7 @@ select a,b,c,d from test_column_defaults
 NULL 20 500 default_text
 
 # fill the timestamp column with default value `now()` again, it should be different from the previous one
-query IIITP
+query I
 insert into test_column_defaults(a, b, c, d) values(2, 20, 200, 'DEF')
 ----
 1

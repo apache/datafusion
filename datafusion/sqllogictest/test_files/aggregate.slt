@@ -35,8 +35,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE TABLE d_table (c1 decimal(10,3), c2 varchar)
@@ -116,8 +116,8 @@ c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test array_agg with order by multiple columns
 query ?
@@ -196,6 +196,73 @@ drop table array_agg_distinct_list_table;
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
+
+
+# Test distinct aggregate function with merge batch
+query II
+with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+    ---- The order is non-deterministic, verify with length
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+3 1
+
+# It has only AggregateExec with FinalPartitioned mode, so `merge_batch` is used
+# If the plan is changed, whether the `merge_batch` is used should be verified to ensure the test coverage
+query TT
+explain with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+logical_plan
+01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]]
+03)----SubqueryAlias: a
+04)------SubqueryAlias: a
+05)--------Union
+06)----------Projection: Int64(1) AS id, Int64(2) AS foo
+07)------------EmptyRelation
+08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+09)------------EmptyRelation
+10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+11)------------EmptyRelation
+12)----------Projection: Int64(1) AS id, Int64(3) AS foo
+13)------------EmptyRelation
+14)----------Projection: Int64(1) AS id, Int64(2) AS foo
+15)------------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))@2 as SUM(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[1 as id, NULL as foo]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[1 as id, NULL as foo]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 3 as foo]
+14)--------------PlaceholderRowExec
+15)------------ProjectionExec: expr=[1 as id, 2 as foo]
+16)--------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -1562,6 +1629,91 @@ SELECT max(c1) FROM test;
 
 
 # count_basic
+statement ok
+create table t (c int) as values (1), (2), (null), (3), (null), (4), (5);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with all nulls
+statement ok
+create table t (c int) as values (null), (null), (null), (null), (null);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test with empty
+statement ok
+create table t (c int);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test count with string
+statement ok
+create table t (c string) as values ('a'), ('b'), (null), ('c'), (null), ('d'), ('e');
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with largeutf8
+statement ok
+create table t (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast(null, 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+select arrow_typeof(c) from t;
+----
+Utf8
+Utf8
+Utf8
+Utf8
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# test count with multiple columns
+statement ok
+create table t (c1 int, c2 int) as values (1, 1), (2, null), (null, 2), (null, null), (3, 3), (null, 4);
+
+query IT
+select count(c1, c2), arrow_typeof(count(c1, c2)) from t;
+----
+2 Int64
+
+statement ok
+drop table t;
+
+
 query II
 SELECT COUNT(c1), COUNT(c2) FROM test
 ----
@@ -1619,13 +1771,347 @@ select avg(c1) from test
 ----
 1.75
 
+# avg_decimal
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.5 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_with_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_all_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_with_nulls
+statement ok
+create table t (c1 int) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_all_nulls
+statement ok
+create table t (c1 int) as values (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# avg_u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f64
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_1
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_2
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_4
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_5
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.602222222222 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_6
+statement ok
+create table t (c1 double, c2 double) as values (1.0, 4.0), (2.0, 5.0), (3.0, 6.0), (1.1, 4.4), (2.2, 5.5), (3.3, 6.6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.761666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_u32
+statement ok
+create table t (c1 int unsigned, c2 int unsigned) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f32
+statement ok
+create table t (c1 float, c2 float) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_1
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, null), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_2
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_3
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
 # simple_mean
 query R
 select mean(c1) from test
 ----
 1.75
 
+# aggregate sum distinct, coerced result from i32 to i64
+statement ok
+create table t (c int) as values (1), (2), (1), (3), (null), (null), (-3), (-3);
 
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from u32 to u64
+statement ok
+create table t (c int unsigned) as values (1), (2), (1), (3), (null), (null), (3);
+
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+6 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from f32 to f64
+statement ok
+create table t (c float) as values (1.0), (2.2), (1.0), (3.3), (null), (null), (3.3), (-2.0);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct with decimal
+statement ok
+create table t (c decimal(35, 0)) as values (1), (2), (1), (3), (null), (null), (3), (-2);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4 Decimal128(38, 0)
+
+statement ok
+drop table t;
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
 query RI
@@ -1685,6 +2171,30 @@ query ?
 SELECT ARRAY_AGG([1]);
 ----
 [[1]]
+
+# array_agg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query ?
+select array_agg(c1) from t;
+----
+[1, 2, 3, 4, 5]
+
+statement ok
+drop table t;
+
+# array_agg_nested
+statement ok
+create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
+
+query ?
+select array_agg(column1) from t;
+----
+[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
 
 # variance_single_value
 query RRRR
@@ -1841,6 +2351,612 @@ ORDER BY tag
 1 8 11 13 14 11 12 6 11 A
 33 11 NULL 33 11 NULL 33 11 NULL B
 
+
+# bit_and_i32
+statement ok
+create table t (c int) as values (4), (7), (15);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c))  from t;
+----
+4 Int32
+
+statement ok
+drop table t;
+
+# bit_and_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (NULL), (3), (5);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+1 Int32
+
+statement ok
+drop table t;
+
+# bit_and_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+# bit_and_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (15);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+4 UInt32
+
+statement ok
+drop table t;
+
+# bit_or_i32
+statement ok
+create table t (c int) as values (4), (7), (15);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+15 Int32
+
+statement ok
+drop table t;
+
+# bit_or_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (NULL), (3), (5);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+7 Int32
+
+statement ok
+drop table t;
+
+#bit_or_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+
+#bit_or_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (15);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+15 UInt32
+
+statement ok
+drop table t;
+
+#bit_xor_i32
+statement ok
+create table t (c int) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+15 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (1), (NULL), (3), (5);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+6 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+# bit_xor_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+15 UInt32
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32
+statement ok
+create table t (c int) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+12 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (1), (NULL), (3), (5);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+7 Int32
+
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32_all_nulls
+statement ok
+create table t (c int ) as values (NULL), (NULL);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+NULL Int32
+
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+12 UInt32
+
+statement ok
+drop table t;
+
+#################
+# Min_Max Begin #
+#################
+# min_decimal, max_decimal
+statement ok
+CREATE TABLE decimals (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals VALUES (123.0001), (124.00);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals;
+----
+123 124
+
+statement ok
+DROP TABLE decimals;
+
+statement ok
+CREATE TABLE decimals_batch (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_batch VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_batch;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_batch;
+
+statement ok
+CREATE TABLE decimals_empty (value DECIMAL(10, 0));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_empty;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_empty;
+
+# min_decimal_all_nulls, max_decimal_all_nulls
+statement ok
+CREATE TABLE decimals_all_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_all_nulls VALUES (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_all_nulls;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_all_nulls;
+
+# min_decimal_with_nulls, max_decimal_with_nulls
+statement ok
+CREATE TABLE decimals_with_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_with_nulls;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_with_nulls;
+
+statement ok
+CREATE TABLE decimals_error (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals_error VALUES (123.00), (arrow_cast(124.001, 'Decimal128(10, 3)'));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_error;
+----
+123 124
+
+statement ok
+DROP TABLE decimals_error;
+
+statement ok
+CREATE TABLE decimals_agg (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_agg VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_agg;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_agg;
+
+# min_i32, max_i32
+statement ok
+CREATE TABLE integers (value INT);
+
+statement ok
+INSERT INTO integers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers
+----
+1 5
+
+statement ok
+DROP TABLE integers;
+
+# min_utf8, max_utf8
+statement ok
+CREATE TABLE strings (value TEXT);
+
+statement ok
+INSERT INTO strings VALUES ('d'), ('a'), ('c'), ('b');
+
+query TT
+SELECT MIN(value), MAX(value) FROM strings
+----
+a d
+
+statement ok
+DROP TABLE strings;
+
+# min_i32_with_nulls, max_i32_with_nulls
+statement ok
+CREATE TABLE integers_with_nulls (value INT);
+
+statement ok
+INSERT INTO integers_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_with_nulls
+----
+1 5
+
+statement ok
+DROP TABLE integers_with_nulls;
+
+# min_i32_all_nulls, max_i32_all_nulls
+statement ok
+CREATE TABLE integers_all_nulls (value INT);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_all_nulls
+----
+NULL NULL
+
+statement ok
+DROP TABLE integers_all_nulls;
+
+# min_u32, max_u32
+statement ok
+CREATE TABLE uintegers (value INT UNSIGNED);
+
+statement ok
+INSERT INTO uintegers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM uintegers
+----
+1 5
+
+statement ok
+DROP TABLE uintegers;
+
+# min_f32, max_f32
+statement ok
+CREATE TABLE floats (value FLOAT);
+
+statement ok
+INSERT INTO floats VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM floats
+----
+1 5
+
+statement ok
+DROP TABLE floats;
+
+# min_f64, max_f64
+statement ok
+CREATE TABLE doubles (value DOUBLE);
+
+statement ok
+INSERT INTO doubles VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM doubles
+----
+1 5
+
+statement ok
+DROP TABLE doubles;
+
+# min_date, max_date
+statement ok
+CREATE TABLE dates (value DATE);
+
+statement ok
+INSERT INTO dates VALUES ('1970-01-02'), ('1970-01-03'), ('1970-01-04'), ('1970-01-05'), ('1970-01-06');
+
+query DD
+SELECT MIN(value), MAX(value) FROM dates
+----
+1970-01-02 1970-01-06
+
+statement ok
+DROP TABLE dates;
+
+# min_seconds, max_seconds
+statement ok
+CREATE TABLE times (value TIME);
+
+statement ok
+INSERT INTO times VALUES ('00:00:01'), ('00:00:02'), ('00:00:03'), ('00:00:04'), ('00:00:05');
+
+query DD
+SELECT MIN(value), MAX(value) FROM times
+----
+00:00:01 00:00:05
+
+statement ok
+DROP TABLE times;
+
+# min_milliseconds, max_milliseconds
+statement ok
+CREATE TABLE time32millisecond (value TIME);
+
+statement ok
+INSERT INTO time32millisecond VALUES ('00:00:00.001'), ('00:00:00.002'), ('00:00:00.003'), ('00:00:00.004'), ('00:00:00.005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time32millisecond
+----
+00:00:00.001 00:00:00.005
+
+statement ok
+DROP TABLE time32millisecond;
+
+# min_microseconds, max_microseconds
+statement ok
+CREATE TABLE time64microsecond (value TIME);
+
+statement ok
+INSERT INTO time64microsecond VALUES ('00:00:00.000001'), ('00:00:00.000002'), ('00:00:00.000003'), ('00:00:00.000004'), ('00:00:00.000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64microsecond
+----
+00:00:00.000001 00:00:00.000005
+
+statement ok
+DROP TABLE time64microsecond;
+
+# min_nanoseconds, max_nanoseconds
+statement ok
+CREATE TABLE time64nanosecond (value TIME);
+
+statement ok
+INSERT INTO time64nanosecond VALUES ('00:00:00.000000001'), ('00:00:00.000000002'), ('00:00:00.000000003'), ('00:00:00.000000004'), ('00:00:00.000000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64nanosecond
+----
+00:00:00.000000001 00:00:00.000000005
+
+statement ok
+DROP TABLE time64nanosecond;
+
+# min_timestamp, max_timestamp
+statement ok
+CREATE TABLE timestampmicrosecond (value TIMESTAMP);
+
+statement ok
+INSERT INTO timestampmicrosecond VALUES ('1970-01-01 00:00:00.000001'), ('1970-01-01 00:00:00.000002'), ('1970-01-01 00:00:00.000003'), ('1970-01-01 00:00:00.000004'), ('1970-01-01 00:00:00.000005');
+
+query PP
+SELECT MIN(value), MAX(value) FROM timestampmicrosecond
+----
+1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000005
+
+statement ok
+DROP TABLE timestampmicrosecond;
+
+# max_bool
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+false
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (true), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (false), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+# min_bool
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+true
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (true), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (false), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+#################
+# Min_Max End #
+#################
 
 statement ok
 create table bool_aggregate_functions (
@@ -2315,6 +3431,81 @@ query RT
 select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
 100 Decimal128(20, 3)
+
+# aggregate sum with deciaml
+statement ok
+create table t (c decimal(35, 3)) as values (10), (null), (20);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+30 Decimal128(38, 3)
+
+statement ok
+drop table t;
+
+# aggregate sum with i32, sum coerced result to i64
+statement ok
+create table t (c int) as values (1), (-1), (10), (null), (-11);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-1 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with all nulls
+statement ok
+create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
+
+query RTIT
+select 
+  sum(c1), arrow_typeof(sum(c1)),
+  sum(c2), arrow_typeof(sum(c2))
+from t;
+----
+NULL Decimal128(20, 0) NULL Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with u32, sum coerced result to u64
+statement ok
+create table t (c int unsigned) as values (1), (0), (10), (null), (4);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+15 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum with f32, sum coerced result to f64
+statement ok
+create table t (c float) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.79999999702 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum with f64
+statement ok
+create table t (c double) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.8 Float64
+
+statement ok
+drop table t;
 
 query TRT
 select c2, sum(c1), arrow_typeof(sum(c1)) from d_table GROUP BY c2 ORDER BY c2;
@@ -3139,7 +4330,7 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
-query ITT
+query I
 INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
 ----
 9
@@ -3508,11 +4699,11 @@ c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
 WITH ORDER (c2 DESC)
 WITH ORDER (c3 ASC)
-LOCATION '../core/tests/data/convert_first_last.csv';
+LOCATION '../core/tests/data/convert_first_last.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test first to last, the result does not show difference, we need to check the conversion by `explain`
 query TT

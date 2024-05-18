@@ -242,12 +242,14 @@ impl TreeNode for LogicalPlan {
                 table_schema,
                 op,
                 input,
+                output_schema,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
                     table_schema,
                     op,
                     input,
+                    output_schema,
                 })
             }),
             LogicalPlan::Copy(CopyTo {

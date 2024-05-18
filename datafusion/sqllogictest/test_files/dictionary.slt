@@ -386,3 +386,61 @@ drop table m3;
 
 statement ok
 drop table m3_source;
+
+
+## Test that filtering on dictionary columns coerces the filter value to the dictionary type
+statement ok
+create table test as values
+  ('row1', arrow_cast('1', 'Dictionary(Int32, Utf8)')),
+  ('row2', arrow_cast('2', 'Dictionary(Int32, Utf8)')),
+  ('row3', arrow_cast('3', 'Dictionary(Int32, Utf8)'))
+;
+
+# query using an string '1' which must be coerced into a dictionary string
+query T?
+SELECT * from test where column2 = '1';
+----
+row1 1
+
+# filter should not have a cast on column2
+query TT
+explain SELECT * from test where column2 = '1';
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+# try literal = col to verify order doesn't matter
+# filter should not cast column2
+query TT
+explain SELECT * from test where '1' = column2
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Now query using an integer which must be coerced into a dictionary string
+query T?
+SELECT * from test where column2 = 1;
+----
+row1 1
+
+query TT
+explain SELECT * from test where column2 = 1;
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]

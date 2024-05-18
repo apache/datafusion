@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -290,6 +291,32 @@ fn eliminate_nested_filters() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[test]
+fn test_propagate_empty_relation_inner_join_and_unions() {
+    let sql = "\
+        SELECT A.col_int32 FROM test AS A \
+        INNER JOIN ( \
+          SELECT col_int32 FROM test WHERE 1 = 0 \
+        ) AS B ON A.col_int32 = B.col_int32 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 1 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 0 = 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE test.col_int32 < 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 0";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Union\
+        \n  TableScan: test projection=[col_int32]\
+        \n  TableScan: test projection=[col_int32]\
+        \n  Filter: test.col_int32 < Int32(0)\
+        \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -303,7 +330,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
     optimizer.optimize(plan, &config, observe)
 }
 

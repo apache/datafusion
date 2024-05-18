@@ -25,12 +25,12 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
     ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
-    DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
-    InListExpr, IsNotNullExpr, IsNullExpr, LastValue, Literal, Max, Median, Min,
-    NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank,
-    RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr,
-    Variance, VariancePop, WindowShift,
+    CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
+    DistinctCount, DistinctSum, FirstValue, Grouping, InListExpr, IsNotNullExpr,
+    IsNullExpr, LastValue, Literal, Max, Median, Min, NegativeExpr, NotExpr, NthValue,
+    NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType,
+    RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr, Variance, VariancePop,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -56,7 +56,6 @@ use datafusion_common::{
     stats::Precision,
     DataFusionError, JoinSide, Result,
 };
-use datafusion_expr::ScalarFunctionDefinition;
 
 use crate::logical_plan::csv_writer_options_to_proto;
 use crate::protobuf::{
@@ -292,10 +291,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Variance
     } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
         protobuf::AggregateFunction::VariancePop
-    } else if aggr_expr.downcast_ref::<Covariance>().is_some() {
-        protobuf::AggregateFunction::Covariance
-    } else if aggr_expr.downcast_ref::<CovariancePop>().is_some() {
-        protobuf::AggregateFunction::CovariancePop
     } else if aggr_expr.downcast_ref::<Stddev>().is_some() {
         protobuf::AggregateFunction::Stddev
     } else if aggr_expr.downcast_ref::<StddevPop>().is_some() {
@@ -542,11 +537,7 @@ pub fn serialize_physical_expr(
         let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
 
         let mut buf = Vec::new();
-        match expr.fun() {
-            ScalarFunctionDefinition::UDF(udf) => {
-                codec.try_encode_udf(udf, &mut buf)?;
-            }
-        }
+        codec.try_encode_udf(expr.fun(), &mut buf)?;
 
         let fun_definition = if buf.is_empty() { None } else { Some(buf) };
         Ok(protobuf::PhysicalExprNode {
@@ -612,6 +603,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+            statistics: pf.statistics.as_ref().map(|s| s.into()),
         })
     }
 }
@@ -906,7 +898,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
-            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
             allow_single_file_parallelism: value.allow_single_file_parallelism,
@@ -980,7 +973,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
     fn try_from(opts: &CsvOptions) -> Result<Self, Self::Error> {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
         Ok(protobuf::CsvOptions {
-            has_header: opts.has_header,
+            has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
             delimiter: vec![opts.delimiter],
             quote: vec![opts.quote],
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),

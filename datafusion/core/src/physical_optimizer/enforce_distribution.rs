@@ -411,7 +411,7 @@ fn adjust_input_keys_ordering(
     } else {
         // By default, push down the parent requirements to children
         for child in requirements.children.iter_mut() {
-            child.data = requirements.data.clone();
+            child.data.clone_from(&requirements.data);
         }
     }
     Ok(Transformed::yes(requirements))
@@ -3572,7 +3572,11 @@ pub(crate) mod tests {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
-        let alias = vec![("a".to_string(), "a".to_string())];
+        let alias = vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+            ("c".to_string(), "c".to_string()),
+        ];
         let plan = sort_preserving_merge_exec(
             sort_key.clone(),
             sort_exec(
@@ -3585,7 +3589,7 @@ pub(crate) mod tests {
         let expected = &[
             "SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
             // Since this projection is trivial, increasing parallelism is not beneficial
-            "ProjectionExec: expr=[a@0 as a]",
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, plan.clone(), true);

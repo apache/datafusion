@@ -1588,8 +1588,9 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        cast, count_distinct, create_udf, expr, lit, sum, BuiltInWindowFunction,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
+        array_agg, cast, count_distinct, create_udf, expr, lit, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
@@ -2041,6 +2042,85 @@ mod tests {
             ],
             &df_results
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_subexpr() -> Result<()> {
+        let df = test_table().await?;
+
+        let group_expr = col("c2") + lit(1);
+        let aggr_expr = sum(col("c3") + lit(2));
+
+        let df = df
+            // GROUP BY `c2 + 1`
+            .aggregate(vec![group_expr.clone()], vec![aggr_expr.clone()])?
+            // SELECT `c2 + 1` as c2 + 10, sum(c3 + 2) + 20
+            // SELECT expressions contain aggr_expr and group_expr as subexpressions
+            .select(vec![
+                group_expr.alias("c2") + lit(10),
+                (aggr_expr + lit(20)).alias("sum"),
+            ])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+                "+----------------+------+",
+                "| c2 + Int32(10) | sum  |",
+                "+----------------+------+",
+                "| 12             | 431  |",
+                "| 13             | 248  |",
+                "| 14             | 453  |",
+                "| 15             | 95   |",
+                "| 16             | -146 |",
+                "+----------------+------+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_name_collision() -> Result<()> {
+        let df = test_table().await?;
+
+        let collided_alias = "aggregate_test_100.c2 + aggregate_test_100.c3";
+        let group_expr = lit(1).alias(collided_alias);
+
+        let df = df
+            // GROUP BY 1
+            .aggregate(vec![group_expr], vec![])?
+            // SELECT `aggregate_test_100.c2 + aggregate_test_100.c3`
+            .select(vec![
+                (col("aggregate_test_100.c2") + col("aggregate_test_100.c3")),
+            ])
+            // The select expr has the same display_name as the group_expr,
+            // but since they are different expressions, it should fail.
+            .expect_err("Expected error");
+        let expected = "Schema error: No field named aggregate_test_100.c2. \
+            Valid fields are \"aggregate_test_100.c2 + aggregate_test_100.c3\".";
+        assert_eq!(df.strip_backtrace(), expected);
+
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/10346
+    #[tokio::test]
+    async fn test_select_over_aggregate_schema() -> Result<()> {
+        let df = test_table()
+            .await?
+            .with_column("c", col("c1"))?
+            .aggregate(vec![], vec![array_agg(col("c")).alias("c")])?
+            .select(vec![col("c")])?;
+
+        assert_eq!(df.schema().fields().len(), 1);
+        let field = df.schema().field(0);
+        // There are two columns named 'c', one from the input of the aggregate and the other from the output.
+        // Select should return the column from the output of the aggregate, which is a list.
+        assert!(matches!(field.data_type(), DataType::List(_)));
 
         Ok(())
     }

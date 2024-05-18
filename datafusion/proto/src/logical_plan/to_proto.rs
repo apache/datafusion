@@ -36,8 +36,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, Unnest,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction, Sort,
+    Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -369,8 +369,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Variance => Self::Variance,
             AggregateFunction::VariancePop => Self::VariancePop,
-            AggregateFunction::Covariance => Self::Covariance,
-            AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
@@ -674,12 +672,6 @@ pub fn serialize_expr(
                     AggregateFunction::VariancePop => {
                         protobuf::AggregateFunction::VariancePop
                     }
-                    AggregateFunction::Covariance => {
-                        protobuf::AggregateFunction::Covariance
-                    }
-                    AggregateFunction::CovariancePop => {
-                        protobuf::AggregateFunction::CovariancePop
-                    }
                     AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                     AggregateFunction::StddevPop => {
                         protobuf::AggregateFunction::StddevPop
@@ -754,12 +746,6 @@ pub fn serialize_expr(
                     },
                 ))),
             },
-            AggregateFunctionDefinition::Name(_) => {
-                return Err(Error::NotImplemented(
-                    "Proto serialization error: Trying to serialize a unresolved function"
-                        .to_string(),
-                ));
-            }
         },
 
         Expr::ScalarVariable(_, _) => {
@@ -767,25 +753,19 @@ pub fn serialize_expr(
                 "Proto serialization error: Scalar Variable not supported".to_string(),
             ))
         }
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let args = serialize_exprs(args, codec)?;
-            match func_def {
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let mut buf = Vec::new();
-                    let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_udf(func.as_ref(), &mut buf);
 
-                    let fun_definition = if buf.is_empty() { None } else { Some(buf) };
+            let fun_definition = if buf.is_empty() { None } else { Some(buf) };
 
-                    protobuf::LogicalExprNode {
-                        expr_type: Some(ExprType::ScalarUdfExpr(
-                            protobuf::ScalarUdfExprNode {
-                                fun_name: fun.name().to_string(),
-                                fun_definition,
-                                args,
-                            },
-                        )),
-                    }
-                }
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+                    fun_name: func.name().to_string(),
+                    fun_definition,
+                    args,
+                })),
             }
         }
         Expr::Not(expr) => {
@@ -1517,7 +1497,7 @@ fn encode_scalar_nested_value(
 
     let gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
-    let (_, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = gen
         .encoded_batch(&batch, &mut dict_tracker, &Default::default())
         .map_err(|e| {
             Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
@@ -1528,6 +1508,13 @@ fn encode_scalar_nested_value(
     let scalar_list_value = protobuf::ScalarNestedValue {
         ipc_message: encoded_message.ipc_message,
         arrow_data: encoded_message.arrow_data,
+        dictionaries: encoded_dictionaries
+            .into_iter()
+            .map(|data| protobuf::scalar_nested_value::Dictionary {
+                ipc_message: data.ipc_message,
+                arrow_data: data.arrow_data,
+            })
+            .collect(),
         schema: Some(schema),
     };
 

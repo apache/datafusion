@@ -872,7 +872,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-
                 let renamed_key = format!("format.{}", key);
                 options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
             } else {
@@ -968,12 +967,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             name,
             columns,
             file_type,
-            has_header,
-            delimiter,
             location,
             table_partition_cols,
             if_not_exists,
-            file_compression_type,
             order_exprs,
             unbounded,
             options,
@@ -985,8 +981,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
         all_constraints.extend(inline_constraints);
 
+        let mut options_map = HashMap::<String, String>::new();
+        for (key, value) in options {
+            if options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!(
+                        "Unsupported Value in CREATE EXTERNAL TABLE statement {}",
+                        value
+                    );
+                }
+            };
+
+            if !(&key.contains('.')) {
+                // If a config does not belong to any namespace, we assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+                let renamed_key = format!("format.{}", key.to_lowercase());
+                options_map.insert(renamed_key, value_string.to_lowercase());
+            } else {
+                options_map.insert(key.to_lowercase(), value_string.to_lowercase());
+            }
+        }
+
+        let compression = options_map
+            .get("format.compression")
+            .map(|c| CompressionTypeVariant::from_str(c))
+            .transpose()?;
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
-            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
+            && compression
+                .map(|c| c != CompressionTypeVariant::UNCOMPRESSED)
+                .unwrap_or(false)
         {
             plan_err!(
                 "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
@@ -1017,15 +1057,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 location,
                 file_type,
-                has_header,
-                delimiter,
                 table_partition_cols,
                 if_not_exists,
                 definition,
-                file_compression_type,
                 order_exprs: ordered_exprs,
                 unbounded,
-                options,
+                options: options_map,
                 constraints,
                 column_defaults,
             },
@@ -1206,12 +1243,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement {
-            table_name: table_ref,
-            table_schema: schema.into(),
-            op: WriteOp::Delete,
-            input: Arc::new(source),
-        });
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            table_ref,
+            schema.into(),
+            WriteOp::Delete,
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 
@@ -1318,12 +1355,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let source = project(source, exprs)?;
 
-        let plan = LogicalPlan::Dml(DmlStatement {
+        let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
             table_schema,
-            op: WriteOp::Update,
-            input: Arc::new(source),
-        });
+            WriteOp::Update,
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 
@@ -1441,12 +1478,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             WriteOp::InsertInto
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement {
+        let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
-            table_schema: Arc::new(table_schema),
+            Arc::new(table_schema),
             op,
-            input: Arc::new(source),
-        });
+            Arc::new(source),
+        ));
         Ok(plan)
     }
 

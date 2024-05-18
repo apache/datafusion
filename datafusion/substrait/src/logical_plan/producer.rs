@@ -722,7 +722,10 @@ pub fn to_substrait_agg_measure(
                             arguments,
                             sorts,
                             output_type: None,
-                            invocation: AggregationInvocation::All as i32,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
                             phase: AggregationPhase::Unspecified as i32,
                             args: vec![],
                             options: vec![],
@@ -732,9 +735,6 @@ pub fn to_substrait_agg_measure(
                             None => None
                         }
                     })
-                }
-                AggregateFunctionDefinition::Name(name) => {
-                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
                 }
             }
 

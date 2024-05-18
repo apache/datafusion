@@ -81,7 +81,7 @@ pub async fn exec_from_lines(
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
-                    query = "".to_owned();
+                    query = "".to_string();
                 } else {
                     query.push('\n');
                 }

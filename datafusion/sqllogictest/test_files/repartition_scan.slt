@@ -158,13 +158,13 @@ DROP TABLE parquet_table_with_order;
 # create a single csv file
 statement ok
 COPY  (VALUES (1), (2), (3), (4), (5)) TO 'test_files/scratch/repartition_scan/csv_table/1.csv'
-STORED AS CSV WITH HEADER ROW;
+STORED AS CSV OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE csv_table(column1 int)
 STORED AS csv
-WITH HEADER ROW
-LOCATION 'test_files/scratch/repartition_scan/csv_table/';
+LOCATION 'test_files/scratch/repartition_scan/csv_table/'
+OPTIONS ('format.has_header' 'true');
 
 query I
 select * from csv_table ORDER BY column1;
@@ -277,8 +277,7 @@ DROP TABLE arrow_table;
 statement ok
 CREATE EXTERNAL TABLE avro_table
 STORED AS AVRO
-WITH HEADER ROW
-LOCATION '../../testing/data/avro/simple_enum.avro'
+LOCATION '../../testing/data/avro/simple_enum.avro';
 
 
 # It would be great to see the file read as "4" groups with even sizes (offsets) eventually

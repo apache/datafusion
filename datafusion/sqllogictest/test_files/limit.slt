@@ -36,8 +36,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 # async fn csv_query_limit
 query T
@@ -512,3 +512,44 @@ SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 9);
 
 statement ok
 drop table aggregate_test_100;
+
+
+## Test limit pushdown in StreamingTableExec
+
+## Create sorted table with 5 rows
+query IT
+COPY (select * from (values
+   (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
+)) TO 'test_files/scratch/limit/data.csv' STORED AS CSV;
+----
+5
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "column1"  INTEGER,
+    "column2" VARCHAR,
+) STORED AS CSV
+WITH ORDER ("column1", "column2")
+LOCATION 'test_files/scratch/limit/data.csv' OPTIONS ('format.has_header' 'false');
+
+query IT
+SELECT * from data LIMIT 3;
+----
+1 a
+2 b
+3 c
+
+# query
+query TT
+explain SELECT * FROM data LIMIT 3;
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: data projection=[column1, column2], fetch=3
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=3
+02)--StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=3, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
+
+
+statement ok
+drop table data;

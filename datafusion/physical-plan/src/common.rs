@@ -153,37 +153,28 @@ pub fn compute_record_batch_statistics(
         })
         .sum();
 
-    let mut column_statistics = vec![ColumnStatistics::new_unknown(); projection.len()];
+    let mut null_counts = vec![0; projection.len()];
 
     for partition in batches.iter() {
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
-                column_statistics[stat_index].null_count =
-                    Precision::Exact(batch.column(*col_index).null_count());
+                null_counts[stat_index] += batch.column(*col_index).null_count();
             }
         }
     }
+    let column_statistics = null_counts
+        .into_iter()
+        .map(|null_count| {
+            let mut s = ColumnStatistics::new_unknown();
+            s.null_count = Precision::Exact(null_count);
+            s
+        })
+        .collect();
 
     Statistics {
         num_rows: Precision::Exact(nb_rows),
         total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
-    }
-}
-
-/// Transposes the given vector of vectors.
-pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    match original.as_slice() {
-        [] => vec![],
-        [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
-            for row in original {
-                for (item, transposed_row) in row.into_iter().zip(&mut result) {
-                    transposed_row.push(item);
-                }
-            }
-            result
-        }
     }
 }
 
@@ -705,11 +696,33 @@ mod tests {
     }
 
     #[test]
-    fn test_transpose() -> Result<()> {
-        let in_data = vec![vec![1, 2, 3], vec![4, 5, 6]];
-        let transposed = transpose(in_data);
-        let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
-        assert_eq!(expected, transposed);
+    fn test_compute_record_batch_statistics_null() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("u64", DataType::UInt64, true)]));
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt64Array::from(vec![Some(1), None, None]))],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt64Array::from(vec![Some(1), Some(2), None]))],
+        )?;
+        let byte_size = batch1.get_array_memory_size() + batch2.get_array_memory_size();
+        let actual =
+            compute_record_batch_statistics(&[vec![batch1], vec![batch2]], &schema, None);
+
+        let expected = Statistics {
+            num_rows: Precision::Exact(6),
+            total_byte_size: Precision::Exact(byte_size),
+            column_statistics: vec![ColumnStatistics {
+                distinct_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                null_count: Precision::Exact(3),
+            }],
+        };
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 }

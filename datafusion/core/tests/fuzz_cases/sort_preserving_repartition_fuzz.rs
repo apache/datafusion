@@ -39,12 +39,12 @@ mod sp_repartition_fuzz_tests {
         config::SessionConfig, memory_pool::MemoryConsumer, SendableRecordBatchStream,
     };
     use datafusion_physical_expr::{
+        equivalence::{EquivalenceClass, EquivalenceProperties},
         expressions::{col, Column},
-        EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        PhysicalExpr, PhysicalSortExpr,
     };
     use test_utils::add_empty_batches;
 
-    use datafusion_physical_expr::equivalence::EquivalenceClass;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -78,7 +78,7 @@ mod sp_repartition_fuzz_tests {
 
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Define a and f are aliases
-        eq_properties.add_equal_conditions(col_a, col_f);
+        eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
         eq_properties = eq_properties.add_constants([col_e.clone()]);
 

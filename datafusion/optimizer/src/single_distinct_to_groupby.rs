@@ -22,15 +22,15 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{qualified_name, DFSchema, Result};
+use datafusion_common::{qualified_name, Result};
+use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
     aggregate_function::AggregateFunction::{Max, Min, Sum},
     col,
     expr::AggregateFunction,
-    logical_plan::{Aggregate, LogicalPlan, Projection},
-    utils::columnize_expr,
-    Expr, ExprSchemable,
+    logical_plan::{Aggregate, LogicalPlan},
+    Expr,
 };
 
 use hashbrown::HashSet;
@@ -90,6 +90,31 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                     } else if !matches!(fun, Sum | Min | Max) {
                         return Ok(false);
                     }
+                } else if let Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::UDF(fun),
+                    distinct,
+                    args,
+                    filter,
+                    order_by,
+                    null_treatment: _,
+                }) = expr
+                {
+                    if filter.is_some() || order_by.is_some() {
+                        return Ok(false);
+                    }
+                    aggregate_count += 1;
+                    if *distinct {
+                        for e in args {
+                            fields_set.insert(e.canonical_name());
+                        }
+                    } else if fun.name() != "SUM"
+                        && fun.name() != "MIN"
+                        && fun.name() != "MAX"
+                    {
+                        return Ok(false);
+                    }
+                } else {
+                    return Ok(false);
                 }
             }
             Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
@@ -228,29 +253,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .collect::<Result<Vec<_>>>()?;
 
                     // construct the inner AggrPlan
-                    let inner_fields = inner_group_exprs
-                        .iter()
-                        .chain(inner_aggr_exprs.iter())
-                        .map(|expr| expr.to_field(input.schema()))
-                        .collect::<Result<Vec<_>>>()?;
-                    let inner_schema = DFSchema::new_with_metadata(
-                        inner_fields,
-                        input.schema().metadata().clone(),
-                    )?;
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
                         inner_group_exprs,
                         inner_aggr_exprs,
-                    )?);
-
-                    let outer_fields = outer_group_exprs
-                        .iter()
-                        .chain(outer_aggr_exprs.iter())
-                        .map(|expr| expr.to_field(&inner_schema))
-                        .collect::<Result<Vec<_>>>()?;
-                    let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
-                        outer_fields,
-                        input.schema().metadata().clone(),
                     )?);
 
                     // so the aggregates are displayed in the same way even after the rewrite
@@ -258,7 +264,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // - group_by aggr
                     // - aggr expr
                     let group_size = group_expr.len();
-                    let alias_expr = out_group_expr_with_alias
+                    let alias_expr: Vec<_> = out_group_expr_with_alias
                         .into_iter()
                         .map(|(group_expr, original_field)| {
                             if let Some(name) = original_field {
@@ -271,7 +277,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             let idx = idx + group_size;
                             let (qualifier, field) = schema.qualified_field(idx);
                             let name = qualified_name(qualifier, field.name());
-                            columnize_expr(expr.clone().alias(name), &outer_aggr_schema)
+                            expr.clone().alias(name)
                         }))
                         .collect();
 
@@ -280,11 +286,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         outer_group_exprs,
                         outer_aggr_exprs,
                     )?);
-
-                    Ok(Some(LogicalPlan::Projection(Projection::try_new(
-                        alias_expr,
-                        Arc::new(outer_aggr),
-                    )?)))
+                    Ok(Some(project(outer_aggr, alias_expr)?))
                 } else {
                     Ok(None)
                 }

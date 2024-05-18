@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod stats;
 pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -33,6 +35,7 @@ use self::utils::{down_cast_any_ref, ordering_fields};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+#[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
@@ -41,6 +44,7 @@ pub fn create_aggregate_expr(
     schema: &Schema,
     name: impl Into<String>,
     ignore_nulls: bool,
+    is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
@@ -70,6 +74,8 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         ordering_fields,
+        is_distinct,
+        input_type: input_exprs_types[0].clone(),
     }))
 }
 
@@ -161,12 +167,19 @@ pub struct AggregateFunctionExpr {
     ordering_req: LexOrdering,
     ignore_nulls: bool,
     ordering_fields: Vec<Field>,
+    is_distinct: bool,
+    input_type: DataType,
 }
 
 impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
+    }
+
+    /// Return if the aggregation is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
     }
 }
 
@@ -181,11 +194,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        self.fun.state_fields(
-            self.name(),
-            self.data_type.clone(),
-            self.ordering_fields.clone(),
-        )
+        let args = StateFieldsArgs {
+            name: &self.name,
+            input_type: &self.input_type,
+            return_type: &self.data_type,
+            ordering_fields: &self.ordering_fields,
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.state_fields(args)
     }
 
     fn field(&self) -> Result<Field> {
@@ -193,12 +210,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let acc_args = AccumulatorArgs::new(
-            &self.data_type,
-            &self.schema,
-            self.ignore_nulls,
-            &self.sort_exprs,
-        );
+        let acc_args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
+        };
 
         self.fun.accumulator(acc_args)
     }
@@ -263,7 +283,16 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        self.fun.groups_accumulator_supported()
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
+        };
+        self.fun.groups_accumulator_supported(args)
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

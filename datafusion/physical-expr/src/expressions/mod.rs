@@ -52,7 +52,6 @@ pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::count::Count;
 pub use crate::aggregate::count_distinct::DistinctCount;
-pub use crate::aggregate::covariance::{Covariance, CovariancePop};
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
@@ -99,14 +98,9 @@ pub use try_cast::{try_cast, TryCastExpr};
 pub(crate) mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{col, create_aggregate_expr, try_cast};
     use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
-    use arrow_array::ArrayRef;
-    use arrow_schema::{Field, Schema};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::type_coercion::aggregates::coerce_types;
-    use datafusion_expr::{AggregateFunction, EmitTo};
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.
@@ -201,44 +195,6 @@ pub(crate) mod tests {
         }};
     }
 
-    /// Assert `function(array) == expected` performing any necessary type coercion
-    pub fn assert_aggregate(
-        array: ArrayRef,
-        function: AggregateFunction,
-        distinct: bool,
-        expected: ScalarValue,
-    ) {
-        let data_type = array.data_type();
-        let sig = function.signature();
-        let coerced = coerce_types(&function, &[data_type.clone()], &sig).unwrap();
-
-        let input_schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
-        let batch =
-            RecordBatch::try_new(Arc::new(input_schema.clone()), vec![array]).unwrap();
-
-        let input = try_cast(
-            col("a", &input_schema).unwrap(),
-            &input_schema,
-            coerced[0].clone(),
-        )
-        .unwrap();
-
-        let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
-        let agg = create_aggregate_expr(
-            &function,
-            distinct,
-            &[input],
-            &[],
-            &schema,
-            "agg",
-            false,
-        )
-        .unwrap();
-
-        let result = aggregate(&batch, agg).unwrap();
-        assert_eq!(expected, result);
-    }
-
     /// macro to perform an aggregation with two inputs and verify the result.
     #[macro_export]
     macro_rules! generic_test_op2 {
@@ -291,23 +247,5 @@ pub(crate) mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
-    }
-
-    pub fn aggregate_new(
-        batch: &RecordBatch,
-        agg: Arc<dyn AggregateExpr>,
-    ) -> Result<ArrayRef> {
-        let mut accum = agg.create_groups_accumulator()?;
-        let expr = agg.expressions();
-        let values = expr
-            .iter()
-            .map(|e| {
-                e.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let indices = vec![0; batch.num_rows()];
-        accum.update_batch(&values, &indices, None, 1)?;
-        accum.evaluate(EmitTo::All)
     }
 }

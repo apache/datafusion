@@ -30,7 +30,6 @@ use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::utils::DataPtr;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
@@ -684,7 +683,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         plan.with_new_children(children)
     } else {

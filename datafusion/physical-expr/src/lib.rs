@@ -27,7 +27,9 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-pub mod udf;
+pub mod udf {
+    pub use crate::scalar_function::create_physical_expr;
+}
 pub mod utils;
 pub mod window;
 
@@ -58,13 +60,6 @@ pub use scalar_function::ScalarFunctionExpr;
 
 pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::split_conjunction;
-
-// For backwards compatibility
-pub mod sort_properties {
-    pub use datafusion_physical_expr_common::sort_properties::{
-        ExprOrdering, SortProperties,
-    };
-}
 
 // For backwards compatibility
 pub mod tree_node {

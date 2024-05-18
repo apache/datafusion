@@ -33,7 +33,7 @@ statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clau
 CREATE EXTERNAL TABLE t STORED AS CSV
 
 # Option value is missing
-statement error DataFusion error: SQL error: ParserError\("Expected literal string, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected string or numeric value, found: \)"\)
 CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
 
 # Missing `(` in WITH ORDER clause
@@ -52,14 +52,6 @@ CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
 statement error DataFusion error: SQL error: ParserError\("Expected BY, found: LOCATION"\)
 CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
 
-# Missing `TYPE` in COMPRESSION clause
-statement error DataFusion error: SQL error: ParserError\("Expected TYPE, found: LOCATION"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'
-
-# Invalid compression type
-statement error DataFusion error: SQL error: ParserError\("Unsupported file compression type ZZZ"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'
-
 # Duplicate `STORED AS` clause
 statement error DataFusion error: SQL error: ParserError\("STORED AS specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
@@ -67,18 +59,6 @@ CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
 # Duplicate `LOCATION` clause
 statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
-
-# Duplicate `WITH HEADER ROW` clause
-statement error DataFusion error: SQL error: ParserError\("WITH HEADER ROW specified more than once"\)
-CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER ROW WITH HEADER ROW LOCATION 'foo.csv'
-
-# Duplicate `DELIMITER` clause
-statement error DataFusion error: SQL error: ParserError\("DELIMITER specified more than once"\)
-CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '-' DELIMITER '+' LOCATION 'foo.csv'
-
-# Duplicate `COMPRESSION TYPE` clause
-statement error DataFusion error: SQL error: ParserError\("COMPRESSION TYPE specified more than once"\)
-CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE BZIP2 COMPRESSION TYPE XZ COMPRESSION TYPE ZSTD COMPRESSION TYPE GZIP LOCATION 'foo.csv'
 
 # Duplicate `PARTITIONED BY` clause
 statement error DataFusion error: SQL error: ParserError\("PARTITIONED BY specified more than once"\)
@@ -130,7 +110,7 @@ PARTITIONED BY (p1 string, p2 string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
 
-query ITT
+query I
 INSERT INTO partitioned VALUES (1, 'x', 'y');
 ----
 1
@@ -186,13 +166,13 @@ PARTITIONED BY (month string, year string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
 
-query TTT
+query I
 -- creates year -> month partitions
 INSERT INTO test VALUES('name', '2024', '03');
 ----
 1
 
-query TTT
+query I
 -- creates month -> year partitions.
 -- now table have both partitions (year -> month and month -> year)
 INSERT INTO test2 VALUES('name', '2024', '03');
@@ -205,3 +185,36 @@ CREATE EXTERNAL TABLE test3(name string)
 PARTITIONED BY (month string, year string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+
+# Duplicate key assignment in OPTIONS clause
+statement error DataFusion error: Error during planning: Option format.delimiter is specified multiple times
+CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS (
+    'format.delimiter' '*',
+    'format.has_header' 'true',
+    'format.delimiter' '|')
+LOCATION 'foo.csv';
+
+# If a config does not belong to any namespace, we assume it is a 'format' option and apply the 'format' prefix for backwards compatibility.
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS region (
+        r_regionkey BIGINT,
+        r_name VARCHAR,
+        r_comment VARCHAR,
+        r_rev VARCHAR,
+) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl'
+OPTIONS (
+        'format.delimiter' '|',
+        'has_header' 'false');
+
+# Verify that we do not need quotations for simple namespaced keys.
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS region (
+        r_regionkey BIGINT,
+        r_name VARCHAR,
+        r_comment VARCHAR,
+        r_rev VARCHAR,
+) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl'
+OPTIONS (
+        format.delimiter '|',
+        has_header false,
+        compression gzip);

@@ -25,12 +25,11 @@ use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayReverse,
     array_reverse,
     array,
@@ -99,13 +98,10 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn general_array_reverse<O: OffsetSizeTrait>(
+fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     array: &GenericListArray<O>,
     field: &FieldRef,
-) -> Result<ArrayRef>
-where
-    O: TryFrom<i64>,
-{
+) -> Result<ArrayRef> {
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());

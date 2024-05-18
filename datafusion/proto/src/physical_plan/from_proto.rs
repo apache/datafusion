@@ -40,7 +40,7 @@ use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{
     ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
@@ -53,7 +53,6 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
-use datafusion_expr::ScalarFunctionDefinition;
 
 use crate::common::proto_error;
 use crate::convert_required;
@@ -156,14 +155,18 @@ pub fn parse_physical_window_expr(
             )
         })?;
 
+    let fun: WindowFunctionDefinition = convert_required!(proto.window_function)?;
+    let name = proto.name.clone();
+    let extended_schema =
+        schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
     create_window_expr(
-        &convert_required!(proto.window_function)?,
-        proto.name.clone(),
+        &fun,
+        name,
         &window_node_expr,
         &partition_by,
         &order_by,
         Arc::new(window_frame),
-        input_schema,
+        &extended_schema,
         false,
     )
 }
@@ -342,7 +345,7 @@ pub fn parse_physical_expr(
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
                 None => registry.udf(e.name.as_str())?,
             };
-            let scalar_fun_def = ScalarFunctionDefinition::UDF(udf.clone());
+            let scalar_fun_def = udf.clone();
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
@@ -351,7 +354,6 @@ pub fn parse_physical_expr(
                 scalar_fun_def,
                 args,
                 convert_required!(e.return_type)?,
-                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -535,6 +537,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
+            statistics: val.statistics.as_ref().map(|v| v.try_into()).transpose()?,
             extensions: None,
         })
     }
@@ -805,7 +808,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
 
     fn try_from(proto_opts: &protobuf::CsvOptions) -> Result<Self, Self::Error> {
         Ok(CsvOptions {
-            has_header: proto_opts.has_header,
+            has_header: proto_opts.has_header.first().map(|h| *h != 0),
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),
@@ -879,7 +882,8 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
-            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp: value.clone()
                 .bloom_filter_fpp_opt
                 .map(|opt| match opt {
