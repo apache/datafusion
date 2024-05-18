@@ -22,7 +22,9 @@ use datafusion_expr::col;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let first_value_builder = first_value_builder(col("a")).order_by(vec![col("b")]).build();
+    let first_value_builder = first_value_builder(col("a"))
+        .order_by(vec![col("b")])
+        .build();
     let first_value_fn = first_value(col("a"), Some(vec![col("b")]));
     assert_eq!(first_value_builder, first_value_fn);
     Ok(())
