@@ -44,9 +44,7 @@ encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
+ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
