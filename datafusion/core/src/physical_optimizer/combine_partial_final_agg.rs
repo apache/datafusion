@@ -201,10 +201,14 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::{displayable, Statistics};
+    use crate::physical_plan::expressions::lit;
+    use crate::physical_plan::repartition::RepartitionExec;
+    use crate::physical_plan::{displayable, Partitioning, Statistics};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::{col, Sum};
+    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -300,98 +304,106 @@ mod tests {
         )
     }
 
-    // fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    //     Arc::new(
-    //         RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap(),
-    //     )
-    // }
+    fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap(),
+        )
+    }
 
-    // #[test]
-    // fn aggregations_not_combined() -> Result<()> {
-    //     let schema = schema();
+    // Return appropriate expr depending if COUNT is for col or table (*)
+    fn count_expr(expr: Arc<dyn PhysicalExpr>, name: &str, schema: &Schema) -> Arc<dyn AggregateExpr> {
+        create_aggregate_expr(
+            &count_udaf(),
+            &[expr],
+            &[],
+            &[],
+            schema,
+            name,
+            false,
+            false,
+        )
+        .unwrap()
+    }
 
-    //     let aggr_expr = vec![Arc::new(Count::new(
-    //         lit(1i8),
-    //         "COUNT(1)".to_string(),
-    //         DataType::Int64,
-    //     )) as _];
-    //     let plan = final_aggregate_exec(
-    //         repartition_exec(partial_aggregate_exec(
-    //             parquet_exec(&schema),
-    //             PhysicalGroupBy::default(),
-    //             aggr_expr.clone(),
-    //         )),
-    //         PhysicalGroupBy::default(),
-    //         aggr_expr,
-    //     );
-    //     // should not combine the Partial/Final AggregateExecs
-    //     let expected = &[
-    //         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
-    //         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-    //         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-    //         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
-    //     ];
-    //     assert_optimized!(expected, plan);
+    #[test]
+    fn aggregations_not_combined() -> Result<()> {
+        let schema = schema();
+        
+        let aggr_expr = vec![
+            count_expr(lit(1i8), "COUNT(1)", &schema),
+        ];
 
-    //     let aggr_expr1 = vec![Arc::new(Count::new(
-    //         lit(1i8),
-    //         "COUNT(1)".to_string(),
-    //         DataType::Int64,
-    //     )) as _];
-    //     let aggr_expr2 = vec![Arc::new(Count::new(
-    //         lit(1i8),
-    //         "COUNT(2)".to_string(),
-    //         DataType::Int64,
-    //     )) as _];
+        let plan = final_aggregate_exec(
+            repartition_exec(partial_aggregate_exec(
+                parquet_exec(&schema),
+                PhysicalGroupBy::default(),
+                aggr_expr.clone(),
+            )),
+            PhysicalGroupBy::default(),
+            aggr_expr,
+        );
+        // should not combine the Partial/Final AggregateExecs
+        let expected = &[
+            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        ];
+        assert_optimized!(expected, plan);
 
-    //     let plan = final_aggregate_exec(
-    //         partial_aggregate_exec(
-    //             parquet_exec(&schema),
-    //             PhysicalGroupBy::default(),
-    //             aggr_expr1,
-    //         ),
-    //         PhysicalGroupBy::default(),
-    //         aggr_expr2,
-    //     );
-    //     // should not combine the Partial/Final AggregateExecs
-    //     let expected = &[
-    //         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
-    //         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-    //         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
-    //     ];
+        let aggr_expr1 = vec![
+            count_expr(lit(1i8), "COUNT(1)", &schema),
+        ];
+        let aggr_expr2 = vec![
+            count_expr(lit(1i8), "COUNT(2)", &schema),
+        ];
 
-    //     assert_optimized!(expected, plan);
+        let plan = final_aggregate_exec(
+            partial_aggregate_exec(
+                parquet_exec(&schema),
+                PhysicalGroupBy::default(),
+                aggr_expr1,
+            ),
+            PhysicalGroupBy::default(),
+            aggr_expr2,
+        );
+        // should not combine the Partial/Final AggregateExecs
+        let expected = &[
+            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        ];
 
-    //     Ok(())
-    // }
+        assert_optimized!(expected, plan);
 
-    // #[test]
-    // fn aggregations_combined() -> Result<()> {
-    //     let schema = schema();
-    //     let aggr_expr = vec![Arc::new(Count::new(
-    //         lit(1i8),
-    //         "COUNT(1)".to_string(),
-    //         DataType::Int64,
-    //     )) as _];
+        Ok(())
+    }
 
-    //     let plan = final_aggregate_exec(
-    //         partial_aggregate_exec(
-    //             parquet_exec(&schema),
-    //             PhysicalGroupBy::default(),
-    //             aggr_expr.clone(),
-    //         ),
-    //         PhysicalGroupBy::default(),
-    //         aggr_expr,
-    //     );
-    //     // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
-    //     let expected = &[
-    //         "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
-    //         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
-    //     ];
+    #[test]
+    fn aggregations_combined() -> Result<()> {
+        let schema = schema();
+        let aggr_expr = vec![
+            count_expr(lit(1i8), "COUNT(1)", &schema),
+        ];
 
-    //     assert_optimized!(expected, plan);
-    //     Ok(())
-    // }
+        let plan = final_aggregate_exec(
+            partial_aggregate_exec(
+                parquet_exec(&schema),
+                PhysicalGroupBy::default(),
+                aggr_expr.clone(),
+            ),
+            PhysicalGroupBy::default(),
+            aggr_expr,
+        );
+        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        let expected = &[
+            "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
 
     #[test]
     fn aggregations_with_group_combined() -> Result<()> {
