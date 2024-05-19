@@ -1238,10 +1238,16 @@ mod tests {
             ),
             (
                 grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
-                r#"GROUPING SETS (("a", "b"), ("a"))"#,
+                r#"GROUPING SETS ((a, b), (a))"#,
             ),
-            (cube(vec![col("a"), col("b")]), r#"CUBE ("a", "b")"#),
-            (rollup(vec![col("a"), col("b")]), r#"ROLLUP ("a", "b")"#),
+            (cube(vec![col("a"), col("b")]), r#"CUBE (a, b)"#),
+            (rollup(vec![col("a"), col("b")]), r#"ROLLUP (a, b)"#),
+            (col("table").eq(lit(1)), r#"("table" = 1)"#),
+            (
+                col("123_need_quoted").eq(lit(1)),
+                r#"("123_need_quoted" = 1)"#,
+            ),
+            (col("need-qutoed").eq(lit(1)), r#"("need-qutoed" = 1)"#),
         ];
 
         for (expr, expected) in tests {
