@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::ArrowPrimitiveType;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
+use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
