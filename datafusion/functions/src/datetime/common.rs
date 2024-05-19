@@ -93,7 +93,9 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 
     if let Err(e) = &dt {
         // no timezone or other failure, try without a timezone
-        let ndt = parsed.to_naive_datetime_with_offset(0);
+        let ndt = parsed
+            .to_naive_datetime_with_offset(0)
+            .or_else(|_| parsed.to_naive_date().map(|nd| nd.into()));
         if let Err(e) = &ndt {
             return Err(err(&e.to_string()));
         }

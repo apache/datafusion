@@ -39,8 +39,8 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
@@ -561,7 +561,7 @@ fn hash_join_convert_symmetric_subrule(
                                 let name = schema.field(*index).name();
                                 let col = Arc::new(Column::new(name, *index)) as _;
                                 // Check if the column is ordered.
-                                equivalence.get_expr_ordering(col).data
+                                equivalence.get_expr_properties(col).sort_properties
                                     != SortProperties::Unordered
                             },
                         )

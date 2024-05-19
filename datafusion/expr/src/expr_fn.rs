@@ -23,6 +23,7 @@ use crate::expr::{
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+    StateFieldsArgs,
 };
 use crate::{
     aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
@@ -690,12 +691,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_fields(
-        &self,
-        _name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
     }
 }

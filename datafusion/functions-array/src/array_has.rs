@@ -22,8 +22,6 @@ use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use itertools::Itertools;

@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
+    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, TryCast,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -365,6 +365,9 @@ impl Unparser<'_> {
                 asc: _,
                 nulls_first: _,
             }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
+            Expr::IsNull(expr) => {
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -376,6 +379,9 @@ impl Unparser<'_> {
             }
             Expr::IsFalse(expr) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotFalse(expr) => {
+                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
@@ -397,27 +403,44 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::ScalarVariable(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::ScalarVariable(_, ids) => {
+                if ids.is_empty() {
+                    return internal_err!("Not a valid ScalarVariable");
+                }
+
+                Ok(if ids.len() == 1 {
+                    ast::Expr::Identifier(
+                        self.new_ident_without_quote_style(ids[0].to_string()),
+                    )
+                } else {
+                    ast::Expr::CompoundIdentifier(
+                        ids.iter()
+                            .map(|i| self.new_ident_without_quote_style(i.to_string()))
+                            .collect(),
+                    )
+                })
             }
-            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
-            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
             Expr::GetIndexedField(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::TryCast(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let inner_expr = self.expr_to_sql(expr)?;
+                Ok(ast::Expr::TryCast {
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                })
+            }
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
             Expr::GroupingSet(_) => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::Placeholder(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::Placeholder(p) => {
+                Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::OuterReferenceColumn(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
+            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
         }
     }
@@ -494,6 +517,13 @@ impl Unparser<'_> {
         ast::Ident {
             value: str,
             quote_style: self.dialect.identifier_quote_style(),
+        }
+    }
+
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
+        ast::Ident {
+            value: str,
+            quote_style: None,
         }
     }
 
@@ -870,12 +900,14 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
+    use arrow_schema::DataType::Int8;
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, wildcard, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        lit, not, not_exists, out_ref_col, placeholder, table_scan, try_cast, when,
+        wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -945,6 +977,14 @@ mod tests {
                 r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
             ),
             (
+                when(col("a").is_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NULL THEN true ELSE false END"#,
+            ),
+            (
+                when(col("a").is_not_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN "a" IS NOT NULL THEN true ELSE false END"#,
+            ),
+            (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
@@ -969,6 +1009,18 @@ mod tests {
             (
                 ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
                 r#"dummy_udf("a", "b")"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_null(),
+                r#"dummy_udf("a", "b") IS NULL"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_not_null(),
+                r#"dummy_udf("a", "b") IS NOT NULL"#,
             ),
             (
                 Expr::Like(Like {
@@ -1092,6 +1144,7 @@ mod tests {
                 r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#""a" IS NOT NULL"#),
+            (col("a").is_null(), r#""a" IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
                 r#"(("a" + "b") > 4) IS TRUE"#,
@@ -1103,6 +1156,10 @@ mod tests {
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
                 r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_false(),
+                r#"(("a" + "b") > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
@@ -1125,6 +1182,30 @@ mod tests {
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
                 r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+            ),
+            (
+                try_cast(col("a"), DataType::Date64),
+                r#"TRY_CAST("a" AS DATETIME)"#,
+            ),
+            (
+                try_cast(col("a"), DataType::UInt32),
+                r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
+            ),
+            (
+                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                r#"@a"#,
+            ),
+            (
+                Expr::ScalarVariable(
+                    Int8,
+                    vec![String::from("@root"), String::from("foo")],
+                ),
+                r#"@root.foo"#,
+            ),
+            (col("x").eq(placeholder("$1")), r#"("x" = $1)"#),
+            (
+                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
+                r#"("t"."a" > 1)"#,
             ),
         ];
 

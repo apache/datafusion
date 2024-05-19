@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use DataType::*;
+
+use crate::physical_expr::down_cast_any_ref;
+use crate::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, DataType::*, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
@@ -163,9 +163,21 @@ impl PhysicalExpr for CastExpr {
         self.cast_options.hash(&mut s);
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child.
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        children[0]
+    /// A [`CastExpr`] preserves the ordering of its child if the cast is done
+    /// under the same datatype family.
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        let source_datatype = children[0].range.data_type();
+        let target_type = &self.cast_type;
+
+        let unbounded = Interval::make_unbounded(target_type)?;
+        if source_datatype.is_numeric() && target_type.is_numeric()
+            || source_datatype.is_temporal() && target_type.is_temporal()
+            || source_datatype.eq(target_type)
+        {
+            Ok(children[0].clone().with_range(unbounded))
+        } else {
+            Ok(ExprProperties::new_unknown().with_range(unbounded))
+        }
     }
 }
 

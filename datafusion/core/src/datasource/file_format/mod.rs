@@ -41,7 +41,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::{not_impl_err, FileType};
+use datafusion_common::not_impl_err;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
@@ -104,9 +104,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
-
-    /// Returns the FileType corresponding to this FileFormat
-    fn file_type(&self) -> FileType;
 }
 
 #[cfg(test)]

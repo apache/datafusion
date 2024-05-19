@@ -2796,7 +2796,6 @@ SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New York';
 statement error
 SELECT '2023-03-12 02:00:00' AT TIME ZONE 'EDT';
 
-
 # Test current_time without parentheses
 query B
 select current_time = current_time;

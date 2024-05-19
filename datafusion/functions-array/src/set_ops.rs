@@ -27,8 +27,6 @@ use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
 use std::any::Any;

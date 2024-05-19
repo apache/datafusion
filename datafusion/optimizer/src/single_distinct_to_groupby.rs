@@ -90,6 +90,31 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                     } else if !matches!(fun, Sum | Min | Max) {
                         return Ok(false);
                     }
+                } else if let Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::UDF(fun),
+                    distinct,
+                    args,
+                    filter,
+                    order_by,
+                    null_treatment: _,
+                }) = expr
+                {
+                    if filter.is_some() || order_by.is_some() {
+                        return Ok(false);
+                    }
+                    aggregate_count += 1;
+                    if *distinct {
+                        for e in args {
+                            fields_set.insert(e.canonical_name());
+                        }
+                    } else if fun.name() != "SUM"
+                        && fun.name() != "MIN"
+                        && fun.name() != "MAX"
+                    {
+                        return Ok(false);
+                    }
+                } else {
+                    return Ok(false);
                 }
             }
             Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)

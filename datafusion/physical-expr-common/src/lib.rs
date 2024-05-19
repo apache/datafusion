@@ -19,6 +19,5 @@ pub mod aggregate;
 pub mod expressions;
 pub mod physical_expr;
 pub mod sort_expr;
-pub mod sort_properties;
 pub mod tree_node;
 pub mod utils;
