@@ -285,12 +285,14 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    /// [`simplify_udwf_expression.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simplify_udwf_expression.rs>
     ///
     /// # Returns
-    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
-    /// if the function cannot be simplified, the arguments *MUST* be returned
-    /// unmodified
+    /// [None] if simplify is not defined or,
+    /// 
+    /// Or, a closure with two arguments:
+    /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
