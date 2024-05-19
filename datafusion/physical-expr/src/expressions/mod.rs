@@ -52,7 +52,6 @@ pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::count::Count;
 pub use crate::aggregate::count_distinct::DistinctCount;
-pub use crate::aggregate::covariance::CovariancePop;
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
@@ -101,9 +100,7 @@ pub(crate) mod tests {
 
     use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
-    use arrow_array::ArrayRef;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::EmitTo;
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.
@@ -250,23 +247,5 @@ pub(crate) mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
-    }
-
-    pub fn aggregate_new(
-        batch: &RecordBatch,
-        agg: Arc<dyn AggregateExpr>,
-    ) -> Result<ArrayRef> {
-        let mut accum = agg.create_groups_accumulator()?;
-        let expr = agg.expressions();
-        let values = expr
-            .iter()
-            .map(|e| {
-                e.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let indices = vec![0; batch.num_rows()];
-        accum.update_batch(&values, &indices, None, 1)?;
-        accum.evaluate(EmitTo::All)
     }
 }

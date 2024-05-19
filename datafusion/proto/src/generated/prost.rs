@@ -320,38 +320,32 @@ pub struct Constraints {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(message, optional, tag = "12")]
+    #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
-    #[prost(bool, tag = "4")]
-    pub has_header: bool,
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<DfSchema>,
-    #[prost(string, repeated, tag = "6")]
+    #[prost(string, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
-    #[prost(string, tag = "8")]
-    pub delimiter: ::prost::alloc::string::String,
-    #[prost(string, tag = "9")]
+    #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
-    pub file_compression_type: i32,
-    #[prost(message, repeated, tag = "13")]
+    #[prost(message, repeated, tag = "10")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
-    #[prost(bool, tag = "14")]
+    #[prost(bool, tag = "11")]
     pub unbounded: bool,
-    #[prost(map = "string, string", tag = "11")]
+    #[prost(map = "string, string", tag = "8")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(message, optional, tag = "15")]
+    #[prost(message, optional, tag = "12")]
     pub constraints: ::core::option::Option<Constraints>,
-    #[prost(map = "string, message", tag = "16")]
+    #[prost(map = "string, message", tag = "13")]
     pub column_defaults: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         LogicalExprNode,
@@ -1139,6 +1133,19 @@ pub struct ScalarNestedValue {
     pub arrow_data: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "4")]
+    pub dictionaries: ::prost::alloc::vec::Vec<scalar_nested_value::Dictionary>,
+}
+/// Nested message and enum types in `ScalarNestedValue`.
+pub mod scalar_nested_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Dictionary {
+        #[prost(bytes = "vec", tag = "1")]
+        pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "vec", tag = "2")]
+        pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1684,8 +1691,8 @@ pub struct CsvWriterOptions {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvOptions {
     /// Indicates if the CSV has a header row
-    #[prost(bool, tag = "1")]
-    pub has_header: bool,
+    #[prost(bytes = "vec", tag = "1")]
+    pub has_header: ::prost::alloc::vec::Vec<u8>,
     /// Delimiter character as a byte
     #[prost(bytes = "vec", tag = "2")]
     pub delimiter: ::prost::alloc::vec::Vec<u8>,
@@ -2835,7 +2842,7 @@ pub enum AggregateFunction {
     Variance = 7,
     VariancePop = 8,
     /// COVARIANCE = 9;
-    CovariancePop = 10,
+    /// COVARIANCE_POP = 10;
     Stddev = 11,
     StddevPop = 12,
     Correlation = 13,
@@ -2881,7 +2888,6 @@ impl AggregateFunction {
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Variance => "VARIANCE",
             AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::CovariancePop => "COVARIANCE_POP",
             AggregateFunction::Stddev => "STDDEV",
             AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
@@ -2924,7 +2930,6 @@ impl AggregateFunction {
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "VARIANCE" => Some(Self::Variance),
             "VARIANCE_POP" => Some(Self::VariancePop),
-            "COVARIANCE_POP" => Some(Self::CovariancePop),
             "STDDEV" => Some(Self::Stddev),
             "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),

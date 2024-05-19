@@ -31,7 +31,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    function::{AccumulatorArgs, GroupsAccumulatorArgs},
+    function::{AccumulatorArgs, StateFieldsArgs},
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
@@ -92,21 +92,16 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_fields(
-        &self,
-        _name: &str,
-        value_type: DataType,
-        _ordering_fields: Vec<arrow_schema::Field>,
-    ) -> Result<Vec<arrow_schema::Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow_schema::Field>> {
         Ok(vec![
-            Field::new("prod", value_type, true),
+            Field::new("prod", args.return_type.clone(), true),
             Field::new("n", DataType::UInt32, true),
         ])
     }
 
     /// Tell DataFusion that this aggregate supports the more performant `GroupsAccumulator`
     /// which is used for cases when there are grouping columns in the query
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 

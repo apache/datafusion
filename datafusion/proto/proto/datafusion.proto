@@ -201,23 +201,19 @@ message Constraints{
 
 message CreateExternalTableNode {
   reserved 1; // was string name
-  TableReference name = 12;
+  TableReference name = 9;
   string location = 2;
   string file_type = 3;
-  bool has_header = 4;
-  DfSchema schema = 5;
-  repeated string table_partition_cols = 6;
-  bool if_not_exists = 7;
-  string delimiter = 8;
-  string definition = 9;
-  reserved 10; // was string file_compression_type
-  CompressionTypeVariant file_compression_type = 17;
-  repeated LogicalExprNodeCollection order_exprs = 13;
-  bool unbounded = 14;
-  map<string, string> options = 11;
-  Constraints constraints = 15;
-  map<string, LogicalExprNode> column_defaults = 16;
-}
+  DfSchema schema = 4;
+  repeated string table_partition_cols = 5;
+  bool if_not_exists = 6;
+  string definition = 7;
+  repeated LogicalExprNodeCollection order_exprs = 10;
+  bool unbounded = 11;
+  map<string, string> options = 8;
+  Constraints constraints = 12;
+  map<string, LogicalExprNode> column_defaults = 13;
+ }
 
 message PrepareNode {
   string name = 1;
@@ -549,7 +545,7 @@ enum AggregateFunction {
   VARIANCE = 7;
   VARIANCE_POP = 8;
   // COVARIANCE = 9;
-  COVARIANCE_POP = 10;
+  // COVARIANCE_POP = 10;
   STDDEV = 11;
   STDDEV_POP = 12;
   CORRELATION = 13;
@@ -801,9 +797,15 @@ message Union{
 
 // Used for List/FixedSizeList/LargeList/Struct
 message ScalarNestedValue {
+  message Dictionary {
+    bytes ipc_message = 1;
+    bytes arrow_data = 2;
+  }
+
   bytes ipc_message = 1;
   bytes arrow_data = 2;
   Schema schema = 3;
+  repeated Dictionary dictionaries = 4;
 }
 
 message ScalarTime32Value {
@@ -1106,7 +1108,7 @@ message CsvWriterOptions {
 
 // Options controlling CSV format
 message CsvOptions {
-  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes has_header = 1; // Indicates if the CSV has a header row
   bytes delimiter = 2; // Delimiter character as a byte
   bytes quote = 3; // Quote character as a byte
   bytes escape = 4; // Optional escape character as a byte

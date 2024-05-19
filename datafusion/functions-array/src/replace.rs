@@ -27,8 +27,6 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::compare_element_to_list;
@@ -38,19 +36,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(ArrayReplace,
+make_udf_expr_and_func!(ArrayReplace,
     array_replace,
     array from to,
     "replaces the first occurrence of the specified element with another specified element.",
     array_replace_udf
 );
-make_udf_function!(ArrayReplaceN,
+make_udf_expr_and_func!(ArrayReplaceN,
     array_replace_n,
     array from to max,
     "replaces the first `max` occurrences of the specified element with another specified element.",
     array_replace_n_udf
 );
-make_udf_function!(ArrayReplaceAll,
+make_udf_expr_and_func!(ArrayReplaceAll,
     array_replace_all,
     array from to,
     "replaces all occurrences of the specified element with another specified element.",

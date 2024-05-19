@@ -42,6 +42,7 @@ use datafusion_physical_expr::{
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
+use itertools::Itertools;
 
 mod bounded_window_agg_exec;
 mod window_agg_exec;
@@ -51,6 +52,31 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 pub use window_agg_exec::WindowAggExec;
+
+/// Build field from window function and add it into schema
+pub fn schema_add_window_field(
+    args: &[Arc<dyn PhysicalExpr>],
+    schema: &Schema,
+    window_fn: &WindowFunctionDefinition,
+    fn_name: &str,
+) -> Result<Arc<Schema>> {
+    let data_types = args
+        .iter()
+        .map(|e| e.clone().as_ref().data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+    window_fields.extend_from_slice(&[Field::new(
+        fn_name,
+        window_expr_return_type,
+        false,
+    )]);
+    Ok(Arc::new(Schema::new(window_fields)))
+}
 
 /// Create a physical expression for window function
 #[allow(clippy::too_many_arguments)]
@@ -103,6 +129,7 @@ pub fn create_window_expr(
                 input_schema,
                 name,
                 ignore_nulls,
+                false,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,
