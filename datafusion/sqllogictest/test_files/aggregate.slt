@@ -194,7 +194,7 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
-statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
 
