@@ -1366,6 +1366,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "rand",
 ]
 
 [[package]]
