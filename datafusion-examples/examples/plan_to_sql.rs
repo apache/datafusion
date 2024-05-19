@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 fn simple_expr_to_sql_demo() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
     let sql = expr_to_sql(&expr)?.to_string();
-    assert_eq!(sql, r#"(("a" < 5) OR ("a" = 8))"#);
+    assert_eq!(sql, r#"((a < 5) OR (a = 8))"#);
     Ok(())
 }
 
