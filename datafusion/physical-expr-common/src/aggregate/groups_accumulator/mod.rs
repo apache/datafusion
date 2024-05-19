@@ -16,3 +16,4 @@
 // under the License.
 
 pub mod accumulate;
+pub mod prim_op;
