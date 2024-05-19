@@ -301,7 +301,6 @@ impl UnnestStream {
 /// Given a set of struct column indices to flatten
 /// try converting the column in input into multiple subfield columns
 /// For example
-/// ```ignore
 /// struct_col: [a: struct(item: int, name: string), b: int]
 /// with a batch
 /// {a: {item: 1, name: "a"}, b: 2},
@@ -309,7 +308,6 @@ impl UnnestStream {
 /// will be converted into
 /// {a.item: 1, a.name: "a", b: 2},
 /// {a.item: 3, a.name: "b", b: 4}
-/// ```
 fn flatten_struct_cols(
     input_batch: &[Arc<dyn Array>],
     schema: &SchemaRef,
@@ -583,7 +581,8 @@ fn unnest_list_array(
     )?)
 }
 
-/// Creates take indicies that will be used to expand all columns except for the unnest [`columns`](UnnestExec::exec_columns).
+/// Creates take indicies that will be used to expand all columns except for the list type
+/// [`columns`](UnnestExec::list_column_indices) that is being unnested.
 /// Every column value needs to be repeated multiple times according to the length array.
 ///
 /// If the length array looks like this:
