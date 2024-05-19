@@ -289,7 +289,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     ///
     /// # Returns
     /// [None] if simplify is not defined or,
-    /// 
+    ///
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
     /// * 'info': [crate::simplify::SimplifyInfo]
