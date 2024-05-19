@@ -18,9 +18,16 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::{
+    array::{ArrayRef, ArrowNativeTypeOp, AsArray},
     compute::SortOptions,
-    datatypes::{DataType, Field},
+    datatypes::{
+        DataType, Decimal128Type, Field, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        ToByteSlice,
+    },
 };
+use datafusion_common::Result;
+use datafusion_expr::Accumulator;
 
 use crate::sort_expr::PhysicalSortExpr;
 
@@ -41,6 +48,60 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+/// Convert scalar values from an accumulator into arrays.
+pub fn get_accum_scalar_values_as_arrays(
+    accum: &mut dyn Accumulator,
+) -> Result<Vec<ArrayRef>> {
+    accum
+        .state()?
+        .iter()
+        .map(|s| s.to_array_of_size(1))
+        .collect()
+}
+
+/// Adjust array type metadata if needed
+///
+/// Since `Decimal128Arrays` created from `Vec<NativeType>` have
+/// default precision and scale, this function adjusts the output to
+/// match `data_type`, if necessary
+pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
+    let array = match data_type {
+        DataType::Decimal128(p, s) => Arc::new(
+            array
+                .as_primitive::<Decimal128Type>()
+                .clone()
+                .with_precision_and_scale(*p, *s)?,
+        ) as ArrayRef,
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampNanosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMicrosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMillisecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(TimeUnit::Second, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampSecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        // no adjustment needed for other arrays
+        _ => array,
+    };
+    Ok(array)
 }
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
@@ -67,3 +128,21 @@ pub fn ordering_fields(
 pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
+
+/// A wrapper around a type to provide hash for floats
+#[derive(Copy, Clone, Debug)]
+pub struct Hashable<T>(pub T);
+
+impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.is_eq(other.0)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
