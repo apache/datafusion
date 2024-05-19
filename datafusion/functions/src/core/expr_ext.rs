@@ -17,12 +17,12 @@
 
 //! Extension methods for Expr.
 
-use datafusion_expr::{lit, Expr};
+use datafusion_expr::{Expr, Literal};
 
 use super::expr_fn::get_field;
 
 pub trait FieldAccessor {
-    fn field(self, name: impl Into<String>) -> Expr;
+    fn field(self, name: impl Literal) -> Expr;
 }
 
 impl FieldAccessor for Expr {
@@ -48,8 +48,8 @@ impl FieldAccessor for Expr {
     ///    .field("my_field");
     /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
     /// ```
-    fn field(self, name: impl Into<String>) -> Expr {
-        get_field(self, lit(name.into()))
+    fn field(self, name: impl Literal) -> Expr {
+        get_field(self, name)
     }
 }
 
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_field() {
         let expr1 = col("a").field("b");
-        let expr2 = get_field(col("a"), lit("b"));
+        let expr2 = get_field(col("a"), "b");
         assert_eq!(expr1, expr2);
     }
 }
