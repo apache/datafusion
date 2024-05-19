@@ -29,7 +29,8 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::function::{AccumulatorArgs, GroupsAccumulatorArgs};
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -136,15 +137,10 @@ impl AggregateUDFImpl for Sum {
         downcast_sum!(args, helper)
     }
 
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        _ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(name, "sum"),
-            value_type,
+            format_state_name(args.name, "sum"),
+            args.return_type.clone(),
             true,
         )])
     }
@@ -153,13 +149,13 @@ impl AggregateUDFImpl for Sum {
         &self.aliases
     }
 
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 
     fn create_groups_accumulator(
         &self,
-        args: GroupsAccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -170,42 +166,6 @@ impl AggregateUDFImpl for Sum {
             };
         }
         downcast_sum!(args, helper)
-
-        // let return_type = args.data_type;
-
-        // match return_type {
-        //     DataType::UInt64 => Ok(Box::new(
-        //         PrimitiveGroupsAccumulator::<UInt64Type, _>::new(&return_type, |x, y| {
-        //             *x = x.add_wrapping(y)
-        //         }),
-        //     )),
-        //     DataType::Int64 => Ok(Box::new(
-        //         PrimitiveGroupsAccumulator::<Int64Type, _>::new(&return_type, |x, y| {
-        //             *x = x.add_wrapping(y)
-        //         }),
-        //     )),
-        //     DataType::Float64 => {
-        //         Ok(Box::new(PrimitiveGroupsAccumulator::<Float64Type, _>::new(
-        //             &return_type,
-        //             |x, y| *x = x.add_wrapping(y),
-        //         )))
-        //     }
-        //     DataType::Decimal128(_, _) => Ok(Box::new(PrimitiveGroupsAccumulator::<
-        //         Decimal128Type,
-        //         _,
-        //     >::new(
-        //         &return_type,
-        //         |x, y| *x = x.add_wrapping(y),
-        //     ))),
-        //     DataType::Decimal256(_, _) => Ok(Box::new(PrimitiveGroupsAccumulator::<
-        //         Decimal256Type,
-        //         _,
-        //     >::new(
-        //         &return_type,
-        //         |x, y| *x = x.add_wrapping(y),
-        //     ))),
-        //     _ => not_impl_err!("Sum not supported for {}: {}", args.name, return_type),
-        // }
     }
 
     fn create_sliding_accumulator(
@@ -218,30 +178,6 @@ impl AggregateUDFImpl for Sum {
             };
         }
         downcast_sum!(args, helper)
-        // let return_type = args.data_type;
-
-        // match return_type {
-        //     DataType::UInt64 => Ok(Box::new(SlidingSumAccumulator::<UInt64Type>::new(
-        //         return_type.clone(),
-        //     ))),
-        //     DataType::Int64 => Ok(Box::new(SlidingSumAccumulator::<Int64Type>::new(
-        //         return_type.clone(),
-        //     ))),
-        //     DataType::Float64 => Ok(Box::new(SlidingSumAccumulator::<Float64Type>::new(
-        //         return_type.clone(),
-        //     ))),
-        //     DataType::Decimal128(_, _) => {
-        //         Ok(Box::new(SlidingSumAccumulator::<Decimal128Type>::new(
-        //             return_type.clone(),
-        //         )))
-        //     }
-        //     DataType::Decimal256(_, _) => {
-        //         Ok(Box::new(SlidingSumAccumulator::<Decimal256Type>::new(
-        //             return_type.clone(),
-        //         )))
-        //     }
-        //     _ => not_impl_err!("Sum not supported for {}: {}", args.name, return_type),
-        // }
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {

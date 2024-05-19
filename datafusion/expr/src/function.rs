@@ -38,13 +38,6 @@ pub type ScalarFunctionImplementation =
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
-pub struct GroupsAccumulatorArgs<'a> {
-    /// The return type of the aggregate function.
-    pub data_type: &'a DataType,
-    /// The name of the aggregate expression
-    pub name: &'a str,
-}
-
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
 /// ordering expressions.

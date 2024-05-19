@@ -225,19 +225,22 @@ impl AggregateExpr for AggregateFunctionExpr {
             name: &self.name,
         };
 
-        self.fun.accumulator(args)
+        self.fun.accumulator(acc_args)
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let args = AccumulatorArgs::new(
-            &self.data_type,
-            &self.schema,
-            self.ignore_nulls,
-            &self.sort_exprs,
-            &self.name,
-        );
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
+            name: &self.name,
+        };
 
-        let accumulator = self.fun().create_sliding_accumulator(args)?;
+        let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
@@ -310,9 +313,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        let args = GroupsAccumulatorArgs {
+        let args = AccumulatorArgs {
             data_type: &self.data_type,
-            name: self.name(),
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            args_num: self.args.len(),
+            name: &self.name,
         };
         self.fun.create_groups_accumulator(args)
     }

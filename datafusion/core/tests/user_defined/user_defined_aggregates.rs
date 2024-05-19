@@ -730,10 +730,7 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         true
     }
 
-    fn create_groups_accumulator(
-        &self,
-        _args: GroupsAccumulatorArgs,
-    ) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
     }
 }

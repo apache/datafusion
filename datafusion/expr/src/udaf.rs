@@ -191,7 +191,7 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(
         &self,
-        args: GroupsAccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator(args)
     }
@@ -365,7 +365,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(
         &self,
-        _args: GroupsAccumulatorArgs,
+        _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
