@@ -22,7 +22,7 @@ pub mod utils;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
+// use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
@@ -53,11 +53,11 @@ pub fn create_aggregate_expr(
         .map(|arg| arg.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    check_arg_count(
-        fun.name(),
-        &input_exprs_types,
-        &fun.signature().type_signature,
-    )?;
+    // check_arg_count(
+    //     fun.name(),
+    //     &input_exprs_types,
+    //     &fun.signature().type_signature,
+    // )?;
 
     let ordering_types = ordering_req
         .iter()

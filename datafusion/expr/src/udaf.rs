@@ -207,9 +207,10 @@ impl AggregateUDF {
         self.inner.reverse_expr()
     }
 
-    pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
+    pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
     }
+
     /// Do the function rewrite
     ///
     /// See [`AggregateUDFImpl::simplify`] for more details.
@@ -413,6 +414,29 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Returns the reverse expression of the aggregate function.
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::NotSupported
+    }
+
+    /// Coerce arguments of a function call to types that the function can evaluate.
+    ///
+    /// This function is only called if [`AggregateUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
+    /// UDAFs should return one of the other variants of `TypeSignature` which handle common
+    /// cases
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a floating point arguments, but the user calls
+    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
+    /// to ensure the argument was cast to `1::double`
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the arguments  this function with
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 }
 

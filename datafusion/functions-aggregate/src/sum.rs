@@ -31,7 +31,6 @@ use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
@@ -76,7 +75,7 @@ pub struct Sum {
 impl Sum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec!["sum".to_string()],
         }
     }
@@ -101,22 +100,22 @@ impl AggregateUDFImpl for Sum {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return exec_err!("SUM expects exactly one argument");
+        }
+
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
 
-        fn coerced_types(data_type: &DataType) -> Result<DataType> {
+        fn coerced_type(data_type: &DataType) -> Result<DataType> {
             match data_type {
-                DataType::Dictionary(_, v) => coerced_types(v),
+                DataType::Dictionary(_, v) => coerced_type(v),
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-                DataType::Decimal128(precision, scale) => {
-                    let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
-                    Ok(DataType::Decimal128(new_precision, *scale))
-                }
-                DataType::Decimal256(precision, scale) => {
-                    let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
-                    Ok(DataType::Decimal256(new_precision, *scale))
+                DataType::Decimal128(_, _) | 
+                DataType::Decimal256(_, _) => {
+                    Ok(data_type.clone())
                 }
                 dt if dt.is_signed_integer() => Ok(DataType::Int64),
                 dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
@@ -125,7 +124,31 @@ impl AggregateUDFImpl for Sum {
             }
         }
 
-        coerced_types(&arg_types[0])
+        Ok(vec![coerced_type(&arg_types[0])?])
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Int64 => Ok(DataType::Int64),
+            DataType::UInt64 => Ok(DataType::UInt64),
+            DataType::Float64 => Ok(DataType::Float64),
+            DataType::Decimal128(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal128(new_precision, *scale))
+            }
+            DataType::Decimal256(precision, scale) => {
+                // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+                // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+                let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
+                Ok(DataType::Decimal256(new_precision, *scale))
+            }
+            other => {
+                panic!("asdf");   
+                exec_err!("[return_type] SUM not supported for {}", other)
+            },
+        }
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

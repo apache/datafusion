@@ -402,7 +402,7 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                         expr::AggregateFunction::new_udf(
                             fun,
                             new_expr,
-                            false,
+                            distinct,
                             filter,
                             order_by,
                             null_treatment,

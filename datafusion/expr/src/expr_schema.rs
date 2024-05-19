@@ -23,7 +23,7 @@ use crate::expr::{
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::type_coercion::functions::data_types_with_scalar_udf;
+use crate::type_coercion::functions::{data_types_with_aggregate_udf, data_types_with_scalar_udf};
 use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -172,7 +172,18 @@ impl ExprSchemable for Expr {
                         fun.return_type(&data_types)
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
-                        Ok(fun.return_type(&data_types)?)
+                        let new_types = data_types_with_aggregate_udf(&data_types, fun).map_err(|err| {
+                            plan_datafusion_err!(
+                                "{} and {}",
+                                err,
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types
+                                )
+                            )
+                        })?;
+                        Ok(fun.return_type(&new_types)?)
                     }
                 }
             }
