@@ -49,6 +49,7 @@ datafusion-expr = { workspace = true }
 log = { workspace = true }
 sqlparser = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }
+regex = { version = "1.8" }
 
 [dev-dependencies]
 ctor = { workspace = true }

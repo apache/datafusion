@@ -52,7 +52,7 @@ use super::{
 ///     .unwrap();
 /// let sql = plan_to_sql(&plan).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "SELECT \"table\".\"id\", \"table\".\"value\" FROM \"table\"")
+/// assert_eq!(format!("{}", sql), "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"")
 /// ```
 pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
     let unparser = Unparser::default();

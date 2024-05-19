@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use regex::Regex;
+use sqlparser::keywords::ALL_KEYWORDS;
+
 /// Dialect is used to capture dialect specific syntax.
 /// Note: this trait will eventually be replaced by the Dialect in the SQLparser package
 ///
@@ -30,6 +33,11 @@ pub struct DefaultDialect {}
 impl Dialect for DefaultDialect {
     fn identifier_quote_style(&self) -> Option<char> {
         Some('"')
+    }
+    fn identifier_needs_quote(&self, ident: &str) -> bool {
+        let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
+        ALL_KEYWORDS.contains(&ident.to_uppercase().as_str())
+            || !identifier_regex.is_match(ident)
     }
 }
 
