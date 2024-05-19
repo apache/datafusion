@@ -21,6 +21,9 @@
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
 pub trait Dialect {
     fn identifier_quote_style(&self) -> Option<char>;
+    fn identifier_needs_quote(&self, _: &str) -> bool {
+        true
+    }
 }
 pub struct DefaultDialect {}
 

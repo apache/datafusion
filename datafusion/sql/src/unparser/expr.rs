@@ -492,10 +492,14 @@ impl Unparser<'_> {
             let mut id = table_ref.to_vec();
             id.push(col.name.to_string());
             return Ok(ast::Expr::CompoundIdentifier(
-                id.iter().map(|i| self.new_ident(i.to_string())).collect(),
+                id.iter()
+                    .map(|i| self.new_ident_quoted_if_needs(i.to_string()))
+                    .collect(),
             ));
         }
-        Ok(ast::Expr::Identifier(self.new_ident(col.name.to_string())))
+        Ok(ast::Expr::Identifier(
+            self.new_ident_quoted_if_needs(col.name.to_string()),
+        ))
     }
 
     fn convert_bound(
@@ -530,6 +534,14 @@ impl Unparser<'_> {
                 }
             })
             .collect::<Result<Vec<_>>>()
+    }
+
+    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> ast::Ident {
+        if self.dialect.identifier_needs_quote(&ident) {
+            self.new_ident(ident)
+        } else {
+            self.new_ident_without_quote_style(ident)
+        }
     }
 
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
