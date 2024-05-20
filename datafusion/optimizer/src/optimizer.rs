@@ -475,7 +475,7 @@ pub(crate) fn assert_schema_is_the_same(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result, DataFusionError};
+    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
     use datafusion_common::tree_node::Transformed;
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
@@ -731,7 +731,7 @@ mod tests {
             true
         }
 
-        fn rewrite(&self, plan: LogicalPlan, _config: &dyn OptimizerConfig) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        fn rewrite(&self, plan: LogicalPlan, _config: &dyn OptimizerConfig) -> Result<Transformed<LogicalPlan>> {
             let projection = match plan {
                 LogicalPlan::Projection(p) if p.expr.len() >= 2 => p,
                 _ => return Ok(Transformed::no(plan)),
