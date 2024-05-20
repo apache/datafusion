@@ -21,33 +21,33 @@ use datafusion_expr::{Expr, Literal};
 
 use super::expr_fn::get_field;
 
+/// Return access to the named field. Example `expr["name"]`
+///
+/// ## Access field "my_field" from column "c1"
+///
+/// For example if column "c1" holds documents like this
+///
+/// ```json
+/// {
+///   "my_field": 123.34,
+///   "other_field": "Boston",
+/// }
+/// ```
+///
+/// You can access column "my_field" with
+///
+/// ```
+/// # use datafusion_expr::{col};
+/// # use datafusion_functions::core::expr_ext::FieldAccessor;
+/// let expr = col("c1")
+///    .field("my_field");
+/// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
+/// ```
 pub trait FieldAccessor {
     fn field(self, name: impl Literal) -> Expr;
 }
 
 impl FieldAccessor for Expr {
-    /// Return access to the named field. Example `expr["name"]`
-    ///
-    /// ## Access field "my_field" from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// {
-    ///   "my_field": 123.34,
-    ///   "other_field": "Boston",
-    /// }
-    /// ```
-    ///
-    /// You can access column "my_field" with
-    ///
-    /// ```
-    /// # use datafusion_expr::{col};
-    /// # use datafusion_functions::core::expr_ext::FieldAccessor;
-    /// let expr = col("c1")
-    ///    .field("my_field");
-    /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
-    /// ```
     fn field(self, name: impl Literal) -> Expr {
         get_field(self, name)
     }
