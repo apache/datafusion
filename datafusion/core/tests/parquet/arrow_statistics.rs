@@ -621,7 +621,7 @@ async fn test_dates_64_diff_rg_sizes() {
 
 // TODO:
 // Other data types to tests
-// Int32Range,
+// `u8`, `u16`, `u32`, and `u64`,
 // UInt,
 // UInt32Range,
 // Float64,
