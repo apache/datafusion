@@ -38,42 +38,98 @@ use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::ParquetFileMetrics;
 
-/// Prune row groups based on statistics
+/// Tracks which RowGroupsw within a parquet file should be scanned.
 ///
-/// Returns a vector of indexes into `groups` which should be scanned.
-///
-/// If an index is NOT present in the returned Vec it means the
-/// predicate filtered all the row group.
-///
-/// If an index IS present in the returned Vec it means the predicate
-/// did not filter out that row group.
-///
-/// Note: This method currently ignores ColumnOrder
-/// <https://github.com/apache/datafusion/issues/8335>
-pub(crate) fn prune_row_groups_by_statistics(
-    arrow_schema: &Schema,
-    parquet_schema: &SchemaDescriptor,
-    groups: &[RowGroupMetaData],
-    range: Option<FileRange>,
-    predicate: Option<&PruningPredicate>,
-    metrics: &ParquetFileMetrics,
-) -> Vec<usize> {
-    let mut filtered = Vec::with_capacity(groups.len());
-    for (idx, metadata) in groups.iter().enumerate() {
-        if let Some(range) = &range {
-            // figure out where the first dictionary page (or first data page are)
+/// This struct encapsulates the various types of pruning that can be applied to
+/// a set of row groups within a parquet file.
+#[derive(Debug)]
+pub(crate) struct RowGroupSet {
+    /// row_groups[i] is true if the i-th row group should be scanned
+    row_groups: Vec<bool>,
+}
+
+impl RowGroupSet {
+    /// Create a new RowGroupSet with all row groups set to true (will be scanned)
+    pub fn new(num_row_groups: usize) -> Self {
+        Self {
+            row_groups: vec![true; num_row_groups],
+        }
+    }
+
+    /// Set the i-th row group to false (should not be scanned)
+    pub fn do_not_scan(&mut self, idx: usize) {
+        self.row_groups[idx] = false;
+    }
+
+    /// return true if the i-th row group should be scanned
+    fn should_scan(&self, idx: usize) -> bool {
+        self.row_groups[idx]
+    }
+
+    pub fn len(&self) -> usize {
+        self.row_groups.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.row_groups.is_empty()
+    }
+
+    /// Return an iterator over the row group indexes that should be scanned
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.row_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &b)| if b { Some(idx) } else { None })
+    }
+
+    /// Return a vector with the row group indexes that should be scanned
+    pub fn indexes(&self) -> Vec<usize> {
+        self.iter().collect()
+    }
+
+    /// Prune remaining row groups so that only those row groups within the
+    /// specified range are scanned.
+    ///
+    /// Updates this set to mark row groups that should not be scanned
+    pub fn prune_by_range(
+        &mut self,
+        groups: &[RowGroupMetaData],
+        range: &FileRange,
+    ) {
+        for (idx, metadata) in groups.iter().enumerate() {
+            // Skip the row group if the first dictionary/data page are not
+            // within the range.
+            //
             // note don't use the location of metadata
             // <https://github.com/apache/datafusion/issues/5995>
             let col = metadata.column(0);
             let offset = col
                 .dictionary_page_offset()
                 .unwrap_or_else(|| col.data_page_offset());
-            if offset < range.start || offset >= range.end {
-                continue;
+            if !range.contains(offset) {
+                self.do_not_scan(idx);
             }
         }
-
-        if let Some(predicate) = predicate {
+    }
+    /// Prune remaining row groups based using min/max/null_count statistics and
+    /// the [`PruningPredicate`].
+    ///
+    /// Updates this set to mark row groups that should not be scanned
+    ///
+    /// Note: This method currently ignores ColumnOrder
+    /// <https://github.com/apache/datafusion/issues/8335>
+    pub fn prune_by_statistics(
+        &mut self,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+        groups: &[RowGroupMetaData],
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) {
+        for (idx, metadata) in groups.iter().enumerate() {
+            if !self.should_scan(idx) {
+                continue;
+            }
             let pruning_stats = RowGroupPruningStatistics {
                 parquet_schema,
                 row_group_metadata: metadata,
@@ -84,6 +140,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                     // NB: false means don't scan row group
                     if !values[0] {
                         metrics.row_groups_pruned_statistics.add(1);
+                        self.do_not_scan(idx);
                         continue;
                     }
                 }
@@ -96,86 +153,77 @@ pub(crate) fn prune_row_groups_by_statistics(
             }
             metrics.row_groups_matched_statistics.add(1);
         }
-
-        filtered.push(idx)
     }
-    filtered
-}
 
-/// Prune row groups by bloom filters
-///
-/// Returns a vector of indexes into `groups` which should be scanned.
-///
-/// If an index is NOT present in the returned Vec it means the
-/// predicate filtered all the row group.
-///
-/// If an index IS present in the returned Vec it means the predicate
-/// did not filter out that row group.
-pub(crate) async fn prune_row_groups_by_bloom_filters<
-    T: AsyncFileReader + Send + 'static,
->(
-    arrow_schema: &Schema,
-    builder: &mut ParquetRecordBatchStreamBuilder<T>,
-    row_groups: &[usize],
-    groups: &[RowGroupMetaData],
-    predicate: &PruningPredicate,
-    metrics: &ParquetFileMetrics,
-) -> Vec<usize> {
-    let mut filtered = Vec::with_capacity(groups.len());
-    for idx in row_groups {
-        // get all columns in the predicate that we could use a bloom filter with
-        let literal_columns = predicate.literal_columns();
-        let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
-
-        for column_name in literal_columns {
-            let Some((column_idx, _field)) =
-                parquet_column(builder.parquet_schema(), arrow_schema, &column_name)
-            else {
+    /// Prune remaining row groups using any available bloom filters and the
+    /// [`PruningPredicate`]
+    ///
+    /// Updates this set with row groups that should not be scanned
+    pub async fn prune_by_bloom_filters<T: AsyncFileReader + Send + 'static>(
+        &mut self,
+        arrow_schema: &Schema,
+        builder: &mut ParquetRecordBatchStreamBuilder<T>,
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) {
+        for idx in 0..self.len() {
+            // already filtered out
+            if !self.should_scan(idx) {
                 continue;
-            };
+            }
 
-            let bf = match builder
-                .get_row_group_column_bloom_filter(*idx, column_idx)
-                .await
-            {
-                Ok(Some(bf)) => bf,
-                Ok(None) => continue, // no bloom filter for this column
-                Err(e) => {
-                    log::debug!("Ignoring error reading bloom filter: {e}");
-                    metrics.predicate_evaluation_errors.add(1);
+            // Attempt to find bloom filters for filtering this row group
+            let literal_columns = predicate.literal_columns();
+            let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
+
+            for column_name in literal_columns {
+                let Some((column_idx, _field)) =
+                    parquet_column(builder.parquet_schema(), arrow_schema, &column_name)
+                else {
                     continue;
+                };
+
+                let bf = match builder
+                    .get_row_group_column_bloom_filter(idx, column_idx)
+                    .await
+                {
+                    Ok(Some(bf)) => bf,
+                    Ok(None) => continue, // no bloom filter for this column
+                    Err(e) => {
+                        log::debug!("Ignoring error reading bloom filter: {e}");
+                        metrics.predicate_evaluation_errors.add(1);
+                        continue;
+                    }
+                };
+                let physical_type =
+                    builder.parquet_schema().column(column_idx).physical_type();
+
+                column_sbbf.insert(column_name.to_string(), (bf, physical_type));
+            }
+
+            let stats = BloomFilterStatistics { column_sbbf };
+
+            // Can this group be pruned?
+            let prune_group = match predicate.prune(&stats) {
+                Ok(values) => !values[0],
+                Err(e) => {
+                    log::debug!(
+                        "Error evaluating row group predicate on bloom filter: {e}"
+                    );
+                    metrics.predicate_evaluation_errors.add(1);
+                    false
                 }
             };
-            let physical_type =
-                builder.parquet_schema().column(column_idx).physical_type();
 
-            column_sbbf.insert(column_name.to_string(), (bf, physical_type));
-        }
-
-        let stats = BloomFilterStatistics { column_sbbf };
-
-        // Can this group be pruned?
-        let prune_group = match predicate.prune(&stats) {
-            Ok(values) => !values[0],
-            Err(e) => {
-                log::debug!("Error evaluating row group predicate on bloom filter: {e}");
-                metrics.predicate_evaluation_errors.add(1);
-                false
-            }
-        };
-
-        if prune_group {
-            metrics.row_groups_pruned_bloom_filter.add(1);
-        } else {
-            if !stats.column_sbbf.is_empty() {
+            if prune_group {
+                metrics.row_groups_pruned_bloom_filter.add(1);
+                self.do_not_scan(idx)
+            } else if !stats.column_sbbf.is_empty() {
                 metrics.row_groups_matched_bloom_filter.add(1);
             }
-            filtered.push(*idx);
         }
     }
-    filtered
 }
-
 /// Implements `PruningStatistics` for Parquet Split Block Bloom Filters (SBBF)
 struct BloomFilterStatistics {
     /// Maps column name to the parquet bloom filter and parquet physical type
@@ -1297,6 +1345,7 @@ mod tests {
         }
     }
 
+    /// Evaluates the pruning predicate on the specified row groups and returns the row groups that are left
     async fn test_row_group_bloom_filter_pruning_predicate(
         file_name: &str,
         data: bytes::Bytes,
