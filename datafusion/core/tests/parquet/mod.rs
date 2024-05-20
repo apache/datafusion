@@ -427,7 +427,7 @@ fn make_int_batches(start: i8, end: i8) -> RecordBatch {
     .unwrap()
 }
 
-/// Return record batch with i8, i16, i32, and i64 sequences
+/// Return record batch with u8, u16, u32, and u64 sequences
 ///
 /// Columns are named
 /// "u8" -> UInt8Array
