@@ -41,6 +41,7 @@ use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod arrow_statistics;
 mod custom_reader;
 mod file_statistics;
 #[cfg(not(target_family = "windows"))]

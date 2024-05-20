@@ -72,6 +72,7 @@ mod statistics;
 
 pub use metrics::ParquetFileMetrics;
 pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
+pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -482,7 +483,6 @@ struct ParquetOpener {
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
-
         let file_metrics = ParquetFileMetrics::new(
             self.partition_index,
             file_meta.location().as_ref(),
