@@ -330,6 +330,7 @@ async fn test_int_32() {
 }
 
 // BUG: ignore this test for now
+// https://github.com/apache/datafusion/issues/10585
 // Note that the file has 4 columns named "i8", "i16", "i32", "i64".
 //   - The tests on column i32 and i64 passed.
 //   - The tests on column i8 and i16 failed.
@@ -365,6 +366,7 @@ async fn test_int_16() {
 }
 
 // BUG (same as above): ignore this test for now
+// https://github.com/apache/datafusion/issues/10585
 #[ignore]
 #[tokio::test]
 async fn test_int_8() {
