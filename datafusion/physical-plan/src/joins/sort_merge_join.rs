@@ -996,21 +996,23 @@ impl SMJStream {
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::LeftSemi) && self.filter.is_some() {
-                    join_streamed = !self
-                        .streamed_batch
-                        .join_filter_matched_idxs
-                        .contains(&(self.streamed_batch.idx as u64))
-                        && !self.streamed_joined;
-                    // if the join filter specified there can be references to buffered columns
-                    // so buffered columns are needed to access them
-                    join_buffered = join_streamed;
-                }
-                if matches!(self.join_type, JoinType::LeftSemi) && self.filter.is_none() {
-                    join_streamed = !self.streamed_joined;
-                    // if the join filter specified there can be references to buffered columns
-                    // so buffered columns are needed to access them
-                    join_buffered = self.filter.is_some();
+                if matches!(self.join_type, JoinType::LeftSemi) {
+                    // if the join filter is specified then its needed to output the streamed index
+                    // only if it has not been emitted before
+                    // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
+                    // filter match and prevents the same index to go into output more than once
+                    if self.filter.is_some() {
+                        join_streamed = !self
+                            .streamed_batch
+                            .join_filter_matched_idxs
+                            .contains(&(self.streamed_batch.idx as u64))
+                            && !self.streamed_joined;
+                        // if the join filter specified there can be references to buffered columns
+                        // so buffered columns are needed to access them
+                        join_buffered = join_streamed;
+                    } else {
+                        join_streamed = !self.streamed_joined;
+                    }
                 }
                 if matches!(
                     self.join_type,
