@@ -17,7 +17,7 @@
 
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
@@ -76,10 +76,10 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
 
-    /// Create a new `ExtensionPlanNode` with the specified children
+    /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
     /// when the plan is being rewritten and a new instance of the
-    /// `ExtensionPlanNode` must be created.
+    /// `UserDefinedLogicalNode` must be created.
     ///
     /// Note that exprs and inputs are in the same order as the result
     /// of self.inputs and self.exprs.
@@ -88,15 +88,12 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     //
     // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
     // like `with_template`, or `with_exprs_and_inputs`.
-    //
-    // Also, I think `ExtensionPlanNode` has been renamed to `UserDefinedLogicalNode`
-    // but the doc comments have not been updated.
     #[allow(clippy::wrong_self_convention)]
     fn from_template(
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode>;
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 
     /// Returns the necessary input columns for this node required to compute
     /// the columns in the output schema
@@ -316,8 +313,8 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        Arc::new(self.from_template(exprs, inputs))
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Ok(Arc::new(self.from_template(exprs, inputs)))
     }
 
     fn necessary_children_exprs(

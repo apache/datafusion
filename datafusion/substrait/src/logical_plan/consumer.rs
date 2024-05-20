@@ -551,7 +551,7 @@ pub async fn from_substrait_rel(
                 );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
-            let plan = plan.from_template(&plan.expressions(), &[input_plan]);
+            let plan = plan.from_template(&plan.expressions(), &[input_plan])?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
@@ -567,7 +567,7 @@ pub async fn from_substrait_rel(
                 let input_plan = from_substrait_rel(ctx, input, extensions).await?;
                 inputs.push(input_plan);
             }
-            let plan = plan.from_template(&plan.expressions(), &inputs);
+            let plan = plan.from_template(&plan.expressions(), &inputs)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::Exchange(exchange)) => {

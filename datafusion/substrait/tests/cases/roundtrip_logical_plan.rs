@@ -114,12 +114,12 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self,
         _: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        Arc::new(Self {
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Ok(Arc::new(Self {
             validation_bytes: self.validation_bytes.clone(),
             inputs: inputs.to_vec(),
             empty_schema: Arc::new(DFSchema::empty()),
-        })
+        }))
     }
 
     fn dyn_hash(&self, _: &mut dyn std::hash::Hasher) {
