@@ -17,7 +17,6 @@
 
 //! [`SingleDistinctToGroupBy`] replaces `AGG(DISTINCT ..)` with `AGG(..) GROUP BY ..`
 
-use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -204,7 +203,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 
                 // replace the distinct arg with alias
                 let mut index = 1;
-                let mut distinct_aggr_exprs = HashSet::new();
+                let mut group_fields_set = HashSet::new();
                 let mut inner_aggr_exprs = vec![];
                 let outer_aggr_exprs = aggr_expr
                     .into_iter()
@@ -221,8 +220,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 }
                                 let arg = args.swap_remove(0);
 
-                                let expr_id = distinct_aggr_exprs.hasher().hash_one(&arg);
-                                if distinct_aggr_exprs.insert(expr_id) {
+                                if group_fields_set.insert(arg.display_name()?) {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
