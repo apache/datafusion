@@ -46,10 +46,6 @@ use crate::utils::make_decimal_type;
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
 pub trait ContextProvider {
-    #[deprecated(since = "32.0.0", note = "please use `get_table_source` instead")]
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        self.get_table_source(name)
-    }
     /// Getter for a datasource
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
     /// Getter for a table function
@@ -86,9 +82,14 @@ pub trait ContextProvider {
     /// Get configuration options
     fn options(&self) -> &ConfigOptions;
 
-    fn udfs_names(&self) -> Vec<String>;
-    fn udafs_names(&self) -> Vec<String>;
-    fn udwfs_names(&self) -> Vec<String>;
+    /// Get all user defined scalar function names
+    fn udf_names(&self) -> Vec<String>;
+
+    /// Get all user defined aggregate function names
+    fn udaf_names(&self) -> Vec<String>;
+
+    /// Get all user defined window function names
+    fn udwf_names(&self) -> Vec<String>;
 }
 
 /// SQL parser options
