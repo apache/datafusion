@@ -577,6 +577,8 @@ async fn test_timestamp_diff_rg_sizes() {
 }
 
 // date with different row group sizes
+// Bug expect `Date32Array` but returns Int32Array
+//  https://github.com/apache/datafusion/issues/10587
 #[tokio::test]
 async fn test_dates_32_diff_rg_sizes() {
     let row_per_group = 13;
@@ -603,8 +605,9 @@ async fn test_dates_32_diff_rg_sizes() {
     .run("date32");
 }
 
-// BUG: same as above. Expect to return Int64Array (for Date64Array) but returns Int32Array
+// BUG: same as above. Expect to return Date64Array but returns Int32Array
 // test date with different row group sizes
+// https://github.com/apache/datafusion/issues/10587
 #[ignore]
 #[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
