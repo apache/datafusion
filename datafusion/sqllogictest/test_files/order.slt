@@ -755,13 +755,13 @@ logical_plan
 02)--Union
 03)----SubqueryAlias: u
 04)------Projection: Int64(0) AS m, m0.t
-05)--------Aggregate: groupBy=[[Int64(0), m0.t]], aggr=[[]]
+05)--------Aggregate: groupBy=[[m0.t]], aggr=[[]]
 06)----------SubqueryAlias: m0
 07)------------Projection: column1 AS t
 08)--------------Values: (Int64(0)), (Int64(1)), (Int64(2))
 09)----SubqueryAlias: v
 10)------Projection: Int64(1) AS m, m1.t
-11)--------Aggregate: groupBy=[[Int64(1), m1.t]], aggr=[[]]
+11)--------Aggregate: groupBy=[[m1.t]], aggr=[[]]
 12)----------SubqueryAlias: m1
 13)------------Projection: column1 AS t
 14)--------------Values: (Int64(0)), (Int64(1))
@@ -769,20 +769,20 @@ physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
 02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
-04)------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+04)------ProjectionExec: expr=[0 as m, t@0 as t]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2
+07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 10)------------------ProjectionExec: expr=[column1@0 as t]
 11)--------------------ValuesExec
-12)------ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]
-13)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+12)------ProjectionExec: expr=[1 as m, t@0 as t]
+13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 14)----------CoalesceBatchesExec: target_batch_size=8192
-15)------------RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2
+15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-17)----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 18)------------------ProjectionExec: expr=[column1@0 as t]
 19)--------------------ValuesExec
 
