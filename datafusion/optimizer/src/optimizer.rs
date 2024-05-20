@@ -475,7 +475,8 @@ pub(crate) fn assert_schema_is_the_same(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
+    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result, DataFusionError};
+    use datafusion_common::tree_node::Transformed;
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
@@ -676,12 +677,20 @@ mod tests {
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
-            let table_scan = test_table_scan()?;
-            Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
+            unreachable!()
         }
 
         fn name(&self) -> &str {
             "get table_scan rule"
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(&self, _plan: LogicalPlan, _config: &dyn OptimizerConfig) -> Result<Transformed<LogicalPlan>> {
+            let table_scan = test_table_scan()?;
+            Ok(Transformed::yes(LogicalPlanBuilder::from(table_scan).build()?))
         }
     }
 
@@ -704,12 +713,28 @@ mod tests {
     impl OptimizerRule for RotateProjectionRule {
         fn try_optimize(
             &self,
-            plan: &LogicalPlan,
+            _plan: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
+            unreachable!()
+        }
+
+        fn name(&self) -> &str {
+            "rotate_projection"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(&self, plan: LogicalPlan, _config: &dyn OptimizerConfig) -> Result<Transformed<LogicalPlan>, DataFusionError> {
             let projection = match plan {
                 LogicalPlan::Projection(p) if p.expr.len() >= 2 => p,
-                _ => return Ok(None),
+                _ => return Ok(Transformed::no(plan)),
             };
 
             let mut exprs = projection.expr.clone();
@@ -722,18 +747,10 @@ mod tests {
                 exprs.rotate_left(1);
             }
 
-            Ok(Some(LogicalPlan::Projection(Projection::try_new(
+            Ok(Transformed::yes(LogicalPlan::Projection(Projection::try_new(
                 exprs,
                 projection.input.clone(),
             )?)))
-        }
-
-        fn apply_order(&self) -> Option<ApplyOrder> {
-            Some(ApplyOrder::TopDown)
-        }
-
-        fn name(&self) -> &str {
-            "rotate_projection"
         }
     }
 }
