@@ -24,6 +24,8 @@ use datafusion_common::DFSchema;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
 
+mod simplification;
+
 #[test]
 fn test_eq() {
     // id = '2'
