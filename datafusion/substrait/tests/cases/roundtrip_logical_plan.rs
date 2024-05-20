@@ -110,7 +110,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         )
     }
 
-    fn from_template(
+    fn with_exprs_and_inputs(
         &self,
         _: &[Expr],
         inputs: &[LogicalPlan],

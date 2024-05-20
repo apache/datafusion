@@ -84,12 +84,8 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Note that exprs and inputs are in the same order as the result
     /// of self.inputs and self.exprs.
     ///
-    /// So, `self.from_template(exprs, ..).expressions() == exprs
-    //
-    // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
-    // like `with_template`, or `with_exprs_and_inputs`.
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(
+    /// So, `self.with_exprs_and_inputs(exprs, ..).expressions() == exprs
+    fn with_exprs_and_inputs(
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
@@ -309,7 +305,7 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         self.fmt_for_explain(f)
     }
 
-    fn from_template(
+    fn with_exprs_and_inputs(
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],

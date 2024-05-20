@@ -417,7 +417,7 @@ where
         .map_data(|new_inputs| {
             let exprs = node.expressions();
             Ok(Extension {
-                node: node.from_template(&exprs, &new_inputs)?,
+                node: node.with_exprs_and_inputs(&exprs, &new_inputs)?,
             })
         })
 }
@@ -663,7 +663,7 @@ impl LogicalPlan {
                     .into_iter()
                     .map_until_stop_and_collect(f)?;
                 let plan = LogicalPlan::Extension(Extension {
-                    node: UserDefinedLogicalNode::from_template(
+                    node: UserDefinedLogicalNode::with_exprs_and_inputs(
                         node.as_ref(),
                         exprs.data.as_slice(),
                         node.inputs()
