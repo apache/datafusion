@@ -216,11 +216,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             ..
                         }) => {
                             if distinct {
-                                debug_assert_eq!(
-                                    args.len(),
-                                    1,
-                                    "DISTINCT aggregate should have exactly one argument"
-                                );
+                                if args.len() != 1 {
+                                    return internal_err!("DISTINCT aggregate should have exactly one argument");
+                                }
                                 let arg = args.swap_remove(0);
 
                                 let expr_id = distinct_aggr_exprs.hasher().hash_one(&arg);
@@ -228,14 +226,14 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
-                                Expr::AggregateFunction(AggregateFunction::new(
+                                Ok(Expr::AggregateFunction(AggregateFunction::new(
                                     fun,
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     None,
                                     None,
                                     None,
-                                ))
+                                )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
                                 index += 1;
@@ -251,19 +249,19 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     ))
                                     .alias(&alias_str),
                                 );
-                                Expr::AggregateFunction(AggregateFunction::new(
+                                Ok(Expr::AggregateFunction(AggregateFunction::new(
                                     fun,
                                     vec![col(&alias_str)],
                                     false,
                                     None,
                                     None,
                                     None,
-                                ))
+                                )))
                             }
                         }
-                        _ => aggr_expr,
+                        _ => Ok(aggr_expr),
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
 
                 // construct the inner AggrPlan
                 let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
