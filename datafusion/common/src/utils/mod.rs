@@ -17,6 +17,8 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+pub mod proxy;
+
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
