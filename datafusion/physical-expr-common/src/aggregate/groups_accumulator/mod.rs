@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilities for implementing [`GroupsAccumulator`]
+//! Utilities for implementing GroupsAccumulator
 
 pub mod accumulate;
 pub mod bool_op;
