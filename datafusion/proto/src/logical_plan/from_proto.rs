@@ -42,7 +42,7 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
-    GetFieldAccess, GetIndexedField, GroupingSet,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -923,63 +923,6 @@ pub fn parse_expr(
                     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
-        }
-        ExprType::GetIndexedField(get_indexed_field) => {
-            let expr = parse_required_expr(
-                get_indexed_field.expr.as_deref(),
-                registry,
-                "expr",
-                codec,
-            )?;
-            let field = match &get_indexed_field.field {
-                Some(protobuf::get_indexed_field::Field::NamedStructField(
-                    named_struct_field,
-                )) => GetFieldAccess::NamedStructField {
-                    name: named_struct_field
-                        .name
-                        .as_ref()
-                        .ok_or_else(|| Error::required("value"))?
-                        .try_into()?,
-                },
-                Some(protobuf::get_indexed_field::Field::ListIndex(list_index)) => {
-                    GetFieldAccess::ListIndex {
-                        key: Box::new(parse_required_expr(
-                            list_index.key.as_deref(),
-                            registry,
-                            "key",
-                            codec,
-                        )?),
-                    }
-                }
-                Some(protobuf::get_indexed_field::Field::ListRange(list_range)) => {
-                    GetFieldAccess::ListRange {
-                        start: Box::new(parse_required_expr(
-                            list_range.start.as_deref(),
-                            registry,
-                            "start",
-                            codec,
-                        )?),
-                        stop: Box::new(parse_required_expr(
-                            list_range.stop.as_deref(),
-                            registry,
-                            "stop",
-                            codec,
-                        )?),
-                        stride: Box::new(parse_required_expr(
-                            list_range.stride.as_deref(),
-                            registry,
-                            "stride",
-                            codec,
-                        )?),
-                    }
-                }
-                None => return Err(proto_error("Field must not be None")),
-            };
-
-            Ok(Expr::GetIndexedField(GetIndexedField::new(
-                Box::new(expr),
-                field,
-            )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {

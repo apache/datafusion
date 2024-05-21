@@ -83,8 +83,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
-    Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
-    WindowFunction,
+    Cast, GroupingSet, InList, Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::expr_vec_fmt;
@@ -215,29 +214,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::IsNotUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
-        }
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
-            match field {
-                GetFieldAccess::NamedStructField { name: _ } => {
-                    unreachable!(
-                        "NamedStructField should have been rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListIndex { key: _ } => {
-                    unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListRange {
-                    start: _,
-                    stop: _,
-                    stride: _,
-                } => {
-                    unreachable!(
-                        "ListRange should have been rewritten in OperatorToFunction"
-                    )
-                }
-            };
         }
         Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
