@@ -22,8 +22,8 @@ use std::fs::File;
 use std::sync::Arc;
 
 use arrow_array::{
-    make_array, Array, ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array,
-    RecordBatch, UInt64Array,
+    make_array, Array, ArrayRef, BooleanArray, Int16Array, Int32Array, Int64Array,
+    Int8Array, RecordBatch, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -33,7 +33,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderB
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
-use crate::parquet::Scenario;
+use crate::parquet::{struct_array, Scenario};
 
 use super::make_test_file_rg;
 
@@ -655,6 +655,47 @@ async fn test_dates_64_diff_rg_sizes() {
 // PeriodsInColumnNames,
 // WithNullValuesPageLevel,
 
+// TODO:
+// f64::NAN
+
+// Boolean
+#[tokio::test]
+async fn test_boolean() {
+    let row_per_group = 5;
+    // This creates a parquet files of 1 column named "bool"
+    // The file is created by 2 record batches each has 5 rows --> 2 row groups
+    let reader = parquet_file_many_columns(Scenario::Boolean, row_per_group).await;
+
+    Test {
+        reader,
+        expected_min: Arc::new(BooleanArray::from(vec![false, false])),
+        expected_max: Arc::new(BooleanArray::from(vec![true, false])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5]),
+    }
+    .run("bool");
+}
+
+// struct array
+// BUG
+// todo: open ticket
+#[ignore]
+#[tokio::test]
+async fn test_struct() {
+    let row_per_group = 5;
+    // This creates a parquet files of 1 column named "struct"
+    // The file is created by 1 record batch with 3 rows in the struct array
+    let reader = parquet_file_many_columns(Scenario::StructArray, row_per_group).await;
+
+    Test {
+        reader,
+        expected_min: Arc::new(struct_array(vec![(Some(1), Some(6.0), Some(12.0))])),
+        expected_max: Arc::new(struct_array(vec![(Some(2), Some(8.5), Some(14.0))])),
+        expected_null_counts: UInt64Array::from(vec![0]),
+        expected_row_counts: UInt64Array::from(vec![3]),
+    }
+    .run("struct");
+}
 ////// Files with missing statistics ///////
 
 #[tokio::test]
