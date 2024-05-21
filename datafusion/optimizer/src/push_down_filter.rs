@@ -1364,11 +1364,15 @@ mod tests {
             write!(f, "NoopPlan")
         }
 
-        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-            Self {
-                input: inputs.to_vec(),
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: inputs,
                 schema: Arc::clone(&self.schema),
-            }
+            })
         }
     }
 

@@ -870,12 +870,16 @@ mod tests {
             write!(f, "NoOpUserDefined")
         }
 
-        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-            Self {
-                exprs: exprs.to_vec(),
-                input: Arc::new(inputs[0].clone()),
+        fn with_exprs_and_inputs(
+            &self,
+            exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                exprs,
+                input: Arc::new(inputs.swap_remove(0)),
                 schema: self.schema.clone(),
-            }
+            })
         }
 
         fn necessary_children_exprs(
@@ -932,14 +936,18 @@ mod tests {
             write!(f, "UserDefinedCrossJoin")
         }
 
-        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        fn with_exprs_and_inputs(
+            &self,
+            exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
             assert_eq!(inputs.len(), 2);
-            Self {
-                exprs: exprs.to_vec(),
-                left_child: Arc::new(inputs[0].clone()),
-                right_child: Arc::new(inputs[1].clone()),
+            Ok(Self {
+                exprs,
+                left_child: Arc::new(inputs.remove(0)),
+                right_child: Arc::new(inputs.remove(0)),
                 schema: self.schema.clone(),
-            }
+            })
         }
 
         fn necessary_children_exprs(
