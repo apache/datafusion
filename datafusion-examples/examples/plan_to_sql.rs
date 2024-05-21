@@ -145,7 +145,7 @@ async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let sql = plan_to_sql(df.logical_plan())?.to_string();
     assert_eq!(
         sql,
-        r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE ((alltypes_plain.id > 1) AND (alltypes_plain.tinyint_col"< alltypes_plain.double_col))"#
+        r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE ((alltypes_plain.id > 1) AND (alltypes_plain.tinyint_col < alltypes_plain.double_col))"#
     );
 
     Ok(())
