@@ -4641,6 +4641,14 @@ fn roundtrip_statement() -> Result<()> {
             group by "Last Name", p.id 
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2"#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2
+            ORDER BY string DESC
+            LIMIT 10"#
         ];
 
     // For each test sql string, we transform as follows:
