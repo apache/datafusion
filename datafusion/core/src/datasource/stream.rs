@@ -103,19 +103,29 @@ impl FromStr for StreamEncoding {
     }
 }
 
-/// The configuration for a [`StreamTable`]
-#[derive(Debug)]
-pub struct StreamConfig {
-    schema: SchemaRef,
-    location: PathBuf,
-    batch_size: usize,
-    encoding: StreamEncoding,
-    header: bool,
-    order: Vec<Vec<Expr>>,
-    constraints: Constraints,
+pub trait StreamSource: std::fmt::Debug + Send + Sync {
+    fn schema(&self) -> SchemaRef;
+    // Needed for `PartitionStream` - maybe there is a better way to do this.
+    fn schema_ref(&self) -> &SchemaRef;
+    fn reader(&self) -> Result<Box<dyn RecordBatchReader>>;
+    fn writer(&self) -> Result<Box<dyn RecordBatchWriter>>;
+    fn stream_write_display(
+        &self,
+        t: DisplayFormatType,
+        f: &mut Formatter,
+    ) -> std::fmt::Result;
 }
 
-impl StreamConfig {
+#[derive(Debug)]
+pub struct FileStreamSource {
+    location: PathBuf,
+    encoding: StreamEncoding,
+    pub schema: SchemaRef,
+    header: bool,
+    batch_size: usize,
+}
+
+impl FileStreamSource {
     /// Stream data from the file at `location`
     ///
     /// * Data will be read sequentially from the provided `location`
@@ -129,19 +139,10 @@ impl StreamConfig {
             location,
             batch_size: 1024,
             encoding: StreamEncoding::Csv,
-            order: vec![],
             header: false,
-            constraints: Constraints::empty(),
         }
     }
 
-    /// Specify a sort order for the stream
-    pub fn with_order(mut self, order: Vec<Vec<Expr>>) -> Self {
-        self.order = order;
-        self
-    }
-
-    /// Specify the batch size
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
@@ -158,11 +159,16 @@ impl StreamConfig {
         self.encoding = encoding;
         self
     }
+}
 
-    /// Assign constraints
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.constraints = constraints;
-        self
+impl StreamSource for FileStreamSource {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    // Needed for `PartitionStream`
+    fn schema_ref(&self) -> &SchemaRef {
+        &self.schema
     }
 
     fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
@@ -210,6 +216,64 @@ impl StreamConfig {
             }
         }
     }
+
+    fn stream_write_display(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut Formatter,
+    ) -> std::fmt::Result {
+        f.debug_struct("StreamWrite")
+            .field("location", &self.location)
+            .field("batch_size", &self.batch_size)
+            .field("encoding", &self.encoding)
+            .field("header", &self.header)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The configuration for a [`StreamTable`]
+#[derive(Debug)]
+pub struct StreamConfig {
+    source: Arc<dyn StreamSource>,
+    order: Vec<Vec<Expr>>,
+    constraints: Constraints,
+}
+
+impl StreamConfig {
+    /// Stream data from the file at `location`
+    ///
+    /// * Data will be read sequentially from the provided `location`
+    /// * New data will be appended to the end of the file
+    ///
+    /// The encoding can be configured with [`Self::with_encoding`] and
+    /// defaults to [`StreamEncoding::Csv`]
+    pub fn new(source: Arc<dyn StreamSource>) -> Self {
+        Self {
+            source,
+            order: vec![],
+            constraints: Constraints::empty(),
+        }
+    }
+
+    /// Specify a sort order for the stream
+    pub fn with_order(mut self, order: Vec<Vec<Expr>>) -> Self {
+        self.order = order;
+        self
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
+        self.source.reader()
+    }
+
+    fn writer(&self) -> Result<Box<dyn RecordBatchWriter>> {
+        self.source.writer()
+    }
 }
 
 /// A [`TableProvider`] for an unbounded stream source
@@ -238,7 +302,7 @@ impl TableProvider for StreamTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.0.schema.clone()
+        self.0.source.schema().clone()
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -258,14 +322,14 @@ impl TableProvider for StreamTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let projected_schema = match projection {
             Some(p) => {
-                let projected = self.0.schema.project(p)?;
+                let projected = self.0.source.schema().project(p)?;
                 create_ordering(&projected, &self.0.order)?
             }
-            None => create_ordering(self.0.schema.as_ref(), &self.0.order)?,
+            None => create_ordering(self.0.source.schema_ref(), &self.0.order)?,
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
-            self.0.schema.clone(),
+            self.0.source.schema(),
             vec![Arc::new(StreamRead(self.0.clone())) as _],
             projection,
             projected_schema,
@@ -282,7 +346,7 @@ impl TableProvider for StreamTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let ordering = match self.0.order.first() {
             Some(x) => {
-                let schema = self.0.schema.as_ref();
+                let schema = self.0.source.schema_ref();
                 let orders = create_ordering(schema, std::slice::from_ref(x))?;
                 let ordering = orders.into_iter().next().unwrap();
                 Some(ordering.into_iter().map(Into::into).collect())
@@ -293,7 +357,7 @@ impl TableProvider for StreamTable {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(self.0.clone())),
-            self.0.schema.clone(),
+            self.0.source.schema(),
             ordering,
         )))
     }
@@ -303,12 +367,12 @@ struct StreamRead(Arc<StreamConfig>);
 
 impl PartitionStream for StreamRead {
     fn schema(&self) -> &SchemaRef {
-        &self.0.schema
+        self.0.source.schema_ref()
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.0.clone();
-        let schema = self.0.schema.clone();
+        let schema = self.0.source.schema().clone();
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
         let tx = builder.tx();
         builder.spawn_blocking(move || {
@@ -329,12 +393,7 @@ struct StreamWrite(Arc<StreamConfig>);
 
 impl DisplayAs for StreamWrite {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("StreamWrite")
-            .field("location", &self.0.location)
-            .field("batch_size", &self.0.batch_size)
-            .field("encoding", &self.0.encoding)
-            .field("header", &self.0.header)
-            .finish_non_exhaustive()
+        self.0.source.stream_write_display(_t, f)
     }
 }
 
