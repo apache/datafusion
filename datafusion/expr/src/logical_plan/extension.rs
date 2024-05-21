@@ -76,6 +76,17 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
 
+    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
+    #[allow(clippy::wrong_self_convention)]
+    fn from_template(
+        &self,
+        exprs: &[Expr],
+        inputs: &[LogicalPlan],
+    ) -> Arc<dyn UserDefinedLogicalNode> {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
     /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
     /// when the plan is being rewritten and a new instance of the
@@ -87,8 +98,8 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// So, `self.with_exprs_and_inputs(exprs, ..).expressions() == exprs
     fn with_exprs_and_inputs(
         &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
     ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 
     /// Returns the necessary input columns for this node required to compute
@@ -307,10 +318,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
 
     fn with_exprs_and_inputs(
         &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
     ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        Ok(Arc::new(self.from_template(exprs, inputs)))
+        Ok(Arc::new(self.from_template(&exprs, &inputs)))
     }
 
     fn necessary_children_exprs(

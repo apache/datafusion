@@ -417,7 +417,7 @@ where
         .map_data(|new_inputs| {
             let exprs = node.expressions();
             Ok(Extension {
-                node: node.with_exprs_and_inputs(&exprs, &new_inputs)?,
+                node: node.with_exprs_and_inputs(exprs, new_inputs)?,
             })
         })
 }
@@ -665,12 +665,8 @@ impl LogicalPlan {
                 let plan = LogicalPlan::Extension(Extension {
                     node: UserDefinedLogicalNode::with_exprs_and_inputs(
                         node.as_ref(),
-                        exprs.data.as_slice(),
-                        node.inputs()
-                            .into_iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .as_slice(),
+                        exprs.data,
+                        node.inputs().into_iter().cloned().collect::<Vec<_>>(),
                     )?,
                 });
                 Transformed::new(plan, exprs.transformed, exprs.tnr)
