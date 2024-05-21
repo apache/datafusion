@@ -100,7 +100,7 @@ use super::metrics::ParquetFileMetrics;
 ///
 /// Using `A > 35`: can rule out all of values in Page 1 (rows 0 -> 199)
 ///
-/// Using `B = 'F'`: can rule out all vaues in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
+/// Using `B = 'F'`: can rule out all values in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
 ///
 /// So we can entirely skip rows 0->199 and 250->299 as we know they
 /// can not contain rows that match the predicate.

@@ -44,7 +44,7 @@ use super::ParquetFileMetrics;
 /// a set of row groups within a parquet file, progressively narrowing down the
 /// set of row groups that should be scanned.
 #[derive(Debug, PartialEq)]
-pub(crate) struct RowGroupSet {
+pub struct RowGroupSet {
     /// `row_groups[i]` is true if the i-th row group should be scanned
     row_groups: Vec<bool>,
 }
