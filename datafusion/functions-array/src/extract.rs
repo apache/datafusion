@@ -97,6 +97,11 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
+        Ok(format!("{}[{}]", args_name[0], args_name[1]))
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -245,6 +250,12 @@ impl ScalarUDFImpl for ArraySlice {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
+        Ok(format!("{}[{}]", args_name[0], args_name[1..].join(":")))
+    }
+
     fn name(&self) -> &str {
         "array_slice"
     }
