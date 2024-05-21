@@ -74,6 +74,22 @@ pub fn parquet_file_one_column(
     no_null_values_end: i64,
     row_per_group: usize,
 ) -> ParquetRecordBatchReaderBuilder<File> {
+    parquet_file_one_column_stats(
+        num_null,
+        no_null_values_start,
+        no_null_values_end,
+        row_per_group,
+        EnabledStatistics::Chunk,
+    )
+}
+
+pub fn parquet_file_one_column_stats(
+    num_null: usize,
+    no_null_values_start: i64,
+    no_null_values_end: i64,
+    row_per_group: usize,
+    enable_stats: EnabledStatistics,
+) -> ParquetRecordBatchReaderBuilder<File> {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquert_statistics_test")
         .suffix(".parquet")
@@ -82,7 +98,7 @@ pub fn parquet_file_one_column(
 
     let props = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
-        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .set_statistics_enabled(enable_stats)
         .build();
 
     let batches = vec![make_int64_batches_with_null(
@@ -638,7 +654,24 @@ async fn test_dates_64_diff_rg_sizes() {
 // ByteArray,
 // PeriodsInColumnNames,
 // WithNullValuesPageLevel,
-// WITHOUT Stats
+
+////// Files with missing statistics ///////
+
+#[tokio::test]
+async fn test_missing_statistics() {
+    let row_per_group = 5;
+    let reader =
+        parquet_file_one_column_stats(0, 4, 7, row_per_group, EnabledStatistics::None);
+
+    Test {
+        reader,
+        expected_min: Arc::new(Int64Array::from(vec![None])),
+        expected_max: Arc::new(Int64Array::from(vec![None])),
+        expected_null_counts: UInt64Array::from(vec![None]),
+        expected_row_counts: UInt64Array::from(vec![3]), // stil has row count statistics
+    }
+    .run("i64");
+}
 
 /////// NEGATIVE TESTS ///////
 // column not found
