@@ -106,7 +106,7 @@ async fn simple_plan_to_sql_demo() -> Result<()> {
 
     assert_eq!(
         sql,
-        r#"SELECT "?table?"."id", "?table?"."int_col", "?table?"."double_col", "?table?"."date_string_col" FROM "?table?""#
+        r#"SELECT "?table?".id, "?table?".int_col, "?table?".double_col, "?table?".date_string_col FROM "?table?""#
     );
 
     Ok(())
