@@ -38,18 +38,19 @@ use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::ParquetFileMetrics;
 
-/// Tracks which RowGroupsw within a parquet file should be scanned.
+/// Tracks which RowGroups within a parquet file should be scanned.
 ///
 /// This struct encapsulates the various types of pruning that can be applied to
-/// a set of row groups within a parquet file.
+/// a set of row groups within a parquet file, progressively narrowing down the
+/// set of row groups that should be scanned.
 #[derive(Debug, PartialEq)]
 pub(crate) struct RowGroupSet {
-    /// row_groups[i] is true if the i-th row group should be scanned
+    /// `row_groups[i]` is true if the i-th row group should be scanned
     row_groups: Vec<bool>,
 }
 
 impl RowGroupSet {
-    /// Create a new RowGroupSet with all row groups set to true (will be scanned)
+    /// Create a new `RowGroupSet` with all row groups set to true (will be scanned)
     pub fn new(num_row_groups: usize) -> Self {
         Self {
             row_groups: vec![true; num_row_groups],
@@ -61,15 +62,17 @@ impl RowGroupSet {
         self.row_groups[idx] = false;
     }
 
-    /// return true if the i-th row group should be scanned
+    /// Return true if the i-th row group should be scanned
     fn should_scan(&self, idx: usize) -> bool {
         self.row_groups[idx]
     }
 
+    /// Return the total number of row groups (not the total number to be scanned)
     pub fn len(&self) -> usize {
         self.row_groups.len()
     }
 
+    /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.row_groups.is_empty()
     }
@@ -82,17 +85,20 @@ impl RowGroupSet {
             .filter_map(|(idx, &b)| if b { Some(idx) } else { None })
     }
 
-    /// Return a vector with the row group indexes that should be scanned
+    /// Return a `Vec` of row group indices that should be scanned
     pub fn indexes(&self) -> Vec<usize> {
         self.iter().collect()
     }
 
-    /// Prune remaining row groups so that only those row groups within the
-    /// specified range are scanned.
+    /// Prune remaining row groups to only those  within the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
     pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
         for (idx, metadata) in groups.iter().enumerate() {
+            if !self.should_scan(idx) {
+                continue;
+            }
+
             // Skip the row group if the first dictionary/data page are not
             // within the range.
             //
@@ -107,8 +113,8 @@ impl RowGroupSet {
             }
         }
     }
-    /// Prune remaining row groups based using min/max/null_count statistics and
-    /// the [`PruningPredicate`].
+    /// Prune remaining row groups using min/max/null_count statistics and
+    /// the [`PruningPredicate`] to determine if the predicate can not be true.
     ///
     /// Updates this set to mark row groups that should not be scanned
     ///
@@ -141,7 +147,7 @@ impl RowGroupSet {
                     }
                 }
                 // stats filter array could not be built
-                // return a closure which will not filter out any row groups
+                // don't prune this row group
                 Err(e) => {
                     log::debug!("Error evaluating row group predicate values {e}");
                     metrics.predicate_evaluation_errors.add(1);
@@ -151,8 +157,8 @@ impl RowGroupSet {
         }
     }
 
-    /// Prune remaining row groups using any available bloom filters and the
-    /// [`PruningPredicate`]
+    /// Prune remaining row groups using available bloom filters and the
+    /// [`PruningPredicate`].
     ///
     /// Updates this set with row groups that should not be scanned
     pub async fn prune_by_bloom_filters<T: AsyncFileReader + Send + 'static>(
@@ -163,7 +169,6 @@ impl RowGroupSet {
         metrics: &ParquetFileMetrics,
     ) {
         for idx in 0..self.len() {
-            // already filtered out
             if !self.should_scan(idx) {
                 continue;
             }
@@ -220,7 +225,7 @@ impl RowGroupSet {
         }
     }
 }
-/// Implements `PruningStatistics` for Parquet Split Block Bloom Filters (SBBF)
+/// Implements [`PruningStatistics`] for Parquet Split Block Bloom Filters (SBBF)
 struct BloomFilterStatistics {
     /// Maps column name to the parquet bloom filter and parquet physical type
     column_sbbf: HashMap<String, (Sbbf, Type)>,
