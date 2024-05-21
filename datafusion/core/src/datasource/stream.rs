@@ -71,11 +71,13 @@ impl TableProviderFactory for StreamTableFactory {
             );
         };
 
-        let config = StreamConfig::new_file(schema, location.into())
+        let source = FileStreamSource::new_file(schema, location.into())
             .with_encoding(encoding)
-            .with_order(cmd.order_exprs.clone())
             .with_batch_size(state.config().batch_size())
-            .with_header(header)
+            .with_header(header);
+
+        let config = StreamConfig::new(Arc::new(source))
+            .with_order(cmd.order_exprs.clone())
             .with_constraints(cmd.constraints.clone());
 
         Ok(Arc::new(StreamTable(Arc::new(config))))
