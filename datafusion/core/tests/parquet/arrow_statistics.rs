@@ -611,7 +611,6 @@ async fn test_dates_32_diff_rg_sizes() {
     .run("date32");
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
     let row_per_group = 13;
