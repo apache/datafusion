@@ -147,7 +147,7 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The DATE_BIN function preserves the order of its second argument.
         let step = &input[0];
         let date_value = &input[1];

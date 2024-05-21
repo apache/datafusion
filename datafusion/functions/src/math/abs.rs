@@ -170,7 +170,7 @@ impl ScalarUDFImpl for AbsFunc {
         abs_fun(&args).map(ColumnarValue::Array)
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // Non-decreasing for x ≥ 0 and symmetrically non-increasing for x ≤ 0.
         let arg = &input[0];
         let range = &arg.range;
