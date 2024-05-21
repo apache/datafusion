@@ -22,7 +22,8 @@ use std::fs::File;
 use std::sync::Arc;
 
 use arrow_array::{
-    make_array, Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt64Array
+    make_array, Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -623,8 +624,8 @@ async fn test_dates_64_diff_rg_sizes() {
     .run("date64");
 }
 
-// BUG: 
-// Todo: open a ticket
+// BUG:
+// https://github.com/apache/datafusion/issues/10604
 #[tokio::test]
 async fn test_uint() {
     let row_per_group = 4;
@@ -642,7 +643,7 @@ async fn test_uint() {
     // BUG: expect UInt8Array but returns Int32Array
     Test {
         reader,
-        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])),  // shoudld be UInt8Array
+        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt8Array
         expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt8Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4, 4]),
@@ -654,7 +655,7 @@ async fn test_uint() {
     let reader = parquet_file_many_columns(Scenario::UInt, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])),   // shoudld be UInt16Array
+        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt16Array
         expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt16Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4, 4]),
@@ -666,8 +667,8 @@ async fn test_uint() {
     let reader = parquet_file_many_columns(Scenario::UInt, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])),    // shoudld be UInt32Array
-        expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])),  // shoudld be UInt32Array
+        expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt32Array
+        expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt32Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4, 4]),
     }
@@ -678,7 +679,7 @@ async fn test_uint() {
     let reader = parquet_file_many_columns(Scenario::UInt, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![0, 1, 4, 7, 251])),   // shoudld be UInt64Array
+        expected_min: Arc::new(Int64Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt64Array
         expected_max: Arc::new(Int64Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt64Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4, 4]),
@@ -704,7 +705,7 @@ async fn test_int32_range() {
 }
 
 // BUG: not convert UInt32Array to Int32Array
-// todo: file a ticket
+// https://github.com/apache/datafusion/issues/10604
 #[tokio::test]
 async fn test_uint32_range() {
     let row_per_group = 5;
@@ -714,8 +715,8 @@ async fn test_uint32_range() {
 
     Test {
         reader,
-        expected_min: Arc::new(Int32Array::from(vec![0])),       // shoudld be UInt32Array
-        expected_max: Arc::new(Int32Array::from(vec![300000])),  // shoudld be UInt32Array
+        expected_min: Arc::new(Int32Array::from(vec![0])), // shoudld be UInt32Array
+        expected_max: Arc::new(Int32Array::from(vec![300000])), // shoudld be UInt32Array
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: UInt64Array::from(vec![4]),
     }
@@ -748,8 +749,16 @@ async fn test_decimal() {
 
     Test {
         reader,
-        expected_min: Arc::new(Decimal128Array::from(vec![100, -500, 2000]).with_precision_and_scale(9, 2).unwrap()),
-        expected_max: Arc::new(Decimal128Array::from(vec![600, 600, 6000]).with_precision_and_scale(9, 2).unwrap()),
+        expected_min: Arc::new(
+            Decimal128Array::from(vec![100, -500, 2000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
+        expected_max: Arc::new(
+            Decimal128Array::from(vec![600, 600, 6000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
@@ -757,7 +766,7 @@ async fn test_decimal() {
 }
 
 // BUG: not convert BinaryArray to StringArray
-// todo: file a ticket
+// https://github.com/apache/datafusion/issues/10605
 #[tokio::test]
 async fn test_byte() {
     let row_per_group = 5;
@@ -767,15 +776,23 @@ async fn test_byte() {
     // "service_string"
     // "service_binary"
     // "service_fixedsize"
-        
+
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = parquet_file_many_columns(Scenario::ByteArray, row_per_group).await;
 
     // column "name"
     Test {
         reader,
-        expected_min: Arc::new(StringArray::from(vec!["all frontends", "mixed", "all backends"])),
-        expected_max: Arc::new(StringArray::from(vec!["all frontends", "mixed", "all backends"])),
+        expected_min: Arc::new(StringArray::from(vec![
+            "all frontends",
+            "mixed",
+            "all backends",
+        ])),
+        expected_max: Arc::new(StringArray::from(vec![
+            "all frontends",
+            "mixed",
+            "all backends",
+        ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
@@ -785,8 +802,16 @@ async fn test_byte() {
     let reader = parquet_file_many_columns(Scenario::ByteArray, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(StringArray::from(vec!["frontend five", "backend one", "backend eight"])),
-        expected_max: Arc::new(StringArray::from(vec!["frontend two", "frontend six", "backend six"])),
+        expected_min: Arc::new(StringArray::from(vec![
+            "frontend five",
+            "backend one",
+            "backend eight",
+        ])),
+        expected_max: Arc::new(StringArray::from(vec![
+            "frontend two",
+            "frontend six",
+            "backend six",
+        ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
@@ -796,8 +821,16 @@ async fn test_byte() {
     let reader = parquet_file_many_columns(Scenario::ByteArray, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(StringArray::from(vec!["frontend five", "backend one", "backend eight"])),  // Shuld be ByteArray
-        expected_max: Arc::new(StringArray::from(vec!["frontend two", "frontend six", "backend six"])),    // Shuld be ByteArray
+        expected_min: Arc::new(StringArray::from(vec![
+            "frontend five",
+            "backend one",
+            "backend eight",
+        ])), // Shuld be BinaryArray
+        expected_max: Arc::new(StringArray::from(vec![
+            "frontend two",
+            "frontend six",
+            "backend six",
+        ])), // Shuld be BinaryArray
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
@@ -811,8 +844,12 @@ async fn test_byte() {
     let reader = parquet_file_many_columns(Scenario::ByteArray, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(FixedSizeBinaryArray::try_from_iter(min_input.into_iter()).unwrap()),
-        expected_max: Arc::new(FixedSizeBinaryArray::try_from_iter(max_input.into_iter()).unwrap()),
+        expected_min: Arc::new(
+            FixedSizeBinaryArray::try_from_iter(min_input.into_iter()).unwrap(),
+        ),
+        expected_max: Arc::new(
+            FixedSizeBinaryArray::try_from_iter(max_input.into_iter()).unwrap(),
+        ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
@@ -825,30 +862,41 @@ async fn test_period_in_column_names() {
     let row_per_group = 5;
     // This creates a parquet file of 2 columns "name" and "service.name"
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
-    let reader = parquet_file_many_columns(Scenario::PeriodsInColumnNames, row_per_group).await;
+    let reader =
+        parquet_file_many_columns(Scenario::PeriodsInColumnNames, row_per_group).await;
 
     // column "name"
     Test {
         reader,
-        expected_min: Arc::new(StringArray::from(vec!["HTTP GET / DISPATCH", "HTTP PUT / DISPATCH", "HTTP GET / DISPATCH"])),
-        expected_max: Arc::new(StringArray::from(vec!["HTTP GET / DISPATCH", "HTTP PUT / DISPATCH", "HTTP GET / DISPATCH"])),
+        expected_min: Arc::new(StringArray::from(vec![
+            "HTTP GET / DISPATCH",
+            "HTTP PUT / DISPATCH",
+            "HTTP GET / DISPATCH",
+        ])),
+        expected_max: Arc::new(StringArray::from(vec![
+            "HTTP GET / DISPATCH",
+            "HTTP PUT / DISPATCH",
+            "HTTP GET / DISPATCH",
+        ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
     .run("name");
 
     // column "service.name"
-    let reader = parquet_file_many_columns(Scenario::PeriodsInColumnNames, row_per_group).await;
+    let reader =
+        parquet_file_many_columns(Scenario::PeriodsInColumnNames, row_per_group).await;
     Test {
         reader,
         expected_min: Arc::new(StringArray::from(vec!["frontend", "backend", "backend"])),
-        expected_max: Arc::new(StringArray::from(vec![ "frontend", "frontend", "backend"])),
+        expected_max: Arc::new(StringArray::from(vec![
+            "frontend", "frontend", "backend",
+        ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
     }
     .run("service.name");
 }
-
 
 // TODO:
 // WITHOUT Stats
