@@ -1248,7 +1248,8 @@ mod tests {
                 col("123_need_quoted").eq(lit(1)),
                 r#"("123_need_quoted" = 1)"#,
             ),
-            (col("need-qutoed").eq(lit(1)), r#"("need-qutoed" = 1)"#),
+            (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
+            (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
         ];
 
         for (expr, expected) in tests {
