@@ -21,9 +21,11 @@
 use std::fs::File;
 use std::sync::Arc;
 
+use arrow::compute::kernels::cast_utils::Parser;
+use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
-    make_array, Array, ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array,
-    RecordBatch, UInt64Array,
+    make_array, Array, ArrayRef, Date32Array, Date64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, RecordBatch, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -577,8 +579,6 @@ async fn test_timestamp_diff_rg_sizes() {
 }
 
 // date with different row group sizes
-// Bug expect `Date32Array` but returns Int32Array
-//  https://github.com/apache/datafusion/issues/10587
 #[tokio::test]
 async fn test_dates_32_diff_rg_sizes() {
     let row_per_group = 13;
@@ -593,10 +593,16 @@ async fn test_dates_32_diff_rg_sizes() {
 
     Test {
         reader,
-        // mins are [18262, 18565,]
-        expected_min: Arc::new(Int32Array::from(vec![18262, 18565])),
-        // maxes are [18564, 21865,]
-        expected_max: Arc::new(Int32Array::from(vec![18564, 21865])),
+        // mins are [2020-01-01, 2020-10-30]
+        expected_min: Arc::new(Date32Array::from(vec![
+            Date32Type::parse("2020-01-01"),
+            Date32Type::parse("2020-10-30"),
+        ])),
+        // maxes are [2020-10-29, 2029-11-12]
+        expected_max: Arc::new(Date32Array::from(vec![
+            Date32Type::parse("2020-10-29"),
+            Date32Type::parse("2029-11-12"),
+        ])),
         // nulls are [2, 2]
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         // row counts are [13, 7]
@@ -605,9 +611,6 @@ async fn test_dates_32_diff_rg_sizes() {
     .run("date32");
 }
 
-// BUG: same as above. Expect to return Date64Array but returns Int32Array
-// test date with different row group sizes
-// https://github.com/apache/datafusion/issues/10587
 #[ignore]
 #[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
@@ -616,8 +619,14 @@ async fn test_dates_64_diff_rg_sizes() {
     let reader = parquet_file_many_columns(Scenario::Dates, row_per_group).await;
     Test {
         reader,
-        expected_min: Arc::new(Int64Array::from(vec![18262, 18565])), // panic here because the actual data is Int32Array
-        expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
+        expected_min: Arc::new(Date64Array::from(vec![
+            Date64Type::parse("2020-01-01"),
+            Date64Type::parse("2020-10-30"),
+        ])),
+        expected_max: Arc::new(Date64Array::from(vec![
+            Date64Type::parse("2020-10-29"),
+            Date64Type::parse("2029-11-12"),
+        ])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
     }

@@ -75,6 +75,12 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Date32) => {
+                        Some(ScalarValue::Date32(Some(*s.$func())))
+                    }
+                    Some(DataType::Date64) => {
+                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -87,6 +93,9 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
+                    }
+                    Some(DataType::Date64) => {
+                        Some(ScalarValue::Date64(Some((*s.$func()))))
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
