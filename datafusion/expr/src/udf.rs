@@ -256,8 +256,8 @@ impl ScalarUDF {
 
     /// Calculates the [`SortProperties`] of this function based on its
     /// children's properties.
-    pub fn monotonicity(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
-        self.inner.monotonicity(inputs)
+    pub fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.output_ordering(inputs)
     }
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
@@ -516,7 +516,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Calculates the [`SortProperties`] of this function based on its
     /// children's properties.
-    fn monotonicity(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }
 
