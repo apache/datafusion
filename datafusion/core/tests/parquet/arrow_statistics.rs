@@ -939,7 +939,8 @@ async fn test_boolean() {
 
 // struct array
 // BUG
-// todo: open ticket
+// https://github.com/apache/datafusion/issues/10609
+// Note that: since I have not worked on struct array before, there may be a bug in the test code rather than the real bug in the code
 #[ignore]
 #[tokio::test]
 async fn test_struct() {
