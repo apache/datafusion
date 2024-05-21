@@ -536,6 +536,7 @@ impl Unparser<'_> {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// This function can create an identifier with or without quotes based on the dialect rules
     pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> ast::Ident {
         if self.dialect.identifier_needs_quote(&ident) {
             self.new_ident(ident)
