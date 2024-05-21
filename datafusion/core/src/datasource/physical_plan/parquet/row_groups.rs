@@ -42,7 +42,7 @@ use super::ParquetFileMetrics;
 ///
 /// This struct encapsulates the various types of pruning that can be applied to
 /// a set of row groups within a parquet file.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct RowGroupSet {
     /// row_groups[i] is true if the i-th row group should be scanned
     row_groups: Vec<bool>,
@@ -91,11 +91,7 @@ impl RowGroupSet {
     /// specified range are scanned.
     ///
     /// Updates this set to mark row groups that should not be scanned
-    pub fn prune_by_range(
-        &mut self,
-        groups: &[RowGroupMetaData],
-        range: &FileRange,
-    ) {
+    pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
         for (idx, metadata) in groups.iter().enumerate() {
             // Skip the row group if the first dictionary/data page are not
             // within the range.
@@ -487,17 +483,15 @@ mod tests {
         );
 
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2],
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1]))
     }
 
     #[test]
@@ -523,17 +517,15 @@ mod tests {
         let metrics = parquet_file_metrics();
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![0, 1]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2],
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::None);
     }
 
     #[test]
@@ -572,17 +564,15 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                groups,
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            groups,
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
@@ -592,17 +582,15 @@ mod tests {
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                groups,
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![0, 1]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            groups,
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::None);
     }
 
     #[test]
@@ -650,17 +638,15 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group should be left because c1 is greater than zero
         // the second should be filtered out because c1 is less than zero
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &file_schema, // NB must be file schema, not table_schema
-                &schema_descr,
-                groups,
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![0]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &file_schema,
+            &schema_descr,
+            groups,
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
     }
 
     fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
@@ -701,17 +687,15 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &groups,
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1]
+        let mut row_groups = RowGroupSet::new(2);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &groups,
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
 
     #[test]
@@ -735,17 +719,15 @@ mod tests {
         let metrics = parquet_file_metrics();
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &groups,
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1]
+        let mut row_groups = RowGroupSet::new(groups.len());
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &groups,
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
 
     #[test]
@@ -797,18 +779,19 @@ mod tests {
             vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2, rgm3],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![0, 2]
+        let mut row_groups = RowGroupSet::new(3);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2, rgm3],
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 2]));
+    }
 
+    #[test]
+    fn row_group_pruning_predicate_decimal_type2() {
         // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
         // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
         // We should convert all type to the coercion type, which is decimal(11,2)
@@ -864,18 +847,18 @@ mod tests {
             vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2, rgm3, rgm4],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![0, 1, 3]
+        let mut row_groups = RowGroupSet::new(4);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2, rgm3, rgm4],
+            &pruning_predicate,
+            &metrics,
         );
-
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1, 3]));
+    }
+    #[test]
+    fn row_group_pruning_predicate_decimal_type3() {
         // INT64: c1 < 5, the c1 is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
@@ -915,18 +898,18 @@ mod tests {
             vec![ParquetStatistics::int64(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2, rgm3],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1, 2]
+        let mut row_groups = RowGroupSet::new(3);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2, rgm3],
+            &pruning_predicate,
+            &metrics,
         );
-
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
+    }
+    #[test]
+    fn row_group_pruning_predicate_decimal_type4() {
         // FIXED_LENGTH_BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -989,18 +972,18 @@ mod tests {
             )],
         );
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2, rgm3],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1, 2]
+        let mut row_groups = RowGroupSet::new(3);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2, rgm3],
+            &pruning_predicate,
+            &metrics,
         );
-
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
+    }
+    #[test]
+    fn row_group_pruning_predicate_decimal_type5() {
         // BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1052,17 +1035,15 @@ mod tests {
             vec![ParquetStatistics::byte_array(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups_by_statistics(
-                &schema,
-                &schema_descr,
-                &[rgm1, rgm2, rgm3],
-                None,
-                Some(&pruning_predicate),
-                &metrics
-            ),
-            vec![1, 2]
+        let mut row_groups = RowGroupSet::new(3);
+        row_groups.prune_by_statistics(
+            &schema,
+            &schema_descr,
+            &[rgm1, rgm2, rgm3],
+            &pruning_predicate,
+            &metrics,
         );
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
 
     fn get_row_group_meta_data(
@@ -1174,16 +1155,14 @@ mod tests {
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
 
-        let row_groups = vec![0];
         let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
             file_name,
             data,
             &pruning_predicate,
-            &row_groups,
         )
         .await
         .unwrap();
-        assert!(pruned_row_groups.is_empty());
+        assert!(pruned_row_groups.indexes().is_empty());
     }
 
     #[tokio::test]
@@ -1244,14 +1223,60 @@ mod tests {
             .await
     }
 
+    // What row groups are expected to be left after pruning
+    #[derive(Debug)]
+    enum ExpectedPruning {
+        All,
+        /// Only the specified row groups are expected to REMAIN (not what is pruned)
+        Some(Vec<usize>),
+        None,
+    }
+
+    impl ExpectedPruning {
+        /// asserts that the pruned row group match this expectation
+        fn assert(&self, row_groups: &RowGroupSet) {
+            let num_row_groups = row_groups.len();
+            assert!(num_row_groups > 0);
+            let num_pruned = (0..num_row_groups)
+                .filter_map(|i| {
+                    if row_groups.should_scan(i) {
+                        None
+                    } else {
+                        Some(1)
+                    }
+                })
+                .sum::<usize>();
+
+            match self {
+                Self::All => {
+                    assert_eq!(
+                        num_row_groups, num_pruned,
+                        "Expected all row groups to be pruned, but got {row_groups:?}"
+                    );
+                }
+                ExpectedPruning::None => {
+                    assert_eq!(
+                        num_pruned, 0,
+                        "Expected no row groups to be pruned, but got {row_groups:?}"
+                    );
+                }
+                ExpectedPruning::Some(expected) => {
+                    let actual = row_groups.indexes();
+                    assert_eq!(expected, &actual, "Unexpected row groups pruned. Expected {expected:?}, got {actual:?}");
+                }
+            }
+        }
+    }
+
+    fn assert_pruned(row_groups: RowGroupSet, expected: ExpectedPruning) {
+        expected.assert(&row_groups);
+    }
+
     struct BloomFilterTest {
         file_name: String,
         schema: Schema,
-        // which row groups should be attempted to prune
-        row_groups: Vec<usize>,
-        // which row groups are expected to be left after pruning. Must be set
-        // otherwise will panic on run()
-        post_pruning_row_groups: Option<Vec<usize>>,
+        // which row groups are expected to be left after pruning
+        post_pruning_row_groups: ExpectedPruning,
     }
 
     impl BloomFilterTest {
@@ -1282,8 +1307,7 @@ mod tests {
             Self {
                 file_name: String::from("data_index_bloom_encoding_stats.parquet"),
                 schema: Schema::new(vec![Field::new("String", DataType::Utf8, false)]),
-                row_groups: vec![0],
-                post_pruning_row_groups: None,
+                post_pruning_row_groups: ExpectedPruning::None,
             }
         }
 
@@ -1296,20 +1320,19 @@ mod tests {
                     DataType::Utf8,
                     false,
                 )]),
-                row_groups: vec![0],
-                post_pruning_row_groups: None,
+                post_pruning_row_groups: ExpectedPruning::None,
             }
         }
 
         /// Expect all row groups to be pruned
         pub fn with_expect_all_pruned(mut self) -> Self {
-            self.post_pruning_row_groups = Some(vec![]);
+            self.post_pruning_row_groups = ExpectedPruning::All;
             self
         }
 
         /// Expect all row groups not to be pruned
         pub fn with_expect_none_pruned(mut self) -> Self {
-            self.post_pruning_row_groups = Some(self.row_groups.clone());
+            self.post_pruning_row_groups = ExpectedPruning::None;
             self
         }
 
@@ -1318,12 +1341,8 @@ mod tests {
             let Self {
                 file_name,
                 schema,
-                row_groups,
                 post_pruning_row_groups,
             } = self;
-
-            let post_pruning_row_groups =
-                post_pruning_row_groups.expect("post_pruning_row_groups must be set");
 
             let testdata = datafusion_common::test_util::parquet_test_data();
             let path = format!("{testdata}/{file_name}");
@@ -1337,11 +1356,11 @@ mod tests {
                 &file_name,
                 data,
                 &pruning_predicate,
-                &row_groups,
             )
             .await
             .unwrap();
-            assert_eq!(pruned_row_groups, post_pruning_row_groups);
+
+            post_pruning_row_groups.assert(&pruned_row_groups);
         }
     }
 
@@ -1350,8 +1369,7 @@ mod tests {
         file_name: &str,
         data: bytes::Bytes,
         pruning_predicate: &PruningPredicate,
-        row_groups: &[usize],
-    ) -> Result<Vec<usize>> {
+    ) -> Result<RowGroupSet> {
         use object_store::{ObjectMeta, ObjectStore};
 
         let object_meta = ObjectMeta {
@@ -1376,17 +1394,16 @@ mod tests {
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
-        let metadata = builder.metadata().clone();
-        let pruned_row_group = prune_row_groups_by_bloom_filters(
-            pruning_predicate.schema(),
-            &mut builder,
-            row_groups,
-            metadata.row_groups(),
-            pruning_predicate,
-            &file_metrics,
-        )
-        .await;
+        let mut pruned_row_groups = RowGroupSet::new(builder.metadata().num_row_groups());
+        pruned_row_groups
+            .prune_by_bloom_filters(
+                pruning_predicate.schema(),
+                &mut builder,
+                pruning_predicate,
+                &file_metrics,
+            )
+            .await;
 
-        Ok(pruned_row_group)
+        Ok(pruned_row_groups)
     }
 }
