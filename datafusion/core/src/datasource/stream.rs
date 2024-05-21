@@ -71,7 +71,7 @@ impl TableProviderFactory for StreamTableFactory {
             );
         };
 
-        let source = FileStreamSource::new_file(schema, location.into())
+        let source = FileStreamProvider::new_file(schema, location.into())
             .with_encoding(encoding)
             .with_batch_size(state.config().batch_size())
             .with_header(header);
@@ -105,12 +105,21 @@ impl FromStr for StreamEncoding {
     }
 }
 
-pub trait StreamSource: std::fmt::Debug + Send + Sync {
+/// The StreamProvider trait is used as a generic interface for reading and writing from streaming
+/// data sources (such as FIFO, Websocket, Kafka, etc.).  Implementations of the provider are
+/// responsible for providing a `RecordBatchReader` and optionally a `RecordBatchWriter`.
+pub trait StreamProvider: std::fmt::Debug + Send + Sync {
+    /// Get a reference to the schema for this stream
     fn schema(&self) -> SchemaRef;
-    // Needed for `PartitionStream` - maybe there is a better way to do this.
+    /// Needed for `PartitionStream` - maybe there is a better way to do this.
     fn schema_ref(&self) -> &SchemaRef;
+    /// Provide `RecordBatchReader`
     fn reader(&self) -> Result<Box<dyn RecordBatchReader>>;
-    fn writer(&self) -> Result<Box<dyn RecordBatchWriter>>;
+    /// Provide `RecordBatchWriter`
+    fn writer(&self) -> Result<Box<dyn RecordBatchWriter>> {
+        unimplemented!()
+    }
+    /// Display implementation when using as a DataSink
     fn stream_write_display(
         &self,
         t: DisplayFormatType,
@@ -118,16 +127,24 @@ pub trait StreamSource: std::fmt::Debug + Send + Sync {
     ) -> std::fmt::Result;
 }
 
+/// Stream data from the file at `location`
+///
+/// * Data will be read sequentially from the provided `location`
+/// * New data will be appended to the end of the file
+///
+/// The encoding can be configured with [`Self::with_encoding`] and
+/// defaults to [`StreamEncoding::Csv`]
 #[derive(Debug)]
-pub struct FileStreamSource {
+pub struct FileStreamProvider {
     location: PathBuf,
     encoding: StreamEncoding,
+    /// Get a reference to the schema for this file stream
     pub schema: SchemaRef,
     header: bool,
     batch_size: usize,
 }
 
-impl FileStreamSource {
+impl FileStreamProvider {
     /// Stream data from the file at `location`
     ///
     /// * Data will be read sequentially from the provided `location`
@@ -145,6 +162,7 @@ impl FileStreamSource {
         }
     }
 
+    /// Set the batch size (the number of rows to load at one time)
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
@@ -163,7 +181,7 @@ impl FileStreamSource {
     }
 }
 
-impl StreamSource for FileStreamSource {
+impl StreamProvider for FileStreamProvider {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -236,20 +254,14 @@ impl StreamSource for FileStreamSource {
 /// The configuration for a [`StreamTable`]
 #[derive(Debug)]
 pub struct StreamConfig {
-    source: Arc<dyn StreamSource>,
+    source: Arc<dyn StreamProvider>,
     order: Vec<Vec<Expr>>,
     constraints: Constraints,
 }
 
 impl StreamConfig {
-    /// Stream data from the file at `location`
-    ///
-    /// * Data will be read sequentially from the provided `location`
-    /// * New data will be appended to the end of the file
-    ///
-    /// The encoding can be configured with [`Self::with_encoding`] and
-    /// defaults to [`StreamEncoding::Csv`]
-    pub fn new(source: Arc<dyn StreamSource>) -> Self {
+    /// Create a new `StreamConfig` from a `StreamProvider`
+    pub fn new(source: Arc<dyn StreamProvider>) -> Self {
         Self {
             source,
             order: vec![],

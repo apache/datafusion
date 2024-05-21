@@ -39,7 +39,7 @@ mod unix_test {
     use tempfile::TempDir;
     use tokio::task::{spawn_blocking, JoinHandle};
 
-    use datafusion::datasource::stream::{FileStreamSource, StreamConfig, StreamTable};
+    use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::datasource::TableProvider;
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
@@ -54,7 +54,7 @@ mod unix_test {
         path: impl Into<PathBuf>,
         sort: Vec<Vec<Expr>>,
     ) -> Arc<dyn TableProvider> {
-        let source = FileStreamSource::new_file(schema, path.into())
+        let source = FileStreamProvider::new_file(schema, path.into())
             .with_batch_size(TEST_BATCH_SIZE)
             .with_header(true);
         let config = StreamConfig::new(Arc::new(source)).with_order(sort);

@@ -31,7 +31,7 @@ use std::task::{Context, Poll};
 
 use crate::dataframe::DataFrame;
 use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::stream::{FileStreamSource, StreamConfig, StreamTable};
+use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -355,7 +355,7 @@ pub fn register_unbounded_file_with_ordering(
     table_name: &str,
     file_sort_order: Vec<Vec<Expr>>,
 ) -> Result<()> {
-    let source = FileStreamSource::new_file(schema, file_path.into());
+    let source = FileStreamProvider::new_file(schema, file_path.into());
     let config = StreamConfig::new(Arc::new(source)).with_order(file_sort_order);
 
     // Register table:
