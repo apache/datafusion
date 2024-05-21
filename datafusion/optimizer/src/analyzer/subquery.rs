@@ -370,10 +370,14 @@ mod test {
             write!(f, "MockUserDefinedLogicalPlan")
         }
 
-        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
-            Self {
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
                 empty_schema: self.empty_schema.clone(),
-            }
+            })
         }
     }
 
