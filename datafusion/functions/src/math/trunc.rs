@@ -86,7 +86,7 @@ impl ScalarUDFImpl for TruncFunc {
         make_scalar_function(trunc, vec![])(args)
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // trunc preserves the order of the first argument
         let value = &input[0];
         let precision = input.get(1);
