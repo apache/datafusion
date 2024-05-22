@@ -144,7 +144,33 @@ pub async fn parquet_file_many_columns(
     ArrowReaderBuilder::try_new(file).unwrap()
 }
 
+/// Defines what data to create in a parquet file
+struct TestReader {
+    /// What data to create in the parquet file
+    scenario: Scenario,
+    /// Number of rows per row group
+    row_per_group: usize,
+}
+
+impl TestReader {
+    /// Create a parquet file with the specified data, and return a
+    /// ParquetRecordBatchReaderBuilder opened to that file.
+    async fn build(self) -> ParquetRecordBatchReaderBuilder<File> {
+        let TestReader {
+            scenario,
+            row_per_group,
+        } = self;
+        let file = make_test_file_rg(scenario, row_per_group).await;
+
+        // open the file & get the reader
+        let file = file.reopen().unwrap();
+        ArrowReaderBuilder::try_new(file).unwrap()
+    }
+}
+
+/// Defines a test case for statistics extraction
 struct Test {
+    /// The parquet file reader
     reader: ParquetRecordBatchReaderBuilder<File>,
     expected_min: ArrayRef,
     expected_max: ArrayRef,
@@ -312,9 +338,13 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
 // Four different integer types
 #[tokio::test]
 async fn test_int_64() {
-    let row_per_group = 5;
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
-    let reader = parquet_file_many_columns(Scenario::Int, row_per_group).await;
+    let reader = TestReader {
+        scenario: Scenario::Int,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
 
     Test {
         reader,
