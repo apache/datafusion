@@ -665,6 +665,16 @@ async fn all_type_literal() -> Result<()> {
         .await
 }
 
+#[tokio::test]
+async fn roundtrip_literal_list() -> Result<()> {
+    assert_expected_plan(
+        "SELECT [[1,2,3], [], NULL, [NULL]] FROM data",
+        "Projection: List([[1, 2, 3], [], , []])\
+        \n  TableScan: data projection=[]",
+    )
+    .await
+}
+
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
 #[tokio::test]
 async fn new_test_grammar() -> Result<()> {
@@ -885,10 +895,12 @@ async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> 
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
+    println!("{proto:#?}");
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
+    ctx.execute_logical_plan(plan2).await?.show().await?;
     Ok(())
 }
 

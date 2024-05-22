@@ -30,6 +30,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use datafusion::arrow::array::{Array, AsArray, OffsetSizeTrait};
 use datafusion::common::{exec_err, internal_err, not_impl_err};
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
@@ -42,6 +43,7 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::List;
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::{CrossRel, ExchangeRel};
@@ -1100,7 +1102,7 @@ pub fn to_substrait_rex(
                 ))),
             })
         }
-        Expr::Literal(value) => to_substrait_literal(value),
+        Expr::Literal(value) => to_substrait_literal_expr(value),
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)
         }
@@ -1526,8 +1528,9 @@ fn make_substrait_like_expr(
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extension_info)?;
-    let escape_char =
-        to_substrait_literal(&ScalarValue::Utf8(escape_char.map(|c| c.to_string())))?;
+    let escape_char = to_substrait_literal_expr(&ScalarValue::Utf8(
+        escape_char.map(|c| c.to_string()),
+    ))?;
     let arguments = vec![
         FunctionArgument {
             arg_type: Some(ArgType::Value(expr)),
@@ -1683,7 +1686,7 @@ fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
     ))
 }
 
-fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
+fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
     let (literal_type, type_variation_reference) = match value {
         ScalarValue::Boolean(Some(b)) => (LiteralType::Boolean(*b), DEFAULT_TYPE_REF),
         ScalarValue::Int8(Some(n)) => (LiteralType::I8(*n as i32), DEFAULT_TYPE_REF),
@@ -1741,15 +1744,64 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
             }),
             DECIMAL_128_TYPE_REF,
         ),
+        ScalarValue::List(l) if !value.is_null() => {
+            let values =
+                convert_array_to_literal_vec::<i32>(&(l.to_owned() as Arc<dyn Array>))?;
+            let list = if values.is_empty() {
+                LiteralType::EmptyList(match to_substrait_type(&l.data_type())? {
+                    substrait::proto::Type {
+                        kind: Some(r#type::Kind::List(l)),
+                    } => l.as_ref().to_owned(),
+                    _ => unreachable!(),
+                })
+            } else {
+                LiteralType::List(List { values })
+            };
+            (list, DEFAULT_CONTAINER_TYPE_REF)
+        }
+        ScalarValue::LargeList(l) if !value.is_null() => {
+            let values =
+                convert_array_to_literal_vec::<i64>(&(l.to_owned() as Arc<dyn Array>))?;
+            let list = if values.is_empty() {
+                LiteralType::EmptyList(match to_substrait_type(&l.data_type())? {
+                    substrait::proto::Type {
+                        kind: Some(r#type::Kind::List(l)),
+                    } => l.as_ref().to_owned(),
+                    _ => unreachable!(),
+                })
+            } else {
+                LiteralType::List(List { values })
+            };
+            (list, LARGE_CONTAINER_TYPE_REF)
+        }
         _ => (try_to_substrait_null(value)?, DEFAULT_TYPE_REF),
     };
 
+    Ok(Literal {
+        nullable: true,
+        type_variation_reference,
+        literal_type: Some(literal_type),
+    })
+}
+
+fn convert_array_to_literal_vec<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<Vec<Literal>> {
+    // Adapted from ScalarValue::convert_array_to_scalar_vec to support both i32 and i64
+    assert_eq!(array.len(), 1);
+    let nested_array = array.as_list::<T>().value(0);
+
+    let scalars = (0..nested_array.len())
+        .map(|i| to_substrait_literal(&ScalarValue::try_from_array(&nested_array, i)?))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(scalars)
+}
+
+fn to_substrait_literal_expr(value: &ScalarValue) -> Result<Expression> {
+    let literal = to_substrait_literal(value)?;
     Ok(Expression {
-        rex_type: Some(RexType::Literal(Literal {
-            nullable: true,
-            type_variation_reference,
-            literal_type: Some(literal_type),
-        })),
+        rex_type: Some(RexType::Literal(literal)),
     })
 }
 
@@ -1936,6 +1988,10 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
                     nullability: default_nullability,
                 })),
             }))
+        }
+        ScalarValue::List(l) => Ok(LiteralType::Null(to_substrait_type(l.data_type())?)),
+        ScalarValue::LargeList(l) => {
+            Ok(LiteralType::Null(to_substrait_type(l.data_type())?))
         }
         // TODO: Extend support for remaining data types
         _ => not_impl_err!("Unsupported literal: {v:?}"),
