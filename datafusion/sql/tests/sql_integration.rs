@@ -2905,6 +2905,21 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
+            "unnest_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "array_col",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "struct_col",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("field1", DataType::Int64, true),
+                        Field::new("field2", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+            ])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -4711,6 +4726,29 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j2";
 
     assert_eq!(format!("{plan_roundtrip:?}"), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_unnest_logical_plan() -> Result<()> {
+    let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
+        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n      TableScan: unnest_table";
+
+    assert_eq!(format!("{plan:?}"), expected);
 
     Ok(())
 }
