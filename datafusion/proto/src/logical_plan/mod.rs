@@ -46,8 +46,7 @@ use datafusion::{
 };
 use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err,
-    parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, Result,
-    TableReference,
+    parsers::CompressionTypeVariant, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     dml,
@@ -59,6 +58,9 @@ use datafusion_expr::{
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
+use datafusion_proto_common::protobuf_common;
+use datafusion_proto_common::FromProtoError;
+use datafusion_proto_common::ToProtoError;
 
 use prost::bytes::BufMut;
 use prost::Message;
@@ -67,18 +69,6 @@ use self::to_proto::serialize_expr;
 
 pub mod from_proto;
 pub mod to_proto;
-
-impl From<from_proto::Error> for DataFusionError {
-    fn from(e: from_proto::Error) -> Self {
-        plan_datafusion_err!("{}", e)
-    }
-}
-
-impl From<to_proto::Error> for DataFusionError {
-    fn from(e: to_proto::Error) -> Self {
-        plan_datafusion_err!("{}", e)
-    }
-}
 
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_decode(buf: &[u8]) -> Result<Self>
@@ -245,7 +235,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .map(|expr| {
                                     from_proto::parse_expr(expr, ctx, extension_codec)
                                 })
-                                .collect::<Result<Vec<_>, from_proto::Error>>()
+                                .collect::<Result<Vec<_>, FromProtoError>>()
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
@@ -906,7 +896,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf::Schema = schema.as_ref().try_into()?;
+                let schema: protobuf_common::Schema = schema.as_ref().try_into()?;
 
                 let filters: Vec<protobuf::LogicalExprNode> = filters
                     .iter()
@@ -958,7 +948,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                         };
                         exprs_vec.push(expr_vec);
                     }
@@ -1039,7 +1029,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             expr: expr
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                             optional_alias: None,
                         },
                     ))),
@@ -1188,7 +1178,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             serialize_expr(r, extension_codec)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, to_proto::Error>>()?
+                    .collect::<Result<Vec<_>, ToProtoError>>()?
                     .into_iter()
                     .unzip();
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
@@ -1256,7 +1246,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let selection_expr: Vec<protobuf::LogicalExprNode> = expr
                     .iter()
                     .map(|expr| serialize_expr(expr, extension_codec))
-                    .collect::<Result<Vec<_>, to_proto::Error>>()?;
+                    .collect::<Result<Vec<_>, ToProtoError>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
@@ -1288,7 +1278,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             hash_expr: exprs
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                             partition_count: *partition_count as u64,
                         })
                     }
@@ -1340,7 +1330,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         logical_expr_nodes: order
                             .iter()
                             .map(|expr| serialize_expr(expr, extension_codec))
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                            .collect::<Result<Vec<_>, ToProtoError>>()?,
                     };
                     converted_order_exprs.push(temp);
                 }

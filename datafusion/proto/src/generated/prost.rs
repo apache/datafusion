@@ -120,7 +120,7 @@ pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "4")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "5")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "6")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(string, repeated, tag = "7")]
@@ -157,7 +157,7 @@ pub struct ViewTableScanNode {
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(string, tag = "5")]
@@ -172,7 +172,7 @@ pub struct CustomTableScanNode {
     #[prost(message, optional, tag = "2")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "3")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", tag = "5")]
@@ -988,17 +988,6 @@ pub struct WindowFrameBound {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Schema {
-    #[prost(message, repeated, tag = "1")]
-    pub columns: ::prost::alloc::vec::Vec<super::datafusion_common::Field>,
-    #[prost(map = "string, string", tag = "2")]
-    pub metadata: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
@@ -1012,7 +1001,7 @@ pub struct ScalarNestedValue {
     #[prost(bytes = "vec", tag = "2")]
     pub arrow_data: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "4")]
     pub dictionaries: ::prost::alloc::vec::Vec<scalar_nested_value::Dictionary>,
 }
@@ -1528,7 +1517,7 @@ pub struct FileSinkConfig {
     #[prost(string, repeated, tag = "3")]
     pub table_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "4")]
-    pub output_schema: ::core::option::Option<Schema>,
+    pub output_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
@@ -1550,7 +1539,7 @@ pub struct JsonSinkExecNode {
     #[prost(message, optional, tag = "2")]
     pub sink: ::core::option::Option<JsonSink>,
     #[prost(message, optional, tag = "3")]
-    pub sink_schema: ::core::option::Option<Schema>,
+    pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
@@ -1570,7 +1559,7 @@ pub struct CsvSinkExecNode {
     #[prost(message, optional, tag = "2")]
     pub sink: ::core::option::Option<CsvSink>,
     #[prost(message, optional, tag = "3")]
-    pub sink_schema: ::core::option::Option<Schema>,
+    pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
@@ -1825,7 +1814,7 @@ pub struct ParquetSinkExecNode {
     #[prost(message, optional, tag = "2")]
     pub sink: ::core::option::Option<ParquetSink>,
     #[prost(message, optional, tag = "3")]
-    pub sink_schema: ::core::option::Option<Schema>,
+    pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
@@ -2113,7 +2102,7 @@ pub struct FileScanExecConf {
     #[prost(message, repeated, tag = "1")]
     pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
     #[prost(message, optional, tag = "2")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(uint32, repeated, tag = "4")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(message, optional, tag = "5")]
@@ -2222,7 +2211,7 @@ pub struct UnionExecNode {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExplainExecNode {
     #[prost(message, optional, tag = "1")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "2")]
     pub stringified_plans: ::prost::alloc::vec::Vec<StringifiedPlan>,
     #[prost(bool, tag = "3")]
@@ -2238,7 +2227,7 @@ pub struct AnalyzeExecNode {
     #[prost(message, optional, boxed, tag = "3")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "4")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2268,13 +2257,13 @@ pub struct JoinOn {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyExecNode {
     #[prost(message, optional, tag = "1")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderRowExecNode {
     #[prost(message, optional, tag = "1")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2348,7 +2337,7 @@ pub struct AggregateExecNode {
     pub aggr_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// we need the input schema to the partial aggregate to pass to the final aggregate
     #[prost(message, optional, tag = "7")]
-    pub input_schema: ::core::option::Option<Schema>,
+    pub input_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "8")]
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]
@@ -2463,7 +2452,7 @@ pub struct JoinFilter {
     #[prost(message, repeated, tag = "2")]
     pub column_indices: ::prost::alloc::vec::Vec<ColumnIndex>,
     #[prost(message, optional, tag = "3")]
-    pub schema: ::core::option::Option<Schema>,
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

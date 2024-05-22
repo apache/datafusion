@@ -79,6 +79,7 @@ use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{self, window_agg_exec_node};
+use datafusion_proto_common as protobuf_common;
 
 use self::to_proto::serialize_physical_expr;
 
@@ -1869,7 +1870,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
             let input_order_mode = match &exec.input_order_mode {
                 InputOrderMode::Linear => window_agg_exec_node::InputOrderMode::Linear(
-                    protobuf::EmptyMessage {},
+                    protobuf_common::EmptyMessage {},
                 ),
                 InputOrderMode::PartiallySorted(columns) => {
                     window_agg_exec_node::InputOrderMode::PartiallySorted(
@@ -1879,7 +1880,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )
                 }
                 InputOrderMode::Sorted => window_agg_exec_node::InputOrderMode::Sorted(
-                    protobuf::EmptyMessage {},
+                    protobuf_common::EmptyMessage {},
                 ),
             };
 

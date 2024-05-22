@@ -52,7 +52,10 @@ pub mod from_proto;
 pub mod generated;
 pub mod to_proto;
 
+pub use from_proto::Error as FromProtoError;
 pub use generated::datafusion_proto_common as protobuf_common;
+pub use generated::datafusion_proto_common::EmptyMessage;
+pub use to_proto::Error as ToProtoError;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

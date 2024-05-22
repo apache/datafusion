@@ -158,3 +158,8 @@ message DfSchema {
   repeated DfField columns = 1;
   map<string, string> metadata = 2;
 }
+
+message Schema {
+  repeated datafusion_common.Field columns = 1;
+  map<string, string> metadata = 2;
+}

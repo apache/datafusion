@@ -92,7 +92,7 @@ message ListingTableScanNode {
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
-  Schema schema = 5;
+  datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
   repeated string table_partition_cols = 7;
   bool collect_stat = 8;
@@ -109,7 +109,7 @@ message ViewTableScanNode {
   reserved 1; // was string table_name
   TableReference table_name = 6;
   LogicalPlanNode input = 2;
-  Schema schema = 3;
+  datafusion_common.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
 }
@@ -119,7 +119,7 @@ message CustomTableScanNode {
   reserved 1; // was string table_name
   TableReference table_name = 6;
   ProjectionColumns projection = 2;
-  Schema schema = 3;
+  datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
 }
@@ -692,11 +692,6 @@ message WindowFrameBound {
 // Arrow Data Types
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-message Schema {
-  repeated datafusion_common.Field columns = 1;
-  map<string, string> metadata = 2;
-}
-
 message FixedSizeBinary{
   int32 length = 1;
 }
@@ -715,7 +710,7 @@ message ScalarNestedValue {
 
   bytes ipc_message = 1;
   bytes arrow_data = 2;
-  Schema schema = 3;
+  datafusion_common.Schema schema = 3;
   repeated Dictionary dictionaries = 4;
 }
 
@@ -995,7 +990,7 @@ message FileSinkConfig {
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
-  Schema output_schema = 4;
+  datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
 }
@@ -1008,7 +1003,7 @@ message JsonSink {
 message JsonSinkExecNode {
   PhysicalPlanNode input = 1;
   JsonSink sink = 2;
-  Schema sink_schema = 3;
+  datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
@@ -1020,7 +1015,7 @@ message CsvSink {
 message CsvSinkExecNode {
   PhysicalPlanNode input = 1;
   CsvSink sink = 2;
-  Schema sink_schema = 3;
+  datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
@@ -1140,7 +1135,7 @@ message ParquetSink {
 message ParquetSinkExecNode {
   PhysicalPlanNode input = 1;
   ParquetSink sink = 2;
-  Schema sink_schema = 3;
+  datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
@@ -1315,7 +1310,7 @@ message FileScanExecConf {
   reserved 10;
 
   repeated FileGroup file_groups = 1;
-  Schema schema = 2;
+  datafusion_common.Schema schema = 2;
   repeated uint32 projection = 4;
   ScanLimit limit = 5;
   Statistics statistics = 6;
@@ -1390,7 +1385,7 @@ message UnionExecNode {
 }
 
 message ExplainExecNode {
-  Schema schema = 1;
+  datafusion_common.Schema schema = 1;
   repeated StringifiedPlan stringified_plans = 2;
   bool verbose = 3;
 }
@@ -1399,7 +1394,7 @@ message AnalyzeExecNode {
   bool verbose = 1;
   bool show_statistics = 2;
   PhysicalPlanNode input = 3;
-  Schema schema = 4;
+  datafusion_common.Schema schema = 4;
 }
 
 message CrossJoinExecNode {
@@ -1418,11 +1413,11 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  Schema schema = 1;
+  datafusion_common.Schema schema = 1;
 }
 
 message PlaceholderRowExecNode {
-  Schema schema = 1;
+  datafusion_common.Schema schema = 1;
 }
 
 message ProjectionExecNode {
@@ -1471,7 +1466,7 @@ message AggregateExecNode {
   repeated string group_expr_name = 5;
   repeated string aggr_expr_name = 6;
   // we need the input schema to the partial aggregate to pass to the final aggregate
-  Schema input_schema = 7;
+  datafusion_common.Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
@@ -1538,7 +1533,7 @@ message RepartitionExecNode{
 message JoinFilter{
   PhysicalExprNode expression = 1;
   repeated ColumnIndex column_indices = 2;
-  Schema schema = 3;
+  datafusion_common.Schema schema = 3;
 }
 
 message ColumnIndex{
