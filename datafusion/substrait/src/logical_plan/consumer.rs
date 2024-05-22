@@ -1285,6 +1285,11 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                 .iter()
                 .map(from_substrait_literal)
                 .collect::<Result<Vec<_>>>()?;
+            if elements.is_empty() {
+                return substrait_err!(
+                    "Empty list must be encoded as EmptyList literal type, not List"
+                );
+            }
             let element_type = elements[0].data_type();
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_REF => ScalarValue::List(ScalarValue::new_list(
