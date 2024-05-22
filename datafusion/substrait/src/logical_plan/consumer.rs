@@ -1059,7 +1059,7 @@ pub async fn from_substrait_rex(
     }
 }
 
-fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),

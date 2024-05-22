@@ -2058,7 +2058,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
-    use crate::logical_plan::consumer::from_substrait_literal;
+    use crate::logical_plan::consumer::{from_substrait_literal, from_substrait_type};
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
 
@@ -2134,6 +2134,51 @@ mod test {
         let substrait_literal = to_substrait_literal(&scalar)?;
         let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_types() -> Result<()> {
+        round_trip_type(DataType::Boolean)?;
+        round_trip_type(DataType::Int8)?;
+        round_trip_type(DataType::UInt8)?;
+        round_trip_type(DataType::Int16)?;
+        round_trip_type(DataType::UInt16)?;
+        round_trip_type(DataType::Int32)?;
+        round_trip_type(DataType::UInt32)?;
+        round_trip_type(DataType::Int64)?;
+        round_trip_type(DataType::UInt64)?;
+        round_trip_type(DataType::Float32)?;
+        round_trip_type(DataType::Float64)?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Second, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+        round_trip_type(DataType::Date32)?;
+        round_trip_type(DataType::Date64)?;
+        round_trip_type(DataType::Binary)?;
+        round_trip_type(DataType::FixedSizeBinary(10))?;
+        round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::Utf8)?;
+        round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Decimal128(10, 2))?;
+        round_trip_type(DataType::Decimal256(30, 2))?;
+        round_trip_type(DataType::List(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::LargeList(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+
+        Ok(())
+    }
+
+    fn round_trip_type(dt: DataType) -> Result<()> {
+        println!("Checking round trip of {dt:?}");
+
+        let substrait = to_substrait_type(&dt)?;
+        let roundtrip_dt = from_substrait_type(&substrait)?;
+        assert_eq!(dt, roundtrip_dt);
         Ok(())
     }
 }
