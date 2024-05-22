@@ -123,26 +123,13 @@ pub trait TreeNode: Sized {
     /// TreeNodeVisitor::f_up(ChildNode2)
     /// TreeNodeVisitor::f_up(ParentNode)
     /// ```
-    fn visit<V: TreeNodeVisitor<Node = Self>>(
-        &self,
-        visitor: &mut V,
-    ) -> Result<TreeNodeRecursion> {
-        visitor
-            .f_down(self)?
-            .visit_children(|| self.apply_children(|c| c.visit(visitor)))?
-            .visit_parent(|| visitor.f_up(self))
-    }
-
-    /// Similar to [`TreeNode::visit()`], but the lifetimes of the [`TreeNode`] references
-    /// passed to [`TreeNodeRefVisitor::f_down()`] and [`TreeNodeRefVisitor::f_up()`]
-    /// methods match the lifetime of the original root [`TreeNode`] reference.
-    fn visit_ref<'n, V: TreeNodeRefVisitor<'n, Node = Self>>(
+    fn visit<'n, V: TreeNodeVisitor<'n, Node = Self>>(
         &'n self,
         visitor: &mut V,
     ) -> Result<TreeNodeRecursion> {
         visitor
             .f_down(self)?
-            .visit_children(|| self.apply_children_ref(|c| c.visit_ref(visitor)))?
+            .visit_children(|| self.apply_children(|c| c.visit(visitor)))?
             .visit_parent(|| visitor.f_up(self))
     }
 
@@ -203,39 +190,18 @@ pub trait TreeNode: Sized {
     /// # See Also
     /// * [`Self::transform_down`] for the equivalent transformation API.
     /// * [`Self::visit`] for both top-down and bottom up traversal.
-    fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
+    fn apply<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
-        fn apply_impl<N: TreeNode, F: FnMut(&N) -> Result<TreeNodeRecursion>>(
-            node: &N,
+        fn apply_impl<'n, N: TreeNode, F: FnMut(&'n N) -> Result<TreeNodeRecursion>>(
+            node: &'n N,
             f: &mut F,
         ) -> Result<TreeNodeRecursion> {
             f(node)?.visit_children(|| node.apply_children(|c| apply_impl(c, f)))
         }
 
         apply_impl(self, &mut f)
-    }
-
-    /// Similar to [`TreeNode::apply()`], but the lifetime of the [`TreeNode`] references
-    /// passed to the `f` closures match the lifetime of the original root [`TreeNode`]
-    /// reference.
-    fn apply_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
-        &'n self,
-        mut f: F,
-    ) -> Result<TreeNodeRecursion> {
-        fn apply_ref_impl<
-            'n,
-            N: TreeNode,
-            F: FnMut(&'n N) -> Result<TreeNodeRecursion>,
-        >(
-            node: &'n N,
-            f: &mut F,
-        ) -> Result<TreeNodeRecursion> {
-            f(node)?.visit_children(|| node.apply_children_ref(|c| apply_ref_impl(c, f)))
-        }
-
-        apply_ref_impl(self, &mut f)
     }
 
     /// Recursively rewrite the node's children and then the node using `f`
@@ -461,18 +427,7 @@ pub trait TreeNode: Sized {
     ///
     /// Description: Apply `f` to inspect node's children (but not the node
     /// itself).
-    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
-        f: F,
-    ) -> Result<TreeNodeRecursion> {
-        // The default implementation is the stricter `apply_children_ref()`
-        self.apply_children_ref(f)
-    }
-
-    /// Similar to [`TreeNode::apply_children()`], but the lifetime of the [`TreeNode`]
-    /// references passed to the `f` closures match the lifetime of the original root
-    /// [`TreeNode`] reference.
-    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
@@ -511,27 +466,7 @@ pub trait TreeNode: Sized {
 ///
 /// # See Also:
 /// * [`TreeNode::rewrite`] to rewrite owned `TreeNode`s
-pub trait TreeNodeVisitor: Sized {
-    /// The node type which is visitable.
-    type Node: TreeNode;
-
-    /// Invoked while traversing down the tree, before any children are visited.
-    /// Default implementation continues the recursion.
-    fn f_down(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
-    /// Invoked while traversing up the tree after children are visited. Default
-    /// implementation continues the recursion.
-    fn f_up(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
-/// Similar to [`TreeNodeVisitor`], but the lifetimes of the [`TreeNode`] references
-/// passed to [`TreeNodeRefVisitor::f_down()`] and [`TreeNodeRefVisitor::f_up()`] methods
-/// match the lifetime of the original root [`TreeNode`] reference.
-pub trait TreeNodeRefVisitor<'n>: Sized {
+pub trait TreeNodeVisitor<'n>: Sized {
     /// The node type which is visitable.
     type Node: TreeNode;
 
@@ -920,11 +855,7 @@ impl<T> TransformedResult<T> for Result<Transformed<T>> {
 /// its related `Arc<dyn T>` will automatically implement [`TreeNode`].
 pub trait DynTreeNode {
     /// Returns all children of the specified `TreeNode`.
-    fn arc_children(&self) -> Vec<Arc<Self>>;
-
-    fn children(&self) -> Vec<&Arc<Self>> {
-        panic!("DynTreeNode::children is not implemented yet")
-    }
+    fn arc_children(&self) -> Vec<&Arc<Self>>;
 
     /// Constructs a new node with the specified children.
     fn with_new_arc_children(
@@ -937,18 +868,11 @@ pub trait DynTreeNode {
 /// Blanket implementation for any `Arc<T>` where `T` implements [`DynTreeNode`]
 /// (such as [`Arc<dyn PhysicalExpr>`]).
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
-        f: F,
-    ) -> Result<TreeNodeRecursion> {
-        self.arc_children().iter().apply_until_stop(f)
-    }
-
-    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
-        self.children().into_iter().apply_until_stop(f)
+        self.arc_children().into_iter().apply_until_stop(f)
     }
 
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
@@ -957,7 +881,10 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     ) -> Result<Transformed<Self>> {
         let children = self.arc_children();
         if !children.is_empty() {
-            let new_children = children.into_iter().map_until_stop_and_collect(f)?;
+            let new_children = children
+                .into_iter()
+                .cloned()
+                .map_until_stop_and_collect(f)?;
             // Propagate up `new_children.transformed` and `new_children.tnr`
             // along with the node containing transformed children.
             if new_children.transformed {
@@ -989,7 +916,7 @@ pub trait ConcreteTreeNode: Sized {
 }
 
 impl<T: ConcreteTreeNode> TreeNode for T {
-    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
@@ -1018,8 +945,8 @@ mod tests {
     use std::fmt::Display;
 
     use crate::tree_node::{
-        Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRefVisitor,
-        TreeNodeRewriter, TreeNodeVisitor,
+        Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
+        TreeNodeVisitor,
     };
     use crate::Result;
 
@@ -1036,7 +963,7 @@ mod tests {
     }
 
     impl<T> TreeNode for TestTreeNode<T> {
-        fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
             &'n self,
             f: F,
         ) -> Result<TreeNodeRecursion> {
@@ -1536,15 +1463,15 @@ mod tests {
         }
     }
 
-    impl<T: Display> TreeNodeVisitor for TestVisitor<T> {
+    impl<'n, T: Display> TreeNodeVisitor<'n> for TestVisitor<T> {
         type Node = TestTreeNode<T>;
 
-        fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
             self.visits.push(format!("f_down({})", node.data));
             (*self.f_down)(node)
         }
 
-        fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
             self.visits.push(format!("f_up({})", node.data));
             (*self.f_up)(node)
         }
@@ -2001,7 +1928,7 @@ mod tests {
     //       |
     //       A
     #[test]
-    fn test_apply_ref() -> Result<()> {
+    fn test_apply_and_visit_references() -> Result<()> {
         let node_a = TestTreeNode::new(vec![], "a".to_string());
         let node_b = TestTreeNode::new(vec![], "b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
@@ -2022,7 +1949,7 @@ mod tests {
         let node_a_ref = &node_d_ref.children[0];
 
         let mut m: HashMap<&TestTreeNode<String>, usize> = HashMap::new();
-        tree.apply_ref(|e| {
+        tree.apply(|e| {
             *m.entry(e).or_insert(0) += 1;
             Ok(TreeNodeRecursion::Continue)
         })?;
@@ -2041,7 +1968,7 @@ mod tests {
             m: HashMap<&'n TestTreeNode<String>, (usize, usize)>,
         }
 
-        impl<'n> TreeNodeRefVisitor<'n> for TestVisitor<'n> {
+        impl<'n> TreeNodeVisitor<'n> for TestVisitor<'n> {
             type Node = TestTreeNode<String>;
 
             fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
@@ -2058,7 +1985,7 @@ mod tests {
         }
 
         let mut visitor = TestVisitor { m: HashMap::new() };
-        tree.visit_ref(&mut visitor)?;
+        tree.visit(&mut visitor)?;
 
         let expected = HashMap::from([
             (node_f_ref, (1, 1)),

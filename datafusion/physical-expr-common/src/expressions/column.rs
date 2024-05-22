@@ -92,7 +92,7 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(batch.column(self.index).clone()))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
 

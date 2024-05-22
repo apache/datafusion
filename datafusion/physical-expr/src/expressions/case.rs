@@ -33,6 +33,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
+use lazy_static::lazy_static;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -258,6 +259,10 @@ impl CaseExpr {
     }
 }
 
+lazy_static! {
+    static ref NO_OP: Arc<dyn PhysicalExpr> = Arc::new(NoOp::new());
+}
+
 impl PhysicalExpr for CaseExpr {
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
@@ -314,20 +319,20 @@ impl PhysicalExpr for CaseExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
         match &self.expr {
-            Some(expr) => children.push(expr.clone()),
-            None => children.push(Arc::new(NoOp::new())),
+            Some(expr) => children.push(expr),
+            None => children.push(&NO_OP),
         }
         self.when_then_expr.iter().for_each(|(cond, value)| {
-            children.push(cond.clone());
-            children.push(value.clone());
+            children.push(cond);
+            children.push(value);
         });
 
         match &self.else_expr {
-            Some(expr) => children.push(expr.clone()),
-            None => children.push(Arc::new(NoOp::new())),
+            Some(expr) => children.push(expr),
+            None => children.push(&NO_OP),
         }
         children
     }

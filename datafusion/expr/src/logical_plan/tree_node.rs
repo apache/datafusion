@@ -56,7 +56,7 @@ use datafusion_common::{
 };
 
 impl TreeNode for LogicalPlan {
-    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
@@ -736,10 +736,10 @@ impl LogicalPlan {
 
     /// Visits a plan similarly to [`Self::visit`], including subqueries that
     /// may appear in expressions such as `IN (SELECT ...)`.
-    pub fn visit_with_subqueries<V: TreeNodeVisitor<Node = Self>>(
-        &self,
-        visitor: &mut V,
-    ) -> Result<TreeNodeRecursion> {
+    pub fn visit_with_subqueries<V>(&self, visitor: &mut V) -> Result<TreeNodeRecursion>
+    where
+        for<'n> V: TreeNodeVisitor<'n, Node = Self>,
+    {
         visitor
             .f_down(self)?
             .visit_children(|| {

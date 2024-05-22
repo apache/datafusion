@@ -157,8 +157,8 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![true]
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -273,7 +273,7 @@ fn require_top_ordering_helper(
         // When an operator requires an ordering, any `SortExec` below can not
         // be responsible for (i.e. the originator of) the global ordering.
         let (new_child, is_changed) =
-            require_top_ordering_helper(children.swap_remove(0))?;
+            require_top_ordering_helper(children.swap_remove(0).clone())?;
         Ok((plan.with_new_children(vec![new_child])?, is_changed))
     } else {
         // Stop searching, there is no global ordering desired for the query.

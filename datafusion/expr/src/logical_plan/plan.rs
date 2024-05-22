@@ -2984,10 +2984,10 @@ digraph {
         strings: Vec<String>,
     }
 
-    impl TreeNodeVisitor for OkVisitor {
+    impl<'n> TreeNodeVisitor<'n> for OkVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -3001,7 +3001,7 @@ digraph {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -3067,10 +3067,10 @@ digraph {
         return_false_from_post_in: OptionalCounter,
     }
 
-    impl TreeNodeVisitor for StoppingVisitor {
+    impl<'n> TreeNodeVisitor<'n> for StoppingVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -3079,7 +3079,7 @@ digraph {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_post_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -3136,10 +3136,10 @@ digraph {
         return_error_from_post_in: OptionalCounter,
     }
 
-    impl TreeNodeVisitor for ErrorVisitor {
+    impl<'n> TreeNodeVisitor<'n> for ErrorVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_pre_in.dec() {
                 return not_impl_err!("Error in pre_visit");
             }
@@ -3147,7 +3147,7 @@ digraph {
             self.inner.f_down(plan)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_post_in.dec() {
                 return not_impl_err!("Error in post_visit");
             }

@@ -195,7 +195,7 @@ impl TestParquetFile {
     ///
     /// Recursively searches for ParquetExec and returns the metrics
     /// on the first one it finds
-    pub fn parquet_metrics(plan: Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
+    pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(parquet) = plan.as_any().downcast_ref::<ParquetExec>() {
             return parquet.metrics();
         }

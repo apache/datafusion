@@ -30,7 +30,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{map_until_stop_and_collect, Result};
 
 impl TreeNode for Expr {
-    fn apply_children_ref<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {

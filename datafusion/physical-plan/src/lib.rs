@@ -215,7 +215,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// The returned list will be empty for leaf nodes such as scans, will contain
     /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
@@ -841,7 +841,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
 
@@ -900,7 +900,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
 
