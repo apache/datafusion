@@ -1397,14 +1397,6 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                 d.scale as i8,
             )),
             r#type::Kind::List(l) => {
-                // let field = Field::new_list_field(
-                //     from_substrait_type(l.r#type.clone().unwrap().as_ref())?,
-                //     true,
-                // );
-                // Ok(ScalarValue::List(Arc::new(GenericListArray::new_null(
-                //     field.into(),
-                //     1,
-                // ))))
                 let field = Field::new_list_field(
                     from_substrait_type(l.r#type.clone().unwrap().as_ref())?,
                     true,

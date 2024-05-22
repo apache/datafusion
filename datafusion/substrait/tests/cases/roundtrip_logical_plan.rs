@@ -895,12 +895,10 @@ async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> 
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    println!("{proto:#?}");
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
-    ctx.execute_logical_plan(plan2).await?.show().await?;
     Ok(())
 }
 
