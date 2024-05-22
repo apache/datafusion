@@ -68,14 +68,14 @@ ideas with the community to get feedback on implementation.
 
 We welcome pull requests (PRs) from anyone in the community.
 
-DataFusion is a very active fast-moving project and we try to review and merge PRs quickly.
+DataFusion is a rapidly evolving project and we try to review and merge PRs quickly.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
 
 The lifecycle of a PR is:
 
 1. Create a PR targeting the `main` branch.
-2. For returning contributors, CI tests are automatically run. For new contributors a committer must first trigger the tests.
+2. For new contributors a committer must first trigger the CI tasks. Please mention the members from committers list in the PR to help trigger the CI
 3. Your PR will be reviewed. Please respond to all feedback on the PR: you don't have to change the code, but you should acknowledge the feedback. PRs waiting for the feedback for more than a few days will be marked as draft.
 4. Once the PR is approved, one of the [committers] will merge your PR, typically within 24 hours. We leave approved "major" changes (see below) open for 24 hours prior to merging, and sometimes leave "minor" PRs open for the same time to permit additional feedback.
 
