@@ -31,10 +31,10 @@ pub trait Dialect {
 pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
-    fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+    fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
         let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
-        if ALL_KEYWORDS.contains(&_identifier.to_uppercase().as_str())
-            || !identifier_regex.is_match(_identifier)
+        if ALL_KEYWORDS.contains(&identifier.to_uppercase().as_str())
+            || !identifier_regex.is_match(identifier)
         {
             Some('"')
         } else {
