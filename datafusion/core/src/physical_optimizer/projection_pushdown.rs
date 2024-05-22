@@ -1297,7 +1297,7 @@ mod tests {
     use crate::physical_plan::joins::StreamJoinPartitionMode;
 
     use arrow_schema::{DataType, Field, Schema, SortOptions};
-    use datafusion_common::{JoinType, ScalarValue, Statistics};
+    use datafusion_common::{JoinType, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::{
@@ -1676,16 +1676,12 @@ mod tests {
             Field::new("e", DataType::Int32, true),
         ]));
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema),
-                projection: Some(vec![0, 1, 2, 3, 4]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![vec![]],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_projection(Some(vec![0, 1, 2, 3, 4])),
             false,
             0,
             0,
@@ -1702,16 +1698,12 @@ mod tests {
             Field::new("d", DataType::Int32, true),
         ]));
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema),
-                projection: Some(vec![3, 2, 1]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![vec![]],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_projection(Some(vec![3, 2, 1])),
             false,
             0,
             0,
