@@ -75,7 +75,7 @@ Review bandwidth is currently our most limited resource, and we highly encourage
 The lifecycle of a PR is:
 
 1. Create a PR targeting the `main` branch.
-2. For returning contributors, CI tests are automatically run. For new contributors a committer must first trigger the tests.
+2. For new contributors a committer must first trigger the CI tasks. Please mention the members from committers list in the PR to help trigger the CI
 3. Your PR will be reviewed. Please respond to all feedback on the PR: you don't have to change the code, but you should acknowledge the feedback. PRs waiting for the feedback for more than a few days will be marked as draft.
 4. Once the PR is approved, one of the [committers] will merge your PR, typically within 24 hours. We leave approved "major" changes (see below) open for 24 hours prior to merging, and sometimes leave "minor" PRs open for the same time to permit additional feedback. 
 
