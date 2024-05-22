@@ -89,6 +89,7 @@ datafusion-physical-expr = { path = "datafusion/physical-expr", version = "38.0.
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "38.0.0", default-features = false }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "38.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "38.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "38.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "38.0.0" }
 datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "38.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "38.0.0" }

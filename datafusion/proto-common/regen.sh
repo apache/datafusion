@@ -17,7 +17,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file does not contain any Apache Software Foundation (ASF) licensed code.
-# Navigate to the repository's root directory
-repo_root=$(git rev-parse --show-toplevel)
-cd "$repo_root" && cargo run --manifest-path datafusion/proto/gen/Cargo.toml
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd "$SCRIPT_DIR" && cargo run --manifest-path gen/Cargo.toml

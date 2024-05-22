@@ -22,7 +22,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn main() -> Result<(), String> {
     let proto_dir = Path::new("proto");
-    let proto_path = Path::new("proto/datafusion.proto");
+    let proto_path = Path::new("proto/datafusion_common.proto");
 
     // proto definitions has to be there
     let descriptor_path = proto_dir.join("proto_descriptor.bin");
@@ -44,11 +44,11 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|e| {
             panic!("Cannot register descriptors {:?}: {}", &descriptor_set, e)
         })
-        .build(&[".datafusion"])
+        .build(&[".datafusion_common"])
         .map_err(|e| format!("pbjson compilation failed: {e}"))?;
 
-    let prost = Path::new("src/datafusion.rs");
-    let pbjson = Path::new("src/datafusion.serde.rs");
+    let prost = Path::new("src/datafusion_common.rs");
+    let pbjson = Path::new("src/datafusion_common.serde.rs");
 
     std::fs::copy(prost, "src/generated/prost.rs").unwrap();
     std::fs::copy(pbjson, "src/generated/pbjson.rs").unwrap();
