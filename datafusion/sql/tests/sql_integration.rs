@@ -4570,25 +4570,21 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (
-            TableReference::bare("person"),
-            "age > 35",
-            r#"("age" > 35)"#,
-        ),
+        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
         (
             TableReference::bare("person"),
             "id = '10'",
-            r#"("id" = '10')"#,
+            r#"(id = '10')"#,
         ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
-            r#"CAST("id" AS VARCHAR)"#,
+            r#"CAST(id AS VARCHAR)"#,
         ),
         (
             TableReference::bare("person"),
             "SUM((age * 2))",
-            r#"SUM(("age" * 2))"#,
+            r#"SUM((age * 2))"#,
         ),
     ];
 
