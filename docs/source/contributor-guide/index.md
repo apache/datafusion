@@ -100,6 +100,14 @@ Note all commits in a PR are squashed when merged to the `main` branch so there 
 
 # Reviewing Pull Requests
 
+Some helpful links:
+
+- [PRs Waiting for Review]
+- [Approved PRs Waiting for Merge]
+
+[prs waiting for review]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+
+[approved prs waiting for merge]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft
+
 When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.
 
 Please ensure any issues you raise contains a rationale and suggested alternative -- it is frustrating to be told "don't do it this way" without any clear reason or alternate provided.
