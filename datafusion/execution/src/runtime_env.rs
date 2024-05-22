@@ -89,6 +89,39 @@ impl RuntimeEnv {
     /// scheme, if any.
     ///
     /// See [`ObjectStoreRegistry`] for more details
+    ///
+    /// # Example: Register local file system object store
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use url::Url;
+    /// # use datafusion_execution::runtime_env::RuntimeEnv;
+    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// let url = Url::try_from("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// // register the object store with the runtime environment
+    /// runtime_env.register_object_store(&url, Arc::new(object_store));
+    /// ```
+    ///
+    /// # Example: Register local file system object store
+    ///
+    /// To register reading from urls such as <https://github.com>`
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use url::Url;
+    /// # use datafusion_execution::runtime_env::RuntimeEnv;
+    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// # // use local store for example as http feature is not enabled
+    /// # let http_store = object_store::local::LocalFileSystem::new();
+    /// // create a new object store via object_store::http::HttpBuilder;
+    /// let base_url = Url::parse("https://github.com").unwrap();
+    /// // let http_store = HttpBuilder::new()
+    /// //    .with_url(base_url.clone())
+    /// //    .build()
+    /// //    .unwrap();
+    /// // register the object store with the runtime environment
+    /// runtime_env.register_object_store(&base_url, Arc::new(http_store));
+    /// ```
     pub fn register_object_store(
         &self,
         url: &Url,
