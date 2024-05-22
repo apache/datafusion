@@ -130,21 +130,8 @@ pub fn parquet_file_one_column_stats(
     ArrowReaderBuilder::try_new(file).unwrap()
 }
 
-// Create a parquet file with many columns each has different data type
-//  - Data types are specified by the given scenario
-//  - Row group sizes are withe the same or different depending on the provided row_per_group & data created in the scenario
-pub async fn parquet_file_many_columns(
-    scenario: super::Scenario,
-    row_per_group: usize,
-) -> ParquetRecordBatchReaderBuilder<File> {
-    let file = make_test_file_rg(scenario, row_per_group).await;
-
-    // open the file & get the reader
-    let file = file.reopen().unwrap();
-    ArrowReaderBuilder::try_new(file).unwrap()
-}
-
 /// Defines what data to create in a parquet file
+#[derive(Debug, Clone, Copy)]
 struct TestReader {
     /// What data to create in the parquet file
     scenario: Scenario,
@@ -342,12 +329,10 @@ async fn test_int_64() {
     let reader = TestReader {
         scenario: Scenario::Int,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [-5, -4, 0, 5]
         expected_min: Arc::new(Int64Array::from(vec![-5, -4, 0, 5])),
         // maxes are [-1, 0, 4, 9]
@@ -366,11 +351,10 @@ async fn test_int_32() {
     let reader = TestReader {
         scenario: Scenario::Int,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
+
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [-5, -4, 0, 5]
         expected_min: Arc::new(Int32Array::from(vec![-5, -4, 0, 5])),
         // maxes are [-1, 0, 4, 9]
@@ -395,12 +379,10 @@ async fn test_int_16() {
     let reader = TestReader {
         scenario: Scenario::Int,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [-5, -4, 0, 5]
         // BUG: not sure why this returns same data but in Int32Array type even though I debugged and the columns name is "i16" an its data is Int16
         // My debugging tells me the bug is either at:
@@ -432,12 +414,10 @@ async fn test_int_8() {
     let reader = TestReader {
         scenario: Scenario::Int,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [-5, -4, 0, 5]
         // BUG: not sure why this returns same data but in Int32Array even though I debugged and the columns name is "i8" an its data is Int8
         expected_min: Arc::new(Int8Array::from(vec![-5, -4, 0, 5])), // panic here because the actual data is Int32Array
@@ -467,12 +447,10 @@ async fn test_timestamp() {
     let reader = TestReader {
         scenario: Scenario::Timestamps,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,]
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000000000,
@@ -495,14 +473,9 @@ async fn test_timestamp() {
     .run("nanos");
 
     // micros
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
+
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000000,
             1577840471000000,
@@ -521,14 +494,8 @@ async fn test_timestamp() {
     .run("micros");
 
     // millis
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000,
             1577840471000,
@@ -547,14 +514,8 @@ async fn test_timestamp() {
     .run("millis");
 
     // seconds
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461, 1577840471, 1577841061, 1578704461,
         ])),
@@ -581,12 +542,10 @@ async fn test_timestamp_diff_rg_sizes() {
     let reader = TestReader {
         scenario: Scenario::Timestamps,
         row_per_group: 8, // note that the row group size is 8
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [1577840461000000000, 1577841061000000000, 1578704521000000000]
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000000000,
@@ -607,14 +566,8 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("nanos");
 
     // micros
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 8, // note that the row group size is 8
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000000,
             1577841061000000,
@@ -631,14 +584,8 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("micros");
 
     // millis
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 8, // note that the row group size is 8
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461000,
             1577841061000,
@@ -655,14 +602,8 @@ async fn test_timestamp_diff_rg_sizes() {
     .run("millis");
 
     // seconds
-    let reader = TestReader {
-        scenario: Scenario::Timestamps,
-        row_per_group: 8, // note that the row group size is 8
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![
             1577840461, 1577841061, 1578704521,
         ])),
@@ -689,12 +630,9 @@ async fn test_dates_32_diff_rg_sizes() {
     let reader = TestReader {
         scenario: Scenario::Dates,
         row_per_group: 13,
-    }
-    .build()
-    .await;
-
+    };
     Test {
-        reader,
+        reader: reader.build().await,
         // mins are [18262, 18565,]
         expected_min: Arc::new(Int32Array::from(vec![18262, 18565])),
         // maxes are [18564, 21865,]
@@ -717,11 +655,9 @@ async fn test_dates_64_diff_rg_sizes() {
     let reader = TestReader {
         scenario: Scenario::Dates,
         row_per_group: 13,
-    }
-    .build()
-    .await;
+    };
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])), // panic here because the actual data is Int32Array
         expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
@@ -744,14 +680,12 @@ async fn test_uint() {
     let reader = TestReader {
         scenario: Scenario::UInt,
         row_per_group: 4,
-    }
-    .build()
-    .await;
+    };
 
     // u8
     // BUG: expect UInt8Array but returns Int32Array
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt8Array
         expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt8Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
@@ -761,14 +695,8 @@ async fn test_uint() {
 
     // u16
     // BUG: expect UInt16Array but returns Int32Array
-    let reader = TestReader {
-        scenario: Scenario::UInt,
-        row_per_group: 4,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt16Array
         expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt16Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
@@ -778,14 +706,8 @@ async fn test_uint() {
 
     // u32
     // BUG: expect UInt32Array but returns Int32Array
-    let reader = TestReader {
-        scenario: Scenario::UInt,
-        row_per_group: 4,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int32Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt32Array
         expected_max: Arc::new(Int32Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt32Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
@@ -795,14 +717,8 @@ async fn test_uint() {
 
     // u64
     // BUG: expect UInt64rray but returns Int64Array
-    let reader = TestReader {
-        scenario: Scenario::UInt,
-        row_per_group: 4,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![0, 1, 4, 7, 251])), // shoudld be UInt64Array
         expected_max: Arc::new(Int64Array::from(vec![3, 4, 6, 250, 254])), // shoudld be UInt64Array
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
@@ -818,12 +734,10 @@ async fn test_int32_range() {
     let reader = TestReader {
         scenario: Scenario::Int32Range,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int32Array::from(vec![0])),
         expected_max: Arc::new(Int32Array::from(vec![300000])),
         expected_null_counts: UInt64Array::from(vec![0]),
@@ -841,12 +755,10 @@ async fn test_uint32_range() {
     let reader = TestReader {
         scenario: Scenario::UInt32Range,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int32Array::from(vec![0])), // should be UInt32Array
         expected_max: Arc::new(Int32Array::from(vec![300000])), // should be UInt32Array
         expected_null_counts: UInt64Array::from(vec![0]),
@@ -862,12 +774,10 @@ async fn test_float64() {
     let reader = TestReader {
         scenario: Scenario::Float64,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
         expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
@@ -883,12 +793,10 @@ async fn test_decimal() {
     let reader = TestReader {
         scenario: Scenario::Decimal,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(
             Decimal128Array::from(vec![100, -500, 2000])
                 .with_precision_and_scale(9, 2)
@@ -919,13 +827,11 @@ async fn test_byte() {
     let reader = TestReader {
         scenario: Scenario::ByteArray,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     // column "name"
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(StringArray::from(vec![
             "all frontends",
             "mixed",
@@ -942,14 +848,8 @@ async fn test_byte() {
     .run("name");
 
     // column "service_string"
-    let reader = TestReader {
-        scenario: Scenario::ByteArray,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(StringArray::from(vec![
             "frontend five",
             "backend one",
@@ -966,14 +866,8 @@ async fn test_byte() {
     .run("service_string");
 
     // column "service_binary"
-    let reader = TestReader {
-        scenario: Scenario::ByteArray,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(StringArray::from(vec![
             "frontend five",
             "backend one",
@@ -994,14 +888,9 @@ async fn test_byte() {
     let min_input = vec![vec![102, 101, 49], vec![98, 101, 49], vec![98, 101, 52]];
     // b"fe5", b"fe6", b"be8"
     let max_input = vec![vec![102, 101, 55], vec![102, 101, 54], vec![98, 101, 56]];
-    let reader = TestReader {
-        scenario: Scenario::ByteArray,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
+
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(
             FixedSizeBinaryArray::try_from_iter(min_input.into_iter()).unwrap(),
         ),
@@ -1022,13 +911,11 @@ async fn test_period_in_column_names() {
     let reader = TestReader {
         scenario: Scenario::PeriodsInColumnNames,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     // column "name"
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(StringArray::from(vec![
             "HTTP GET / DISPATCH",
             "HTTP PUT / DISPATCH",
@@ -1045,15 +932,8 @@ async fn test_period_in_column_names() {
     .run("name");
 
     // column "service.name"
-    let reader = TestReader {
-        scenario: Scenario::PeriodsInColumnNames,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
-
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(StringArray::from(vec!["frontend", "backend", "backend"])),
         expected_max: Arc::new(StringArray::from(vec![
             "frontend", "frontend", "backend",
@@ -1072,12 +952,10 @@ async fn test_boolean() {
     let reader = TestReader {
         scenario: Scenario::Boolean,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
 
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(BooleanArray::from(vec![false, false])),
         expected_max: Arc::new(BooleanArray::from(vec![true, false])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
@@ -1098,11 +976,9 @@ async fn test_struct() {
     let reader = TestReader {
         scenario: Scenario::StructArray,
         row_per_group: 5,
-    }
-    .build()
-    .await;
+    };
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(struct_array(vec![(Some(1), Some(6.0), Some(12.0))])),
         expected_max: Arc::new(struct_array(vec![(Some(2), Some(8.5), Some(14.0))])),
         expected_null_counts: UInt64Array::from(vec![0]),
@@ -1132,10 +1008,12 @@ async fn test_missing_statistics() {
 // column not found
 #[tokio::test]
 async fn test_column_not_found() {
-    let row_per_group = 5;
-    let reader = parquet_file_many_columns(Scenario::Dates, row_per_group).await;
+    let reader = TestReader {
+        scenario: Scenario::Dates,
+        row_per_group: 5,
+    };
     Test {
-        reader,
+        reader: reader.build().await,
         expected_min: Arc::new(Int64Array::from(vec![18262, 18565])),
         expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),

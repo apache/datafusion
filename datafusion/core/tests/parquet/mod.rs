@@ -64,6 +64,7 @@ fn init() {
 // ----------------------
 
 /// What data to use
+#[derive(Debug, Clone, Copy)]
 enum Scenario {
     Boolean,
     Timestamps,
