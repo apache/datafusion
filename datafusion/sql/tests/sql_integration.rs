@@ -33,7 +33,11 @@ use datafusion_expr::{
     Volatility, WindowUDF,
 };
 use datafusion_functions::{string, unicode};
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
+use datafusion_sql::unparser::dialect::{
+    DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
+    MySqlDialect as UnparserMySqlDialect,
+};
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
@@ -4711,6 +4715,52 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j2";
 
     assert_eq!(format!("{plan_roundtrip:?}"), expected);
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect() -> Result<()> {
+    struct TestStatementWithDialect {
+        sql: &'static str,
+        expected: &'static str,
+        parser_dialect: Box<dyn Dialect>,
+        unparser_dialect: Box<dyn UnparserDialect>,
+    }
+    let tests: Vec<TestStatementWithDialect> = vec![
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected:
+                "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected: r#"SELECT "ta"."j1_id" FROM "j1" AS "ta" ORDER BY "ta"."j1_id" ASC NULLS LAST LIMIT 10"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+    ];
+
+    for query in tests {
+        let statement = Parser::new(&*query.parser_dialect)
+            .try_with_sql(query.sql)?
+            .parse_statement()?;
+
+        let context = MockContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+        let unparser = Unparser::new(&*query.unparser_dialect);
+        let roundtrip_statement = unparser.plan_to_sql(&plan)?;
+
+        let actual = format!("{}", &roundtrip_statement);
+        println!("roundtrip sql: {actual}");
+        println!("plan {}", plan.display_indent());
+
+        assert_eq!(query.expected, actual);
+    }
 
     Ok(())
 }
