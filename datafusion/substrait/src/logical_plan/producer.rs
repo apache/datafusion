@@ -30,7 +30,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion::arrow::array::{Array, AsArray, OffsetSizeTrait};
+use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{exec_err, internal_err, not_impl_err};
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
@@ -1744,35 +1744,12 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             }),
             DECIMAL_128_TYPE_REF,
         ),
-        ScalarValue::List(l) if !value.is_null() => {
-            let values =
-                convert_array_to_literal_vec::<i32>(&(l.to_owned() as Arc<dyn Array>))?;
-            let list = if values.is_empty() {
-                LiteralType::EmptyList(match to_substrait_type(&l.data_type())? {
-                    substrait::proto::Type {
-                        kind: Some(r#type::Kind::List(l)),
-                    } => l.as_ref().to_owned(),
-                    _ => unreachable!(),
-                })
-            } else {
-                LiteralType::List(List { values })
-            };
-            (list, DEFAULT_CONTAINER_TYPE_REF)
-        }
+        ScalarValue::List(l) if !value.is_null() => (
+            convert_array_to_literal_list(l)?,
+            DEFAULT_CONTAINER_TYPE_REF,
+        ),
         ScalarValue::LargeList(l) if !value.is_null() => {
-            let values =
-                convert_array_to_literal_vec::<i64>(&(l.to_owned() as Arc<dyn Array>))?;
-            let list = if values.is_empty() {
-                LiteralType::EmptyList(match to_substrait_type(&l.data_type())? {
-                    substrait::proto::Type {
-                        kind: Some(r#type::Kind::List(l)),
-                    } => l.as_ref().to_owned(),
-                    _ => unreachable!(),
-                })
-            } else {
-                LiteralType::List(List { values })
-            };
-            (list, LARGE_CONTAINER_TYPE_REF)
+            (convert_array_to_literal_list(l)?, LARGE_CONTAINER_TYPE_REF)
         }
         _ => (try_to_substrait_null(value)?, DEFAULT_TYPE_REF),
     };
@@ -1784,18 +1761,27 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
     })
 }
 
-fn convert_array_to_literal_vec<T: OffsetSizeTrait>(
-    array: &dyn Array,
-) -> Result<Vec<Literal>> {
-    // Adapted from ScalarValue::convert_array_to_scalar_vec to support both i32 and i64
+fn convert_array_to_literal_list<T: OffsetSizeTrait>(
+    array: &GenericListArray<T>,
+) -> Result<LiteralType> {
     assert_eq!(array.len(), 1);
-    let nested_array = array.as_list::<T>().value(0);
+    let nested_array = array.value(0);
 
-    let scalars = (0..nested_array.len())
+    let values = (0..nested_array.len())
         .map(|i| to_substrait_literal(&ScalarValue::try_from_array(&nested_array, i)?))
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(scalars)
+    if values.is_empty() {
+        let et = match to_substrait_type(&array.data_type())? {
+            substrait::proto::Type {
+                kind: Some(r#type::Kind::List(lt)),
+            } => lt.as_ref().to_owned(),
+            _ => unreachable!(),
+        };
+        Ok(LiteralType::EmptyList(et))
+    } else {
+        Ok(LiteralType::List(List { values }))
+    }
 }
 
 fn to_substrait_literal_expr(value: &ScalarValue) -> Result<Expression> {
@@ -2073,6 +2059,8 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 #[cfg(test)]
 mod test {
     use crate::logical_plan::consumer::from_substrait_literal;
+    use datafusion::arrow::array::GenericListArray;
+    use datafusion::arrow::datatypes::Field;
 
     use super::*;
 
@@ -2110,20 +2098,40 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Float32(Some(1.0))],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+            &[],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::List(Arc::new(GenericListArray::new_null(
+            Field::new_list_field(DataType::Float32, true).into(),
+            1,
+        ))))?;
+        round_trip_literal(ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[ScalarValue::Float32(Some(1.0))],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::LargeList(Arc::new(
+            GenericListArray::new_null(
+                Field::new_list_field(DataType::Float32, true).into(),
+                1,
+            ),
+        )))?;
+
         Ok(())
     }
 
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {scalar:?}");
 
-        let substrait = to_substrait_literal(&scalar)?;
-        let Expression {
-            rex_type: Some(RexType::Literal(substrait_literal)),
-        } = substrait
-        else {
-            panic!("Expected Literal expression, got {substrait:?}");
-        };
-
+        let substrait_literal = to_substrait_literal(&scalar)?;
         let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())

@@ -1401,10 +1401,17 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                     from_substrait_type(l.r#type.clone().unwrap().as_ref())?,
                     true,
                 );
-                Ok(ScalarValue::List(Arc::new(GenericListArray::new_null(
-                    field.into(),
-                    1,
-                ))))
+                match l.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::List(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeList(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {kind:?}"
+                    ),
+                }
             }
             _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
         }
