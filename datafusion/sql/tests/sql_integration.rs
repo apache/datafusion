@@ -1866,7 +1866,7 @@ fn create_external_table_with_pk() {
 
 #[test]
 fn create_external_table_column_option() {
-    let sql = "CREATE EXTERNAL TABLE t(c1 int OPTIONS(foo='bar')) STORED AS CSV LOCATION 'foo.csv'";
+    let sql = "CREATE EXTERNAL TABLE t(c1 int METADATA(foo='bar')) STORED AS CSV LOCATION 'foo.csv'";
     let plan = logical_plan(sql);
     let metadata = plan
         .iter()
