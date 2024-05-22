@@ -2819,7 +2819,11 @@ mod tests {
             write!(f, "NoOp")
         }
 
-        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
             unimplemented!("NoOp");
         }
     }
