@@ -49,7 +49,6 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 async fn main() -> Result<()> {
     // See how to evaluate expressions
     simple_expr_to_sql_demo()?;
-    simple_expr_to_sql_demo_no_escape()?;
     simple_expr_to_sql_demo_escape_mysql_style()?;
     simple_plan_to_sql_demo().await?;
     round_trip_plan_to_sql_demo().await?;
@@ -61,17 +60,6 @@ async fn main() -> Result<()> {
 fn simple_expr_to_sql_demo() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
     let sql = expr_to_sql(&expr)?.to_string();
-    assert_eq!(sql, r#"((a < 5) OR (a = 8))"#);
-    Ok(())
-}
-
-/// DataFusion can convert expressions to SQL without escaping column names using
-/// using a custom dialect and an explicit unparser
-fn simple_expr_to_sql_demo_no_escape() -> Result<()> {
-    let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
-    let dialect = CustomDialect::new(None);
-    let unparser = Unparser::new(&dialect);
-    let sql = unparser.expr_to_sql(&expr)?.to_string();
     assert_eq!(sql, r#"((a < 5) OR (a = 8))"#);
     Ok(())
 }

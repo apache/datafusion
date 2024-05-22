@@ -18,7 +18,10 @@
 use regex::Regex;
 use sqlparser::keywords::ALL_KEYWORDS;
 
-/// Dialect is used to capture dialect specific syntax.
+/// `Dialect` to usse for Unparsing
+///
+/// The default dialect tries to avoid quoting identifiers unless necessary (e.g. `a` instead of `"a"`)
+/// but this behavior can be overridden as needed
 /// Note: this trait will eventually be replaced by the Dialect in the SQLparser package
 ///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
