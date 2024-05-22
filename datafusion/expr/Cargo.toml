@@ -38,9 +38,7 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
+ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 chrono = { workspace = true }
