@@ -32,7 +32,7 @@ use arrow::{
 };
 
 use datafusion_common::{
-    Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
+    Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GroupingSet,
@@ -228,23 +228,6 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
         };
 
         Ok(res)
-    }
-}
-
-impl From<Column> for protobuf::Column {
-    fn from(c: Column) -> Self {
-        Self {
-            relation: c.relation.map(|relation| protobuf_common::ColumnRelation {
-                relation: relation.to_string(),
-            }),
-            name: c.name,
-        }
-    }
-}
-
-impl From<&Column> for protobuf::Column {
-    fn from(c: &Column) -> Self {
-        c.clone().into()
     }
 }
 

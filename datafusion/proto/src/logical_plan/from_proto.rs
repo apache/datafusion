@@ -31,9 +31,8 @@ use arrow::{
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, Constraint, Constraints,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
@@ -147,20 +146,6 @@ where
             None => Err(Error::required(field)),
             Some(t) => t.try_into(),
         }
-    }
-}
-
-impl From<protobuf::Column> for Column {
-    fn from(c: protobuf::Column) -> Self {
-        let protobuf::Column { relation, name } = c;
-
-        Self::new(relation.map(|r| r.relation), name)
-    }
-}
-
-impl From<&protobuf::Column> for Column {
-    fn from(c: &protobuf::Column) -> Self {
-        c.clone().into()
     }
 }
 

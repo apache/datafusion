@@ -14,3 +14,20 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+use crate::protobuf_common as protobuf;
+use datafusion_common::Column;
+
+impl From<protobuf::Column> for Column {
+    fn from(c: protobuf::Column) -> Self {
+        let protobuf::Column { relation, name } = c;
+
+        Self::new(relation.map(|r| r.relation), name)
+    }
+}
+
+impl From<&protobuf::Column> for Column {
+    fn from(c: &protobuf::Column) -> Self {
+        c.clone().into()
+    }
+}

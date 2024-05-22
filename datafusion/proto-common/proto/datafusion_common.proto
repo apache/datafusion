@@ -23,3 +23,8 @@ package datafusion_common;
 message ColumnRelation {
   string relation = 1;
 }
+
+message Column {
+  string name = 1;
+  ColumnRelation relation = 2;
+}

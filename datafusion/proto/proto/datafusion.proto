@@ -26,11 +26,6 @@ option java_outer_classname = "DatafusionProto";
 
 import "datafusion/proto-common/proto/datafusion_common.proto";
 
-message Column {
-  string name = 1;
-  datafusion_common.ColumnRelation relation = 2;
-}
-
 message DfField{
   Field field = 1;
   datafusion_common.ColumnRelation qualifier = 2;
@@ -356,7 +351,7 @@ message SubqueryAliasNode {
 message LogicalExprNode {
   oneof ExprType {
     // column references
-    Column column = 1;
+    datafusion_common.Column column = 1;
 
     // alias
     AliasNode alias = 2;
