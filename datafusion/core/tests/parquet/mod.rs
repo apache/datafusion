@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::make_array;
+use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -64,7 +64,9 @@ fn init() {
 // ----------------------
 
 /// What data to use
+#[derive(Debug, Clone, Copy)]
 enum Scenario {
+    Boolean,
     Timestamps,
     Dates,
     Int,
@@ -81,6 +83,7 @@ enum Scenario {
     PeriodsInColumnNames,
     WithNullValues,
     WithNullValuesPageLevel,
+    StructArray,
 }
 
 enum Unit {
@@ -310,6 +313,16 @@ impl ContextWithParquet {
             pretty_results,
         }
     }
+}
+
+fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "bool",
+        DataType::Boolean,
+        true,
+    )]));
+    let array = Arc::new(BooleanArray::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
 /// Return record batch with a few rows of data for all of the supported timestamp types
@@ -699,6 +712,24 @@ fn make_int_batches_with_null(
 
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
+        Scenario::Boolean => {
+            vec![
+                make_boolean_batch(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                ]),
+                make_boolean_batch(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                ]),
+            ]
+        }
         Scenario::Timestamps => {
             vec![
                 make_timestamp_batch(TimeDelta::try_seconds(0).unwrap()),
@@ -881,6 +912,20 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_int_batches_with_null(5, 1, 6),
             ]
         }
+        Scenario::StructArray => {
+            let struct_array_data = struct_array(vec![
+                (Some(1), Some(6.0), Some(12.0)),
+                (Some(2), Some(8.5), None),
+                (None, Some(8.5), Some(14.0)),
+            ]);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "struct",
+                struct_array_data.data_type().clone(),
+                true,
+            )]));
+            vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
     }
 }
 
@@ -935,4 +980,28 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
     }
     writer.close().unwrap();
     output_file
+}
+
+// returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
+fn struct_array(input: Vec<(Option<i32>, Option<f32>, Option<f64>)>) -> ArrayRef {
+    let int_32: Int32Array = input.iter().map(|(i, _, _)| i).collect();
+    let float_32: Float32Array = input.iter().map(|(_, f, _)| f).collect();
+    let float_64: Float64Array = input.iter().map(|(_, _, f)| f).collect();
+
+    let nullable = true;
+    let struct_array = StructArray::from(vec![
+        (
+            Arc::new(Field::new("int32_col", DataType::Int32, nullable)),
+            Arc::new(int_32) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("float32_col", DataType::Float32, nullable)),
+            Arc::new(float_32) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("float64_col", DataType::Float64, nullable)),
+            Arc::new(float_64) as ArrayRef,
+        ),
+    ]);
+    Arc::new(struct_array)
 }
