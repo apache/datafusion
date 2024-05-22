@@ -2199,7 +2199,7 @@ mod test {
                 Field::new("c0", DataType::Int32, true),
                 Field::new("c1", DataType::Utf8, true),
             ]
-                .into(),
+            .into(),
         ))?;
 
         Ok(())
