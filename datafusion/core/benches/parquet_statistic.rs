@@ -87,7 +87,6 @@ fn create_parquet_file(dtype: TestTypes, row_groups: usize) -> NamedTempFile {
             TestTypes::F64 => make_f64_batch(),
             TestTypes::String => make_string_batch(),
             TestTypes::Dictionary => make_dict_batch(),
-            _ => panic!("Unsupported data type"),
         };
         writer.write(&batch).unwrap();
     }
