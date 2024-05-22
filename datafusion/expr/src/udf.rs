@@ -17,19 +17,20 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+
 use crate::expr::create_name;
+use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
-    ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
-    ScalarFunctionImplementation, Signature,
+    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
+
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
-use std::any::Any;
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -202,16 +203,61 @@ impl ScalarUDF {
         Arc::new(move |args| captured.invoke(args))
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
-    ///
-    /// See [`ScalarUDFImpl::monotonicity`] for more details.
-    pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        self.inner.monotonicity()
-    }
-
     /// Get the circuits of inner implementation
     pub fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
+    }
+
+    /// Computes the output interval for a [`ScalarUDF`], given the input
+    /// intervals.
+    ///
+    /// # Parameters
+    ///
+    /// * `inputs` are the intervals for the inputs (children) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
+    pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(inputs)
+    }
+
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, -6]`, then propagation would would return
+    /// `[-5, 5]`.
+    pub fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.inner.propagate_constraints(interval, inputs)
+    }
+
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    pub fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.output_ordering(inputs)
     }
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
@@ -387,11 +433,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         &[]
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(None)
-    }
-
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
@@ -424,6 +465,59 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Setting this to true prevents certain optimizations such as common subexpression elimination
     fn short_circuits(&self) -> bool {
         false
+    }
+
+    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// intervals.
+    ///
+    /// # Parameters
+    ///
+    /// * `children` are the intervals for the children (inputs) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
+    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
+        // We cannot assume the input datatype is the same of output type.
+        Interval::make_unbounded(&DataType::Null)
+    }
+
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, -6]`, then propagation would would return
+    /// `[-5, 5]`.
+    fn propagate_constraints(
+        &self,
+        _interval: &Interval,
+        _inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        Ok(Some(vec![]))
+    }
+
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    fn output_ordering(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(SortProperties::Unordered)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.

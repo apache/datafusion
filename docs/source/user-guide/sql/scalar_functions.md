@@ -1457,6 +1457,7 @@ position(substr in origstr)
 - [today](#today)
 - [make_date](#make_date)
 - [to_char](#to_char)
+- [to_date](#to_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1701,6 +1702,51 @@ Additional examples can be found [here]
 #### Aliases
 
 - date_format
+
+### `to_date`
+
+Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format]s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+
+Note: `to_date` returns Date32. The supported range for integer input is between `-96465293` and `95026237`.
+Supported range for string input is between `1677-09-21` and `2262-04-11` exclusive. To parse dates outside of
+that range use a [Chrono format].
+
+```
+to_date(expression[, ..., format_n])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+[chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
+
+#### Example
+
+```
+> select to_date('2023-01-31');
++-----------------------------+
+| to_date(Utf8("2023-01-31")) |
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------+
+| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
 
 ### `to_timestamp`
 

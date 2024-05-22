@@ -255,19 +255,18 @@ pub fn merge_vectors(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use arrow_array::{ArrayRef, Float32Array, Float64Array};
     use std::any::Any;
     use std::fmt::{Display, Formatter};
 
     use super::*;
     use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
+    use arrow_array::{ArrayRef, Float32Array, Float64Array};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-    use datafusion_expr::{
-        ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-    };
     use petgraph::visit::Bfs;
 
     #[derive(Debug, Clone)]
@@ -309,8 +308,8 @@ pub(crate) mod tests {
             }
         }
 
-        fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-            Ok(Some(vec![Some(true)]))
+        fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+            Ok(input[0].sort_properties)
         }
 
         fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

@@ -50,6 +50,7 @@ pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
 pub mod simplify;
+pub mod sort_properties;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
@@ -77,8 +78,7 @@ pub use logical_plan::*;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
-    ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
-    TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{AggregateUDF, AggregateUDFImpl};

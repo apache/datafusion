@@ -97,6 +97,11 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
+        Ok(format!("{}[{}]", args_name[0], args_name[1]))
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -245,6 +250,12 @@ impl ScalarUDFImpl for ArraySlice {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
+        Ok(format!("{}[{}]", args_name[0], args_name[1..].join(":")))
+    }
+
     fn name(&self) -> &str {
         "array_slice"
     }
@@ -418,19 +429,16 @@ where
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
-            // array_slice with stride in duckdb, return empty array if stride is not supported and from > to.
-            if stride.is_none() && from > to {
-                // return empty array
-                offsets.push(offsets[row_index]);
-                continue;
-            }
+            // Default stride is 1 if not provided
             let stride = stride.unwrap_or(1);
             if stride.is_zero() {
                 return exec_err!(
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if from <= to && stride.is_negative() {
+            } else if (from <= to && stride.is_negative())
+                || (from > to && stride.is_positive())
+            {
                 // return empty array
                 offsets.push(offsets[row_index]);
                 continue;

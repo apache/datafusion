@@ -16,7 +16,7 @@
 // under the License.
 
 use core::fmt;
-use std::fmt::Display;
+use std::{fmt::Display, vec};
 
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, TryCast,
+    Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -394,11 +394,22 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::ScalarVariable(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
-            Expr::GetIndexedField(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::ScalarVariable(_, ids) => {
+                if ids.is_empty() {
+                    return internal_err!("Not a valid ScalarVariable");
+                }
+
+                Ok(if ids.len() == 1 {
+                    ast::Expr::Identifier(
+                        self.new_ident_without_quote_style(ids[0].to_string()),
+                    )
+                } else {
+                    ast::Expr::CompoundIdentifier(
+                        ids.iter()
+                            .map(|i| self.new_ident_without_quote_style(i.to_string()))
+                            .collect(),
+                    )
+                })
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
@@ -411,9 +422,40 @@ impl Unparser<'_> {
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::GroupingSet(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::GroupingSets(grouping_sets) => {
+                    let expr_ast_sets = grouping_sets
+                        .iter()
+                        .map(|set| {
+                            set.iter()
+                                .map(|e| self.expr_to_sql(e))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Ok(ast::Expr::GroupingSets(expr_ast_sets))
+                }
+                GroupingSet::Cube(cube) => {
+                    let expr_ast_sets = cube
+                        .iter()
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ast::Expr::Cube(expr_ast_sets))
+                }
+                GroupingSet::Rollup(rollup) => {
+                    let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
+                        .iter()
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ast::Expr::Rollup(expr_ast_sets))
+                }
+            },
             Expr::Placeholder(p) => {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
@@ -494,6 +536,13 @@ impl Unparser<'_> {
         ast::Ident {
             value: str,
             quote_style: self.dialect.identifier_quote_style(),
+        }
+    }
+
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
+        ast::Ident {
+            value: str,
+            quote_style: None,
         }
     }
 
@@ -868,13 +917,14 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
+    use arrow_schema::DataType::Int8;
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, exists,
+        case, col, cube, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, out_ref_col, placeholder, table_scan, try_cast, when,
-        wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-        WindowFrame, WindowFunctionDefinition,
+        grouping_set, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
+        try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -1158,11 +1208,28 @@ mod tests {
                 try_cast(col("a"), DataType::UInt32),
                 r#"TRY_CAST("a" AS INTEGER UNSIGNED)"#,
             ),
+            (
+                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                r#"@a"#,
+            ),
+            (
+                Expr::ScalarVariable(
+                    Int8,
+                    vec![String::from("@root"), String::from("foo")],
+                ),
+                r#"@root.foo"#,
+            ),
             (col("x").eq(placeholder("$1")), r#"("x" = $1)"#),
             (
                 out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
                 r#"("t"."a" > 1)"#,
             ),
+            (
+                grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
+                r#"GROUPING SETS (("a", "b"), ("a"))"#,
+            ),
+            (cube(vec![col("a"), col("b")]), r#"CUBE ("a", "b")"#),
+            (rollup(vec![col("a"), col("b")]), r#"ROLLUP ("a", "b")"#),
         ];
 
         for (expr, expected) in tests {

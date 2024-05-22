@@ -17,17 +17,17 @@
 
 use std::sync::Arc;
 
-use arrow::array::AsArray;
-use arrow_array::{ArrayRef, BooleanArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
+use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
 
-/// An accumulator that implements a single operation over a
-/// [`BooleanArray`] where the accumulated state is also boolean (such
-/// as [`BitAndAssign`])
+/// An accumulator that implements a single operation over
+/// [`ArrowPrimitiveType`] where the accumulated state is the same as
+/// the input type (such as `Sum`)
 ///
 /// F: The function to apply to two elements. The first argument is
 /// the existing value and should be updated with the second value
@@ -35,36 +35,53 @@ use super::accumulate::NullState;
 ///
 /// [`BitAndAssign`]: std::ops::BitAndAssign
 #[derive(Debug)]
-pub struct BooleanGroupsAccumulator<F>
+pub struct PrimitiveGroupsAccumulator<T, F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
-    /// values per group
-    values: BooleanBufferBuilder,
+    /// values per group, stored as the native type
+    values: Vec<T::Native>,
+
+    /// The output type (needed for Decimal precision and scale)
+    data_type: DataType,
+
+    /// The starting value for new groups
+    starting_value: T::Native,
 
     /// Track nulls in the input / filters
     null_state: NullState,
 
-    /// Function that computes the output
-    bool_fn: F,
+    /// Function that computes the primitive result
+    prim_fn: F,
 }
 
-impl<F> BooleanGroupsAccumulator<F>
+impl<T, F> PrimitiveGroupsAccumulator<T, F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
-    pub fn new(bitop_fn: F) -> Self {
+    pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: BooleanBufferBuilder::new(0),
+            values: vec![],
+            data_type: data_type.clone(),
             null_state: NullState::new(),
-            bool_fn: bitop_fn,
+            starting_value: T::default_value(),
+            prim_fn,
         }
+    }
+
+    /// Set the starting values for new groups
+    pub fn with_starting_value(mut self, starting_value: T::Native) -> Self {
+        self.starting_value = starting_value;
+        self
     }
 }
 
-impl<F> GroupsAccumulator for BooleanGroupsAccumulator<F>
+impl<T, F> GroupsAccumulator for PrimitiveGroupsAccumulator<T, F>
 where
-    F: Fn(bool, bool) -> bool + Send + Sync,
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     fn update_batch(
         &mut self,
@@ -74,23 +91,20 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values[0].as_boolean();
+        let values = values[0].as_primitive::<T>();
 
-        if self.values.len() < total_num_groups {
-            let new_groups = total_num_groups - self.values.len();
-            self.values.append_n(new_groups, Default::default());
-        }
+        // update values
+        self.values.resize(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        self.null_state.accumulate_boolean(
+        self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let current_value = self.values.get_bit(group_index);
-                let value = (self.bool_fn)(current_value, new_value);
-                self.values.set_bit(group_index, value);
+                let value = &mut self.values[group_index];
+                (self.prim_fn)(value, new_value);
             },
         );
 
@@ -98,22 +112,10 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = self.values.finish();
-
-        let values = match emit_to {
-            EmitTo::All => values,
-            EmitTo::First(n) => {
-                let first_n: BooleanBuffer = values.iter().take(n).collect();
-                // put n+1 back into self.values
-                for v in values.iter().skip(n) {
-                    self.values.append(v);
-                }
-                first_n
-            }
-        };
-
+        let values = emit_to.take_needed(&mut self.values);
         let nulls = self.null_state.build(emit_to);
-        let values = BooleanArray::new(values, Some(nulls));
+        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
+            .with_data_type(self.data_type.clone());
         Ok(Arc::new(values))
     }
 
@@ -133,7 +135,6 @@ where
     }
 
     fn size(&self) -> usize {
-        // capacity is in bits, so convert to bytes
-        self.values.capacity() / 8 + self.null_state.size()
+        self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
     }
 }

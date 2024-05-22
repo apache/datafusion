@@ -625,7 +625,7 @@ impl LogicalPlan {
                 let expr = node.expressions();
                 let inputs: Vec<_> = node.inputs().into_iter().cloned().collect();
                 Ok(LogicalPlan::Extension(Extension {
-                    node: node.from_template(&expr, &inputs),
+                    node: node.with_exprs_and_inputs(expr, inputs)?,
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
@@ -923,7 +923,7 @@ impl LogicalPlan {
                 definition: definition.clone(),
             }))),
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
-                node: e.node.from_template(&expr, &inputs),
+                node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
             LogicalPlan::Union(Union { schema, .. }) => {
                 let input_schema = inputs[0].schema();

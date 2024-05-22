@@ -248,16 +248,10 @@ fn build_join(
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
 
-    let mut pull_up = PullUpCorrelatedExpr {
-        join_filters: vec![],
-        correlated_subquery_cols_map: Default::default(),
-        in_predicate_opt: in_predicate_opt.clone(),
-        exists_sub_query: in_predicate_opt.is_none(),
-        can_pull_up: true,
-        need_handle_count_bug: false,
-        collected_count_expr_map: Default::default(),
-        pull_up_having_expr: None,
-    };
+    let mut pull_up = PullUpCorrelatedExpr::new()
+        .with_in_predicate_opt(in_predicate_opt.clone())
+        .with_exists_sub_query(in_predicate_opt.is_none());
+
     let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);

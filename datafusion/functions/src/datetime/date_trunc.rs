@@ -29,19 +29,18 @@ use arrow::array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{Array, PrimitiveArray};
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
-use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
-use chrono::{
-    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
-};
-
+use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8};
+use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-    TIMEZONE_WILDCARD,
+    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+};
+
+use chrono::{
+    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
 
 #[derive(Debug)]
@@ -205,8 +204,16 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.aliases
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![None, Some(true)]))
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // The DATE_TRUNC function preserves the order of its second argument.
+        let precision = &input[0];
+        let date_value = &input[1];
+
+        if precision.sort_properties.eq(&SortProperties::Singleton) {
+            Ok(date_value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 }
 
@@ -410,7 +417,10 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::datetime::date_trunc::{date_trunc_coarse, DateTruncFunc};
+
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::TimestampNanosecondArray;
@@ -418,7 +428,6 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-    use std::sync::Arc;
 
     #[test]
     fn date_trunc_test() {

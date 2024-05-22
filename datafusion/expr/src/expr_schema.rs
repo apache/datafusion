@@ -17,11 +17,9 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
-    Sort, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
-use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::data_types_with_scalar_udf;
 use crate::{utils, LogicalPlan, Projection, Subquery};
@@ -214,9 +212,6 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                field_for_index(expr, field, schema).map(|x| x.data_type().clone())
-            }
         }
     }
 
@@ -320,16 +315,6 @@ impl ExprSchemable for Expr {
             Expr::Wildcard { .. } => internal_err!(
                 "Wildcard expressions are not valid in a logical query plan"
             ),
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                // If schema is nested, check if parent is nullable
-                // if it is, return early
-                if let Expr::Column(col) = expr.as_ref() {
-                    if input_schema.nullable(col)? {
-                        return Ok(true);
-                    }
-                }
-                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
-            }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
                 // in projections
@@ -473,33 +458,6 @@ impl ExprSchemable for Expr {
     }
 }
 
-/// return the schema [`Field`] for the type referenced by `get_indexed_field`
-fn field_for_index(
-    expr: &Expr,
-    field: &GetFieldAccess,
-    schema: &dyn ExprSchema,
-) -> Result<Field> {
-    let expr_dt = expr.get_type(schema)?;
-    match field {
-        GetFieldAccess::NamedStructField { name } => {
-            GetFieldAccessSchema::NamedStructField { name: name.clone() }
-        }
-        GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
-            key_dt: key.get_type(schema)?,
-        },
-        GetFieldAccess::ListRange {
-            start,
-            stop,
-            stride,
-        } => GetFieldAccessSchema::ListRange {
-            start_dt: start.get_type(schema)?,
-            stop_dt: stop.get_type(schema)?,
-            stride_dt: stride.get_type(schema)?,
-        },
-    }
-    .get_accessed_field(&expr_dt)
-}
-
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
@@ -536,7 +494,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{Fields, SchemaBuilder};
+
     use datafusion_common::{DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
@@ -671,31 +629,6 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
-    }
-
-    #[test]
-    fn test_nested_schema_nullability() {
-        let mut builder = SchemaBuilder::new();
-        builder.push(Field::new("foo", DataType::Int32, true));
-        builder.push(Field::new(
-            "parent",
-            DataType::Struct(Fields::from(vec![Field::new(
-                "child",
-                DataType::Int64,
-                false,
-            )])),
-            true,
-        ));
-        let schema = builder.finish();
-
-        let dfschema = DFSchema::from_field_specific_qualified_schema(
-            vec![Some("table_name".into()), None],
-            &Arc::new(schema),
-        )
-        .unwrap();
-
-        let expr = col("parent").field("child");
-        assert!(expr.nullable(&dfschema).unwrap());
     }
 
     #[derive(Debug)]

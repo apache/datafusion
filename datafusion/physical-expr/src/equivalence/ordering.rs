@@ -223,25 +223,25 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
 mod tests {
     use std::sync::Arc;
 
+    use crate::equivalence::tests::{
+        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
+        create_test_params, create_test_schema, generate_table_for_eq_properties,
+        is_table_same_after_sort,
+    };
+    use crate::equivalence::{
+        EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
+        OrderingEquivalenceClass,
+    };
+    use crate::expressions::{col, BinaryExpr, Column};
+    use crate::utils::tests::TestScalarUDF;
+    use crate::{PhysicalExpr, PhysicalSortExpr};
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
-    use itertools::Itertools;
-
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
 
-    use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
-        create_test_params, generate_table_for_eq_properties, is_table_same_after_sort,
-    };
-    use crate::equivalence::{tests::create_test_schema, EquivalenceProperties};
-    use crate::equivalence::{
-        EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
-    };
-    use crate::expressions::Column;
-    use crate::expressions::{col, BinaryExpr};
-    use crate::utils::tests::TestScalarUDF;
-    use crate::{PhysicalExpr, PhysicalSortExpr};
+    use itertools::Itertools;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -883,7 +883,7 @@ mod tests {
         };
         // a=c (e.g they are aliases).
         let mut eq_properties = EquivalenceProperties::new(test_schema);
-        eq_properties.add_equal_conditions(col_a, col_c);
+        eq_properties.add_equal_conditions(col_a, col_c)?;
 
         let orderings = vec![
             vec![(col_a, options)],

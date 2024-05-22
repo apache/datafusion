@@ -34,6 +34,7 @@ pub mod concat;
 pub mod dimension;
 pub mod empty;
 pub mod except;
+pub mod expr_ext;
 pub mod extract;
 pub mod flatten;
 pub mod length;

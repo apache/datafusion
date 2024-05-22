@@ -354,7 +354,6 @@ pub fn parse_physical_expr(
                 scalar_fun_def,
                 args,
                 convert_required!(e.return_type)?,
-                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(

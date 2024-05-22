@@ -41,6 +41,7 @@ use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod arrow_statistics;
 mod custom_reader;
 mod file_statistics;
 #[cfg(not(target_family = "windows"))]
@@ -48,6 +49,7 @@ mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
 mod schema;
+mod schema_adapter;
 mod schema_coercion;
 
 #[cfg(test)]
@@ -425,7 +427,7 @@ fn make_int_batches(start: i8, end: i8) -> RecordBatch {
     .unwrap()
 }
 
-/// Return record batch with i8, i16, i32, and i64 sequences
+/// Return record batch with u8, u16, u32, and u64 sequences
 ///
 /// Columns are named
 /// "u8" -> UInt8Array
