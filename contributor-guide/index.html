@@ -602,23 +602,40 @@ ideas with the community to get feedback on implementation.</p>
 <h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Link to this heading">¶</a></h1>
 <section id="pull-request-overview">
 <h2>Pull Request Overview<a class="headerlink" href="#pull-request-overview" title="Link to this heading">¶</a></h2>
-<p>We welcome pull requests (PRs) from anyone from the community.</p>
-<p>DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the <a class="reference external" href="https://people.apache.org/phonebook.html?unix=datafusion">committers</a> will merge your PR.</p>
+<p>We welcome pull requests (PRs) from anyone in the community.</p>
+<p>DataFusion is a rapidly evolving project and we try to review and merge PRs quickly.</p>
 <p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
+<p>The lifecycle of a PR is:</p>
+<ol class="arabic simple">
+<li><p>Create a PR targeting the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch.</p></li>
+<li><p>For new contributors a committer must first trigger the CI tasks. Please mention the members from committers list in the PR to help trigger the CI</p></li>
+<li><p>Your PR will be reviewed. Please respond to all feedback on the PR: you don’t have to change the code, but you should acknowledge the feedback. PRs waiting for the feedback for more than a few days will be marked as draft.</p></li>
+<li><p>Once the PR is approved, one of the <a class="reference external" href="https://people.apache.org/phonebook.html?unix=datafusion">committers</a> will merge your PR, typically within 24 hours. We leave approved “major” changes (see below) open for 24 hours prior to merging, and sometimes leave “minor” PRs open for the same time to permit additional feedback.</p></li>
+</ol>
+<p>Note that the above time frames are estimates. Due to limited committer
+bandwidth, it may take longer to merge your PR. Please wait
+patiently. If it has been several days you can friendly ping the
+committer who approved your PR to help remind them to merge it.</p>
 </section>
 <section id="creating-pull-requests">
 <h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Link to this heading">¶</a></h2>
-<p>We recommend splitting your contributions into smaller PRs rather than large PRs (500+ lines) because:</p>
+<p>We recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:</p>
 <ol class="arabic simple">
 <li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
 <li><p>The PR discussions tend to be more focused and less likely to get lost among several different threads.</p></li>
 <li><p>It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.</p></li>
 </ol>
 <p>If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.</p>
+<p>Note all commits in a PR are squashed when merged to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch so there is one commit per PR.</p>
 </section>
 </section>
 <section id="reviewing-pull-requests">
 <h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">¶</a></h1>
+<p>Some helpful links:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft">Approved PRs Waiting for Merge</a></p></li>
+</ul>
 <p>When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.</p>
 <p>Please ensure any issues you raise contains a rationale and suggested alternative – it is frustrating to be told “don’t do it this way” without any clear reason or alternate provided.</p>
 <p>Some things to specifically check:</p>
