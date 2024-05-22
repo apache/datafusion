@@ -26,7 +26,7 @@ fn main() -> Result<(), String> {
     let out_dir = Path::new("datafusion/proto/src");
 
     // proto definitions has to be there
-    let descriptor_path = proto_dir.join("proto_descriptor.bin");
+    let descriptor_path = proto_dir.join("proto/proto_descriptor.bin");
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
