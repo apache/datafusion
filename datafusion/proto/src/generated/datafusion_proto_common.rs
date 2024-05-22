@@ -13,3 +13,294 @@ pub struct Column {
     #[prost(message, optional, tag = "2")]
     pub relation: ::core::option::Option<ColumnRelation>,
 }
+/// Useful for representing an empty enum variant in rust
+/// E.G. enum example{One, Two(i32)}
+/// maps to
+/// message example{
+///     oneof{
+///         EmptyMessage One = 1;
+///         i32 Two = 2;
+///    }
+/// }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EmptyMessage {}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Timestamp {
+    #[prost(enumeration = "TimeUnit", tag = "1")]
+    pub time_unit: i32,
+    #[prost(string, tag = "2")]
+    pub timezone: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal {
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct List {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub field_type: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FixedSizeList {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub field_type: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+    #[prost(int32, tag = "2")]
+    pub list_size: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Struct {
+    #[prost(message, repeated, tag = "1")]
+    pub sub_field_types: ::prost::alloc::vec::Vec<Field>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Union {
+    #[prost(message, repeated, tag = "1")]
+    pub union_types: ::prost::alloc::vec::Vec<Field>,
+    #[prost(enumeration = "UnionMode", tag = "2")]
+    pub union_mode: i32,
+    #[prost(int32, repeated, tag = "3")]
+    pub type_ids: ::prost::alloc::vec::Vec<i32>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Dictionary {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<ArrowType>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ArrowType>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Map {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub field_type: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+    #[prost(bool, tag = "2")]
+    pub keys_sorted: bool,
+}
+/// Serialized data type
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowType {
+    #[prost(
+        oneof = "arrow_type::ArrowTypeEnum",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 15, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
+    )]
+    pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
+}
+/// Nested message and enum types in `ArrowType`.
+pub mod arrow_type {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ArrowTypeEnum {
+        /// arrow::Type::NA
+        #[prost(message, tag = "1")]
+        None(super::EmptyMessage),
+        /// arrow::Type::BOOL
+        #[prost(message, tag = "2")]
+        Bool(super::EmptyMessage),
+        /// arrow::Type::UINT8
+        #[prost(message, tag = "3")]
+        Uint8(super::EmptyMessage),
+        /// arrow::Type::INT8
+        #[prost(message, tag = "4")]
+        Int8(super::EmptyMessage),
+        /// represents arrow::Type fields in src/arrow/type.h
+        #[prost(message, tag = "5")]
+        Uint16(super::EmptyMessage),
+        #[prost(message, tag = "6")]
+        Int16(super::EmptyMessage),
+        #[prost(message, tag = "7")]
+        Uint32(super::EmptyMessage),
+        #[prost(message, tag = "8")]
+        Int32(super::EmptyMessage),
+        #[prost(message, tag = "9")]
+        Uint64(super::EmptyMessage),
+        #[prost(message, tag = "10")]
+        Int64(super::EmptyMessage),
+        #[prost(message, tag = "11")]
+        Float16(super::EmptyMessage),
+        #[prost(message, tag = "12")]
+        Float32(super::EmptyMessage),
+        #[prost(message, tag = "13")]
+        Float64(super::EmptyMessage),
+        #[prost(message, tag = "14")]
+        Utf8(super::EmptyMessage),
+        #[prost(message, tag = "32")]
+        LargeUtf8(super::EmptyMessage),
+        #[prost(message, tag = "15")]
+        Binary(super::EmptyMessage),
+        #[prost(int32, tag = "16")]
+        FixedSizeBinary(i32),
+        #[prost(message, tag = "31")]
+        LargeBinary(super::EmptyMessage),
+        #[prost(message, tag = "17")]
+        Date32(super::EmptyMessage),
+        #[prost(message, tag = "18")]
+        Date64(super::EmptyMessage),
+        #[prost(enumeration = "super::TimeUnit", tag = "19")]
+        Duration(i32),
+        #[prost(message, tag = "20")]
+        Timestamp(super::Timestamp),
+        #[prost(enumeration = "super::TimeUnit", tag = "21")]
+        Time32(i32),
+        #[prost(enumeration = "super::TimeUnit", tag = "22")]
+        Time64(i32),
+        #[prost(enumeration = "super::IntervalUnit", tag = "23")]
+        Interval(i32),
+        #[prost(message, tag = "24")]
+        Decimal(super::Decimal),
+        #[prost(message, tag = "25")]
+        List(::prost::alloc::boxed::Box<super::List>),
+        #[prost(message, tag = "26")]
+        LargeList(::prost::alloc::boxed::Box<super::List>),
+        #[prost(message, tag = "27")]
+        FixedSizeList(::prost::alloc::boxed::Box<super::FixedSizeList>),
+        #[prost(message, tag = "28")]
+        Struct(super::Struct),
+        #[prost(message, tag = "29")]
+        Union(super::Union),
+        #[prost(message, tag = "30")]
+        Dictionary(::prost::alloc::boxed::Box<super::Dictionary>),
+        #[prost(message, tag = "33")]
+        Map(::prost::alloc::boxed::Box<super::Map>),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Field {
+    /// name of the field
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub arrow_type: ::core::option::Option<::prost::alloc::boxed::Box<ArrowType>>,
+    #[prost(bool, tag = "3")]
+    pub nullable: bool,
+    /// for complex data types like structs, unions
+    #[prost(message, repeated, tag = "4")]
+    pub children: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "5")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    #[prost(int64, tag = "6")]
+    pub dict_id: i64,
+    #[prost(bool, tag = "7")]
+    pub dict_ordered: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DfField {
+    #[prost(message, optional, tag = "1")]
+    pub field: ::core::option::Option<Field>,
+    #[prost(message, optional, tag = "2")]
+    pub qualifier: ::core::option::Option<ColumnRelation>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DfSchema {
+    #[prost(message, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<DfField>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TimeUnit {
+    Second = 0,
+    Millisecond = 1,
+    Microsecond = 2,
+    Nanosecond = 3,
+}
+impl TimeUnit {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            TimeUnit::Second => "Second",
+            TimeUnit::Millisecond => "Millisecond",
+            TimeUnit::Microsecond => "Microsecond",
+            TimeUnit::Nanosecond => "Nanosecond",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Second" => Some(Self::Second),
+            "Millisecond" => Some(Self::Millisecond),
+            "Microsecond" => Some(Self::Microsecond),
+            "Nanosecond" => Some(Self::Nanosecond),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum IntervalUnit {
+    YearMonth = 0,
+    DayTime = 1,
+    MonthDayNano = 2,
+}
+impl IntervalUnit {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            IntervalUnit::YearMonth => "YearMonth",
+            IntervalUnit::DayTime => "DayTime",
+            IntervalUnit::MonthDayNano => "MonthDayNano",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "YearMonth" => Some(Self::YearMonth),
+            "DayTime" => Some(Self::DayTime),
+            "MonthDayNano" => Some(Self::MonthDayNano),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum UnionMode {
+    Sparse = 0,
+    Dense = 1,
+}
+impl UnionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            UnionMode::Sparse => "sparse",
+            UnionMode::Dense => "dense",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "sparse" => Some(Self::Sparse),
+            "dense" => Some(Self::Dense),
+            _ => None,
+        }
+    }
+}

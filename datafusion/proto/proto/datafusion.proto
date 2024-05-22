@@ -26,16 +26,6 @@ option java_outer_classname = "DatafusionProto";
 
 import "datafusion/proto-common/proto/datafusion_common.proto";
 
-message DfField{
-  Field field = 1;
-  datafusion_common.ColumnRelation qualifier = 2;
-}
-
-message DfSchema {
-  repeated DfField columns = 1;
-  map<string, string> metadata = 2;
-}
-
 // logical plan
 // LogicalPlan is a nested type
 message LogicalPlanNode {
@@ -195,7 +185,7 @@ message CreateExternalTableNode {
   TableReference name = 9;
   string location = 2;
   string file_type = 3;
-  DfSchema schema = 4;
+  datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
   string definition = 7;
@@ -208,26 +198,26 @@ message CreateExternalTableNode {
 
 message PrepareNode {
   string name = 1;
-  repeated ArrowType data_types = 2;
+  repeated datafusion_common.ArrowType data_types = 2;
   LogicalPlanNode input = 3;
 }
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
   bool if_not_exists = 2;
-  DfSchema schema = 3;
+  datafusion_common.DfSchema schema = 3;
 }
 
 message CreateCatalogNode {
   string catalog_name = 1;
   bool if_not_exists = 2;
-  DfSchema schema = 3;
+  datafusion_common.DfSchema schema = 3;
 }
 
 message DropViewNode {
   TableReference name = 1;
   bool if_exists = 2;
-  DfSchema schema = 3;
+  datafusion_common.DfSchema schema = 3;
 }
 
 message CreateViewNode {
@@ -419,7 +409,7 @@ message Wildcard {
 
 message PlaceholderNode {
   string id = 1;
-  ArrowType data_type = 2;
+  datafusion_common.ArrowType data_type = 2;
 }
 
 message LogicalExprList {
@@ -657,12 +647,12 @@ message WhenThen {
 
 message CastNode {
   LogicalExprNode expr = 1;
-  ArrowType arrow_type = 2;
+  datafusion_common.ArrowType arrow_type = 2;
 }
 
 message TryCastNode {
   LogicalExprNode expr = 1;
-  ArrowType arrow_type = 2;
+  datafusion_common.ArrowType arrow_type = 2;
 }
 
 message SortExprNode {
@@ -703,87 +693,17 @@ message WindowFrameBound {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 message Schema {
-  repeated Field columns = 1;
+  repeated datafusion_common.Field columns = 1;
   map<string, string> metadata = 2;
-}
-
-message Field {
-  // name of the field
-  string name = 1;
-  ArrowType arrow_type = 2;
-  bool nullable = 3;
-  // for complex data types like structs, unions
-  repeated Field children = 4;
-  map<string, string> metadata = 5;
-  int64 dict_id = 6;
-  bool dict_ordered = 7;
 }
 
 message FixedSizeBinary{
   int32 length = 1;
 }
 
-message Timestamp{
-  TimeUnit time_unit = 1;
-  string timezone = 2;
-}
-
 enum DateUnit{
   Day = 0;
   DateMillisecond = 1;
-}
-
-enum TimeUnit{
-  Second = 0;
-  Millisecond = 1;
-  Microsecond = 2;
-  Nanosecond = 3;
-}
-
-enum IntervalUnit{
-  YearMonth = 0;
-  DayTime = 1;
-  MonthDayNano = 2;
-}
-
-message Decimal{
-  reserved 1, 2;
-  uint32 precision = 3;
-  int32 scale = 4;
-}
-
-message List{
-  Field field_type = 1;
-}
-
-message FixedSizeList{
-  Field field_type = 1;
-  int32 list_size = 2;
-}
-
-message Dictionary{
-  ArrowType key = 1;
-  ArrowType value = 2;
-}
-
-message Struct{
-  repeated Field sub_field_types = 1;
-}
-
-message Map {
-  Field field_type = 1;
-  bool keys_sorted = 2;
-}
-
-enum UnionMode{
-  sparse = 0;
-  dense = 1;
-}
-
-message Union{
-  repeated Field union_types = 1;
-  UnionMode union_mode = 2;
-  repeated int32 type_ids = 3;
 }
 
 // Used for List/FixedSizeList/LargeList/Struct
@@ -824,7 +744,7 @@ message ScalarTimestampValue {
 }
 
 message ScalarDictionaryValue {
-  ArrowType index_type = 1;
+  datafusion_common.ArrowType index_type = 1;
   ScalarValue value = 2;
 }
 
@@ -836,7 +756,7 @@ message IntervalMonthDayNanoValue {
 
 message UnionField {
   int32 field_id = 1;
-  Field field = 2;
+  datafusion_common.Field field = 2;
 }
 
 message UnionValue {
@@ -845,7 +765,7 @@ message UnionValue {
   int32 value_id = 1;
   ScalarValue value = 2;
   repeated UnionField fields = 3;
-  UnionMode mode = 4;
+  datafusion_common.UnionMode mode = 4;
 }
 
 message ScalarFixedSizeBinary{
@@ -860,7 +780,7 @@ message ScalarValue{
   oneof value {
     // was PrimitiveScalarType null_value = 19;
     // Null value of any type
-    ArrowType null_value = 33;
+    datafusion_common.ArrowType null_value = 33;
 
     bool   bool_value = 1;
     string utf8_value = 2;
@@ -918,56 +838,6 @@ message Decimal256{
   int64 s = 3;
 }
 
-// Serialized data type
-message ArrowType{
-  oneof arrow_type_enum {
-    EmptyMessage NONE = 1;     // arrow::Type::NA
-    EmptyMessage BOOL = 2;     // arrow::Type::BOOL
-    EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
-    EmptyMessage INT8 = 4;     // arrow::Type::INT8
-    EmptyMessage UINT16 = 5;   // represents arrow::Type fields in src/arrow/type.h
-    EmptyMessage INT16 = 6;
-    EmptyMessage UINT32 = 7;
-    EmptyMessage INT32 = 8;
-    EmptyMessage UINT64 = 9;
-    EmptyMessage INT64 = 10 ;
-    EmptyMessage FLOAT16 = 11 ;
-    EmptyMessage FLOAT32 = 12 ;
-    EmptyMessage FLOAT64 = 13 ;
-    EmptyMessage UTF8 = 14 ;
-    EmptyMessage LARGE_UTF8 = 32;
-    EmptyMessage BINARY = 15 ;
-    int32 FIXED_SIZE_BINARY = 16 ;
-    EmptyMessage LARGE_BINARY = 31;
-    EmptyMessage DATE32 = 17 ;
-    EmptyMessage DATE64 = 18 ;
-    TimeUnit DURATION = 19;
-    Timestamp TIMESTAMP = 20 ;
-    TimeUnit TIME32 = 21 ;
-    TimeUnit TIME64 = 22 ;
-    IntervalUnit INTERVAL = 23 ;
-    Decimal DECIMAL = 24 ;
-    List LIST = 25;
-    List LARGE_LIST = 26;
-    FixedSizeList FIXED_SIZE_LIST = 27;
-    Struct STRUCT = 28;
-    Union UNION = 29;
-    Dictionary DICTIONARY = 30;
-    Map MAP = 33;
-  }
-}
-
-//Useful for representing an empty enum variant in rust
-// E.G. enum example{One, Two(i32)}
-// maps to
-// message example{
-//    oneof{
-//        EmptyMessage One = 1;
-//        i32 Two = 2;
-//   }
-//}
-message EmptyMessage{}
-
 message AnalyzedLogicalPlanType {
   string analyzer_name = 1;
 }
@@ -982,16 +852,16 @@ message OptimizedPhysicalPlanType {
 
 message PlanType {
   oneof plan_type_enum {
-    EmptyMessage InitialLogicalPlan = 1;
+    datafusion_common.EmptyMessage InitialLogicalPlan = 1;
     AnalyzedLogicalPlanType AnalyzedLogicalPlan = 7;
-    EmptyMessage FinalAnalyzedLogicalPlan = 8;
+    datafusion_common.EmptyMessage FinalAnalyzedLogicalPlan = 8;
     OptimizedLogicalPlanType OptimizedLogicalPlan = 2;
-    EmptyMessage FinalLogicalPlan = 3;
-    EmptyMessage InitialPhysicalPlan = 4;
-    EmptyMessage InitialPhysicalPlanWithStats = 9;
+    datafusion_common.EmptyMessage FinalLogicalPlan = 3;
+    datafusion_common.EmptyMessage InitialPhysicalPlan = 4;
+    datafusion_common.EmptyMessage InitialPhysicalPlanWithStats = 9;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
-    EmptyMessage FinalPhysicalPlan = 6;
-    EmptyMessage FinalPhysicalPlanWithStats = 10;
+    datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
+    datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
   }
 }
 
@@ -1069,7 +939,7 @@ enum CompressionTypeVariant {
 
 message PartitionColumn {
   string name = 1;
-  ArrowType arrow_type = 2;
+  datafusion_common.ArrowType arrow_type = 2;
 }
 
 
@@ -1322,7 +1192,7 @@ message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
-  ArrowType return_type = 4;
+  datafusion_common.ArrowType return_type = 4;
 }
 
 message PhysicalAggregateExprNode {
@@ -1409,12 +1279,12 @@ message PhysicalCaseNode {
 
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
-  ArrowType arrow_type = 2;
+  datafusion_common.ArrowType arrow_type = 2;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
-  ArrowType arrow_type = 2;
+  datafusion_common.ArrowType arrow_type = 2;
 }
 
 message PhysicalNegativeNode {
@@ -1579,9 +1449,9 @@ message WindowAggExecNode {
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
   oneof input_order_mode {
-    EmptyMessage linear = 7;
+    datafusion_common.EmptyMessage linear = 7;
     PartiallySortedInputOrderMode partially_sorted = 8;
-    EmptyMessage sorted = 9;
+    datafusion_common.EmptyMessage sorted = 9;
   }
 }
 
