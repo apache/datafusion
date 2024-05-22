@@ -75,6 +75,12 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Int8) => {
+                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Int16) => {
+                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
