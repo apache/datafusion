@@ -212,7 +212,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             .map(|o| o.value().clone())
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
-                    "No suitable object store found for {url}"
+                    "No suitable object store found for {url}. See `RuntimeEnv::register_object_store`"
                 ))
             })
     }

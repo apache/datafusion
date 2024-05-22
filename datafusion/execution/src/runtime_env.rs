@@ -89,6 +89,27 @@ impl RuntimeEnv {
     /// scheme, if any.
     ///
     /// See [`ObjectStoreRegistry`] for more details
+    ///
+    /// # Examples
+    ///
+    /// Here's how to set up a local file system object store:
+    /// ```
+    /// let url = Url::try_from("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// ctx.runtime_env()
+    ///    .register_object_store(&url, Arc::new(object_store));
+    /// ```
+    ///
+    /// Or how to set up a http object store:
+    /// ```
+    /// let base_url = Url::parse("https://github.com").unwrap();
+    /// let http_store = HttpBuilder::new()
+    ///     .with_url(base_url.clone())
+    ///     .build()
+    ///     .unwrap();
+    /// ctx.runtime_env()
+    ///     .register_object_store(&base_url, Arc::new(http_store));
+    /// ```
     pub fn register_object_store(
         &self,
         url: &Url,
