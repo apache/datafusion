@@ -44,6 +44,7 @@ use datafusion_expr::{
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 
+use datafusion_proto_common::protobuf_common as protobuf_common;
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -233,7 +234,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
 impl From<Column> for protobuf::Column {
     fn from(c: Column) -> Self {
         Self {
-            relation: c.relation.map(|relation| protobuf::ColumnRelation {
+            relation: c.relation.map(|relation| protobuf_common::ColumnRelation {
                 relation: relation.to_string(),
             }),
             name: c.name,
@@ -278,7 +279,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
             .map(|(qualifier, field)| {
                 Ok(protobuf::DfField {
                     field: Some(field.as_ref().try_into()?),
-                    qualifier: qualifier.map(|r| protobuf::ColumnRelation {
+                    qualifier: qualifier.map(|r| protobuf_common::ColumnRelation {
                         relation: r.to_string(),
                     }),
                 })

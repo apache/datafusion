@@ -32,6 +32,8 @@ members = [
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
+    "datafusion/proto-common",
+    "datafusion/proto-common/gen",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",

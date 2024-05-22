@@ -14,15 +14,3 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
-#[allow(clippy::all)]
-#[rustfmt::skip]
-pub mod datafusion {
-    include!("prost.rs");
-    include!("datafusion_proto_common.rs");
-
-    #[cfg(feature = "json")]
-    include!("pbjson.rs");
-}
-
-pub use datafusion_proto_common::protobuf_common as datafusion_common;
