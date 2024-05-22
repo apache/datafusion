@@ -63,6 +63,7 @@ use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::arrow::array::GenericListArray;
 use datafusion::common::plan_err;
+use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -1317,6 +1318,18 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                     return substrait_err!("Unknown type variation reference {others}");
                 }
             }
+        }
+        Some(LiteralType::Struct(s)) => {
+            let mut builder = ScalarStructBuilder::new();
+            for (i, field) in s.fields.iter().enumerate() {
+                let sv = from_substrait_literal(field)?;
+                // c0, c1, ... align with e.g. SqlToRel::create_named_struct
+                builder = builder.with_scalar(
+                    Field::new(&format!("c{i}"), sv.data_type(), field.nullable),
+                    sv,
+                );
+            }
+            builder.build()?
         }
         Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
