@@ -70,7 +70,6 @@ fn create_parquet_file(dtype: TestTypes, row_groups: usize) -> NamedTempFile {
             DataType::Dictionary(Box::new(Int32), Box::new(Utf8)),
             true,
         )])),
-        _ => panic!("Unsupported data type"),
     };
 
     let props = WriterProperties::builder().build();
