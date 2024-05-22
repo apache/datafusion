@@ -1283,7 +1283,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             let elements = l
                 .values
                 .iter()
-                .map(|el| from_substrait_literal(el))
+                .map(from_substrait_literal)
                 .collect::<Result<Vec<_>>>()?;
             let element_type = elements[0].data_type();
             match lit.type_variation_reference {

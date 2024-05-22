@@ -1772,7 +1772,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let et = match to_substrait_type(&array.data_type())? {
+        let et = match to_substrait_type(array.data_type())? {
             substrait::proto::Type {
                 kind: Some(r#type::Kind::List(lt)),
             } => lt.as_ref().to_owned(),
