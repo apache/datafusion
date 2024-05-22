@@ -94,9 +94,6 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
-                    Some(DataType::Date64) => {
-                        Some(ScalarValue::Date64(Some((*s.$func()))))
-                    }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
             }
