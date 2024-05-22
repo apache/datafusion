@@ -500,7 +500,7 @@ macro_rules! typed_min_max_string {
     }};
 }
 
-macro_rules! interval_choose_min_max {
+macro_rules! cmp_choose_min_max {
     (min) => {
         std::cmp::Ordering::Greater
     };
@@ -509,10 +509,11 @@ macro_rules! interval_choose_min_max {
     };
 }
 
-macro_rules! interval_min_max {
+// Use ScalarValue::partial_cmp to compare the values
+macro_rules! cmp_min_max {
     ($OP:tt, $LHS:expr, $RHS:expr) => {{
         match $LHS.partial_cmp(&$RHS) {
-            Some(interval_choose_min_max!($OP)) => $RHS.clone(),
+            Some(cmp_choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
                 return internal_err!("Comparison error while computing interval min/max")
@@ -554,11 +555,11 @@ macro_rules! min_max {
             (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
                 typed_min_max!(lhs, rhs, Boolean, $OP)
             }
-            (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-                typed_min_max!(lhs, rhs, Float64, $OP)
+            (ScalarValue::Float64(_), ScalarValue::Float64(_)) => {
+                cmp_min_max!($OP, $VALUE, $DELTA)
             }
-            (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-                typed_min_max!(lhs, rhs, Float32, $OP)
+            (ScalarValue::Float32(_), ScalarValue::Float32(_)) => {
+                cmp_min_max!($OP, $VALUE, $DELTA)
             }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
                 typed_min_max!(lhs, rhs, UInt64, $OP)
@@ -690,7 +691,7 @@ macro_rules! min_max {
                 ScalarValue::IntervalDayTime(_),
                 ScalarValue::IntervalMonthDayNano(_),
             ) => {
-                interval_min_max!($OP, $VALUE, $DELTA)
+                cmp_min_max!($OP, $VALUE, $DELTA)
             }
                     (
                 ScalarValue::DurationSecond(lhs),
@@ -1101,5 +1102,38 @@ impl Accumulator for SlidingMinAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn float_max_with_nans() {
+        let pos_nan = f32::NAN;
+        let zero = 0_f32;
+
+        let vals_float = Float32Array::from_iter_values([zero, pos_nan].iter().copied());
+
+        let vals: ArrayRef = Arc::new(vals_float.clone());
+
+        // We accumulate the above two rows in two different ways.  First, we pass in both as a single batch
+        let mut accumulator = MaxAccumulator::try_new(&DataType::Float32).unwrap();
+        accumulator.update_batch(&[vals]).unwrap();
+        let single_batch_result = &accumulator.evaluate().unwrap();
+
+        // Next we pass the two values in two different batches.
+        let vals_a: ArrayRef =
+            Arc::new(Float32Array::from_iter_values([pos_nan].iter().copied()));
+        let vals_b: ArrayRef =
+            Arc::new(Float32Array::from_iter_values([zero].iter().copied()));
+
+        let mut accumulator = MaxAccumulator::try_new(&DataType::Float32).unwrap();
+        accumulator.update_batch(&[vals_a]).unwrap();
+        accumulator.update_batch(&[vals_b]).unwrap();
+        let split_batch_result = &accumulator.evaluate().unwrap();
+
+        assert_eq!(single_batch_result, split_batch_result);
     }
 }
