@@ -81,7 +81,7 @@ impl ScalarUDFImpl for LogFunc {
         }
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         match (input[0].sort_properties, input[1].sort_properties) {
             (first @ SortProperties::Ordered(value), SortProperties::Ordered(base))
                 if !value.descending && base.descending

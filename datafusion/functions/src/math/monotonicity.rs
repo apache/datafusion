@@ -28,7 +28,7 @@ fn symmetric_unit_interval(data_type: &DataType) -> Result<Interval> {
 }
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
-pub fn acos_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -42,7 +42,7 @@ pub fn acos_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing for x ≥ 1, undefined otherwise.
-pub fn acosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn acosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -59,7 +59,7 @@ pub fn acosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
-pub fn asin_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn asin_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -73,17 +73,17 @@ pub fn asin_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing for all real numbers.
-pub fn asinh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn asinh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn atan_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn atan_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
-pub fn atanh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -96,31 +96,31 @@ pub fn atanh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
     }
 }
 
-/// Monotonicity depends on the quadrant.
-// TODO: Implement monotonicity of the ATAN2 function.
-pub fn atan2_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
+/// Order depends on the quadrant.
+// TODO: Implement ordering rule of the ATAN2 function.
+pub fn atan2_order(_input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(SortProperties::Unordered)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn cbrt_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn cbrt_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn ceil_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn ceil_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
-// TODO: Implement monotonicity of the ATAN2 function.
-pub fn cos_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
+// TODO: Implement ordering rule of the ATAN2 function.
+pub fn cos_order(_input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(SortProperties::Unordered)
 }
 
 /// Non-decreasing for x ≥ 0 and symmetrically non-increasing for x ≤ 0.
-pub fn cosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn cosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -136,22 +136,22 @@ pub fn cosh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing function that converts radians to degrees.
-pub fn degrees_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn degrees_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn exp_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn exp_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn floor_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn floor_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
-pub fn ln_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn ln_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -165,7 +165,7 @@ pub fn ln_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
-pub fn log2_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn log2_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -179,7 +179,7 @@ pub fn log2_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
-pub fn log10_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn log10_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -193,29 +193,29 @@ pub fn log10_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 }
 
 /// Non-decreasing for all real numbers x.
-pub fn radians_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn radians_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for all real numbers x.
-pub fn signum_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn signum_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing on \[0, π\] and then non-increasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
-// TODO: Implement monotonicity of the SIN function.
-pub fn sin_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
+// TODO: Implement ordering rule of the SIN function.
+pub fn sin_order(_input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(SortProperties::Unordered)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn sinh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn sinh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
-pub fn sqrt_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn sqrt_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
@@ -230,12 +230,12 @@ pub fn sqrt_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
 
 /// Non-decreasing between vertical asymptotes at x = k * π ± π / 2 for any
 /// integer k.
-// TODO: Implement monotonicity of the TAN function.
-pub fn tan_monotonicity(_input: &[ExprProperties]) -> Result<SortProperties> {
+// TODO: Implement ordering rule of the TAN function.
+pub fn tan_order(_input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(SortProperties::Unordered)
 }
 
 /// Non-decreasing for all real numbers.
-pub fn tanh_monotonicity(input: &[ExprProperties]) -> Result<SortProperties> {
+pub fn tanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }

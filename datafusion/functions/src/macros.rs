@@ -154,9 +154,9 @@ macro_rules! downcast_arg {
 /// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
-/// $MONOTONIC_FUNC: the monotonicity of the function
+/// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $MONOTONICITY:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
@@ -209,11 +209,11 @@ macro_rules! make_math_unary_udf {
                     }
                 }
 
-                fn monotonicity(
+                fn output_ordering(
                     &self,
                     input: &[ExprProperties],
                 ) -> Result<SortProperties> {
-                    $MONOTONICITY(input)
+                    $OUTPUT_ORDERING(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -261,9 +261,9 @@ macro_rules! make_math_unary_udf {
 /// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $BINARY_FUNC: the binary function to apply to the argument
-/// $MONOTONIC_FUNC: the monotonicity of the function
+/// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $MONOTONICITY:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
@@ -319,11 +319,11 @@ macro_rules! make_math_binary_udf {
                     }
                 }
 
-                fn monotonicity(
+                fn output_ordering(
                     &self,
                     input: &[ExprProperties],
                 ) -> Result<SortProperties> {
-                    $MONOTONICITY(input)
+                    $OUTPUT_ORDERING(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

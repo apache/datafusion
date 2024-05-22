@@ -110,16 +110,16 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         )
     }
 
-    fn from_template(
+    fn with_exprs_and_inputs(
         &self,
-        _: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        Arc::new(Self {
+        _: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Ok(Arc::new(Self {
             validation_bytes: self.validation_bytes.clone(),
-            inputs: inputs.to_vec(),
+            inputs,
             empty_schema: Arc::new(DFSchema::empty()),
-        })
+        }))
     }
 
     fn dyn_hash(&self, _: &mut dyn std::hash::Hasher) {
@@ -663,6 +663,16 @@ async fn all_type_literal() -> Result<()> {
             large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8');",
     )
         .await
+}
+
+#[tokio::test]
+async fn roundtrip_literal_list() -> Result<()> {
+    assert_expected_plan(
+        "SELECT [[1,2,3], [], NULL, [NULL]] FROM data",
+        "Projection: List([[1, 2, 3], [], , []])\
+        \n  TableScan: data projection=[]",
+    )
+    .await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.

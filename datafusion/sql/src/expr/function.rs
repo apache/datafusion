@@ -46,18 +46,18 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
         funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udwfs_names());
+        funcs.extend(ctx.udwf_names());
 
         funcs
     } else {
         // All scalar functions and aggregate functions
         let mut funcs = Vec::new();
 
-        funcs.extend(ctx.udfs_names());
+        funcs.extend(ctx.udf_names());
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
 
         funcs
     };
