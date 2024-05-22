@@ -56,7 +56,11 @@ fn main() -> Result<(), String> {
 
     std::fs::copy(prost, proto_dir.join("src/generated/prost.rs")).unwrap();
     std::fs::copy(pbjson, proto_dir.join("src/generated/pbjson.rs")).unwrap();
-    std::fs::copy(common_path, proto_dir.join("src/generated/datafusion_proto_common.rs")).unwrap();
+    std::fs::copy(
+        common_path,
+        proto_dir.join("src/generated/datafusion_proto_common.rs"),
+    )
+    .unwrap();
 
     Ok(())
 }

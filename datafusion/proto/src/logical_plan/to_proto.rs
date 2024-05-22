@@ -44,7 +44,6 @@ use datafusion_expr::{
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 
-use datafusion_proto_common::protobuf_common as protobuf_common;
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -58,6 +57,7 @@ use crate::protobuf::{
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
     UnionField, UnionValue,
 };
+use datafusion_proto_common::protobuf_common;
 
 use super::LogicalExtensionCodec;
 

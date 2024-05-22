@@ -22,6 +22,8 @@
 //!
 //! 1. [`ScalarValue`]'s
 //!
+//! [`ScalarValue`]: datafusion_common::ScalarValue
+//!
 //! Internally, this crate is implemented by converting the common types to [protocol
 //! buffers] using [prost].
 //!
@@ -44,69 +46,8 @@
 //! [substrait.io]: https://substrait.io
 //!
 //! # Example: Serializing [`ScalarValue`]s
-//! ```
-//! # use datafusion_common::Result;
-//! # use datafusion_expr::{col, lit, Expr};
-//! # use datafusion_proto::bytes::Serializeable;
-//! # fn main() -> Result<()>{
-//!  // Create a new `Expr` a < 32
-//!  let expr = col("a").lt(lit(5i32));
-//!
-//!  // Convert it to bytes (for sending over the network, etc.)
-//!  let bytes = expr.to_bytes()?;
-//!
-//!  // Decode bytes from somewhere (over network, etc.) back to Expr
-//!  let decoded_expr = Expr::from_bytes(&bytes)?;
-//!  assert_eq!(expr, decoded_expr);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Example: Serializing [`LogicalPlan`]s
-//! ```
-//! # use datafusion::prelude::*;
-//! # use datafusion_common::Result;
-//! # use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-//! # #[tokio::main]
-//! # async fn main() -> Result<()>{
-//!  // Create a plan that scans table 't'
-//!  let ctx = SessionContext::new();
-//!  ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default()).await?;
-//!  let plan = ctx.table("t1").await?.into_optimized_plan()?;
-//!
-//!  // Convert the plan into bytes (for sending over the network, etc.)
-//!  let bytes = logical_plan_to_bytes(&plan)?;
-//!
-//!  // Decode bytes from somewhere (over network, etc.) back to LogicalPlan
-//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-//!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
-//! # Ok(())
-//! # }
-//! ```
-//! # Example: Serializing [`ExecutionPlan`]s
-//!
-//! ```
-//! # use datafusion::prelude::*;
-//! # use datafusion_common::Result;
-//! # use datafusion_proto::bytes::{physical_plan_from_bytes,physical_plan_to_bytes};
-//! # #[tokio::main]
-//! # async fn main() -> Result<()>{
-//!  // Create a plan that scans table 't'
-//!  let ctx = SessionContext::new();
-//!  ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default()).await?;
-//!  let physical_plan = ctx.table("t1").await?.create_physical_plan().await?;
-//!
-//!  // Convert the plan into bytes (for sending over the network, etc.)
-//!  let bytes = physical_plan_to_bytes(physical_plan.clone())?;
-//!
-//!  // Decode bytes from somewhere (over network, etc.) back to ExecutionPlan
-//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
-//!  assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
-//! # Ok(())
-//! # }
-//! ```
+//! TODO: Add example
 
-//! Includes common data structure conversion libs for state handling
 pub mod from_proto;
 pub mod generated;
 pub mod to_proto;
