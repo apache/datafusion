@@ -343,11 +343,12 @@ pub(crate) fn recursive_transform_unnest(
 mod tests {
     use std::{ops::Add, sync::Arc};
 
-    use super::*;
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::DFSchema;
-    use datafusion_expr::EmptyRelation;
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
+
+    use crate::utils::recursive_transform_unnest;
 
     #[test]
     fn test_recursive_transform_unnest() -> Result<()> {
@@ -362,7 +363,11 @@ mod tests {
             ),
             Field::new(
                 "array_col",
-                ArrowDataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                ArrowDataType::List(Arc::new(Field::new(
+                    "item",
+                    ArrowDataType::Int64,
+                    true,
+                ))),
                 true,
             ),
             Field::new("int_col", ArrowDataType::Int32, false),
@@ -379,9 +384,7 @@ mod tests {
         let mut inner_projection_exprs = vec![];
 
         // unnest(struct_col)
-        let original_expr = Expr::Unnest(Unnest {
-            expr: Box::new(Expr::Column(Column::from_name("struct_col"))),
-        });
+        let original_expr = unnest(col("struct_col"));
         let transformed_exprs = recursive_transform_unnest(
             &input,
             &mut unnest_placeholder_columns,
@@ -391,8 +394,8 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                Expr::Column(Column::from_name("unnest(struct_col).field1")),
-                Expr::Column(Column::from_name("unnest(struct_col).field2")),
+                col("unnest(struct_col).field1"),
+                col("unnest(struct_col).field2"),
             ]
         );
         assert_eq!(unnest_placeholder_columns, vec!["unnest(struct_col)"]);
@@ -400,16 +403,11 @@ mod tests {
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![
-                Expr::Column(Column::from_name("struct_col")).alias("unnest(struct_col)"),
-            ]
+            vec![col("struct_col").alias("unnest(struct_col)"),]
         );
 
-        // unnest(array_col ) + 1
-        let original_expr = Expr::Unnest(Unnest {
-            expr: Box::new(Expr::Column(Column::from_name("array_col"))),
-        })
-        .add(Expr::Literal(ScalarValue::Int64(Some(1))));
+        // unnest(array_col) + 1
+        let original_expr = unnest(col("array_col")).add(lit(1i64));
         let transformed_exprs = recursive_transform_unnest(
             &input,
             &mut unnest_placeholder_columns,
@@ -423,8 +421,7 @@ mod tests {
         // only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![Expr::Column(Column::from_name("unnest(array_col)"))
-                .add(Expr::Literal(ScalarValue::Int64(Some(1))))]
+            vec![col("unnest(array_col)").add(lit(1i64))]
         );
 
         // keep appending to the current vector
@@ -433,8 +430,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                Expr::Column(Column::from_name("struct_col")).alias("unnest(struct_col)"),
-                Expr::Column(Column::from_name("array_col")).alias("unnest(array_col)"),
+                col("struct_col").alias("unnest(struct_col)"),
+                col("array_col").alias("unnest(array_col)")
             ]
         );
 

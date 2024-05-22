@@ -1595,6 +1595,12 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     unnest_with_options(input, columns, UnnestOptions::default())
 }
 
+// Based on data type, either struct or a variant of list
+// return a set of columns as the result of unnesting
+// the input columns.
+// For example, given a column with name "a",
+// - List(Element) returns ["a"] with data type Element
+// - Struct(field1, field2) returns ["a.field1","a.field2"]
 pub fn get_unnested_columns(
     col_name: &String,
     data_type: &DataType,

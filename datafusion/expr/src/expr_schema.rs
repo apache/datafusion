@@ -123,7 +123,6 @@ impl ExprSchemable for Expr {
                         Ok(field.data_type().clone())
                     }
                     DataType::Struct(_) => {
-                        // TODO: this is not correct, because unnest(struct) wll result into multiple data_type
                         Ok(arg_data_type)
                     }
                     DataType::Null => {

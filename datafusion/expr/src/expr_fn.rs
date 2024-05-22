@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast,
+    Placeholder, TryCast, Unnest,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -487,6 +487,13 @@ pub fn case(expr: Expr) -> CaseBuilder {
 /// Create a CASE WHEN statement with boolean WHEN expressions and no base expression.
 pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
+}
+
+/// Create a Unnest expression
+pub fn unnest(expr: Expr) -> Expr {
+    Expr::Unnest(Unnest {
+        expr: Box::new(expr),
+    })
 }
 
 /// Convenience method to create a new user defined scalar function (UDF) with a

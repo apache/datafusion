@@ -30,6 +30,13 @@ AS VALUES
     (null, null, 4, [17, 18], null)
 ;
 
+statement ok
+CREATE TABLE nested_unnest_table
+AS VALUES 
+    (struct('a', 'b', struct('c')), (struct('a', 'b', [10,20]))), 
+    (struct('d', 'e', struct('f')), (struct('x', 'y', [30,40, 50])))
+;
+
 ## Basic unnest expression in select list
 query I
 select unnest([1,2,3]);
@@ -415,8 +422,26 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 5 3
 11 NULL
 
+## unnest for nested struct(struct)
+query TT?
+select unnest(column1) from nested_unnest_table;
+----
+a b {c0: c}
+d e {c0: f}
+
+## unnest for nested(struct(list))
+query TT?
+select unnest(column2) from nested_unnest_table;
+----
+a b [10, 20]
+x y [30, 40, 50]
+
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
+
+## TODO: support unnest as a child expr
+query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression 
+select arrow_typeof(unnest(column5)) from unnest_table;
 
 statement ok
 drop table unnest_table;
