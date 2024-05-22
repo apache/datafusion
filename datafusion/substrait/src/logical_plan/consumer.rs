@@ -1160,6 +1160,15 @@ pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataTyp
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
+            r#type::Kind::Struct(s) => {
+                let mut fields = vec![];
+                for (i, f) in s.types.iter().enumerate() {
+                    let field =
+                        Field::new(&format!("c{i}"), from_substrait_type(f)?, true);
+                    fields.push(field);
+                }
+                Ok(DataType::Struct(fields.into()))
+            }
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),

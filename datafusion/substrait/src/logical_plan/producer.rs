@@ -2194,6 +2194,13 @@ mod test {
         round_trip_type(DataType::LargeList(
             Field::new_list_field(DataType::Int32, true).into(),
         ))?;
+        round_trip_type(DataType::Struct(
+            vec![
+                Field::new("c0", DataType::Int32, true),
+                Field::new("c1", DataType::Utf8, true),
+            ]
+                .into(),
+        ))?;
 
         Ok(())
     }
