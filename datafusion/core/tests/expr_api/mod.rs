@@ -26,6 +26,8 @@ use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
 
+mod simplification;
+
 #[test]
 fn test_eq() {
     // id = '2'
