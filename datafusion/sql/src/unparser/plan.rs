@@ -512,7 +512,7 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::{col, logical_plan::table_scan};
     #[test]
-    fn test_plan_to_sql() {
+    fn test_table_references_in_plan_to_sql() {
         fn test(table_name: &str, expected_sql: &str) {
             let schema = Schema::new(vec![
                 Field::new("id", DataType::Utf8, false),
