@@ -43,8 +43,8 @@ use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_f
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_proto_common::common::proto_error;
 
-use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;

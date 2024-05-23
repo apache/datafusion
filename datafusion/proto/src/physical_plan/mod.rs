@@ -63,8 +63,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ScalarUDF;
+use datafusion_proto_common::{self as protobuf_common, common::proto_error};
 
-use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
@@ -79,7 +80,6 @@ use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{self, window_agg_exec_node};
-use datafusion_proto_common as protobuf_common;
 
 use self::to_proto::serialize_physical_expr;
 

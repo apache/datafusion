@@ -29,6 +29,7 @@ use datafusion_expr::{
     BuiltInWindowFunction, Expr, JoinConstraint, JoinType, TryCast, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_proto_common::{protobuf_common, EmptyMessage, ToProtoError as Error};
 
 use crate::protobuf::{
     self,
@@ -41,9 +42,6 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-use datafusion_proto_common::protobuf_common;
-use datafusion_proto_common::EmptyMessage;
-use datafusion_proto_common::ToProtoError as Error;
 
 use super::LogicalExtensionCodec;
 

@@ -19,31 +19,29 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::array::AsArray;
+use crate::common::proto_error;
+use crate::protobuf_common as protobuf;
+use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
     UnionFields, UnionMode,
 };
-use arrow::ipc::reader::read_record_batch;
-use arrow::ipc::root_as_message;
+use arrow::ipc::{reader::read_record_batch, root_as_message};
 
-use crate::common::proto_error;
-use crate::protobuf_common as protobuf;
-use datafusion_common::config::{
-    ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
-};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::stats::Precision;
 use datafusion_common::{
-    arrow_datafusion_err, plan_datafusion_err, Column, ColumnStatistics, DFSchema,
-    DFSchemaRef, JoinSide, ScalarValue, Statistics, TableReference,
+    arrow_datafusion_err,
+    config::{
+        ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
+    },
+    file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+    parsers::CompressionTypeVariant,
+    plan_datafusion_err,
+    stats::Precision,
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
-use datafusion_common::{Constraint, Constraints, DataFusionError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -101,6 +99,12 @@ impl Error {
     }
 }
 
+impl From<Error> for DataFusionError {
+    fn from(e: Error) -> Self {
+        plan_datafusion_err!("{}", e)
+    }
+}
+
 /// An extension trait that adds the methods `optional` and `required` to any
 /// Option containing a type implementing `TryInto<U, Error = Error>`
 pub trait FromOptionalField<T> {
@@ -147,24 +151,42 @@ impl From<&protobuf::Column> for Column {
     }
 }
 
-impl TryFrom<&protobuf::Field> for Field {
+impl TryFrom<&protobuf::DfSchema> for DFSchema {
     type Error = Error;
-    fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
-        let datatype = field.arrow_type.as_deref().required("arrow_type")?;
-        let field = if field.dict_id != 0 {
-            Self::new_dict(
-                field.name.as_str(),
-                datatype,
-                field.nullable,
-                field.dict_id,
-                field.dict_ordered,
-            )
-            .with_metadata(field.metadata.clone())
-        } else {
-            Self::new(field.name.as_str(), datatype, field.nullable)
-                .with_metadata(field.metadata.clone())
-        };
-        Ok(field)
+
+    fn try_from(
+        df_schema: &protobuf::DfSchema,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let df_fields = df_schema.columns.clone();
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<Field>)> = df_fields
+            .iter()
+            .map(|df_field| {
+                let field: Field = df_field.field.as_ref().required("field")?;
+                Ok((
+                    df_field
+                        .qualifier
+                        .as_ref()
+                        .map(|q| q.relation.clone().into()),
+                    Arc::new(field),
+                ))
+            })
+            .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
+
+        Ok(DFSchema::new_with_metadata(
+            qualifiers_and_fields,
+            df_schema.metadata.clone(),
+        )?)
+    }
+}
+
+impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
+    type Error = Error;
+
+    fn try_from(
+        df_schema: protobuf::DfSchema,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let dfschema: DFSchema = (&df_schema).try_into()?;
+        Ok(Arc::new(dfschema))
     }
 }
 
@@ -287,96 +309,24 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
     }
 }
 
-pub fn parse_i32_to_time_unit(value: &i32) -> datafusion_common::Result<TimeUnit, Error> {
-    protobuf::TimeUnit::try_from(*value)
-        .map(|t| t.into())
-        .map_err(|_| Error::unknown("TimeUnit", *value))
-}
-
-pub fn parse_i32_to_interval_unit(
-    value: &i32,
-) -> datafusion_common::Result<IntervalUnit, Error> {
-    protobuf::IntervalUnit::try_from(*value)
-        .map(|t| t.into())
-        .map_err(|_| Error::unknown("IntervalUnit", *value))
-}
-
-/// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
-pub fn parse_proto_fields_to_fields<'a, I>(
-    fields: I,
-) -> std::result::Result<Vec<Field>, Error>
-where
-    I: IntoIterator<Item = &'a protobuf::Field>,
-{
-    fields
-        .into_iter()
-        .map(Field::try_from)
-        .collect::<datafusion_common::Result<_, _>>()
-}
-
-impl From<protobuf::TimeUnit> for TimeUnit {
-    fn from(time_unit: protobuf::TimeUnit) -> Self {
-        match time_unit {
-            protobuf::TimeUnit::Second => TimeUnit::Second,
-            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
-    }
-}
-
-impl From<protobuf::IntervalUnit> for IntervalUnit {
-    fn from(interval_unit: protobuf::IntervalUnit) -> Self {
-        match interval_unit {
-            protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
-            protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
-            protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
-        }
-    }
-}
-
-impl From<Error> for DataFusionError {
-    fn from(e: Error) -> Self {
-        plan_datafusion_err!("{}", e)
-    }
-}
-
-impl TryFrom<&protobuf::DfSchema> for DFSchema {
+impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
-
-    fn try_from(
-        df_schema: &protobuf::DfSchema,
-    ) -> datafusion_common::Result<Self, Self::Error> {
-        let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<Field>)> = df_fields
-            .iter()
-            .map(|df_field| {
-                let field: Field = df_field.field.as_ref().required("field")?;
-                Ok((
-                    df_field
-                        .qualifier
-                        .as_ref()
-                        .map(|q| q.relation.clone().into()),
-                    Arc::new(field),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
-
-        Ok(DFSchema::new_with_metadata(
-            qualifiers_and_fields,
-            df_schema.metadata.clone(),
-        )?)
-    }
-}
-
-impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
-    type Error = Error;
-
-    fn try_from(
-        df_schema: protobuf::DfSchema,
-    ) -> datafusion_common::Result<Self, Self::Error> {
-        let dfschema: DFSchema = (&df_schema).try_into()?;
-        Ok(Arc::new(dfschema))
+    fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
+        let datatype = field.arrow_type.as_deref().required("arrow_type")?;
+        let field = if field.dict_id != 0 {
+            Self::new_dict(
+                field.name.as_str(),
+                datatype,
+                field.nullable,
+                field.dict_id,
+                field.dict_ordered,
+            )
+            .with_metadata(field.metadata.clone())
+        } else {
+            Self::new(field.name.as_str(), datatype, field.nullable)
+                .with_metadata(field.metadata.clone())
+        };
+        Ok(field)
     }
 }
 
@@ -392,33 +342,6 @@ impl TryFrom<&protobuf::Schema> for Schema {
             .map(Field::try_from)
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
         Ok(Self::new_with_metadata(fields, schema.metadata.clone()))
-    }
-}
-
-impl From<protobuf::Constraints> for Constraints {
-    fn from(constraints: protobuf::Constraints) -> Self {
-        Constraints::new_unverified(
-            constraints
-                .constraints
-                .into_iter()
-                .map(|item| item.into())
-                .collect(),
-        )
-    }
-}
-
-impl From<protobuf::Constraint> for Constraint {
-    fn from(value: protobuf::Constraint) -> Self {
-        match value.constraint_mode.unwrap() {
-            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
-                Constraint::PrimaryKey(
-                    elem.indices.into_iter().map(|item| item as usize).collect(),
-                )
-            }
-            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
-                elem.indices.into_iter().map(|item| item as usize).collect(),
-            ),
-        }
     }
 }
 
@@ -692,11 +615,229 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     }
 }
 
-// panic here because no better way to convert from Vec to Array
-fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
-    v.try_into().unwrap_or_else(|v: Vec<T>| {
-        panic!("Expected a Vec of length {} but it was {}", N, v.len())
-    })
+impl From<protobuf::TimeUnit> for TimeUnit {
+    fn from(time_unit: protobuf::TimeUnit) -> Self {
+        match time_unit {
+            protobuf::TimeUnit::Second => TimeUnit::Second,
+            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
+            protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
+        }
+    }
+}
+
+impl From<protobuf::IntervalUnit> for IntervalUnit {
+    fn from(interval_unit: protobuf::IntervalUnit) -> Self {
+        match interval_unit {
+            protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
+            protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
+            protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
+        }
+    }
+}
+
+impl From<protobuf::Constraints> for Constraints {
+    fn from(constraints: protobuf::Constraints) -> Self {
+        Constraints::new_unverified(
+            constraints
+                .constraints
+                .into_iter()
+                .map(|item| item.into())
+                .collect(),
+        )
+    }
+}
+
+impl From<protobuf::Constraint> for Constraint {
+    fn from(value: protobuf::Constraint) -> Self {
+        match value.constraint_mode.unwrap() {
+            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
+                Constraint::PrimaryKey(
+                    elem.indices.into_iter().map(|item| item as usize).collect(),
+                )
+            }
+            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
+                elem.indices.into_iter().map(|item| item as usize).collect(),
+            ),
+        }
+    }
+}
+
+impl From<&protobuf::ColumnStats> for ColumnStatistics {
+    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: if let Some(nc) = &cs.null_count {
+                nc.clone().into()
+            } else {
+                Precision::Absent
+            },
+            max_value: if let Some(max) = &cs.max_value {
+                max.clone().into()
+            } else {
+                Precision::Absent
+            },
+            min_value: if let Some(min) = &cs.min_value {
+                min.clone().into()
+            } else {
+                Precision::Absent
+            },
+            distinct_count: if let Some(dc) = &cs.distinct_count {
+                dc.clone().into()
+            } else {
+                Precision::Absent
+            },
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<usize> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Exact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Inexact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<ScalarValue> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Exact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Inexact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
+        }
+    }
+}
+
+impl From<protobuf::JoinSide> for JoinSide {
+    fn from(t: protobuf::JoinSide) -> Self {
+        match t {
+            protobuf::JoinSide::LeftSide => JoinSide::Left,
+            protobuf::JoinSide::RightSide => JoinSide::Right,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Statistics> for Statistics {
+    type Error = DataFusionError;
+
+    fn try_from(
+        s: &protobuf::Statistics,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        // Keep it sync with Statistics::to_proto
+        Ok(Statistics {
+            num_rows: if let Some(nr) = &s.num_rows {
+                nr.clone().into()
+            } else {
+                Precision::Absent
+            },
+            total_byte_size: if let Some(tbs) = &s.total_byte_size {
+                tbs.clone().into()
+            } else {
+                Precision::Absent
+            },
+            // No column statistic (None) is encoded with empty array
+            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
+        })
+    }
+}
+
+impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
+    fn from(value: protobuf::CompressionTypeVariant) -> Self {
+        match value {
+            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
+            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
+            protobuf::CompressionTypeVariant::Xz => Self::XZ,
+            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
+            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
+        }
+    }
+}
+
+impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(
+        opts: &protobuf::CsvWriterOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let write_options = csv_writer_options_from_proto(opts)?;
+        let compression: CompressionTypeVariant = opts.compression().into();
+        Ok(CsvWriterOptions::new(write_options, compression))
+    }
+}
+
+impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(
+        opts: &protobuf::JsonWriterOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let compression: CompressionTypeVariant = opts.compression().into();
+        Ok(JsonWriterOptions::new(compression))
+    }
 }
 
 impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
@@ -880,30 +1021,6 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
     }
 }
 
-impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
-    fn from(value: protobuf::CompressionTypeVariant) -> Self {
-        match value {
-            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
-            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
-            protobuf::CompressionTypeVariant::Xz => Self::XZ,
-            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
-            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
-        }
-    }
-}
-
-impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
-    fn from(value: CompressionTypeVariant) -> Self {
-        match value {
-            CompressionTypeVariant::GZIP => Self::Gzip,
-            CompressionTypeVariant::BZIP2 => Self::Bzip2,
-            CompressionTypeVariant::XZ => Self::Xz,
-            CompressionTypeVariant::ZSTD => Self::Zstd,
-            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
-        }
-    }
-}
-
 impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
     type Error = DataFusionError;
 
@@ -918,27 +1035,38 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
     }
 }
 
-impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(
-        opts: &protobuf::CsvWriterOptions,
-    ) -> datafusion_common::Result<Self, Self::Error> {
-        let write_options = csv_writer_options_from_proto(opts)?;
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(CsvWriterOptions::new(write_options, compression))
-    }
+pub fn parse_i32_to_time_unit(value: &i32) -> datafusion_common::Result<TimeUnit, Error> {
+    protobuf::TimeUnit::try_from(*value)
+        .map(|t| t.into())
+        .map_err(|_| Error::unknown("TimeUnit", *value))
 }
 
-impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
-    type Error = DataFusionError;
+pub fn parse_i32_to_interval_unit(
+    value: &i32,
+) -> datafusion_common::Result<IntervalUnit, Error> {
+    protobuf::IntervalUnit::try_from(*value)
+        .map(|t| t.into())
+        .map_err(|_| Error::unknown("IntervalUnit", *value))
+}
 
-    fn try_from(
-        opts: &protobuf::JsonWriterOptions,
-    ) -> datafusion_common::Result<Self, Self::Error> {
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(JsonWriterOptions::new(compression))
-    }
+// panic here because no better way to convert from Vec to Array
+fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
+    v.try_into().unwrap_or_else(|v: Vec<T>| {
+        panic!("Expected a Vec of length {} but it was {}", N, v.len())
+    })
+}
+
+/// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
+pub fn parse_proto_fields_to_fields<'a, I>(
+    fields: I,
+) -> std::result::Result<Vec<Field>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::Field>,
+{
+    fields
+        .into_iter()
+        .map(Field::try_from)
+        .collect::<datafusion_common::Result<_, _>>()
 }
 
 pub(crate) fn csv_writer_options_from_proto(
@@ -963,134 +1091,4 @@ pub(crate) fn csv_writer_options_from_proto(
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
         .with_null(writer_options.null_value.clone()))
-}
-
-impl From<&protobuf::ColumnStats> for ColumnStatistics {
-    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
-        ColumnStatistics {
-            null_count: if let Some(nc) = &cs.null_count {
-                nc.clone().into()
-            } else {
-                Precision::Absent
-            },
-            max_value: if let Some(max) = &cs.max_value {
-                max.clone().into()
-            } else {
-                Precision::Absent
-            },
-            min_value: if let Some(min) = &cs.min_value {
-                min.clone().into()
-            } else {
-                Precision::Absent
-            },
-            distinct_count: if let Some(dc) = &cs.distinct_count {
-                dc.clone().into()
-            } else {
-                Precision::Absent
-            },
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<usize> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Exact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Inexact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<ScalarValue> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Exact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Inexact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::JoinSide> for JoinSide {
-    fn from(t: protobuf::JoinSide) -> Self {
-        match t {
-            protobuf::JoinSide::LeftSide => JoinSide::Left,
-            protobuf::JoinSide::RightSide => JoinSide::Right,
-        }
-    }
-}
-
-impl TryFrom<&protobuf::Statistics> for Statistics {
-    type Error = DataFusionError;
-
-    fn try_from(
-        s: &protobuf::Statistics,
-    ) -> datafusion_common::Result<Self, Self::Error> {
-        // Keep it sync with Statistics::to_proto
-        Ok(Statistics {
-            num_rows: if let Some(nr) = &s.num_rows {
-                nr.clone().into()
-            } else {
-                Precision::Absent
-            },
-            total_byte_size: if let Some(tbs) = &s.total_byte_size {
-                tbs.clone().into()
-            } else {
-                Precision::Absent
-            },
-            // No column statistic (None) is encoded with empty array
-            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
-        })
-    }
 }

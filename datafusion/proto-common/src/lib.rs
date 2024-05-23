@@ -55,8 +55,7 @@ pub mod to_proto;
 
 pub use from_proto::Error as FromProtoError;
 pub use generated::datafusion_proto_common as protobuf_common;
-pub use generated::datafusion_proto_common::EmptyMessage;
-pub use generated::datafusion_proto_common::JoinSide;
+pub use generated::datafusion_proto_common::*;
 pub use to_proto::Error as ToProtoError;
 
 #[cfg(doctest)]

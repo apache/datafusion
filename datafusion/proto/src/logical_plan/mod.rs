@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::common::proto_error;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
@@ -57,9 +56,9 @@ use datafusion_expr::{
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
-use datafusion_proto_common::protobuf_common;
-use datafusion_proto_common::FromProtoError;
-use datafusion_proto_common::ToProtoError;
+use datafusion_proto_common::{
+    common::proto_error, protobuf_common, FromProtoError, ToProtoError,
+};
 
 use prost::bytes::BufMut;
 use prost::Message;

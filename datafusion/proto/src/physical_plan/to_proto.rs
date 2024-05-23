@@ -45,12 +45,12 @@ use datafusion::{
 };
 use datafusion_common::config::FormatOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_proto_common::protobuf_common;
 
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
     PhysicalSortExprNode, PhysicalSortExprNodeCollection,
 };
-use datafusion_proto_common::protobuf_common;
 
 use super::PhysicalExtensionCodec;
 

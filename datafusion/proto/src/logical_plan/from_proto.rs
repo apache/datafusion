@@ -34,6 +34,7 @@ use datafusion_expr::{
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
+use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
 use crate::protobuf::{
     self,
@@ -46,8 +47,6 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-use datafusion_proto_common::from_proto::FromOptionalField;
-use datafusion_proto_common::FromProtoError as Error;
 
 use super::LogicalExtensionCodec;
 
