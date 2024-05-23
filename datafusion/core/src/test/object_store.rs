@@ -27,8 +27,7 @@ use url::Url;
 /// Returns a test object store with the provided `ctx`
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
     let url = Url::parse("test://").unwrap();
-    ctx.runtime_env()
-        .register_object_store(&url, make_test_store_and_state(files).0);
+    ctx.register_object_store(&url, make_test_store_and_state(files).0);
 }
 
 /// Create a test object store with the provided files

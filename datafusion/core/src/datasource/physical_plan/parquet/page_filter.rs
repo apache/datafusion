@@ -42,6 +42,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
 use crate::datasource::physical_plan::parquet::statistics::{
     from_bytes_to_i128, parquet_column,
 };
@@ -99,7 +100,7 @@ use super::metrics::ParquetFileMetrics;
 ///
 /// Using `A > 35`: can rule out all of values in Page 1 (rows 0 -> 199)
 ///
-/// Using `B = 'F'`: can rule out all vaues in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
+/// Using `B = 'F'`: can rule out all values in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
 ///
 /// So we can entirely skip rows 0->199 and 250->299 as we know they
 /// can not contain rows that match the predicate.
@@ -133,7 +134,7 @@ impl PagePruningPredicate {
         &self,
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
-        row_groups: &[usize],
+        row_groups: &RowGroupSet,
         file_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
     ) -> Result<Option<RowSelection>> {
@@ -172,10 +173,10 @@ impl PagePruningPredicate {
             let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
             let mut selectors = Vec::with_capacity(row_groups.len());
             for r in row_groups.iter() {
-                let row_group_metadata = &groups[*r];
+                let row_group_metadata = &groups[r];
 
-                let rg_offset_indexes = file_offset_indexes.get(*r);
-                let rg_page_indexes = file_page_indexes.get(*r);
+                let rg_offset_indexes = file_offset_indexes.get(r);
+                let rg_page_indexes = file_page_indexes.get(r);
                 if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) =
                     (rg_page_indexes, rg_offset_indexes, col_idx)
                 {
@@ -185,7 +186,7 @@ impl PagePruningPredicate {
                             predicate,
                             rg_offset_indexes.get(col_idx),
                             rg_page_indexes.get(col_idx),
-                            groups[*r].column(col_idx).column_descr(),
+                            groups[r].column(col_idx).column_descr(),
                             file_metrics,
                         )
                         .map_err(|e| {
@@ -201,7 +202,7 @@ impl PagePruningPredicate {
                     );
                     // fallback select all rows
                     let all_selected =
-                        vec![RowSelector::select(groups[*r].num_rows() as usize)];
+                        vec![RowSelector::select(groups[r].num_rows() as usize)];
                     selectors.push(all_selected);
                 }
             }

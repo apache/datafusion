@@ -49,7 +49,7 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -1112,24 +1112,18 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
-                columns,
+                list_type_columns,
+                struct_type_columns,
                 schema,
                 options,
                 ..
             }) => {
                 let input = children.one()?;
-                let column_execs = columns
-                    .iter()
-                    .map(|column| {
-                        schema
-                            .index_of_column(column)
-                            .map(|idx| Column::new(&column.name, idx))
-                    })
-                    .collect::<Result<_>>()?;
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(
                     input,
-                    column_execs,
+                    list_type_columns.clone(),
+                    struct_type_columns.clone(),
                     schema,
                     options.clone(),
                 ))

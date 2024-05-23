@@ -30,6 +30,7 @@ use datafusion_common::{
     JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
     TableScan, Window,
@@ -289,7 +290,6 @@ fn optimize_projections(
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
-        | LogicalPlan::Unnest(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Distinct(Distinct::On(_)) => {
@@ -398,6 +398,13 @@ fn optimize_projections(
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
+        }
+        LogicalPlan::Unnest(Unnest {
+            dependency_indices, ..
+        }) => {
+            vec![RequiredIndicies::new_from_indices(
+                dependency_indices.clone(),
+            )]
         }
     };
 
