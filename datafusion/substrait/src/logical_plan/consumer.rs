@@ -1136,11 +1136,13 @@ pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataTyp
                 ),
             },
             r#type::Kind::List(list) => {
-                let inner_type =
-                    from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
-                        substrait_datafusion_err!("List type must have inner type")
-                    })?)?;
-                let field = Arc::new(Field::new_list_field(inner_type, true));
+                let inner_type = list.r#type.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("List type must have inner type")
+                })?;
+                let field = Arc::new(Field::new_list_field(
+                    from_substrait_type(inner_type)?,
+                    is_substrait_type_nullable(inner_type)?,
+                ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
@@ -1163,8 +1165,11 @@ pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataTyp
             r#type::Kind::Struct(s) => {
                 let mut fields = vec![];
                 for (i, f) in s.types.iter().enumerate() {
-                    let field =
-                        Field::new(&format!("c{i}"), from_substrait_type(f)?, true);
+                    let field = Field::new(
+                        &format!("c{i}"),
+                        from_substrait_type(f)?,
+                        is_substrait_type_nullable(f)?,
+                    );
                     fields.push(field);
                 }
                 Ok(DataType::Struct(fields.into()))
@@ -1173,6 +1178,47 @@ pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataTyp
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
     }
+}
+
+fn is_substrait_type_nullable(dtype: &Type) -> Result<bool> {
+    fn is_nullable(nullability: i32) -> bool {
+        nullability != substrait::proto::r#type::Nullability::Required as i32
+    }
+
+    let nullable = match dtype
+        .clone()
+        .kind
+        .ok_or(substrait_datafusion_err!("Type must contain Kind"))?
+    {
+        r#type::Kind::Bool(val) => is_nullable(val.nullability),
+        r#type::Kind::I8(val) => is_nullable(val.nullability),
+        r#type::Kind::I16(val) => is_nullable(val.nullability),
+        r#type::Kind::I32(val) => is_nullable(val.nullability),
+        r#type::Kind::I64(val) => is_nullable(val.nullability),
+        r#type::Kind::Fp32(val) => is_nullable(val.nullability),
+        r#type::Kind::Fp64(val) => is_nullable(val.nullability),
+        r#type::Kind::String(val) => is_nullable(val.nullability),
+        r#type::Kind::Binary(val) => is_nullable(val.nullability),
+        r#type::Kind::Timestamp(val) => is_nullable(val.nullability),
+        r#type::Kind::Date(val) => is_nullable(val.nullability),
+        r#type::Kind::Time(val) => is_nullable(val.nullability),
+        r#type::Kind::IntervalYear(val) => is_nullable(val.nullability),
+        r#type::Kind::IntervalDay(val) => is_nullable(val.nullability),
+        r#type::Kind::TimestampTz(val) => is_nullable(val.nullability),
+        r#type::Kind::Uuid(val) => is_nullable(val.nullability),
+        r#type::Kind::FixedChar(val) => is_nullable(val.nullability),
+        r#type::Kind::Varchar(val) => is_nullable(val.nullability),
+        r#type::Kind::FixedBinary(val) => is_nullable(val.nullability),
+        r#type::Kind::Decimal(val) => is_nullable(val.nullability),
+        r#type::Kind::PrecisionTimestamp(val) => is_nullable(val.nullability),
+        r#type::Kind::PrecisionTimestampTz(val) => is_nullable(val.nullability),
+        r#type::Kind::Struct(val) => is_nullable(val.nullability),
+        r#type::Kind::List(val) => is_nullable(val.nullability),
+        r#type::Kind::Map(val) => is_nullable(val.nullability),
+        r#type::Kind::UserDefined(val) => is_nullable(val.nullability),
+        r#type::Kind::UserDefinedTypeReference(_) => true, // not implemented, assume nullable
+    };
+    Ok(nullable)
 }
 
 fn from_substrait_bound(
