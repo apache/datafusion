@@ -44,10 +44,11 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::cast;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
+    binary, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount, NotExpr,
+    NthValue, PhysicalSortExpr, StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;

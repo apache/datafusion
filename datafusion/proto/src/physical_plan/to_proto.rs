@@ -24,17 +24,17 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
-    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
-    DistinctCount, DistinctSum, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
-    Max, Median, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
-    OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop,
-    StringAgg, Sum, TryCastExpr, Variance, VariancePop, WindowShift,
+    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr, Column,
+    Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor, DistinctCount,
+    DistinctSum, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Median,
+    Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg,
+    Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum,
+    TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
 use datafusion::physical_plan::{
-    AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
+    AggregateExpr, CastExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion::{
     datasource::{

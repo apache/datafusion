@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, lexsort_to_indices, SortColumn, SortOptions};
+use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{
@@ -32,12 +32,13 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
-    TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
-use datafusion_physical_expr_common::expressions;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
+};
 
 make_udaf_expr_and_func!(
     FirstValue,
@@ -108,30 +109,8 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let mut all_sort_orders = vec![];
-
-        // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
-        for expr in acc_args.sort_exprs {
-            if let Expr::Sort(sort) = expr {
-                if let Expr::Column(col) = sort.expr.as_ref() {
-                    let name = &col.name;
-                    let e = expressions::column::col(name, acc_args.schema)?;
-                    sort_exprs.push(PhysicalSortExpr {
-                        expr: e,
-                        options: SortOptions {
-                            descending: !sort.asc,
-                            nulls_first: sort.nulls_first,
-                        },
-                    });
-                }
-            }
-        }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.extend(sort_exprs);
-        }
-
-        let ordering_req = all_sort_orders;
+        let ordering_req =
+            convert_logical_sort_exprs_to_physical(acc_args.sort_exprs, acc_args.schema)?;
 
         let ordering_dtypes = ordering_req
             .iter()
@@ -428,30 +407,8 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let mut all_sort_orders = vec![];
-
-        // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
-        for expr in acc_args.sort_exprs {
-            if let Expr::Sort(sort) = expr {
-                if let Expr::Column(col) = sort.expr.as_ref() {
-                    let name = &col.name;
-                    let e = expressions::column::col(name, acc_args.schema)?;
-                    sort_exprs.push(PhysicalSortExpr {
-                        expr: e,
-                        options: SortOptions {
-                            descending: !sort.asc,
-                            nulls_first: sort.nulls_first,
-                        },
-                    });
-                }
-            }
-        }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.extend(sort_exprs);
-        }
-
-        let ordering_req = all_sort_orders;
+        let ordering_req =
+            convert_logical_sort_exprs_to_physical(acc_args.sort_exprs, acc_args.schema)?;
 
         let ordering_dtypes = ordering_req
             .iter()
@@ -472,14 +429,14 @@ impl AggregateUDFImpl for LastValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let StateFieldsArgs {
             name,
-            input_type: _,
-            return_type,
+            input_type,
+            return_type: _,
             ordering_fields,
             is_distinct: _,
         } = args;
         let mut fields = vec![Field::new(
             format_state_name(name, "last_value"),
-            return_type.clone(),
+            input_type.clone(),
             true,
         )];
         fields.extend(ordering_fields.to_vec());
@@ -714,31 +671,6 @@ fn convert_to_sort_cols(
         })
         .collect::<Vec<_>>()
 }
-
-// fn replace_order_by_clause(order_by: &mut String) {
-//     let suffixes = [
-//         (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
-//         (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
-//         (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
-//         (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
-//     ];
-//
-//     if let Some(start) = order_by.find("ORDER BY [") {
-//         if let Some(end) = order_by[start..].find(']') {
-//             let order_by_start = start + 9;
-//             let order_by_end = start + end;
-//
-//             let column_order = &order_by[order_by_start..=order_by_end];
-//             for &(suffix, replacement) in &suffixes {
-//                 if column_order.ends_with(suffix) {
-//                     let new_order = column_order.replace(suffix, replacement);
-//                     order_by.replace_range(order_by_start..=order_by_end, &new_order);
-//                     break;
-//                 }
-//             }
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

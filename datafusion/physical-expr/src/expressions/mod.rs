@@ -20,7 +20,6 @@
 #[macro_use]
 mod binary;
 mod case;
-mod cast;
 mod column;
 mod datum;
 mod in_list;
@@ -78,10 +77,10 @@ pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
+pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};

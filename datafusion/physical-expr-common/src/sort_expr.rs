@@ -24,10 +24,11 @@ use std::sync::Arc;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::{ColumnarValue, Expr};
 
 use crate::physical_expr::PhysicalExpr;
+use crate::utils::convert_logical_expr_to_physical_expr;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -267,3 +268,25 @@ pub type LexRequirement = Vec<PhysicalSortRequirement>;
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
+
+pub fn convert_logical_sort_exprs_to_physical(
+    exprs: &[datafusion_expr::Expr],
+    schema: &Schema,
+) -> Result<Vec<PhysicalSortExpr>> {
+    // Construct PhysicalSortExpr objects from Expr objects:
+    let mut sort_exprs = vec![];
+    for expr in exprs {
+        if let Expr::Sort(sort) = expr {
+            sort_exprs.push(PhysicalSortExpr {
+                expr: convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
+                options: SortOptions {
+                    descending: !sort.asc,
+                    nulls_first: sort.nulls_first,
+                },
+            });
+        } else {
+            return exec_err!("Expects to receive sort expression");
+        }
+    }
+    Ok(sort_exprs)
+}

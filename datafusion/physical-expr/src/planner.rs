@@ -27,6 +27,7 @@ use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
+use datafusion_physical_expr_common::expressions::cast;
 
 use crate::scalar_function;
 use crate::{
@@ -257,7 +258,7 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
+        Expr::Cast(Cast { expr, data_type }) => cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
             data_type.clone(),
