@@ -2141,12 +2141,14 @@ mod test {
             ),
         )))?;
 
-        let struct_field_1 = Field::new("c0", DataType::Boolean, true);
-        let struct_field_2 = Field::new("c1", DataType::Int32, true);
+        let c0 = Field::new("c0", DataType::Boolean, true);
+        let c1 = Field::new("c1", DataType::Int32, true);
+        let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
-                .with_scalar(struct_field_1, ScalarValue::Boolean(Some(true)))
-                .with_scalar(struct_field_2, ScalarValue::Int32(Some(1)))
+                .with_scalar(c0, ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1, ScalarValue::Int32(Some(1)))
+                .with_scalar(c2, ScalarValue::Utf8(None))
                 .build()?,
         )?;
 
