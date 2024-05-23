@@ -368,42 +368,36 @@ impl TreeNode for Expr {
     }
 }
 
-fn transform_box<F>(be: Box<Expr>, f: &mut F) -> Result<Transformed<Box<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+fn transform_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    be: Box<Expr>,
+    f: &mut F,
+) -> Result<Transformed<Box<Expr>>> {
     Ok(f(*be)?.update_data(Box::new))
 }
 
-fn transform_option_box<F>(
+fn transform_option_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     obe: Option<Box<Expr>>,
     f: &mut F,
-) -> Result<Transformed<Option<Box<Expr>>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+) -> Result<Transformed<Option<Box<Expr>>>> {
     obe.map_or(Ok(Transformed::no(None)), |be| {
         Ok(transform_box(be, f)?.update_data(Some))
     })
 }
 
 /// &mut transform a Option<`Vec` of `Expr`s>
-pub fn transform_option_vec<F>(
+pub fn transform_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     ove: Option<Vec<Expr>>,
     f: &mut F,
-) -> Result<Transformed<Option<Vec<Expr>>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+) -> Result<Transformed<Option<Vec<Expr>>>> {
     ove.map_or(Ok(Transformed::no(None)), |ve| {
         Ok(transform_vec(ve, f)?.update_data(Some))
     })
 }
 
 /// &mut transform a `Vec` of `Expr`s
-fn transform_vec<F>(ve: Vec<Expr>, f: &mut F) -> Result<Transformed<Vec<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+fn transform_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    ve: Vec<Expr>,
+    f: &mut F,
+) -> Result<Transformed<Vec<Expr>>> {
     ve.into_iter().map_until_stop_and_collect(f)
 }
