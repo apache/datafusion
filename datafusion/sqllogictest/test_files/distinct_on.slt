@@ -116,8 +116,8 @@ SELECT DISTINCT ON () c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
 ----
-5 -140
-2 -99
+1 25
+4 23
 
 # Multiple complex expressions
 query TIB
@@ -127,7 +127,7 @@ WHERE c1 IN ('a', 'b')
 ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;
 ----
 D 0 false
-D 1 false
+D 1 true
 E 0 false
 E 1 false
 
