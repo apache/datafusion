@@ -373,6 +373,7 @@ impl AggregateExpr for AggregateFunctionExpr {
                 &self.schema,
                 self.name(),
                 self.ignore_nulls,
+                self.is_distinct,
             )
             .unwrap();
             return Ok(Some(aggr_expr));
@@ -397,6 +398,7 @@ impl AggregateExpr for AggregateFunctionExpr {
                 &self.schema,
                 name,
                 self.ignore_nulls,
+                self.is_distinct,
             )
             .unwrap();
             return Some(reverse_aggr);

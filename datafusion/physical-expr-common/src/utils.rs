@@ -17,11 +17,6 @@
 
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
-    compute::{and_kleene, is_not_null, SlicesIterator},
-};
-use datafusion_common::Result;
 use datafusion_expr::Expr;
 
 use crate::{
