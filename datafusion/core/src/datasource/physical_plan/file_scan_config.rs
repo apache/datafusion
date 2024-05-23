@@ -75,19 +75,17 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// # let file_schema = Arc::new(Schema::empty());
 /// // create FileScan config for reading data from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let mut config = FileScanConfig::new(object_store_url, file_schema)
+/// let config = FileScanConfig::new(object_store_url, file_schema)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
-///   .with_projection(Some(vec![2, 3])); // project columns 2 and 3
-///
-/// // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
-/// config.add_file(PartitionedFile::new("file1.parquet", 1234));
-///
-/// // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
-/// // in a  single row group
-/// config.add_file_group(vec![
+///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
+///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
+///   .with_file(PartitionedFile::new("file1.parquet", 1234))
+///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
+///   // in a  single row group
+///   .with_file_group(vec![
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
-/// ]);
+///   ]);
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
@@ -135,8 +133,10 @@ pub struct FileScanConfig {
 impl FileScanConfig {
     /// Create a new `FileScanConfig` with default settings for scanning files.
     ///
-    /// No file groups are added by default. See [`Self::add_file`] and
-    /// [`Self::add_file_group`]
+    /// See example on [`FileScanConfig`]
+    ///
+    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group]` and
+    /// [`Self::with_file_groups`].
     ///
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
@@ -153,20 +153,6 @@ impl FileScanConfig {
             table_partition_cols: vec![],
             output_ordering: vec![],
         }
-    }
-
-    /// Add a new file as a single file group
-    ///
-    /// See [Self::file_groups] for more information
-    pub fn add_file(&mut self, file: PartitionedFile) {
-        self.add_file_group(vec![file])
-    }
-
-    /// Add a new file group
-    ///
-    /// See [Self::file_groups] for more information
-    pub fn add_file_group(&mut self, file_group: Vec<PartitionedFile>) {
-        self.file_groups.push(file_group);
     }
 
     /// Set the statistics of the files
@@ -190,9 +176,8 @@ impl FileScanConfig {
     /// Add a file as a single group
     ///
     /// See [Self::file_groups] for more information.
-    pub fn with_file(mut self, file: PartitionedFile) -> Self {
-        self.add_file(file);
-        self
+    pub fn with_file(self, file: PartitionedFile) -> Self {
+        self.with_file_group(vec![file])
     }
 
     /// Add the file groups
@@ -210,7 +195,7 @@ impl FileScanConfig {
     ///
     /// See [Self::file_groups] for more information
     pub fn with_file_group(mut self, file_group: Vec<PartitionedFile>) -> Self {
-        self.add_file_group(file_group);
+        self.file_groups.push(file_group);
         self
     }
 
