@@ -474,10 +474,17 @@ impl Unparser<'_> {
                 nulls_first,
             }) => {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
+
+                let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
+                    Some(*nulls_first)
+                } else {
+                    None
+                };
+
                 Ok(Unparsed::OrderByExpr(ast::OrderByExpr {
                     expr: sql_parser_expr,
                     asc: Some(*asc),
-                    nulls_first: Some(*nulls_first),
+                    nulls_first,
                 }))
             }
             _ => {
