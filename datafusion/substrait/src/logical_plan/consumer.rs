@@ -16,7 +16,7 @@
 // under the License.
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
@@ -24,7 +24,7 @@ use datafusion::common::{
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, BinaryExpr, Case, Expr, LogicalPlan,
-    Operator, ScalarUDF,
+    Operator, ScalarUDF, Values,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -507,7 +507,52 @@ pub async fn from_substrait_rel(
                     _ => Ok(t),
                 }
             }
-            _ => not_impl_err!("Only NamedTable reads are supported"),
+            Some(ReadType::VirtualTable(vt)) => {
+                let base_schema = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Virtual Table")
+                })?;
+
+                let fields = from_substrait_struct(
+                    base_schema.r#struct.as_ref().ok_or_else(|| {
+                        substrait_datafusion_err!("Named struct must contain a struct")
+                    })?,
+                    &base_schema.names,
+                    &mut 0,
+                );
+                let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?);
+
+                let values = vt
+                    .values
+                    .iter()
+                    .map(|row| {
+                        let mut name_idx = 0;
+                        let lits = row
+                            .fields
+                            .iter()
+                            .map(|lit| {
+                                name_idx += 1; // top-level names are provided through schema
+                                Ok(Expr::Literal(from_substrait_literal_with_names(
+                                    lit,
+                                    &base_schema.names,
+                                    &mut name_idx,
+                                )?))
+                            })
+                            .collect::<Result<_>>()?;
+                        if name_idx != base_schema.names.len() {
+                            Err(substrait_datafusion_err!(
+                                "Names list must match exactly to nested ®schema, but found {} uses for {} names",
+                                name_idx,
+                                base_schema.names.len()
+                            ))
+                        } else {
+                            Ok(lits)
+                        }
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(LogicalPlan::Values(Values { schema, values }))
+            }
+            _ => not_impl_err!("Only NamedTable and VirtualTable reads are supported"),
         },
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => match set_op {
@@ -1060,7 +1105,15 @@ pub async fn from_substrait_rex(
     }
 }
 
-pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+pub(crate) fn from_substrait_type(dt: &Type) -> Result<DataType> {
+    from_substrait_type_with_names(dt, &vec![], &mut 0)
+}
+
+fn from_substrait_type_with_names(
+    dt: &Type,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<DataType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),
@@ -1162,21 +1215,47 @@ pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataTyp
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::Struct(s) => {
-                let mut fields = vec![];
-                for (i, f) in s.types.iter().enumerate() {
-                    let field = Field::new(
-                        &format!("c{i}"),
-                        from_substrait_type(f)?,
-                        is_substrait_type_nullable(f)?,
-                    );
-                    fields.push(field);
-                }
-                Ok(DataType::Struct(fields.into()))
-            }
+            r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct(
+                s, dfs_names, name_idx,
+            )?)),
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
+    }
+}
+
+fn from_substrait_struct(
+    s: &r#type::Struct,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<Fields> {
+    let mut fields = vec![];
+    for (i, f) in s.types.iter().enumerate() {
+        let field = Field::new(
+            next_struct_field_name(i, dfs_names, name_idx)?,
+            from_substrait_type_with_names(f, dfs_names, name_idx)?,
+            is_substrait_type_nullable(f)?,
+        );
+        fields.push(field);
+    }
+    Ok(fields.into())
+}
+
+fn next_struct_field_name(
+    i: usize,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<String> {
+    if dfs_names.is_empty() {
+        // If names are not given, create dummy names
+        // c0, c1, ... align with e.g. SqlToRel::create_named_struct
+        Ok(format!("c{i}"))
+    } else {
+        let name = dfs_names.get(*name_idx).cloned().ok_or_else(|| {
+            substrait_datafusion_err!("Named schema must contain names for all fields")
+        })?;
+        *name_idx += 1;
+        Ok(name)
     }
 }
 
@@ -1258,6 +1337,14 @@ fn from_substrait_bound(
 }
 
 pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
+    from_substrait_literal_with_names(lit, &vec![], &mut 0)
+}
+
+fn from_substrait_literal_with_names(
+    lit: &Literal,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<ScalarValue> {
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
         Some(LiteralType::I8(n)) => match lit.type_variation_reference {
@@ -1377,23 +1464,27 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
         Some(LiteralType::Struct(s)) => {
             let mut builder = ScalarStructBuilder::new();
             for (i, field) in s.fields.iter().enumerate() {
-                let sv = from_substrait_literal(field)?;
-                // c0, c1, ... align with e.g. SqlToRel::create_named_struct
-                builder = builder.with_scalar(
-                    Field::new(&format!("c{i}"), sv.data_type(), field.nullable),
-                    sv,
-                );
+                let name = next_struct_field_name(i, dfs_names, name_idx)?;
+                let sv = from_substrait_literal_with_names(field, dfs_names, name_idx)?;
+                builder = builder
+                    .with_scalar(Field::new(name, sv.data_type(), field.nullable), sv);
             }
             builder.build()?
         }
-        Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
+        Some(LiteralType::Null(ntype)) => {
+            from_substrait_null_with_names(ntype, dfs_names, name_idx)?
+        }
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
 
     Ok(scalar_value)
 }
 
-fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
+fn from_substrait_null_with_names(
+    null_type: &Type,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<ScalarValue> {
     if let Some(kind) = &null_type.kind {
         match kind {
             r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
@@ -1485,6 +1576,10 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                         "Unsupported Substrait type variation {v} of type {kind:?}"
                     ),
                 }
+            }
+            r#type::Kind::Struct(s) => {
+                let fields = from_substrait_struct(s, dfs_names, name_idx)?;
+                Ok(ScalarStructBuilder::new_null(fields))
             }
             _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
         }

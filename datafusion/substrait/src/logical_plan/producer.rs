@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -31,7 +32,9 @@ use datafusion::{
 };
 
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
-use datafusion::common::{exec_err, internal_err, not_impl_err};
+use datafusion::common::{
+    exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+};
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
@@ -46,6 +49,7 @@ use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::literal::{List, Struct};
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
+use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
     proto::{
@@ -164,6 +168,98 @@ pub fn to_substrait_rel(
                         names: scan.table_name.to_vec(),
                         advanced_extension: None,
                     })),
+                }))),
+            }))
+        }
+        LogicalPlan::Values(v) => {
+            fn field_names_dfs(dtype: &DataType) -> Result<Vec<String>> {
+                // Substrait wants a list of all field names, including nested fields from structs,
+                // also from within lists and maps. However, it does not want the list and map field names
+                // themselves - only structs are considered to have useful names.
+                match dtype {
+                    DataType::Struct(fields) => {
+                        let mut names = Vec::new();
+                        for field in fields {
+                            names.push(field.name().to_string());
+                            names.extend(field_names_dfs(field.data_type())?);
+                        }
+                        Ok(names)
+                    }
+                    DataType::List(l) => field_names_dfs(l.data_type()),
+                    DataType::Map(m, _) => match m.data_type() {
+                        DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                            let key_names = field_names_dfs(
+                                key_and_value.first().unwrap().data_type(),
+                            )?;
+                            let value_names = field_names_dfs(
+                                key_and_value.last().unwrap().data_type(),
+                            )?;
+                            Ok([key_names, value_names].concat())
+                        }
+                        _ => plan_err!(
+                            "Map fields must contain a Struct with exactly 2 fields"
+                        ),
+                    },
+                    _ => Ok(Vec::new()),
+                }
+            }
+            let names = v
+                .schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    let mut names = vec![f.name().to_string()];
+                    names.extend(field_names_dfs(f.data_type())?);
+                    Ok(names)
+                })
+                .flatten_ok()
+                .collect::<Result<_>>()?;
+
+            let field_types = r#type::Struct {
+                types: v
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
+                    .collect::<Result<_>>()?,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: r#type::Nullability::Unspecified as i32,
+            };
+            let values = v
+                .values
+                .iter()
+                .map(|row| {
+                    let fields = row
+                        .iter()
+                        .map(|v| match v {
+                            Expr::Literal(sv) => to_substrait_literal(sv),
+                            Expr::Alias(alias) => match alias.expr.as_ref() {
+                                // The schema gives us the names, so we can skip aliases
+                                Expr::Literal(sv) => to_substrait_literal(sv),
+                                _ => Err(substrait_datafusion_err!(
+                                    "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
+                                )),
+                            },
+                            _ => Err(substrait_datafusion_err!(
+                                "Only literal types and aliases are supported in Virtual Tables, got: {}", v.variant_name()
+                            )),
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok(Struct { fields })
+                })
+                .collect::<Result<_>>()?;
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(NamedStruct {
+                        names,
+                        r#struct: Some(field_types),
+                    }),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection: None,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
                 }))),
             }))
         }
@@ -1996,11 +2092,12 @@ mod test {
         let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
-                .with_scalar(c0, ScalarValue::Boolean(Some(true)))
-                .with_scalar(c1, ScalarValue::Int32(Some(1)))
-                .with_scalar(c2, ScalarValue::Utf8(None))
+                .with_scalar(c0.to_owned(), ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1.to_owned(), ScalarValue::Int32(Some(1)))
+                .with_scalar(c2.to_owned(), ScalarValue::Utf8(None))
                 .build()?,
         )?;
+        round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
 
         Ok(())
     }
