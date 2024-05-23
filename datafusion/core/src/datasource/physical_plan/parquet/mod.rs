@@ -70,6 +70,7 @@ mod row_groups;
 mod schema_adapter;
 mod statistics;
 
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
 pub use metrics::ParquetFileMetrics;
 pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
 pub use statistics::{RequestedStatistics, StatisticsConverter};
@@ -556,32 +557,36 @@ impl FileOpener for ParquetOpener {
                 };
             };
 
-            // Row group pruning by statistics: attempt to skip entire row_groups
-            // using metadata on the row groups
+            // Determine which row groups to actually read. The idea is to skip
+            // as many row groups as possible based on the metadata and query
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
-            let mut row_groups = row_groups::prune_row_groups_by_statistics(
-                &file_schema,
-                builder.parquet_schema(),
-                file_metadata.row_groups(),
-                file_range,
-                predicate,
-                &file_metrics,
-            );
+            let rg_metadata = file_metadata.row_groups();
+            // track which row groups to actually read
+            let mut row_groups = RowGroupSet::new(rg_metadata.len());
+            // if there is a range restricting what parts of the file to read
+            if let Some(range) = file_range.as_ref() {
+                row_groups.prune_by_range(rg_metadata, range);
+            }
+            // If there is a predicate that can be evaluated against the metadata
+            if let Some(predicate) = predicate.as_ref() {
+                row_groups.prune_by_statistics(
+                    &file_schema,
+                    builder.parquet_schema(),
+                    rg_metadata,
+                    predicate,
+                    &file_metrics,
+                );
 
-            // Bloom filter pruning: if bloom filters are enabled and then attempt to skip entire row_groups
-            // using bloom filters on the row groups
-            if enable_bloom_filter && !row_groups.is_empty() {
-                if let Some(predicate) = predicate {
-                    row_groups = row_groups::prune_row_groups_by_bloom_filters(
-                        &file_schema,
-                        &mut builder,
-                        &row_groups,
-                        file_metadata.row_groups(),
-                        predicate,
-                        &file_metrics,
-                    )
-                    .await;
+                if enable_bloom_filter && !row_groups.is_empty() {
+                    row_groups
+                        .prune_by_bloom_filters(
+                            &file_schema,
+                            &mut builder,
+                            predicate,
+                            &file_metrics,
+                        )
+                        .await;
                 }
             }
 
@@ -610,7 +615,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_groups)
+                .with_row_groups(row_groups.indexes())
                 .build()?;
 
             let adapted = stream
