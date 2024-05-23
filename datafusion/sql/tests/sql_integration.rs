@@ -27,13 +27,18 @@ use datafusion_common::{
     assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
     ScalarValue, TableReference,
 };
+use datafusion_expr::{col, table_scan};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
 use datafusion_functions::{string, unicode};
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
+use datafusion_sql::unparser::dialect::{
+    DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
+    MySqlDialect as UnparserMySqlDialect,
+};
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
@@ -4727,6 +4732,52 @@ fn roundtrip_crossjoin() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_statement_with_dialect() -> Result<()> {
+    struct TestStatementWithDialect {
+        sql: &'static str,
+        expected: &'static str,
+        parser_dialect: Box<dyn Dialect>,
+        unparser_dialect: Box<dyn UnparserDialect>,
+    }
+    let tests: Vec<TestStatementWithDialect> = vec![
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected:
+                "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected: r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+    ];
+
+    for query in tests {
+        let statement = Parser::new(&*query.parser_dialect)
+            .try_with_sql(query.sql)?
+            .parse_statement()?;
+
+        let context = MockContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+        let unparser = Unparser::new(&*query.unparser_dialect);
+        let roundtrip_statement = unparser.plan_to_sql(&plan)?;
+
+        let actual = format!("{}", &roundtrip_statement);
+        println!("roundtrip sql: {actual}");
+        println!("plan {}", plan.display_indent());
+
+        assert_eq!(query.expected, actual);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_unnest_logical_plan() -> Result<()> {
     let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
 
@@ -4747,6 +4798,32 @@ fn test_unnest_logical_plan() -> Result<()> {
     assert_eq!(format!("{plan:?}"), expected);
 
     Ok(())
+}
+
+#[test]
+fn test_table_references_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+        let plan = table_scan(Some(table_name), &schema, None)
+            .unwrap()
+            .project(vec![col("id"), col("value")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
+    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "table",
+        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+    );
 }
 
 #[cfg(test)]

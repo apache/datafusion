@@ -675,6 +675,16 @@ async fn roundtrip_literal_list() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn roundtrip_literal_struct() -> Result<()> {
+    assert_expected_plan(
+        "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
+        "Projection: Struct({c0:1,c1:true,c2:})\
+        \n  TableScan: data projection=[]",
+    )
+    .await
+}
+
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
 #[tokio::test]
 async fn new_test_grammar() -> Result<()> {
