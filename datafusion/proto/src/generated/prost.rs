@@ -426,17 +426,11 @@ pub mod copy_to_node {
         #[prost(message, tag = "10")]
         Parquet(super::super::datafusion_common::TableParquetOptions),
         #[prost(message, tag = "11")]
-        Avro(super::AvroOptions),
+        Avro(super::super::datafusion_common::AvroOptions),
         #[prost(message, tag = "12")]
-        Arrow(super::ArrowOptions),
+        Arrow(super::super::datafusion_common::ArrowOptions),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AvroOptions {}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ArrowOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {

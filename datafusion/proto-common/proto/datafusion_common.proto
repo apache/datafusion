@@ -465,13 +465,13 @@ message ParquetOptions {
 }
 
 message JsonWriterOptions {
-  datafusion_common.CompressionTypeVariant compression = 1;
+  CompressionTypeVariant compression = 1;
 }
 
 
 message CsvWriterOptions {
   // Compression type
-  datafusion_common.CompressionTypeVariant compression = 1;
+  CompressionTypeVariant compression = 1;
   // Optional column delimiter. Defaults to `b','`
   string delimiter = 2;
   // Whether to write column names as file headers. Defaults to `true`
@@ -490,7 +490,7 @@ message CsvWriterOptions {
 
 message Precision{
   PrecisionInfo precision_info = 1;
-  datafusion_common.ScalarValue val = 2;
+  ScalarValue val = 2;
 }
 
 enum PrecisionInfo {
@@ -533,3 +533,6 @@ enum JoinConstraint {
   ON = 0;
   USING = 1;
 }
+
+message AvroOptions {}
+message ArrowOptions {}

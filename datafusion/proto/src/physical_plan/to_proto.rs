@@ -48,8 +48,9 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
-    ArrowOptions, AvroOptions, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    PhysicalSortExprNode, PhysicalSortExprNodeCollection,
 };
+use datafusion_proto_common::protobuf_common;
 
 use super::PhysicalExtensionCodec;
 
@@ -767,8 +768,12 @@ impl TryFrom<&FormatOptions> for copy_to_node::FormatOptions {
             FormatOptions::PARQUET(options) => {
                 copy_to_node::FormatOptions::Parquet(options.try_into()?)
             }
-            FormatOptions::AVRO => copy_to_node::FormatOptions::Avro(AvroOptions {}),
-            FormatOptions::ARROW => copy_to_node::FormatOptions::Arrow(ArrowOptions {}),
+            FormatOptions::AVRO => {
+                copy_to_node::FormatOptions::Avro(protobuf_common::AvroOptions {})
+            }
+            FormatOptions::ARROW => {
+                copy_to_node::FormatOptions::Arrow(protobuf_common::ArrowOptions {})
+            }
         })
     }
 }

@@ -254,14 +254,11 @@ message CopyToNode {
       datafusion_common.CsvOptions csv = 8;
       datafusion_common.JsonOptions json = 9;
       datafusion_common.TableParquetOptions parquet = 10;
-      AvroOptions avro = 11;
-      ArrowOptions arrow = 12;
+      datafusion_common.AvroOptions avro = 11;
+      datafusion_common.ArrowOptions arrow = 12;
     }
     repeated string partition_by = 7;
 }
-
-message AvroOptions {}
-message ArrowOptions {}
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
