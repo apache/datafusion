@@ -39,8 +39,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+LOCATION '../../testing/data/csv/aggregate_test_100.csv' 
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
@@ -621,7 +621,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
         l_shipinstruct VARCHAR,
         l_shipmode VARCHAR,
         l_comment VARCHAR,
-) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/lineitem.csv';
+) STORED AS CSV LOCATION '../core/tests/tpch-csv/lineitem.csv' OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS part (
@@ -634,7 +634,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS part (
         p_container VARCHAR,
         p_retailprice DECIMAL(15, 2),
         p_comment VARCHAR,
-) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/part.csv';
+) STORED AS CSV LOCATION '../core/tests/tpch-csv/part.csv' OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT l_partkey FROM

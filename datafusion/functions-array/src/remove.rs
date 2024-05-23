@@ -27,12 +27,11 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayRemove,
     array_remove,
     array element,
@@ -81,7 +80,7 @@ impl ScalarUDFImpl for ArrayRemove {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayRemoveN,
     array_remove_n,
     array element max,
@@ -130,7 +129,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayRemoveAll,
     array_remove_all,
     array element,

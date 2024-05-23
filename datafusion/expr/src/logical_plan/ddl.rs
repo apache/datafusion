@@ -25,7 +25,6 @@ use std::{
 use crate::{Expr, LogicalPlan, Volatility};
 
 use arrow::datatypes::DataType;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
 
@@ -190,10 +189,6 @@ pub struct CreateExternalTable {
     pub location: String,
     /// The file type of physical file
     pub file_type: String,
-    /// Whether the CSV file contains a header
-    pub has_header: bool,
-    /// Delimiter for CSV
-    pub delimiter: char,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
@@ -202,8 +197,6 @@ pub struct CreateExternalTable {
     pub definition: Option<String>,
     /// Order expressions supplied by user
     pub order_exprs: Vec<Vec<Expr>>,
-    /// File compression type (GZIP, BZIP2, XZ, ZSTD)
-    pub file_compression_type: CompressionTypeVariant,
     /// Whether the table is an infinite streams
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -221,12 +214,9 @@ impl Hash for CreateExternalTable {
         self.name.hash(state);
         self.location.hash(state);
         self.file_type.hash(state);
-        self.has_header.hash(state);
-        self.delimiter.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
         self.definition.hash(state);
-        self.file_compression_type.hash(state);
         self.order_exprs.hash(state);
         self.unbounded.hash(state);
         self.options.len().hash(state); // HashMap is not hashable

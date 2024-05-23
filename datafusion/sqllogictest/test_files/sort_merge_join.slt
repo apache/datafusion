@@ -263,5 +263,173 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
+# LEFTSEMI join tests
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b = t1.b)
+) order by 1, 2
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b = t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b)
+    select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    )
+select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    )
+select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
+#LEFTANTI tests
+# returns no rows instead of correct result
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c union all
+#    select 11 a, 14 b, 4 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+#----
+#11 12 1
+#11 13 2
+
+# Set batch size to 1 for sort merge join to test scenario when data spread across multiple batches
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+SELECT * FROM (
+    WITH
+        t1 AS (
+            SELECT 12 a, 12 b
+        ),
+        t2 AS (
+            SELECT 12 a, 12 b
+        )
+        SELECT t1.* FROM t1 JOIN t2 on t1.a = t2.b WHERE t1.a > t2.b
+) ORDER BY 1, 2;
+----
+
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    )
+select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b)
+) order by 1, 2;
+----
+11 12
+11 13
+
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;

@@ -44,9 +44,7 @@ encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
+ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
@@ -61,14 +59,14 @@ datafusion-expr = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { workspace = true }
 hex = { version = "0.4", optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "^1.0"
 petgraph = "0.6.2"
-regex = { version = "1.8", optional = true }
+regex = { workspace = true, optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

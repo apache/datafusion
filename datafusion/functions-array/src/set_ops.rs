@@ -27,8 +27,6 @@ use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
 use std::any::Any;
@@ -37,7 +35,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayUnion,
     array_union,
     array1 array2,
@@ -45,7 +43,7 @@ make_udf_function!(
     array_union_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayIntersect,
     array_intersect,
     first_array second_array,
@@ -53,7 +51,7 @@ make_udf_function!(
     array_intersect_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayDistinct,
     array_distinct,
     array,

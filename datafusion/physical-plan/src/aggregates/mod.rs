@@ -2076,7 +2076,7 @@ mod tests {
         let col_c = &col("c", &test_schema)?;
         let mut eq_properties = EquivalenceProperties::new(test_schema);
         // Columns a and b are equal.
-        eq_properties.add_equal_conditions(col_a, col_b);
+        eq_properties.add_equal_conditions(col_a, col_b)?;
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let order_by_exprs = vec![

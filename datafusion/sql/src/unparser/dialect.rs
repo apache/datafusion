@@ -15,25 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Dialect is used to capture dialect specific syntax.
+use regex::Regex;
+use sqlparser::keywords::ALL_KEYWORDS;
+
+/// `Dialect` to use for Unparsing
+///
+/// The default dialect tries to avoid quoting identifiers unless necessary (e.g. `a` instead of `"a"`)
+/// but this behavior can be overridden as needed
 /// Note: this trait will eventually be replaced by the Dialect in the SQLparser package
 ///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
 pub trait Dialect {
-    fn identifier_quote_style(&self) -> Option<char>;
+    fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
 }
 pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
-    fn identifier_quote_style(&self) -> Option<char> {
-        Some('"')
+    fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
+        let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
+        if ALL_KEYWORDS.contains(&identifier.to_uppercase().as_str())
+            || !identifier_regex.is_match(identifier)
+        {
+            Some('"')
+        } else {
+            None
+        }
     }
 }
 
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
-    fn identifier_quote_style(&self) -> Option<char> {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
 }
@@ -41,7 +54,7 @@ impl Dialect for PostgreSqlDialect {
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
-    fn identifier_quote_style(&self) -> Option<char> {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
 }
@@ -49,7 +62,7 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
-    fn identifier_quote_style(&self) -> Option<char> {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
 }
@@ -67,7 +80,7 @@ impl CustomDialect {
 }
 
 impl Dialect for CustomDialect {
-    fn identifier_quote_style(&self) -> Option<char> {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
         self.identifier_quote_style
     }
 }

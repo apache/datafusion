@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::sort_properties::SortProperties;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -47,48 +46,7 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    collapse_monotonic_lex_req(output)
-}
-
-/// This function constructs a normalized [`LexRequirement`] by filtering out entries
-/// that are ordered if the next entry is.
-/// Used in `collapse_lex_req`
-fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
-    input
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| {
-            // If it's the last entry, there is no next entry
-            if i == input.len() - 1 {
-                return Some(item);
-            }
-            let next_expr = &input[i + 1];
-
-            // Only handle expressions with exactly one child
-            // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
-            // if f is monotonic in all arguments
-            if !(item.expr.children().len() == 1
-                && item.expr.children()[0].eq(&next_expr.expr))
-            {
-                return Some(item);
-            }
-
-            let opts = match next_expr.options {
-                None => return Some(item),
-                Some(opts) => opts,
-            };
-
-            if item.options.map(SortProperties::Ordered)
-                == Some(item.expr.get_ordering(&[SortProperties::Ordered(opts)]))
-            {
-                // Remove the redundant sort
-                return None;
-            }
-
-            Some(item)
-        })
-        .cloned()
-        .collect::<Vec<_>>()
+    output
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
@@ -112,7 +70,6 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
@@ -189,7 +146,7 @@ mod tests {
         let col_f = &col("f", &test_schema)?;
         let col_g = &col("g", &test_schema)?;
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
-        eq_properties.add_equal_conditions(col_a, col_c);
+        eq_properties.add_equal_conditions(col_a, col_c)?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -246,7 +203,7 @@ mod tests {
 
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Define a and f are aliases
-        eq_properties.add_equal_conditions(col_a, col_f);
+        eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
         eq_properties = eq_properties.add_constants([col_e.clone()]);
 
@@ -380,11 +337,11 @@ mod tests {
         let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
         // a and b are aliases
-        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr);
+        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
 
         // This new entry is redundant, size shouldn't increase
-        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr);
+        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 2);
@@ -393,7 +350,7 @@ mod tests {
 
         // b and c are aliases. Exising equivalence class should expand,
         // however there shouldn't be any new equivalence class
-        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr);
+        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 3);
@@ -402,12 +359,12 @@ mod tests {
         assert!(eq_groups.contains(&col_c_expr));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr);
+        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr);
+        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 5);

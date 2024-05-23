@@ -21,8 +21,12 @@ use arrow_array::{ArrayRef, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::DFSchema;
+use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
+
+mod simplification;
 
 #[test]
 fn test_eq() {
@@ -60,7 +64,6 @@ fn test_eq_with_coercion() {
 
 #[test]
 fn test_get_field() {
-    // field access Expr::field() requires a rewrite to work
     evaluate_expr_test(
         col("props").field("a"),
         vec![
@@ -77,8 +80,6 @@ fn test_get_field() {
 
 #[test]
 fn test_nested_get_field() {
-    // field access Expr::field() requires a rewrite to work, test when it is
-    // not the root expression
     evaluate_expr_test(
         col("props")
             .field("a")
@@ -98,7 +99,6 @@ fn test_nested_get_field() {
 
 #[test]
 fn test_list() {
-    // list access also requires a rewrite to work
     evaluate_expr_test(
         col("list").index(lit(1i64)),
         vec![
@@ -110,7 +110,6 @@ fn test_list() {
 
 #[test]
 fn test_list_range() {
-    // range access also requires a rewrite to work
     evaluate_expr_test(
         col("list").range(lit(1i64), lit(2i64)),
         vec![

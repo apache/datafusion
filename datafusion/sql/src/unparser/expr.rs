@@ -16,7 +16,7 @@
 // under the License.
 
 use core::fmt;
-use std::fmt::Display;
+use std::{fmt::Display, vec};
 
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
+    Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -74,7 +74,7 @@ impl Display for Unparsed {
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "(\"a\" > 4)")
+/// assert_eq!(format!("{}", sql), "(a > 4)")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -356,6 +356,9 @@ impl Unparser<'_> {
                 asc: _,
                 nulls_first: _,
             }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
+            Expr::IsNull(expr) => {
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+            }
             Expr::IsNotNull(expr) => {
                 Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
             }
@@ -367,6 +370,9 @@ impl Unparser<'_> {
             }
             Expr::IsFalse(expr) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsNotFalse(expr) => {
+                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
@@ -388,27 +394,72 @@ impl Unparser<'_> {
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::ScalarVariable(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::ScalarVariable(_, ids) => {
+                if ids.is_empty() {
+                    return internal_err!("Not a valid ScalarVariable");
+                }
+
+                Ok(if ids.len() == 1 {
+                    ast::Expr::Identifier(
+                        self.new_ident_without_quote_style(ids[0].to_string()),
+                    )
+                } else {
+                    ast::Expr::CompoundIdentifier(
+                        ids.iter()
+                            .map(|i| self.new_ident_without_quote_style(i.to_string()))
+                            .collect(),
+                    )
+                })
             }
-            Expr::IsNull(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
-            Expr::IsNotFalse(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
-            Expr::GetIndexedField(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let inner_expr = self.expr_to_sql(expr)?;
+                Ok(ast::Expr::TryCast {
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                })
             }
-            Expr::TryCast(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
             Expr::Wildcard { qualifier: _ } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
-            Expr::GroupingSet(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::GroupingSets(grouping_sets) => {
+                    let expr_ast_sets = grouping_sets
+                        .iter()
+                        .map(|set| {
+                            set.iter()
+                                .map(|e| self.expr_to_sql(e))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Ok(ast::Expr::GroupingSets(expr_ast_sets))
+                }
+                GroupingSet::Cube(cube) => {
+                    let expr_ast_sets = cube
+                        .iter()
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ast::Expr::Cube(expr_ast_sets))
+                }
+                GroupingSet::Rollup(rollup) => {
+                    let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
+                        .iter()
+                        .map(|e| {
+                            let sql = self.expr_to_sql(e)?;
+                            Ok(vec![sql])
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ast::Expr::Rollup(expr_ast_sets))
+                }
+            },
+            Expr::Placeholder(p) => {
+                Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::Placeholder(_) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
-            Expr::OuterReferenceColumn(_, _) => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
-            }
+            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
         }
     }
@@ -441,10 +492,14 @@ impl Unparser<'_> {
             let mut id = table_ref.to_vec();
             id.push(col.name.to_string());
             return Ok(ast::Expr::CompoundIdentifier(
-                id.iter().map(|i| self.new_ident(i.to_string())).collect(),
+                id.iter()
+                    .map(|i| self.new_ident_quoted_if_needs(i.to_string()))
+                    .collect(),
             ));
         }
-        Ok(ast::Expr::Identifier(self.new_ident(col.name.to_string())))
+        Ok(ast::Expr::Identifier(
+            self.new_ident_quoted_if_needs(col.name.to_string()),
+        ))
     }
 
     fn convert_bound(
@@ -481,10 +536,19 @@ impl Unparser<'_> {
             .collect::<Result<Vec<_>>>()
     }
 
-    pub(super) fn new_ident(&self, str: String) -> ast::Ident {
+    /// This function can create an identifier with or without quotes based on the dialect rules
+    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> ast::Ident {
+        let quote_style = self.dialect.identifier_quote_style(&ident);
+        ast::Ident {
+            value: ident,
+            quote_style,
+        }
+    }
+
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: self.dialect.identifier_quote_style(),
+            quote_style: None,
         }
     }
 
@@ -859,12 +923,14 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
+    use arrow_schema::DataType::Int8;
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, exists,
+        case, col, cube, exists,
         expr::{AggregateFunction, AggregateFunctionDefinition},
-        lit, not, not_exists, table_scan, wildcard, ColumnarValue, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        grouping_set, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
+        try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -917,47 +983,67 @@ mod tests {
             .build()?;
 
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"("a"."b"."c" > 4)"#,
+                r#"(a.b.c > 4)"#,
             ),
             (
                 case(col("a"))
                     .when(lit(1), lit(true))
                     .when(lit(0), lit(false))
                     .otherwise(lit(ScalarValue::Null))?,
-                r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
+                r#"CASE a WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
+            ),
+            (
+                when(col("a").is_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN a IS NULL THEN true ELSE false END"#,
+            ),
+            (
+                when(col("a").is_not_null(), lit(true)).otherwise(lit(false))?,
+                r#"CASE WHEN a IS NOT NULL THEN true ELSE false END"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
                 }),
-                r#"CAST("a" AS DATETIME)"#,
+                r#"CAST(a AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::UInt32,
                 }),
-                r#"CAST("a" AS INTEGER UNSIGNED)"#,
+                r#"CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
                 col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
-                r#""a" IN (1, 2, 3)"#,
+                r#"a IN (1, 2, 3)"#,
             ),
             (
                 col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
-                r#""a" NOT IN (1, 2, 3)"#,
+                r#"a NOT IN (1, 2, 3)"#,
             ),
             (
                 ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
-                r#"dummy_udf("a", "b")"#,
+                r#"dummy_udf(a, b)"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_null(),
+                r#"dummy_udf(a, b) IS NULL"#,
+            ),
+            (
+                ScalarUDF::new_from_impl(DummyUDF::new())
+                    .call(vec![col("a"), col("b")])
+                    .is_not_null(),
+                r#"dummy_udf(a, b) IS NOT NULL"#,
             ),
             (
                 Expr::Like(Like {
@@ -967,7 +1053,7 @@ mod tests {
                     escape_char: Some('o'),
                     case_insensitive: true,
                 }),
-                r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
+                r#"a NOT LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::SimilarTo(Like {
@@ -977,7 +1063,7 @@ mod tests {
                     escape_char: Some('o'),
                     case_insensitive: true,
                 }),
-                r#""a" LIKE 'foo' ESCAPE 'o'"#,
+                r#"a LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
@@ -1014,7 +1100,7 @@ mod tests {
                     order_by: None,
                     null_treatment: None,
                 }),
-                r#"SUM("a")"#,
+                r#"SUM(a)"#,
             ),
             (
                 Expr::AggregateFunction(AggregateFunction {
@@ -1053,7 +1139,7 @@ mod tests {
                     window_frame: WindowFrame::new(None),
                     null_treatment: None,
                 }),
-                r#"ROW_NUMBER("col") OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
+                r#"ROW_NUMBER(col) OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
             ),
             (
                 Expr::WindowFunction(WindowFunction {
@@ -1078,43 +1164,85 @@ mod tests {
                     ),
                     null_treatment: None,
                 }),
-                r#"COUNT(*) OVER (ORDER BY "a" DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"COUNT(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
-            (col("a").is_not_null(), r#""a" IS NOT NULL"#),
+            (col("a").is_not_null(), r#"a IS NOT NULL"#),
+            (col("a").is_null(), r#"a IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
-                r#"(("a" + "b") > 4) IS TRUE"#,
+                r#"((a + b) > 4) IS TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_true(),
-                r#"(("a" + "b") > 4) IS NOT TRUE"#,
+                r#"((a + b) > 4) IS NOT TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
-                r#"(("a" + "b") > 4) IS FALSE"#,
+                r#"((a + b) > 4) IS FALSE"#,
+            ),
+            (
+                (col("a") + col("b")).gt(lit(4)).is_not_false(),
+                r#"((a + b) > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
-                r#"(("a" + "b") > 4) IS UNKNOWN"#,
+                r#"((a + b) > 4) IS UNKNOWN"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
-                r#"(("a" + "b") > 4) IS NOT UNKNOWN"#,
+                r#"((a + b) > 4) IS NOT UNKNOWN"#,
             ),
-            (not(col("a")), r#"NOT "a""#),
+            (not(col("a")), r#"NOT a"#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
-                r#"("a" BETWEEN 1 AND 7)"#,
+                r#"(a BETWEEN 1 AND 7)"#,
             ),
-            (Expr::Negative(Box::new(col("a"))), r#"-"a""#),
+            (Expr::Negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
-                r#"EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+                r#"EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
-                r#"NOT EXISTS (SELECT "t"."a" FROM "t" WHERE ("t"."a" = 1))"#,
+                r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
+            (
+                try_cast(col("a"), DataType::Date64),
+                r#"TRY_CAST(a AS DATETIME)"#,
+            ),
+            (
+                try_cast(col("a"), DataType::UInt32),
+                r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
+            ),
+            (
+                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                r#"@a"#,
+            ),
+            (
+                Expr::ScalarVariable(
+                    Int8,
+                    vec![String::from("@root"), String::from("foo")],
+                ),
+                r#"@root.foo"#,
+            ),
+            (col("x").eq(placeholder("$1")), r#"(x = $1)"#),
+            (
+                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
+                r#"(t.a > 1)"#,
+            ),
+            (
+                grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
+                r#"GROUPING SETS ((a, b), (a))"#,
+            ),
+            (cube(vec![col("a"), col("b")]), r#"CUBE (a, b)"#),
+            (rollup(vec![col("a"), col("b")]), r#"ROLLUP (a, b)"#),
+            (col("table").eq(lit(1)), r#"("table" = 1)"#),
+            (
+                col("123_need_quoted").eq(lit(1)),
+                r#"("123_need_quoted" = 1)"#,
+            ),
+            (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
+            (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
         ];
 
         for (expr, expected) in tests {
@@ -1131,8 +1259,8 @@ mod tests {
     #[test]
     fn expr_to_unparsed_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
-            (col("a").sort(true, true), r#""a" ASC NULLS FIRST"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
+            (col("a").sort(true, true), r#"a ASC NULLS FIRST"#),
         ];
 
         for (expr, expected) in tests {

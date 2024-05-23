@@ -221,7 +221,7 @@ pub fn coerce_plan_expr_for_schema(
             let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
-            let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
+            let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
                 let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
                 Ok(LogicalPlan::Projection(projection))

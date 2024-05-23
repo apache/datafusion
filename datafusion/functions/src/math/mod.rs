@@ -17,8 +17,11 @@
 
 //! "math" DataFusion functions
 
-use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
+
+use crate::math::monotonicity::*;
+
+use datafusion_expr::ScalarUDF;
 
 pub mod abs;
 pub mod cot;
@@ -27,6 +30,7 @@ pub mod gcd;
 pub mod iszero;
 pub mod lcm;
 pub mod log;
+pub mod monotonicity;
 pub mod nans;
 pub mod nanvl;
 pub mod pi;
@@ -37,42 +41,54 @@ pub mod trunc;
 
 // Create UDFs
 make_udf_function!(abs::AbsFunc, ABS, abs);
-make_math_unary_udf!(AcosFunc, ACOS, acos, acos, None);
-make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh, Some(vec![Some(true)]));
-make_math_unary_udf!(AsinFunc, ASIN, asin, asin, None);
-make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh, Some(vec![Some(true)]));
-make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
-make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
-make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, Some(vec![Some(true)]));
-make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, None);
-make_math_unary_udf!(CeilFunc, CEIL, ceil, ceil, Some(vec![Some(true)]));
-make_math_unary_udf!(CosFunc, COS, cos, cos, None);
-make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, None);
+make_math_unary_udf!(AcosFunc, ACOS, acos, acos, super::acos_order);
+make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh, super::acosh_order);
+make_math_unary_udf!(AsinFunc, ASIN, asin, asin, super::asin_order);
+make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh, super::asinh_order);
+make_math_unary_udf!(AtanFunc, ATAN, atan, atan, super::atan_order);
+make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, super::atanh_order);
+make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order);
+make_math_unary_udf!(CbrtFunc, CBRT, cbrt, cbrt, super::cbrt_order);
+make_math_unary_udf!(CeilFunc, CEIL, ceil, ceil, super::ceil_order);
+make_math_unary_udf!(CosFunc, COS, cos, cos, super::cos_order);
+make_math_unary_udf!(CoshFunc, COSH, cosh, cosh, super::cosh_order);
 make_udf_function!(cot::CotFunc, COT, cot);
-make_math_unary_udf!(DegreesFunc, DEGREES, degrees, to_degrees, None);
-make_math_unary_udf!(ExpFunc, EXP, exp, exp, Some(vec![Some(true)]));
+make_math_unary_udf!(
+    DegreesFunc,
+    DEGREES,
+    degrees,
+    to_degrees,
+    super::degrees_order
+);
+make_math_unary_udf!(ExpFunc, EXP, exp, exp, super::exp_order);
 make_udf_function!(factorial::FactorialFunc, FACTORIAL, factorial);
-make_math_unary_udf!(FloorFunc, FLOOR, floor, floor, Some(vec![Some(true)]));
+make_math_unary_udf!(FloorFunc, FLOOR, floor, floor, super::floor_order);
 make_udf_function!(log::LogFunc, LOG, log);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(iszero::IsZeroFunc, ISZERO, iszero);
 make_udf_function!(lcm::LcmFunc, LCM, lcm);
-make_math_unary_udf!(LnFunc, LN, ln, ln, Some(vec![Some(true)]));
-make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
-make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
+make_math_unary_udf!(LnFunc, LN, ln, ln, super::ln_order);
+make_math_unary_udf!(Log2Func, LOG2, log2, log2, super::log2_order);
+make_math_unary_udf!(Log10Func, LOG10, log10, log10, super::log10_order);
 make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
 make_udf_function!(pi::PiFunc, PI, pi);
 make_udf_function!(power::PowerFunc, POWER, power);
-make_math_unary_udf!(RadiansFunc, RADIANS, radians, to_radians, None);
+make_math_unary_udf!(
+    RadiansFunc,
+    RADIANS,
+    radians,
+    to_radians,
+    super::radians_order
+);
 make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
-make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, None);
-make_math_unary_udf!(SinFunc, SIN, sin, sin, None);
-make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, None);
-make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, None);
-make_math_unary_udf!(TanFunc, TAN, tan, tan, None);
-make_math_unary_udf!(TanhFunc, TANH, tanh, tanh, None);
+make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, super::signum_order);
+make_math_unary_udf!(SinFunc, SIN, sin, sin, super::sin_order);
+make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, super::sinh_order);
+make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, super::sqrt_order);
+make_math_unary_udf!(TanFunc, TAN, tan, tan, super::tan_order);
+make_math_unary_udf!(TanhFunc, TANH, tanh, tanh, super::tanh_order);
 make_udf_function!(trunc::TruncFunc, TRUNC, trunc);
 
 pub mod expr_fn {

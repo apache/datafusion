@@ -59,8 +59,6 @@ pub enum AggregateFunction {
     Stddev,
     /// Standard Deviation (Population)
     StddevPop,
-    /// Covariance (Population)
-    CovariancePop,
     /// Correlation
     Correlation,
     /// Slope from linear regression
@@ -120,7 +118,6 @@ impl AggregateFunction {
             VariancePop => "VAR_POP",
             Stddev => "STDDEV",
             StddevPop => "STDDEV_POP",
-            CovariancePop => "COVAR_POP",
             Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
             RegrIntercept => "REGR_INTERCEPT",
@@ -173,7 +170,6 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "covar_pop" => AggregateFunction::CovariancePop,
             "stddev" => AggregateFunction::Stddev,
             "stddev_pop" => AggregateFunction::StddevPop,
             "stddev_samp" => AggregateFunction::Stddev,
@@ -246,9 +242,6 @@ impl AggregateFunction {
             AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
             AggregateFunction::VariancePop => {
                 variance_return_type(&coerced_data_types[0])
-            }
-            AggregateFunction::CovariancePop => {
-                covariance_return_type(&coerced_data_types[0])
             }
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
@@ -337,8 +330,7 @@ impl AggregateFunction {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
-            AggregateFunction::CovariancePop
-            | AggregateFunction::Correlation
+            AggregateFunction::Correlation
             | AggregateFunction::RegrSlope
             | AggregateFunction::RegrIntercept
             | AggregateFunction::RegrCount

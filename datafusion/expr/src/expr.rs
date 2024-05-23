@@ -143,9 +143,6 @@ pub enum Expr {
     IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`arrow::array::ListArray`] or
-    /// [`arrow::array::StructArray`] by index or range
-    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -524,9 +521,6 @@ pub enum AggregateFunctionDefinition {
     BuiltIn(aggregate_function::AggregateFunction),
     /// Resolved to a user defined aggregate function
     UDF(Arc<crate::AggregateUDF>),
-    /// A aggregation function constructed with name. This variant can not be executed directly
-    /// and instead must be resolved to one of the other variants prior to physical planning.
-    Name(Arc<str>),
 }
 
 impl AggregateFunctionDefinition {
@@ -535,7 +529,6 @@ impl AggregateFunctionDefinition {
         match self {
             AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
             AggregateFunctionDefinition::UDF(udf) => udf.name(),
-            AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
 }
@@ -846,15 +839,16 @@ impl GroupingSet {
     /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
     /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
     /// the exprs in the underlying sets.
-    pub fn distinct_expr(&self) -> Vec<Expr> {
+    pub fn distinct_expr(&self) -> Vec<&Expr> {
         match self {
-            GroupingSet::Rollup(exprs) => exprs.clone(),
-            GroupingSet::Cube(exprs) => exprs.clone(),
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => {
+                exprs.iter().collect()
+            }
             GroupingSet::GroupingSets(groups) => {
-                let mut exprs: Vec<Expr> = vec![];
+                let mut exprs: Vec<&Expr> = vec![];
                 for exp in groups.iter().flatten() {
-                    if !exprs.contains(exp) {
-                        exprs.push(exp.clone());
+                    if !exprs.contains(&exp) {
+                        exprs.push(exp);
                     }
                 }
                 exprs
@@ -900,7 +894,6 @@ impl Expr {
             Expr::Column(..) => "Column",
             Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
-            Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery(..) => "InSubquery",
@@ -1088,6 +1081,34 @@ impl Expr {
         }
     }
 
+    /// Recursively potentially multiple aliases from an expression.
+    ///
+    /// If the expression is not an alias, the expression is returned unchanged.
+    /// This method removes directly nested aliases, but not other nested
+    /// aliases.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// // `foo as "bar"` is unaliased to `foo`
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    ///
+    /// // `foo as "bar" + baz` is not unaliased
+    /// let expr = col("foo").alias("bar") + col("baz");
+    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    ///
+    /// // `foo as "bar" as "baz" is unalaised to foo
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// ```
+    pub fn unalias_nested(self) -> Expr {
+        match self {
+            Expr::Alias(alias) => alias.expr.unalias_nested(),
+            _ => self,
+        }
+    }
+
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
@@ -1164,95 +1185,33 @@ impl Expr {
         ))
     }
 
-    /// Return access to the named field. Example `expr["name"]`
-    ///
-    /// ## Access field "my_field" from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// {
-    ///   "my_field": 123.34,
-    ///   "other_field": "Boston",
-    /// }
-    /// ```
-    ///
-    /// You can access column "my_field" with
-    ///
-    /// ```
-    /// # use datafusion_expr::{col};
-    /// let expr = col("c1")
-    ///    .field("my_field");
-    /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
-    /// ```
-    pub fn field(self, name: impl Into<String>) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::NamedStructField {
-                name: ScalarValue::from(name.into()),
-            },
-        })
-    }
-
-    /// Return access to the element field. Example `expr["name"]`
-    ///
-    /// ## Example Access element 2 from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// [10, 20, 30, 40]
-    /// ```
-    ///
-    /// You can access the value "30" with
-    ///
-    /// ```
-    /// # use datafusion_expr::{lit, col, Expr};
-    /// let expr = col("c1")
-    ///    .index(lit(3));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
-    /// ```
-    pub fn index(self, key: Expr) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::ListIndex { key: Box::new(key) },
-        })
-    }
-
-    /// Return elements between `1` based `start` and `stop`, for
-    /// example `expr[1:3]`
-    ///
-    /// ## Example: Access element 2, 3, 4 from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// [10, 20, 30, 40]
-    /// ```
-    ///
-    /// You can access the value `[20, 30, 40]` with
-    ///
-    /// ```
-    /// # use datafusion_expr::{lit, col};
-    /// let expr = col("c1")
-    ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
-    /// ```
-    pub fn range(self, start: Expr, stop: Expr) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::ListRange {
-                start: Box::new(start),
-                stop: Box::new(stop),
-                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
-            },
-        })
-    }
-
+    #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
             _ => plan_err!("Could not coerce '{self}' into Column!"),
+        }
+    }
+
+    /// Return a reference to the inner `Column` if any
+    ///
+    /// returns `None` if the expression is not a `Column`
+    ///
+    /// Example
+    /// ```
+    /// # use datafusion_common::Column;
+    /// use datafusion_expr::{col, Expr};
+    /// let expr = col("foo");
+    /// assert_eq!(expr.try_as_col(), Some(&Column::from("foo")));
+    ///
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.try_as_col(), None);
+    /// ```
+    pub fn try_as_col(&self) -> Option<&Column> {
+        if let Expr::Column(it) = self {
+            Some(it)
+        } else {
+            None
         }
     }
 
@@ -1323,7 +1282,6 @@ impl Expr {
             | Expr::Cast(..)
             | Expr::Column(..)
             | Expr::Exists(..)
-            | Expr::GetIndexedField(..)
             | Expr::GroupingSet(..)
             | Expr::InList(..)
             | Expr::InSubquery(..)
@@ -1572,19 +1530,6 @@ impl fmt::Display for Expr {
                 Some(qualifier) => write!(f, "{qualifier}.*"),
                 None => write!(f, "*"),
             },
-            Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
-                GetFieldAccess::NamedStructField { name } => {
-                    write!(f, "({expr})[{name}]")
-                }
-                GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => {
-                    write!(f, "({expr})[{start}:{stop}:{stride}]")
-                }
-            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
@@ -1635,28 +1580,42 @@ fn fmt_function(
     write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
 }
 
-fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<String> {
-    let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
-    let distinct_str = match distinct {
-        true => "DISTINCT ",
-        false => "",
-    };
-    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+fn write_function_name<W: Write>(
+    w: &mut W,
+    fun: &str,
+    distinct: bool,
+    args: &[Expr],
+) -> Result<()> {
+    write!(w, "{}(", fun)?;
+    if distinct {
+        w.write_str("DISTINCT ")?;
+    }
+    write_names_join(w, args, ",")?;
+    w.write_str(")")?;
+    Ok(())
 }
 
 /// Returns a readable name of an expression based on the input schema.
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 pub(crate) fn create_name(e: &Expr) -> Result<String> {
+    let mut s = String::new();
+    write_name(&mut s, e)?;
+    Ok(s)
+}
+
+fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
     match e {
-        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
-        Expr::Column(c) => Ok(c.flat_name()),
-        Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
-        Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
-        Expr::Literal(value) => Ok(format!("{value:?}")),
+        Expr::Alias(Alias { name, .. }) => write!(w, "{}", name)?,
+        Expr::Column(c) => write!(w, "{}", c.flat_name())?,
+        Expr::OuterReferenceColumn(_, c) => write!(w, "outer_ref({})", c.flat_name())?,
+        Expr::ScalarVariable(_, variable_names) => {
+            write!(w, "{}", variable_names.join("."))?
+        }
+        Expr::Literal(value) => write!(w, "{value:?}")?,
         Expr::BinaryExpr(binary_expr) => {
-            let left = create_name(binary_expr.left.as_ref())?;
-            let right = create_name(binary_expr.right.as_ref())?;
-            Ok(format!("{} {} {}", left, binary_expr.op, right))
+            write_name(w, binary_expr.left.as_ref())?;
+            write!(w, " {} ", binary_expr.op)?;
+            write_name(w, binary_expr.right.as_ref())?;
         }
         Expr::Like(Like {
             negated,
@@ -1665,19 +1624,17 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             escape_char,
             case_insensitive,
         }) => {
-            let s = format!(
-                "{} {}{} {} {}",
+            write!(
+                w,
+                "{} {}{} {}",
                 expr,
                 if *negated { "NOT " } else { "" },
                 if *case_insensitive { "ILIKE" } else { "LIKE" },
                 pattern,
-                if let Some(char) = escape_char {
-                    format!("CHAR '{char}'")
-                } else {
-                    "".to_string()
-                }
-            );
-            Ok(s)
+            )?;
+            if let Some(char) = escape_char {
+                write!(w, " CHAR '{char}'")?;
+            }
         }
         Expr::SimilarTo(Like {
             negated,
@@ -1686,8 +1643,9 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             escape_char,
             case_insensitive: _,
         }) => {
-            let s = format!(
-                "{} {} {} {}",
+            write!(
+                w,
+                "{} {} {}",
                 expr,
                 if *negated {
                     "NOT SIMILAR TO"
@@ -1695,114 +1653,95 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
                     "SIMILAR TO"
                 },
                 pattern,
-                if let Some(char) = escape_char {
-                    format!("CHAR '{char}'")
-                } else {
-                    "".to_string()
-                }
-            );
-            Ok(s)
+            )?;
+            if let Some(char) = escape_char {
+                write!(w, " CHAR '{char}'")?;
+            }
         }
         Expr::Case(case) => {
-            let mut name = "CASE ".to_string();
+            write!(w, "CASE ")?;
             if let Some(e) = &case.expr {
-                let e = create_name(e)?;
-                let _ = write!(name, "{e} ");
+                write_name(w, e)?;
+                w.write_str(" ")?;
             }
-            for (w, t) in &case.when_then_expr {
-                let when = create_name(w)?;
-                let then = create_name(t)?;
-                let _ = write!(name, "WHEN {when} THEN {then} ");
+            for (when, then) in &case.when_then_expr {
+                w.write_str("WHEN ")?;
+                write_name(w, when)?;
+                w.write_str(" THEN ")?;
+                write_name(w, then)?;
+                w.write_str(" ")?;
             }
             if let Some(e) = &case.else_expr {
-                let e = create_name(e)?;
-                let _ = write!(name, "ELSE {e} ");
+                w.write_str("ELSE ")?;
+                write_name(w, e)?;
+                w.write_str(" ")?;
             }
-            name += "END";
-            Ok(name)
+            w.write_str("END")?;
         }
         Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
-            create_name(expr)
+            write_name(w, expr)?;
         }
         Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
-            create_name(expr)
+            write_name(w, expr)?;
         }
         Expr::Not(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("NOT {expr}"))
+            w.write_str("NOT ")?;
+            write_name(w, expr)?;
         }
         Expr::Negative(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("(- {expr})"))
+            w.write_str("(- ")?;
+            write_name(w, expr)?;
+            w.write_str(")")?;
         }
         Expr::IsNull(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS NULL"))
+            write_name(w, expr)?;
+            w.write_str(" IS NULL")?;
         }
         Expr::IsNotNull(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS NOT NULL"))
+            write_name(w, expr)?;
+            w.write_str(" IS NOT NULL")?;
         }
         Expr::IsTrue(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS TRUE"))
+            write_name(w, expr)?;
+            w.write_str(" IS TRUE")?;
         }
         Expr::IsFalse(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS FALSE"))
+            write_name(w, expr)?;
+            w.write_str(" IS FALSE")?;
         }
         Expr::IsUnknown(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS UNKNOWN"))
+            write_name(w, expr)?;
+            w.write_str(" IS UNKNOWN")?;
         }
         Expr::IsNotTrue(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS NOT TRUE"))
+            write_name(w, expr)?;
+            w.write_str(" IS NOT TRUE")?;
         }
         Expr::IsNotFalse(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS NOT FALSE"))
+            write_name(w, expr)?;
+            w.write_str(" IS NOT FALSE")?;
         }
         Expr::IsNotUnknown(expr) => {
-            let expr = create_name(expr)?;
-            Ok(format!("{expr} IS NOT UNKNOWN"))
+            write_name(w, expr)?;
+            w.write_str(" IS NOT UNKNOWN")?;
         }
-        Expr::Exists(Exists { negated: true, .. }) => Ok("NOT EXISTS".to_string()),
-        Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
-        Expr::InSubquery(InSubquery { negated: true, .. }) => Ok("NOT IN".to_string()),
-        Expr::InSubquery(InSubquery { negated: false, .. }) => Ok("IN".to_string()),
+        Expr::Exists(Exists { negated: true, .. }) => w.write_str("NOT EXISTS")?,
+        Expr::Exists(Exists { negated: false, .. }) => w.write_str("EXISTS")?,
+        Expr::InSubquery(InSubquery { negated: true, .. }) => w.write_str("NOT IN")?,
+        Expr::InSubquery(InSubquery { negated: false, .. }) => w.write_str("IN")?,
         Expr::ScalarSubquery(subquery) => {
-            Ok(subquery.subquery.schema().field(0).name().clone())
-        }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let expr = create_name(expr)?;
-            match field {
-                GetFieldAccess::NamedStructField { name } => {
-                    Ok(format!("{expr}[{name}]"))
-                }
-                GetFieldAccess::ListIndex { key } => {
-                    let key = create_name(key)?;
-                    Ok(format!("{expr}[{key}]"))
-                }
-                GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => {
-                    let start = create_name(start)?;
-                    let stop = create_name(stop)?;
-                    let stride = create_name(stride)?;
-                    Ok(format!("{expr}[{start}:{stop}:{stride}]"))
-                }
-            }
+            w.write_str(subquery.subquery.schema().field(0).name().as_str())?;
         }
         Expr::Unnest(Unnest { expr }) => {
-            let expr_name = create_name(expr)?;
-            Ok(format!("unnest({expr_name})"))
+            w.write_str("unnest(")?;
+            write_name(w, expr)?;
+            w.write_str(")")?;
         }
-        Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
+        Expr::ScalarFunction(fun) => {
+            w.write_str(fun.func.display_name(&fun.args)?.as_str())?;
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -1811,23 +1750,21 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             order_by,
             null_treatment,
         }) => {
-            let mut parts: Vec<String> =
-                vec![create_function_name(&fun.to_string(), false, args)?];
-
+            write_function_name(w, &fun.to_string(), false, args)?;
             if let Some(nt) = null_treatment {
-                parts.push(format!("{}", nt));
+                w.write_str(" ")?;
+                write!(w, "{}", nt)?;
             }
-
             if !partition_by.is_empty() {
-                parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
+                w.write_str(" ")?;
+                write!(w, "PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
             }
-
             if !order_by.is_empty() {
-                parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
+                w.write_str(" ")?;
+                write!(w, "ORDER BY [{}]", expr_vec_fmt!(order_by))?;
             }
-
-            parts.push(format!("{window_frame}"));
-            Ok(parts.join(" "))
+            w.write_str(" ")?;
+            write!(w, "{window_frame}")?;
         }
         Expr::AggregateFunction(AggregateFunction {
             func_def,
@@ -1837,50 +1774,40 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             order_by,
             null_treatment,
         }) => {
-            let name = match func_def {
-                AggregateFunctionDefinition::BuiltIn(..)
-                | AggregateFunctionDefinition::Name(..) => {
-                    create_function_name(func_def.name(), *distinct, args)?
-                }
-                AggregateFunctionDefinition::UDF(..) => {
-                    let names: Vec<String> =
-                        args.iter().map(create_name).collect::<Result<_>>()?;
-                    names.join(",")
-                }
-            };
-            let mut info = String::new();
+            write_function_name(w, func_def.name(), *distinct, args)?;
+
             if let Some(fe) = filter {
-                info += &format!(" FILTER (WHERE {fe})");
+                write!(w, " FILTER (WHERE {fe})")?;
             };
             if let Some(order_by) = order_by {
-                info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
+                write!(w, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
             };
             if let Some(nt) = null_treatment {
-                info += &format!(" {}", nt);
-            }
-            match func_def {
-                AggregateFunctionDefinition::BuiltIn(..)
-                | AggregateFunctionDefinition::Name(..) => {
-                    Ok(format!("{}{}", name, info))
-                }
-                AggregateFunctionDefinition::UDF(fun) => {
-                    Ok(format!("{}({}){}", fun.name(), name, info))
-                }
+                write!(w, " {}", nt)?;
             }
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
-                Ok(format!("ROLLUP ({})", create_names(exprs.as_slice())?))
+                write!(w, "ROLLUP (")?;
+                write_names(w, exprs.as_slice())?;
+                write!(w, ")")?;
             }
             GroupingSet::Cube(exprs) => {
-                Ok(format!("CUBE ({})", create_names(exprs.as_slice())?))
+                write!(w, "CUBE (")?;
+                write_names(w, exprs.as_slice())?;
+                write!(w, ")")?;
             }
             GroupingSet::GroupingSets(lists_of_exprs) => {
-                let mut list_of_names = vec![];
-                for exprs in lists_of_exprs {
-                    list_of_names.push(format!("({})", create_names(exprs.as_slice())?));
+                write!(w, "GROUPING SETS (")?;
+                for (i, exprs) in lists_of_exprs.iter().enumerate() {
+                    if i != 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "(")?;
+                    write_names(w, exprs.as_slice())?;
+                    write!(w, ")")?;
                 }
-                Ok(format!("GROUPING SETS ({})", list_of_names.join(", ")))
+                write!(w, ")")?;
             }
         },
         Expr::InList(InList {
@@ -1888,12 +1815,12 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             list,
             negated,
         }) => {
-            let expr = create_name(expr)?;
+            write_name(w, expr)?;
             let list = list.iter().map(create_name);
             if *negated {
-                Ok(format!("{expr} NOT IN ({list:?})"))
+                write!(w, " NOT IN ({list:?})")?;
             } else {
-                Ok(format!("{expr} IN ({list:?})"))
+                write!(w, " IN ({list:?})")?;
             }
         }
         Expr::Between(Between {
@@ -1902,35 +1829,46 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
             low,
             high,
         }) => {
-            let expr = create_name(expr)?;
-            let low = create_name(low)?;
-            let high = create_name(high)?;
+            write_name(w, expr)?;
             if *negated {
-                Ok(format!("{expr} NOT BETWEEN {low} AND {high}"))
+                write!(w, " NOT BETWEEN ")?;
             } else {
-                Ok(format!("{expr} BETWEEN {low} AND {high}"))
+                write!(w, " BETWEEN ")?;
             }
+            write_name(w, low)?;
+            write!(w, " AND ")?;
+            write_name(w, high)?;
         }
         Expr::Sort { .. } => {
-            internal_err!("Create name does not support sort expression")
+            return internal_err!("Create name does not support sort expression")
         }
         Expr::Wildcard { qualifier } => match qualifier {
-            Some(qualifier) => internal_err!(
-                "Create name does not support qualified wildcard, got {qualifier}"
-            ),
-            None => Ok("*".to_string()),
+            Some(qualifier) => {
+                return internal_err!(
+                    "Create name does not support qualified wildcard, got {qualifier}"
+                )
+            }
+            None => write!(w, "*")?,
         },
-        Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
-    }
+        Expr::Placeholder(Placeholder { id, .. }) => write!(w, "{}", id)?,
+    };
+    Ok(())
 }
 
-/// Create a comma separated list of names from a list of expressions
-fn create_names(exprs: &[Expr]) -> Result<String> {
-    Ok(exprs
-        .iter()
-        .map(create_name)
-        .collect::<Result<Vec<String>>>()?
-        .join(", "))
+fn write_names<W: Write>(w: &mut W, exprs: &[Expr]) -> Result<()> {
+    exprs.iter().try_for_each(|e| write_name(w, e))
+}
+
+fn write_names_join<W: Write>(w: &mut W, exprs: &[Expr], sep: &str) -> Result<()> {
+    let mut iter = exprs.iter();
+    if let Some(first_arg) = iter.next() {
+        write_name(w, first_arg)?;
+    }
+    for a in iter {
+        w.write_str(sep)?;
+        write_name(w, a)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

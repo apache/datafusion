@@ -30,8 +30,10 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    function::AccumulatorArgs, type_coercion::aggregates::NUMERICS,
-    utils::format_state_name, Accumulator, AggregateUDFImpl, Signature, Volatility,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    type_coercion::aggregates::NUMERICS,
+    utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::stats::StatsType;
 
@@ -41,6 +43,14 @@ make_udaf_expr_and_func!(
     y x,
     "Computes the sample covariance.",
     covar_samp_udaf
+);
+
+make_udaf_expr_and_func!(
+    CovariancePopulation,
+    covar_pop,
+    y x,
+    "Computes the population covariance.",
+    covar_pop_udaf
 );
 
 pub struct CovarianceSample {
@@ -93,12 +103,8 @@ impl AggregateUDFImpl for CovarianceSample {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(
-        &self,
-        name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
             Field::new(format_state_name(name, "mean1"), DataType::Float64, true),
@@ -117,6 +123,75 @@ impl AggregateUDFImpl for CovarianceSample {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+}
+
+pub struct CovariancePopulation {
+    signature: Signature,
+}
+
+impl Debug for CovariancePopulation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("CovariancePopulation")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for CovariancePopulation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CovariancePopulation {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for CovariancePopulation {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "covar_pop"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Covariance requires numeric input types");
+        }
+
+        Ok(DataType::Float64)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let name = args.name;
+        Ok(vec![
+            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+            Field::new(format_state_name(name, "mean1"), DataType::Float64, true),
+            Field::new(format_state_name(name, "mean2"), DataType::Float64, true),
+            Field::new(
+                format_state_name(name, "algo_const"),
+                DataType::Float64,
+                true,
+            ),
+        ])
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CovarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
     }
 }
 

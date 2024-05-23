@@ -19,15 +19,15 @@
 
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
-    Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
+    Cast, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, Sort,
+    TryCast, Unnest, WindowFunction,
 };
-use crate::{Expr, GetFieldAccess};
+use crate::Expr;
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, map_until_stop_and_collect, Result};
+use datafusion_common::{map_until_stop_and_collect, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -51,16 +51,6 @@ impl TreeNode for Expr {
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = expr.as_ref();
-                match field {
-                    GetFieldAccess::ListIndex {key} => vec![key.as_ref(), expr],
-                    GetFieldAccess::ListRange {start, stop, stride} => {
-                        vec![start.as_ref(), stop.as_ref(),stride.as_ref(), expr]
-                    }
-                    GetFieldAccess::NamedStructField { .. } => vec![expr],
-                }
-            }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
             Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
@@ -348,9 +338,6 @@ impl TreeNode for Expr {
                             null_treatment,
                         )))
                     }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
                 },
             )?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -377,11 +364,6 @@ impl TreeNode for Expr {
             .update_data(|(new_expr, new_list)| {
                 Expr::InList(InList::new(new_expr, new_list, negated))
             }),
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                transform_box(expr, &mut f)?.update_data(|be| {
-                    Expr::GetIndexedField(GetIndexedField::new(be, field))
-                })
-            }
         })
     }
 }

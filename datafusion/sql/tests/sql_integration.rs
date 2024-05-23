@@ -32,13 +32,13 @@ use datafusion_expr::{
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
+use datafusion_functions::{string, unicode};
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
-use datafusion_functions::{string, unicode};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -1903,12 +1903,12 @@ fn create_external_table_csv_no_schema() {
 fn create_external_table_with_compression_type() {
     // positive case
     let sqls = vec![
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv.gz'",
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv.bz2'",
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON COMPRESSION TYPE GZIP LOCATION 'foo.json.gz'",
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON COMPRESSION TYPE BZIP2 LOCATION 'foo.json.bz2'",
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD COMPRESSION TYPE GZIP LOCATION 'foo.unk'",
-        ];
+        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv.gz' OPTIONS ('format.compression' 'gzip')",
+        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv.bz2' OPTIONS ('format.compression' 'bzip2')",
+        "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.gz' OPTIONS ('format.compression' 'gzip')",
+        "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.bz2' OPTIONS ('format.compression' 'bzip2')",
+        "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD LOCATION 'foo.unk' OPTIONS ('format.compression' 'gzip')",
+         ];
     for sql in sqls {
         let expected = "CreateExternalTable: Bare { table: \"t\" }";
         quick_test(sql, expected);
@@ -1916,12 +1916,12 @@ fn create_external_table_with_compression_type() {
 
     // negative case
     let sqls = vec![
-        "CREATE EXTERNAL TABLE t STORED AS AVRO COMPRESSION TYPE GZIP LOCATION 'foo.avro'",
-        "CREATE EXTERNAL TABLE t STORED AS AVRO COMPRESSION TYPE BZIP2 LOCATION 'foo.avro'",
-        "CREATE EXTERNAL TABLE t STORED AS PARQUET COMPRESSION TYPE GZIP LOCATION 'foo.parquet'",
-        "CREATE EXTERNAL TABLE t STORED AS PARQUET COMPRESSION TYPE BZIP2 LOCATION 'foo.parquet'",
-        "CREATE EXTERNAL TABLE t STORED AS ARROW COMPRESSION TYPE GZIP LOCATION 'foo.arrow'",
-        "CREATE EXTERNAL TABLE t STORED AS ARROW COMPRESSION TYPE BZIP2 LOCATION 'foo.arrow'",
+        "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro' OPTIONS ('format.compression' 'gzip')",
+        "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro' OPTIONS ('format.compression' 'bzip2')",
+        "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet' OPTIONS ('format.compression' 'gzip')",
+        "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet' OPTIONS ('format.compression' 'bzip2')",
+        "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'gzip')",
+        "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'bzip2')",
     ];
     for sql in sqls {
         let err = logical_plan(sql).expect_err("query should have failed");
@@ -2905,6 +2905,21 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
+            "unnest_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "array_col",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "struct_col",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("field1", DataType::Int64, true),
+                        Field::new("field2", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+            ])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -2942,15 +2957,15 @@ impl ContextProvider for MockContextProvider {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udf_names(&self) -> Vec<String> {
         self.udfs.keys().cloned().collect()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         self.udafs.keys().cloned().collect()
     }
 
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         Vec::new()
     }
 }
@@ -4555,25 +4570,21 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (
-            TableReference::bare("person"),
-            "age > 35",
-            r#"("age" > 35)"#,
-        ),
+        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
         (
             TableReference::bare("person"),
             "id = '10'",
-            r#"("id" = '10')"#,
+            r#"(id = '10')"#,
         ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
-            r#"CAST("id" AS VARCHAR)"#,
+            r#"CAST(id AS VARCHAR)"#,
         ),
         (
             TableReference::bare("person"),
             "SUM((age * 2))",
-            r#"SUM(("age" * 2))"#,
+            r#"SUM((age * 2))"#,
         ),
     ];
 
@@ -4641,6 +4652,14 @@ fn roundtrip_statement() -> Result<()> {
             group by "Last Name", p.id 
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2"#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2
+            ORDER BY string DESC
+            LIMIT 10"#
         ];
 
     // For each test sql string, we transform as follows:
@@ -4703,6 +4722,29 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j2";
 
     assert_eq!(format!("{plan_roundtrip:?}"), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_unnest_logical_plan() -> Result<()> {
+    let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
+        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n      TableScan: unnest_table";
+
+    assert_eq!(format!("{plan:?}"), expected);
 
     Ok(())
 }

@@ -1899,21 +1899,20 @@ a
 
 # The 'from' and 'for' parameters don't support string types, because they should be treated as
 # regular expressions, which we have not implemented yet.
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3' FOR '2')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM '3' FOR 2)
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FROM 3 FOR '2')
 
-query error DataFusion error: Error during planning: No function matches the given name and argument types
+query error
 SELECT substring('alphabet' FOR '2')
-
 
 ##### csv_query_nullif_divide_by_0
 
@@ -1935,8 +1934,8 @@ CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 
@@ -2275,13 +2274,13 @@ select f64, round(1.0 / f64) as i64_1, acos(round(1.0 / f64)) from doubles;
 10.1 0 1.570796326795
 
 # common subexpr with coalesce (short-circuited)
-query RRR rowsort
+query RRR
 select f64, coalesce(1.0 / f64, 0.0), acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
 10.1 0.09900990099 1.471623942989
 
 # common subexpr with coalesce (short-circuited) and alias
-query RRR rowsort
+query RRR
 select f64, coalesce(1.0 / f64, 0.0) as f64_1, acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
 10.1 0.09900990099 1.471623942989
@@ -2325,27 +2324,133 @@ host3 3.3
 
 # can have an aggregate function with an inner CASE WHEN
 query TR
-select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum((case when t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] is not null then t2."struct(t1.time,t1.load1,t1.load2,t1.host)" end)['c2']) from (select struct(time,load1,load2,host) from t1) t2 where t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] IS NOT NULL group by t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] order by host;
+select 
+    t2.server_host as host, 
+    sum((
+        case when t2.server_host is not null 
+        then t2.server_load2
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
 ----
 host1 101
 host2 202
 host3 303
 
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query error
+select 
+    t2.server['c3'] as host, 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server
+        from t1
+    ) t2 
+    where t2.server['c3'] IS NOT NULL 
+    group by t2.server['c3'] order by host;
+
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
-select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum(coalesce(t2."struct(t1.time,t1.load1,t1.load2,t1.host)")['c1']), sum((case when t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] is not null then t2."struct(t1.time,t1.load1,t1.load2,t1.host)" end)['c2']) from (select struct(time,load1,load2,host) from t1) t2 where t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] IS NOT NULL group by t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] order by host;
+select 
+    t2.server_host as host, 
+    sum(coalesce(server_load1)),
+    sum((
+        case when t2.server_host is not null 
+        then t2.server_load2
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c1'] as server_load1,
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
 ----
 host1 1.1 101
 host2 2.2 202
 host3 3.3 303
 
-# can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. CASE WHEN)
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query error
+select 
+    t2.server['c3'] as host, 
+    sum(coalesce(server['c1'])),
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server,
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+
 query TRR
-select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum((case when t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] is not null then t2."struct(t1.time,t1.load1,t1.load2,t1.host)" end)['c1']), sum((case when t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] is not null then t2."struct(t1.time,t1.load1,t1.load2,t1.host)" end)['c2']) from (select struct(time,load1,load2,host) from t1) t2 where t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] IS NOT NULL group by t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] order by host;
+select 
+    t2.server_host as host, 
+    sum((
+        case when t2.server_host is not null 
+        then server_load1 
+        end
+    )), 
+    sum((
+        case when server_host is not null 
+        then server_load2 
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c1'] as server_load1,
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
 ----
 host1 1.1 101
 host2 2.2 202
 host3 3.3 303
+
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query error
+select 
+    t2.server['c3'] as host, 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c1']
+        end
+    )), 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server 
+        from t1
+    ) t2 
+    where t2.server['c3'] IS NOT NULL 
+    group by t2.server['c3'] order by host;
 
 # can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. coalesce)
 query TRR

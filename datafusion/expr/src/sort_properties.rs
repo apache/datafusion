@@ -17,9 +17,10 @@
 
 use std::ops::Neg;
 
-use arrow::compute::SortOptions;
+use crate::interval_arithmetic::Interval;
 
-use crate::tree_node::ExprContext;
+use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
 
 /// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -120,29 +121,39 @@ impl SortProperties {
 impl Neg for SortProperties {
     type Output = Self;
 
-    fn neg(self) -> Self::Output {
-        match self {
-            SortProperties::Ordered(SortOptions {
-                descending,
-                nulls_first,
-            }) => SortProperties::Ordered(SortOptions {
-                descending: !descending,
-                nulls_first,
-            }),
-            SortProperties::Singleton => SortProperties::Singleton,
-            SortProperties::Unordered => SortProperties::Unordered,
+    fn neg(mut self) -> Self::Output {
+        if let SortProperties::Ordered(SortOptions { descending, .. }) = &mut self {
+            *descending = !*descending;
         }
+        self
     }
 }
 
-/// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
-/// by [`SortProperties`]) for a given `PhysicalExpr`. When analyzing the orderings
-/// of a `PhysicalExpr`, the process begins by assigning the ordering of its leaf nodes.
-/// By propagating these leaf node orderings upwards in the expression tree, the overall
-/// ordering of the entire `PhysicalExpr` can be derived.
-///
-/// This struct holds the necessary state information for each expression in the `PhysicalExpr`.
-/// It encapsulates the orderings (`data`) associated with the expression (`expr`), and
-/// orderings of the children expressions (`children`). The [`ExprOrdering`] of a parent
-/// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-pub type ExprOrdering = ExprContext<SortProperties>;
+/// Represents the properties of a `PhysicalExpr`, including its sorting and range attributes.
+#[derive(Debug, Clone)]
+pub struct ExprProperties {
+    pub sort_properties: SortProperties,
+    pub range: Interval,
+}
+
+impl ExprProperties {
+    /// Creates a new `ExprProperties` instance with unknown sort properties and unknown range.
+    pub fn new_unknown() -> Self {
+        Self {
+            sort_properties: SortProperties::default(),
+            range: Interval::make_unbounded(&DataType::Null).unwrap(),
+        }
+    }
+
+    /// Sets the sorting properties of the expression and returns the modified instance.
+    pub fn with_order(mut self, order: SortProperties) -> Self {
+        self.sort_properties = order;
+        self
+    }
+
+    /// Sets the range of the expression and returns the modified instance.
+    pub fn with_range(mut self, range: Interval) -> Self {
+        self.range = range;
+        self
+    }
+}

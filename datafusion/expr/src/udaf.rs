@@ -17,7 +17,9 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::function::AccumulatorArgs;
+use crate::function::{
+    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
+};
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
@@ -178,18 +180,13 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        self.inner.state_fields(name, value_type, ordering_fields)
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.inner.state_fields(args)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
-    pub fn groups_accumulator_supported(&self) -> bool {
-        self.inner.groups_accumulator_supported()
+    pub fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.groups_accumulator_supported(args)
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
@@ -215,6 +212,16 @@ impl AggregateUDF {
         self.inner
             .reverse_udf()
             .map(|reverse| Self { inner: reverse })
+    }
+
+    pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
+    }
+    /// Do the function rewrite
+    ///
+    /// See [`AggregateUDFImpl::simplify`] for more details.
+    pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        self.inner.simplify()
     }
 }
 
@@ -243,7 +250,7 @@ where
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
-/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::AccumulatorArgs};
+/// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
 /// #[derive(Debug, Clone)]
@@ -272,9 +279,9 @@ where
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_fields(&self, _name: &str, value_type: DataType, _ordering_fields: Vec<Field>) -> Result<Vec<Field>> {
+///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
 ///        Ok(vec![
-///             Field::new("value", value_type, true),
+///             Field::new("value", args.return_type.clone(), true),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
@@ -330,19 +337,17 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(
-        &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
-        let value_fields = vec![Field::new(
-            format_state_name(name, "value"),
-            value_type,
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let fields = vec![Field::new(
+            format_state_name(args.name, "value"),
+            args.return_type.clone(),
             true,
         )];
 
-        Ok(value_fields.into_iter().chain(ordering_fields).collect())
+        Ok(fields
+            .into_iter()
+            .chain(args.ordering_fields.to_vec())
+            .collect())
     }
 
     /// If the aggregate expression has a specialized
@@ -355,7 +360,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `Self::accumulator` for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
     }
 
@@ -392,6 +397,44 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
         None
     }
+    /// Optionally apply per-UDaF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// # Returns
+    ///
+    /// [None] if simplify is not defined or,
+    ///
+    /// Or, a closure with two arguments:
+    /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// closure returns simplified [Expr] or an error.
+    ///
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        None
+    }
+
+    /// Returns the reverse expression of the aggregate function.
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::NotSupported
+    }
+}
+
+pub enum ReversedUDAF {
+    /// The expression is the same as the original expression, like SUM, COUNT
+    Identical,
+    /// The expression does not support reverse calculation, like ArrayAgg
+    NotSupported,
+    /// The expression is different from the original expression
+    Reversed(Arc<dyn AggregateUDFImpl>),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to

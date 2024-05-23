@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub mod arrow_cast;
 pub mod arrowtypeof;
 pub mod coalesce;
+pub mod expr_ext;
 pub mod getfield;
 pub mod named_struct;
 pub mod nullif;
@@ -43,7 +44,7 @@ make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 pub mod expr_fn {
-    use datafusion_expr::Expr;
+    use datafusion_expr::{Expr, Literal};
 
     /// returns NULL if value1 equals value2; otherwise it returns value1. This
     /// can be used to perform the inverse operation of the COALESCE expression
@@ -83,8 +84,8 @@ pub mod expr_fn {
     }
 
     /// Returns the value of the field with the given name from the struct
-    pub fn get_field(arg1: Expr, arg2: Expr) -> Expr {
-        super::get_field().call(vec![arg1, arg2])
+    pub fn get_field(arg1: Expr, field_name: impl Literal) -> Expr {
+        super::get_field().call(vec![arg1, field_name.lit()])
     }
 
     /// Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL

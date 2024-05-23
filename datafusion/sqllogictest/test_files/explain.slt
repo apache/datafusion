@@ -32,8 +32,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain SELECT c1 FROM aggregate_test_100 where c2 > 10
@@ -68,9 +68,9 @@ CREATE EXTERNAL TABLE aggregate_test_100_with_order (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv';
+LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain SELECT c1 FROM aggregate_test_100_with_order order by c1 ASC limit 10
@@ -128,8 +128,8 @@ CREATE EXTERNAL TABLE simple_explain_test (
   c INT
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/example.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test
@@ -156,8 +156,8 @@ CREATE UNBOUNDED EXTERNAL TABLE sink_table (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN INSERT INTO sink_table SELECT * FROM aggregate_test_100 ORDER by c1
@@ -209,6 +209,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
 logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -235,6 +236,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
 logical_plan after optimize_projections SAME TEXT AS ABOVE
 logical_plan TableScan: simple_explain_test projection=[a, b, c]
 initial_physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
@@ -252,9 +254,9 @@ physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
-physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan after LimitAggregation SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
 physical_plan_with_stats CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
 
@@ -311,9 +313,9 @@ physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 01)GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
-physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan after LimitAggregation SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
@@ -348,9 +350,9 @@ physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 01)GlobalLimitExec: skip=0, fetch=10
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10
-physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan after LimitAggregation SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=10
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10

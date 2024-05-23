@@ -52,6 +52,7 @@ use datafusion_common::{
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
+use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -368,8 +369,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        accumu.insert(l.try_into_col()?);
-                        accumu.insert(r.try_into_col()?);
+                        let Some(l) = l.try_as_col().cloned() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {l:?}"
+                            );
+                        };
+                        let Some(r) = r.try_as_col().cloned() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {r:?}"
+                            );
+                        };
+                        accumu.insert(l);
+                        accumu.insert(r);
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);
@@ -465,6 +476,205 @@ impl LogicalPlan {
     #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         self.with_new_exprs(self.expressions(), inputs.to_vec())
+    }
+
+    /// Recomputes schema and type information for this LogicalPlan if needed.
+    ///
+    /// Some `LogicalPlan`s may need to recompute their schema if the number or
+    /// type of expressions have been changed (for example due to type
+    /// coercion). For example [`LogicalPlan::Projection`]s schema depends on
+    /// its expressions.
+    ///
+    /// Some `LogicalPlan`s schema is unaffected by any changes to their
+    /// expressions. For example [`LogicalPlan::Filter`] schema is always the
+    /// same as its input schema.
+    ///
+    /// This is useful after modifying a plans `Expr`s (or input plans) via
+    /// methods such as [Self::map_children] and [Self::map_expressions]. Unlike
+    /// [Self::with_new_exprs], this method does not require a new set of
+    /// expressions or inputs plans.
+    ///
+    /// # Return value
+    /// Returns an error if there is some issue recomputing the schema.
+    ///
+    /// # Notes
+    ///
+    /// * Does not recursively recompute schema for input (child) plans.
+    pub fn recompute_schema(self) -> Result<Self> {
+        match self {
+            // Since expr may be different than the previous expr, schema of the projection
+            // may change. We need to use try_new method instead of try_new_with_schema method.
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                schema: _,
+            }) => Projection::try_new(expr, input).map(LogicalPlan::Projection),
+            LogicalPlan::Dml(_) => Ok(self),
+            LogicalPlan::Copy(_) => Ok(self),
+            LogicalPlan::Values(Values { schema, values }) => {
+                // todo it isn't clear why the schema is not recomputed here
+                Ok(LogicalPlan::Values(Values { schema, values }))
+            }
+            LogicalPlan::Filter(Filter { predicate, input }) => {
+                // todo: should this logic be moved to Filter::try_new?
+
+                // filter predicates should not contain aliased expressions so we remove any aliases
+                // before this logic was added we would have aliases within filters such as for
+                // benchmark q6:
+                //
+                // lineitem.l_shipdate >= Date32(\"8766\")
+                // AND lineitem.l_shipdate < Date32(\"9131\")
+                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
+                // Decimal128(Some(49999999999999),30,15)
+                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
+                // Decimal128(Some(69999999999999),30,15)
+                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+
+                let predicate = predicate
+                    .transform_down(|expr| {
+                        match expr {
+                            Expr::Exists { .. }
+                            | Expr::ScalarSubquery(_)
+                            | Expr::InSubquery(_) => {
+                                // subqueries could contain aliases so we don't recurse into those
+                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                            }
+                            Expr::Alias(_) => Ok(Transformed::new(
+                                expr.unalias(),
+                                true,
+                                TreeNodeRecursion::Jump,
+                            )),
+                            _ => Ok(Transformed::no(expr)),
+                        }
+                    })
+                    .data()?;
+
+                Filter::try_new(predicate, input).map(LogicalPlan::Filter)
+            }
+            LogicalPlan::Repartition(_) => Ok(self),
+            LogicalPlan::Window(Window {
+                input,
+                window_expr,
+                schema: _,
+            }) => Window::try_new(window_expr, input).map(LogicalPlan::Window),
+            LogicalPlan::Aggregate(Aggregate {
+                input,
+                group_expr,
+                aggr_expr,
+                schema: _,
+            }) => Aggregate::try_new(input, group_expr, aggr_expr)
+                .map(LogicalPlan::Aggregate),
+            LogicalPlan::Sort(_) => Ok(self),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                filter,
+                join_type,
+                join_constraint,
+                on,
+                schema: _,
+                null_equals_null,
+            }) => {
+                let schema =
+                    build_join_schema(left.schema(), right.schema(), &join_type)?;
+
+                let new_on: Vec<_> = on
+                    .into_iter()
+                    .map(|equi_expr| {
+                        // SimplifyExpression rule may add alias to the equi_expr.
+                        (equi_expr.0.unalias(), equi_expr.1.unalias())
+                    })
+                    .collect();
+
+                Ok(LogicalPlan::Join(Join {
+                    left,
+                    right,
+                    join_type,
+                    join_constraint,
+                    on: new_on,
+                    filter,
+                    schema: DFSchemaRef::new(schema),
+                    null_equals_null,
+                }))
+            }
+            LogicalPlan::CrossJoin(CrossJoin {
+                left,
+                right,
+                schema: _,
+            }) => {
+                let join_schema =
+                    build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
+
+                Ok(LogicalPlan::CrossJoin(CrossJoin {
+                    left,
+                    right,
+                    schema: join_schema.into(),
+                }))
+            }
+            LogicalPlan::Subquery(_) => Ok(self),
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input,
+                alias,
+                schema: _,
+            }) => SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias),
+            LogicalPlan::Limit(_) => Ok(self),
+            LogicalPlan::Ddl(_) => Ok(self),
+            LogicalPlan::Extension(Extension { node }) => {
+                // todo make an API that does not require cloning
+                // This requires a copy of the extension nodes expressions and inputs
+                let expr = node.expressions();
+                let inputs: Vec<_> = node.inputs().into_iter().cloned().collect();
+                Ok(LogicalPlan::Extension(Extension {
+                    node: node.with_exprs_and_inputs(expr, inputs)?,
+                }))
+            }
+            LogicalPlan::Union(Union { inputs, schema }) => {
+                let input_schema = inputs[0].schema();
+                // If inputs are not pruned do not change schema
+                // TODO this seems wrong (shouldn't we always use the schema of the input?)
+                let schema = if schema.fields().len() == input_schema.fields().len() {
+                    schema.clone()
+                } else {
+                    input_schema.clone()
+                };
+                Ok(LogicalPlan::Union(Union { inputs, schema }))
+            }
+            LogicalPlan::Distinct(distinct) => {
+                let distinct = match distinct {
+                    Distinct::All(input) => Distinct::All(input),
+                    Distinct::On(DistinctOn {
+                        on_expr,
+                        select_expr,
+                        sort_expr,
+                        input,
+                        schema: _,
+                    }) => Distinct::On(DistinctOn::try_new(
+                        on_expr,
+                        select_expr,
+                        sort_expr,
+                        input,
+                    )?),
+                };
+                Ok(LogicalPlan::Distinct(distinct))
+            }
+            LogicalPlan::RecursiveQuery(_) => Ok(self),
+            LogicalPlan::Analyze(_) => Ok(self),
+            LogicalPlan::Explain(_) => Ok(self),
+            LogicalPlan::Prepare(_) => Ok(self),
+            LogicalPlan::TableScan(_) => Ok(self),
+            LogicalPlan::EmptyRelation(_) => Ok(self),
+            LogicalPlan::Statement(_) => Ok(self),
+            LogicalPlan::DescribeTable(_) => Ok(self),
+            LogicalPlan::Unnest(Unnest {
+                input,
+                exec_columns,
+                options,
+                ..
+            }) => {
+                // Update schema with unnested column type.
+                unnest_with_options(unwrap_arc(input), exec_columns, options)
+            }
+        }
     }
 
     /// Returns a new `LogicalPlan` based on `self` with inputs and
@@ -713,7 +923,7 @@ impl LogicalPlan {
                 definition: definition.clone(),
             }))),
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
-                node: e.node.from_template(&expr, &inputs),
+                node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
             LogicalPlan::Union(Union { schema, .. }) => {
                 let input_schema = inputs[0].schema();
@@ -807,11 +1017,15 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                columns, options, ..
+                exec_columns: columns,
+                options,
+                ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                unnest_with_options(input, columns.clone(), options.clone())
+                let new_plan =
+                    unnest_with_options(input, columns.clone(), options.clone())?;
+                Ok(new_plan)
             }
         }
     }
@@ -1003,6 +1217,45 @@ impl LogicalPlan {
         })
         .unwrap();
         contains
+    }
+
+    /// Get the output expressions and their corresponding columns.
+    ///
+    /// The parent node may reference the output columns of the plan by expressions, such as
+    /// projection over aggregate or window functions. This method helps to convert the
+    /// referenced expressions into columns.
+    ///
+    /// See also: [`crate::utils::columnize_expr`]
+    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
+        match self {
+            LogicalPlan::Aggregate(aggregate) => Ok(aggregate
+                .output_expressions()?
+                .into_iter()
+                .zip(self.schema().columns())
+                .collect()),
+            LogicalPlan::Window(Window {
+                window_expr,
+                input,
+                schema,
+            }) => {
+                // The input could be another Window, so the result should also include the input's. For Example:
+                // `EXPLAIN SELECT RANK() OVER (PARTITION BY a ORDER BY b), SUM(b) OVER (PARTITION BY a) FROM t`
+                // Its plan is:
+                // Projection: RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(t.b) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                //   WindowAggr: windowExpr=[[SUM(CAST(t.b AS Int64)) PARTITION BY [t.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                //     WindowAggr: windowExpr=[[RANK() PARTITION BY [t.a] ORDER BY [t.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]/
+                //       TableScan: t projection=[a, b]
+                let mut output_exprs = input.columnized_output_exprs()?;
+                let input_len = input.schema().fields().len();
+                output_exprs.extend(
+                    window_expr
+                        .iter()
+                        .zip(schema.columns().into_iter().skip(input_len)),
+                );
+                Ok(output_exprs)
+            }
+            _ => Ok(vec![]),
+        }
     }
 }
 
@@ -1541,8 +1794,23 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { columns, .. }) => {
-                        write!(f, "Unnest: {}", expr_vec_fmt!(columns))
+                    LogicalPlan::Unnest(Unnest {
+                        input: plan,
+                        list_type_columns: list_col_indices,
+                        struct_type_columns: struct_col_indices, .. }) => {
+                        let input_columns = plan.schema().columns();
+                        let list_type_columns = list_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        let struct_type_columns = struct_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        // get items from input_columns indexed by list_col_indices
+                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        expr_vec_fmt!(list_type_columns),
+                        expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }
@@ -2158,6 +2426,16 @@ pub enum Distinct {
     On(DistinctOn),
 }
 
+impl Distinct {
+    /// return a reference to the nodes input
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        match self {
+            Distinct::All(input) => input,
+            Distinct::On(DistinctOn { input, .. }) => input,
+        }
+    }
+}
+
 /// Removes duplicate rows from the input
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DistinctOn {
@@ -2270,9 +2548,9 @@ impl Aggregate {
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+        let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut qualified_fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
+        let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2326,6 +2604,14 @@ impl Aggregate {
             aggr_expr,
             schema,
         })
+    }
+
+    /// Get the output expressions.
+    fn output_expressions(&self) -> Result<Vec<&Expr>> {
+        let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
+        exprs.extend(self.aggr_expr.iter());
+        debug_assert!(exprs.len() == self.schema.fields().len());
+        Ok(exprs)
     }
 
     /// Get the length of the group by expression in the output schema
@@ -2516,8 +2802,17 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The columns to unnest
-    pub columns: Vec<Column>,
+    /// Columns to run unnest on, can be a list of (List/Struct) columns
+    pub exec_columns: Vec<Column>,
+    /// refer to the indices(in the input schema) of columns
+    /// that have type list to run unnest on
+    pub list_type_columns: Vec<usize>,
+    /// refer to the indices (in the input schema) of columns
+    /// that have type struct to run unnest on
+    pub struct_type_columns: Vec<usize>,
+    /// Having items aligned with the output columns
+    /// representing which column in the input schema each output column depends on
+    pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options

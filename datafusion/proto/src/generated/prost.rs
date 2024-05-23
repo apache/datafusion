@@ -320,38 +320,32 @@ pub struct Constraints {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(message, optional, tag = "12")]
+    #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
-    #[prost(bool, tag = "4")]
-    pub has_header: bool,
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<DfSchema>,
-    #[prost(string, repeated, tag = "6")]
+    #[prost(string, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
-    #[prost(string, tag = "8")]
-    pub delimiter: ::prost::alloc::string::String,
-    #[prost(string, tag = "9")]
+    #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
-    pub file_compression_type: i32,
-    #[prost(message, repeated, tag = "13")]
+    #[prost(message, repeated, tag = "10")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
-    #[prost(bool, tag = "14")]
+    #[prost(bool, tag = "11")]
     pub unbounded: bool,
-    #[prost(map = "string, string", tag = "11")]
+    #[prost(map = "string, string", tag = "8")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(message, optional, tag = "15")]
+    #[prost(message, optional, tag = "12")]
     pub constraints: ::core::option::Option<Constraints>,
-    #[prost(map = "string, message", tag = "16")]
+    #[prost(map = "string, message", tag = "13")]
     pub column_defaults: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         LogicalExprNode,
@@ -572,7 +566,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -628,8 +622,6 @@ pub mod logical_expr_node {
         /// Scalar UDF expressions
         #[prost(message, tag = "20")]
         ScalarUdfExpr(super::ScalarUdfExprNode),
-        #[prost(message, tag = "21")]
-        GetIndexedField(::prost::alloc::boxed::Box<super::GetIndexedField>),
         #[prost(message, tag = "22")]
         GroupingSet(super::GroupingSetNode),
         #[prost(message, tag = "23")]
@@ -707,24 +699,24 @@ pub struct NamedStructField {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListIndex {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub key: ::core::option::Option<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListRange {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "3")]
-    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub start: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "2")]
+    pub stop: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "3")]
+    pub stride: ::core::option::Option<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetIndexedField {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<LogicalExprNode>,
     #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4")]
     pub field: ::core::option::Option<get_indexed_field::Field>,
 }
@@ -736,9 +728,9 @@ pub mod get_indexed_field {
         #[prost(message, tag = "2")]
         NamedStructField(super::NamedStructField),
         #[prost(message, tag = "3")]
-        ListIndex(::prost::alloc::boxed::Box<super::ListIndex>),
+        ListIndex(super::ListIndex),
         #[prost(message, tag = "4")]
-        ListRange(::prost::alloc::boxed::Box<super::ListRange>),
+        ListRange(super::ListRange),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1139,6 +1131,19 @@ pub struct ScalarNestedValue {
     pub arrow_data: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "4")]
+    pub dictionaries: ::prost::alloc::vec::Vec<scalar_nested_value::Dictionary>,
+}
+/// Nested message and enum types in `ScalarNestedValue`.
+pub mod scalar_nested_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Dictionary {
+        #[prost(bytes = "vec", tag = "1")]
+        pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "vec", tag = "2")]
+        pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1684,8 +1689,8 @@ pub struct CsvWriterOptions {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvOptions {
     /// Indicates if the CSV has a header row
-    #[prost(bool, tag = "1")]
-    pub has_header: bool,
+    #[prost(bytes = "vec", tag = "1")]
+    pub has_header: ::prost::alloc::vec::Vec<u8>,
     /// Delimiter character as a byte
     #[prost(bytes = "vec", tag = "2")]
     pub delimiter: ::prost::alloc::vec::Vec<u8>,
@@ -2835,7 +2840,7 @@ pub enum AggregateFunction {
     Variance = 7,
     VariancePop = 8,
     /// COVARIANCE = 9;
-    CovariancePop = 10,
+    /// COVARIANCE_POP = 10;
     Stddev = 11,
     StddevPop = 12,
     Correlation = 13,
@@ -2881,7 +2886,6 @@ impl AggregateFunction {
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Variance => "VARIANCE",
             AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::CovariancePop => "COVARIANCE_POP",
             AggregateFunction::Stddev => "STDDEV",
             AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
@@ -2924,7 +2928,6 @@ impl AggregateFunction {
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "VARIANCE" => Some(Self::Variance),
             "VARIANCE_POP" => Some(Self::VariancePop),
-            "COVARIANCE_POP" => Some(Self::CovariancePop),
             "STDDEV" => Some(Self::Stddev),
             "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),

@@ -29,11 +29,10 @@ use datafusion_common::{exec_err, plan_err, Result};
 use crate::utils::{compute_array_dims, make_scalar_function};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
 use arrow_schema::Field;
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayDims,
     array_dims,
     array,
@@ -88,7 +87,7 @@ impl ScalarUDFImpl for ArrayDims {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayNdims,
     array_ndims,
     array,
