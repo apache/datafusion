@@ -338,8 +338,6 @@ impl PhysicalExpr for CaseExpr {
         if children.len() != self.children().len() {
             internal_err!("CaseExpr: Wrong number of children")
         } else {
-            assert_eq!(children.len() % 2, 0);
-
             let (expr, when_then_expr, else_expr) =
                 match (self.expr().is_some(), self.else_expr().is_some()) {
                     (true, true) => (
