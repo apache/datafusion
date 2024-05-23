@@ -1431,21 +1431,16 @@ pub(crate) mod tests {
     pub(crate) fn parquet_exec_with_sort(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
-            None,
-            None,
-            Default::default(),
-        ))
+        Arc::new(ParquetExec::new(FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema: schema(),
+            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+            statistics: Statistics::new_unknown(&schema()),
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering,
+        }))
     }
 
     fn parquet_exec_multiple() -> Arc<ParquetExec> {
@@ -1456,24 +1451,19 @@ pub(crate) mod tests {
     fn parquet_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![
-                    vec![PartitionedFile::new("x".to_string(), 100)],
-                    vec![PartitionedFile::new("y".to_string(), 100)],
-                ],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
-            None,
-            None,
-            Default::default(),
-        ))
+        Arc::new(ParquetExec::new(FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema: schema(),
+            file_groups: vec![
+                vec![PartitionedFile::new("x".to_string(), 100)],
+                vec![PartitionedFile::new("y".to_string(), 100)],
+            ],
+            statistics: Statistics::new_unknown(&schema()),
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering,
+        }))
     }
 
     fn csv_exec() -> Arc<CsvExec> {

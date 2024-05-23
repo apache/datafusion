@@ -172,20 +172,16 @@ impl TestParquetFile {
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
-            let parquet_exec = Arc::new(ParquetExec::new(
-                scan_config,
-                Some(physical_filter_expr.clone()),
-                None,
-                parquet_options,
-            ));
+            let parquet_exec = Arc::new(
+                ParquetExec::new_with_options(scan_config, parquet_options)
+                    .with_predicate(Some(physical_filter_expr.clone())),
+            );
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(Arc::new(ParquetExec::new(
+            Ok(Arc::new(ParquetExec::new_with_options(
                 scan_config,
-                None,
-                None,
                 parquet_options,
             )))
         }

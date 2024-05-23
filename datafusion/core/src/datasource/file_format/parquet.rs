@@ -258,12 +258,11 @@ impl FileFormat for ParquetFormat {
         // will not prune data based on the statistics.
         let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
 
-        Ok(Arc::new(ParquetExec::new(
-            conf,
-            predicate,
-            self.metadata_size_hint(),
-            self.options.clone(),
-        )))
+        Ok(Arc::new(
+            ParquetExec::new_with_options(conf, self.options.clone())
+                .with_predicate(predicate)
+                .with_metadata_size_hint(self.metadata_size_hint()),
+        ))
     }
 
     async fn create_writer_physical_plan(

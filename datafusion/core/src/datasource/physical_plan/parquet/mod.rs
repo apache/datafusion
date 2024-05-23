@@ -102,48 +102,27 @@ pub struct ParquetExec {
 }
 
 impl ParquetExec {
-    /// Create a new Parquet reader execution plan provided file list and schema.
-    pub fn new(
+    /// Create a `ParquetExec` to read the provided file list.
+    ///
+    /// # Example
+    /// ```
+    /// TODO
+    /// ```
+    pub fn new(base_config: FileScanConfig) -> Self {
+        Self::new_with_options(base_config, TableParquetOptions::default())
+    }
+
+    /// Create a `ParquetExec` to read the provided file list with options
+    pub fn new_with_options(
         base_config: FileScanConfig,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        metadata_size_hint: Option<usize>,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
-        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        base_config.file_groups, base_config.projection, predicate, base_config.limit);
+        debug!(
+            "Creating ParquetExec, files: {:?}, projection {:?}, limit: {:?}",
+            base_config.file_groups, base_config.projection, base_config.limit
+        );
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
-
-        let file_schema = &base_config.file_schema;
-        let pruning_predicate = predicate
-            .clone()
-            .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
-                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                    Err(e) => {
-                        debug!("Could not create pruning predicate for: {e}");
-                        predicate_creation_errors.add(1);
-                        None
-                    }
-                }
-            })
-            .filter(|p| !p.always_true());
-
-        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
-            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
-                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                Err(e) => {
-                    debug!(
-                        "Could not create page pruning predicate for '{:?}': {}",
-                        pruning_predicate, e
-                    );
-                    predicate_creation_errors.add(1);
-                    None
-                }
-            }
-        });
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
@@ -156,10 +135,10 @@ impl ParquetExec {
             base_config,
             projected_statistics,
             metrics,
-            predicate,
-            pruning_predicate,
-            page_pruning_predicate,
-            metadata_size_hint,
+            predicate: None,
+            pruning_predicate: None,
+            page_pruning_predicate: None,
+            metadata_size_hint: None,
             parquet_file_reader_factory: None,
             cache,
             table_parquet_options,
@@ -175,6 +154,78 @@ impl ParquetExec {
     /// Options passed to the parquet reader for this scan
     pub fn table_parquet_options(&self) -> &TableParquetOptions {
         &self.table_parquet_options
+    }
+
+    /// Set the predicate (and [`PruningPredicate`]) that will be used to prune
+    /// row groups and pages
+    pub fn with_predicate(mut self, predicate: Option<Arc<dyn PhysicalExpr>>) -> Self {
+        debug!("  Setting ParquetExec predicate: {:?}", predicate);
+        let Some(predicate) = predicate else {
+            self.predicate = None;
+            self.pruning_predicate = None;
+            self.page_pruning_predicate = None;
+            return self;
+        };
+
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .global_counter("num_predicate_creation_errors");
+
+        let file_schema = &self.base_config.file_schema;
+
+        self.pruning_predicate =
+            match PruningPredicate::try_new(predicate.clone(), file_schema.clone()) {
+                Ok(pruning_predicate) if !pruning_predicate.always_true() => {
+                    Some(Arc::new(pruning_predicate))
+                }
+                Ok(_pruning_predicate) => {
+                    debug!(
+                        "Pruning predicate is always true: {:?}, skipping",
+                        predicate
+                    );
+                    None
+                }
+                Err(e) => {
+                    debug!("Could not create pruning predicate for: {e}");
+                    predicate_creation_errors.add(1);
+                    None
+                }
+            };
+
+        self.page_pruning_predicate =
+            match PagePruningPredicate::try_new(&predicate, file_schema.clone()) {
+                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
+                Err(e) => {
+                    debug!(
+                        "Could not create page pruning predicate for '{:?}': {}",
+                        self.pruning_predicate, e
+                    );
+                    predicate_creation_errors.add(1);
+                    None
+                }
+            };
+
+        self.predicate = Some(predicate);
+
+        self
+    }
+
+    /// Set the options for reading Parquet files
+    pub fn with_table_parquet_options(
+        mut self,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
+        self.table_parquet_options = table_parquet_options;
+        self
+    }
+
+    /// Set the metadata size hint for the parquet reader
+    ///
+    /// This value determines how many bytes at the end of the file the
+    /// ParquetExec will request in the initial IO. If this is too small, the
+    /// ParquetExec will need to make additional IO requests to read the footer.
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: Option<usize>) -> Self {
+        self.metadata_size_hint = metadata_size_hint;
+        self
     }
 
     /// Optional predicate.
@@ -931,21 +982,17 @@ mod tests {
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
-            let mut parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: vec![file_groups],
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
-                predicate,
-                None,
-                Default::default(),
-            );
+            let mut parquet_exec = ParquetExec::new(FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: vec![file_groups],
+                statistics: Statistics::new_unknown(&file_schema),
+                file_schema,
+                projection,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: vec![],
+            })
+            .with_predicate(predicate);
 
             if pushdown_predicate {
                 parquet_exec = parquet_exec
@@ -1589,21 +1636,16 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups,
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
-                None,
-                None,
-                Default::default(),
-            );
+            let parquet_exec = ParquetExec::new(FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups,
+                statistics: Statistics::new_unknown(&file_schema),
+                file_schema,
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: vec![],
+            });
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1699,33 +1741,28 @@ mod tests {
             ),
         ]);
 
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: schema.clone(),
-                statistics: Statistics::new_unknown(&schema),
-                // file has 10 cols so index 12 should be month and 13 should be day
-                projection: Some(vec![0, 1, 2, 12, 13]),
-                limit: None,
-                table_partition_cols: vec![
-                    Field::new("year", DataType::Utf8, false),
-                    Field::new("month", DataType::UInt8, false),
-                    Field::new(
-                        "day",
-                        DataType::Dictionary(
-                            Box::new(DataType::UInt16),
-                            Box::new(DataType::Utf8),
-                        ),
-                        false,
+        let parquet_exec = ParquetExec::new(FileScanConfig {
+            object_store_url,
+            file_groups: vec![vec![partitioned_file]],
+            file_schema: schema.clone(),
+            statistics: Statistics::new_unknown(&schema),
+            // file has 10 cols so index 12 should be month and 13 should be day
+            projection: Some(vec![0, 1, 2, 12, 13]),
+            limit: None,
+            table_partition_cols: vec![
+                Field::new("year", DataType::Utf8, false),
+                Field::new("month", DataType::UInt8, false),
+                Field::new(
+                    "day",
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Utf8),
                     ),
-                ],
-                output_ordering: vec![],
-            },
-            None,
-            None,
-            Default::default(),
-        );
+                    false,
+                ),
+            ],
+            output_ordering: vec![],
+        });
         assert_eq!(
             parquet_exec.cache.output_partitioning().partition_count(),
             1
@@ -1779,21 +1816,16 @@ mod tests {
             extensions: None,
         };
 
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::new_unknown(&Schema::empty()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
-            None,
-            None,
-            Default::default(),
-        );
+        let parquet_exec = ParquetExec::new(FileScanConfig {
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_groups: vec![vec![partitioned_file]],
+            file_schema: Arc::new(Schema::empty()),
+            statistics: Statistics::new_unknown(&Schema::empty()),
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![],
+        });
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();

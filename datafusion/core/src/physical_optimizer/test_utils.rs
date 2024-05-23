@@ -274,21 +274,16 @@ pub fn sort_preserving_merge_exec(
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    Arc::new(ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
-        None,
-        None,
-        Default::default(),
-    ))
+    Arc::new(ParquetExec::new(FileScanConfig {
+        object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+        file_schema: schema.clone(),
+        file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+        statistics: Statistics::new_unknown(schema),
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+    }))
 }
 
 // Created a sorted parquet exec
@@ -298,21 +293,16 @@ pub fn parquet_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![sort_exprs],
-        },
-        None,
-        None,
-        Default::default(),
-    ))
+    Arc::new(ParquetExec::new(FileScanConfig {
+        object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+        file_schema: schema.clone(),
+        file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+        statistics: Statistics::new_unknown(schema),
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![sort_exprs],
+    }))
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
