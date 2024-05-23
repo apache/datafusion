@@ -194,6 +194,9 @@ impl AggregateUDF {
         self.inner.create_groups_accumulator()
     }
 
+    /// Sets the flag specifying whether the requirement of the UDf is satisfied or not.
+    /// `None` indicates that, UDF doesn't have support for requirement satisfied mode (In this case, its requirement
+    /// should be definitely satisfied).
     pub fn with_requirement_satisfied(
         self,
         requirement_satisfied: bool,
@@ -204,10 +207,13 @@ impl AggregateUDF {
         Ok(updated_udf.map(|udf| Self { inner: udf }))
     }
 
+    /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`] for possible options.
     pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         self.inner.order_sensitivity()
     }
 
+    /// Reserves the `AggregateUDF` (e.g. returns the `AggregateUDF` that will generate same result with this
+    /// `AggregateUDF` when iterated in reverse order. `None` indicates, there is no such `AggregateUDF`.)
     pub fn reverse_udf(&self) -> Option<AggregateUDF> {
         match self.inner.reverse_expr() {
             ReversedUDAF::NotSupported => None,
@@ -383,6 +389,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &[]
     }
 
+    /// Sets the flag specifying whether the requirement of the UDf is satisfied or not.
+    /// `None` indicates that, UDF doesn't have support for requirement satisfied mode (In this case, its requirement
+    /// should be definitely satisfied).
     fn with_requirement_satisfied(
         self: Arc<Self>,
         _requirement_satisfied: bool,
@@ -391,8 +400,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         Ok(None)
     }
 
+    /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`] for possible options.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // By default, requirement is hard if not specified.
+        // By default, requirement is hard. This means, requirement should be definitely satisfied (if any).
+        // For aggregator to generate correct result.
         AggregateOrderSensitivity::HardRequirement
     }
 

@@ -338,7 +338,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         if !self.ordering_req.is_empty() {
-            // If there is requirement, use the sensitive of the implementation
+            // If there is requirement, use the sensitivity of the implementation
             self.fun.order_sensitivity()
         } else {
             // If no requirement, aggregator is order insensitive
@@ -376,8 +376,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
             let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
             let mut name = self.name().to_string();
-            // let name = calc_fn_name_with_args(self.fun.name(), &self.args);
-            // let name = self.fun.name();
             replace_order_by_clause(&mut name);
             replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
             let reverse_aggr = create_aggregate_expr(

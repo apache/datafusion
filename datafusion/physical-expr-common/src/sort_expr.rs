@@ -269,6 +269,8 @@ pub type LexRequirement = Vec<PhysicalSortRequirement>;
 /// represents a reference to a lexicographical ordering requirement.
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
 
+/// Converts each `datafusion_expr::Expr` into corresponding `PhysicalSortExpr`.
+/// Assumes `datafusion_expr::Expr` is `datafusion_expr::Expr::Sort` otherwise returns Error.
 pub fn convert_logical_sort_exprs_to_physical(
     exprs: &[datafusion_expr::Expr],
     schema: &Schema,

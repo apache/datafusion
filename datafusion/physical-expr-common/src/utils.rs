@@ -17,8 +17,6 @@
 
 use std::sync::Arc;
 
-use datafusion_expr::Expr;
-
 use crate::{
     expressions, physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr,
     tree_node::ExprContext,
@@ -30,6 +28,7 @@ use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::Expr;
 
 /// Represents a [`PhysicalExpr`] node with associated properties (order and
 /// range) in a context where properties are tracked.
@@ -113,13 +112,15 @@ pub fn reverse_sort_exprs(sort_exprs: &[Expr]) -> Vec<Expr> {
             if let Expr::Sort(s) = e {
                 Expr::Sort(s.reverse())
             } else {
-                // TODO: Return error
+                // Expects to receive `Expr::Sort`.
                 unreachable!()
             }
         })
         .collect::<Vec<_>>()
 }
 
+/// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
+/// If conversion is not supported yet, returns Error.
 pub fn convert_logical_expr_to_physical_expr(
     expr: &datafusion_expr::Expr,
     schema: &Schema,
