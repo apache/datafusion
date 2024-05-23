@@ -75,6 +75,12 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Date32) => {
+                        Some(ScalarValue::Date32(Some(*s.$func())))
+                    }
+                    Some(DataType::Date64) => {
+                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -363,10 +369,12 @@ impl<'a> StatisticsConverter<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::compute::kernels::cast_utils::Parser;
+    use arrow::datatypes::{Date32Type, Date64Type};
     use arrow_array::{
-        new_null_array, Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array,
-        Float64Array, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
-        TimestampNanosecondArray,
+        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
+        StringArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -660,6 +668,68 @@ mod test {
                 Some(b"ZZ"),
                 None,
             ])),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date32() {
+        Test {
+            input: date32_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date32_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date32_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date64() {
+        Test {
+            input: date64_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date64_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date64_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
         }
         .run()
     }
@@ -1068,5 +1138,25 @@ mod test {
             ),
         ]);
         Arc::new(struct_array)
+    }
+
+    fn date32_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date32Array::from(
+            input
+                .into_iter()
+                .map(|s| Date32Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
+    }
+
+    fn date64_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date64Array::from(
+            input
+                .into_iter()
+                .map(|s| Date64Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
     }
 }
