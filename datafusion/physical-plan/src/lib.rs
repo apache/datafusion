@@ -85,7 +85,6 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
 };
-pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 
 // Backwards compatibility
 pub use crate::stream::EmptyRecordBatchStream;

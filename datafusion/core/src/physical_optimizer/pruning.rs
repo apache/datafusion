@@ -43,7 +43,6 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
-use datafusion_physical_expr_common::expressions as phys_expr_common;
 
 use log::trace;
 
@@ -1077,16 +1076,14 @@ fn rewrite_expr_to_prunable(
     {
         // `col op lit()`
         Ok((column_expr.clone(), op, scalar_expr.clone()))
-    } else if let Some(cast) =
-        column_expr_any.downcast_ref::<phys_expr_common::CastExpr>()
-    {
+    } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
         let arrow_schema: SchemaRef = schema.clone().into();
         let from_type = cast.expr().data_type(&arrow_schema)?;
         verify_support_type_for_prune(&from_type, cast.cast_type())?;
         let (left, op, right) =
             rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
-        let left = Arc::new(phys_expr_common::CastExpr::new(
+        let left = Arc::new(phys_expr::CastExpr::new(
             left,
             cast.cast_type().clone(),
             None,
