@@ -34,8 +34,7 @@ async fn main() -> Result<()> {
         .with_url(base_url.clone())
         .build()
         .unwrap();
-    ctx.runtime_env()
-        .register_object_store(&base_url, Arc::new(http_store));
+    ctx.register_object_store(&base_url, Arc::new(http_store));
 
     // register csv file with the execution context
     ctx.register_csv(
