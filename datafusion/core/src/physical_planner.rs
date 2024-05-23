@@ -1876,22 +1876,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     (agg_expr, filter, physical_sort_exprs)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let name = match order_by {
-                        Some(order_by) => {
-                            if order_by.is_empty() {
-                                name.into()
-                            } else {
-                                // let name = name.into();
-                                // let reqs = order_by
-                                //     .iter()
-                                //     .map(|sort_expr| format!("{sort_expr}"))
-                                //     .collect::<Vec<_>>();
-                                // format!("{name} ORDER BY [{}]", reqs.join(", "))
-                                name.into()
-                            }
-                        }
-                        None => name.into(),
-                    };
                     let sort_exprs = order_by.clone().unwrap_or(vec![]);
                     let physical_sort_exprs = match order_by {
                         Some(exprs) => Some(create_physical_sort_exprs(

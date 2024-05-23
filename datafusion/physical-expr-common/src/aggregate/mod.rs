@@ -66,13 +66,12 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
-    let name = name.into();
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
-        name,
+        name: name.into(),
         schema: schema.clone(),
         sort_exprs: sort_exprs.to_vec(),
         ordering_req: ordering_req.to_vec(),
@@ -81,15 +80,6 @@ pub fn create_aggregate_expr(
         is_distinct,
         input_type: input_exprs_types[0].clone(),
     }))
-}
-
-#[allow(dead_code)]
-fn calc_fn_name_with_args(fn_name: &str, args: &[Arc<dyn PhysicalExpr>]) -> String {
-    let args = args
-        .iter()
-        .map(|sort_expr| format!("{sort_expr}"))
-        .collect::<Vec<_>>();
-    format!("{fn_name}({})", args.join(", "))
 }
 
 /// An aggregate expression that:
@@ -364,7 +354,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             .clone()
             .with_requirement_satisfied(requirement_satisfied)?
         {
-            // let name = calc_fn_name_with_args(self.fun.name(), &self.args);
             let aggr_expr = create_aggregate_expr(
                 &updated_fn,
                 &self.args,
