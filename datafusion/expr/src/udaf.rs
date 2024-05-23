@@ -209,9 +209,11 @@ impl AggregateUDF {
     }
 
     pub fn reverse_udf(&self) -> Option<AggregateUDF> {
-        self.inner
-            .reverse_udf()
-            .map(|reverse| Self { inner: reverse })
+        match self.inner.reverse_expr() {
+            ReversedUDAF::NotSupported => None,
+            ReversedUDAF::Identical => Some(self.clone()),
+            ReversedUDAF::Reversed(reverse) => Some(Self { inner: reverse }),
+        }
     }
 
     pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
@@ -394,9 +396,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         AggregateOrderSensitivity::HardRequirement
     }
 
-    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
-        None
-    }
     /// Optionally apply per-UDaF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during

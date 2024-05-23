@@ -179,8 +179,8 @@ impl AggregateUDFImpl for FirstValue {
         AggregateOrderSensitivity::Beneficial
     }
 
-    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
-        Some(Arc::new(LastValue::new()))
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(Arc::new(LastValue::new()))
     }
 }
 
@@ -504,8 +504,8 @@ impl AggregateUDFImpl for LastValue {
         AggregateOrderSensitivity::Beneficial
     }
 
-    fn reverse_udf(&self) -> Option<Arc<dyn AggregateUDFImpl>> {
-        Some(Arc::new(FirstValue::new()))
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(Arc::new(FirstValue::new()))
     }
 }
 
