@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
-use datafusion::functions_aggregate::expr_fn::first_value;
+use datafusion::functions_aggregate::first_last::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};

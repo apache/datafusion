@@ -1881,13 +1881,13 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                             if order_by.is_empty() {
                                 name.into()
                             } else {
-                                let name = name.into();
-                                let reqs = order_by
-                                    .iter()
-                                    .map(|sort_expr| format!("{sort_expr}"))
-                                    .collect::<Vec<_>>();
-                                // name.into()
-                                format!("{name} ORDER BY [{}]", reqs.join(", "))
+                                // let name = name.into();
+                                // let reqs = order_by
+                                //     .iter()
+                                //     .map(|sort_expr| format!("{sort_expr}"))
+                                //     .collect::<Vec<_>>();
+                                // format!("{name} ORDER BY [{}]", reqs.join(", "))
+                                name.into()
                             }
                         }
                         None => name.into(),

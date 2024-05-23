@@ -2854,10 +2854,10 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
-    /// When a function with the same name exists among built-in window functions,
-    /// we append "_AGG" to obey name scoping rules.
-    FirstValueAgg = 24,
-    LastValueAgg = 25,
+    ///   // When a function with the same name exists among built-in window functions,
+    ///   // we append "_AGG" to obey name scoping rules.
+    ///   FIRST_VALUE_AGG = 24;
+    ///   LAST_VALUE_AGG = 25;
     RegrSlope = 26,
     RegrIntercept = 27,
     RegrCount = 28,
@@ -2901,8 +2901,6 @@ impl AggregateFunction {
             AggregateFunction::BitXor => "BIT_XOR",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
-            AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
             AggregateFunction::RegrSlope => "REGR_SLOPE",
             AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
             AggregateFunction::RegrCount => "REGR_COUNT",
@@ -2943,8 +2941,6 @@ impl AggregateFunction {
             "BIT_XOR" => Some(Self::BitXor),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),
-            "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
-            "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             "REGR_SLOPE" => Some(Self::RegrSlope),
             "REGR_INTERCEPT" => Some(Self::RegrIntercept),
             "REGR_COUNT" => Some(Self::RegrCount),

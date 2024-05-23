@@ -1198,6 +1198,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_expr::expr::Sort;
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
     };
@@ -1977,28 +1978,52 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
+            expr: Box::new(datafusion_expr::Expr::Column(
+                datafusion_common::Column::new(Some("table1"), "b"),
+            )),
+            asc: !sort_options.descending,
+            nulls_first: sort_options.nulls_first,
+        })];
         let ordering_req = vec![PhysicalSortExpr {
             expr: col("b", &schema)?,
-            options: SortOptions::default(),
+            options: sort_options,
         }];
+        let args = vec![col("b", &schema)?];
         let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
-            // create_aggregate_expr()
-            vec![Arc::new(FirstValue::new(
-                col("b", &schema)?,
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-                vec![],
-            ))]
+            let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
+            vec![
+                datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+                    &func,
+                    &args,
+                    &sort_exprs,
+                    &ordering_req,
+                    &schema,
+                    "FIRST_VALUE(b)",
+                    false,
+                    false,
+                )
+                .unwrap(),
+            ]
         } else {
-            vec![Arc::new(LastValue::new(
-                col("b", &schema)?,
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-            ))]
+            let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
+            vec![
+                datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+                    &func,
+                    &args,
+                    &sort_exprs,
+                    &ordering_req,
+                    &schema,
+                    "LAST_VALUE(b)",
+                    false,
+                    false,
+                )
+                .unwrap(),
+            ]
         };
 
         let memory_exec = Arc::new(MemoryExec::try_new(
@@ -2165,22 +2190,31 @@ mod tests {
         let sort_expr_reverse = reverse_order_bys(&sort_expr);
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
+        let first_func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
+        let last_func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            Arc::new(FirstValue::new(
-                col_b.clone(),
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr_reverse.clone(),
-                vec![DataType::Float64],
-                vec![],
-            )),
-            Arc::new(LastValue::new(
-                col_b.clone(),
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr.clone(),
-                vec![DataType::Float64],
-            )),
+            datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+                &first_func,
+                &[col_b.clone()],
+                &[],
+                &sort_expr_reverse,
+                &schema,
+                "FIRST_VALUE(b)",
+                false,
+                false,
+            )
+            .unwrap(),
+            datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+                &last_func,
+                &[col_b.clone()],
+                &[],
+                &sort_expr,
+                &schema,
+                "LAST_VALUE(b)",
+                false,
+                false,
+            )
+            .unwrap(),
         ];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let aggregate_exec = Arc::new(AggregateExec::try_new(
