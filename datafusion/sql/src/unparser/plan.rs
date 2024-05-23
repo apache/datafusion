@@ -141,7 +141,8 @@ impl Unparser<'_> {
                 let mut builder = TableRelationBuilder::default();
                 let mut table_parts = vec![];
                 if let Some(catalog_name) = scan.table_name.catalog() {
-                    table_parts.push(self.new_ident(catalog_name.to_string()));
+                    table_parts
+                        .push(self.new_ident_quoted_if_needs(catalog_name.to_string()));
                 }
                 if let Some(schema_name) = scan.table_name.schema() {
                     table_parts
