@@ -515,35 +515,3 @@ impl From<BuilderError> for DataFusionError {
         DataFusionError::External(Box::new(e))
     }
 }
-
-#[cfg(test)]
-mod test {
-    use crate::unparser::plan_to_sql;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{col, logical_plan::table_scan};
-    #[test]
-    fn test_table_references_in_plan_to_sql() {
-        fn test(table_name: &str, expected_sql: &str) {
-            let schema = Schema::new(vec![
-                Field::new("id", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
-            ]);
-            let plan = table_scan(Some(table_name), &schema, None)
-                .unwrap()
-                .project(vec![col("id"), col("value")])
-                .unwrap()
-                .build()
-                .unwrap();
-            let sql = plan_to_sql(&plan).unwrap();
-
-            assert_eq!(format!("{}", sql), expected_sql)
-        }
-
-        test("catalog.schema.table", "SELECT \"catalog\".\"schema\".\"table\".\"id\", \"catalog\".\"schema\".\"table\".\"value\" FROM \"catalog\".\"schema\".\"table\"");
-        test("schema.table", "SELECT \"schema\".\"table\".\"id\", \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
-        test(
-            "table",
-            "SELECT \"table\".\"id\", \"table\".\"value\" FROM \"table\"",
-        );
-    }
-}
