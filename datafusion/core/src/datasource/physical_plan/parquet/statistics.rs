@@ -75,6 +75,12 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Int8) => {
+                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Int16) => {
+                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
+                    }
                     Some(DataType::Date32) => {
                         Some(ScalarValue::Date32(Some(*s.$func())))
                     }
@@ -373,8 +379,8 @@ mod test {
     use arrow::datatypes::{Date32Type, Date64Type};
     use arrow_array::{
         new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-        StringArray, StructArray, TimestampNanosecondArray,
+        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -856,13 +862,13 @@ mod test {
             })
             .with_column(ExpectedColumn {
                 name: "tinyint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i8_array([Some(0)]),
+                expected_max: i8_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "smallint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i16_array([Some(0)]),
+                expected_max: i16_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "int_col",
@@ -1085,6 +1091,16 @@ mod test {
 
     fn bool_array(input: impl IntoIterator<Item = Option<bool>>) -> ArrayRef {
         let array: BooleanArray = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i8_array(input: impl IntoIterator<Item = Option<i8>>) -> ArrayRef {
+        let array: Int8Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i16_array(input: impl IntoIterator<Item = Option<i16>>) -> ArrayRef {
+        let array: Int16Array = input.into_iter().collect();
         Arc::new(array)
     }
 
