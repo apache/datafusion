@@ -2909,6 +2909,21 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
+            "unnest_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "array_col",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "struct_col",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("field1", DataType::Int64, true),
+                        Field::new("field2", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+            ])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -4559,25 +4574,21 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (
-            TableReference::bare("person"),
-            "age > 35",
-            r#"("age" > 35)"#,
-        ),
+        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
         (
             TableReference::bare("person"),
             "id = '10'",
-            r#"("id" = '10')"#,
+            r#"(id = '10')"#,
         ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
-            r#"CAST("id" AS VARCHAR)"#,
+            r#"CAST(id AS VARCHAR)"#,
         ),
         (
             TableReference::bare("person"),
             "SUM((age * 2))",
-            r#"SUM(("age" * 2))"#,
+            r#"SUM((age * 2))"#,
         ),
     ];
 
@@ -4737,7 +4748,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
-            expected: r#"SELECT "ta"."j1_id" FROM "j1" AS "ta" ORDER BY "ta"."j1_id" ASC NULLS LAST LIMIT 10"#,
+            expected: r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
@@ -4761,6 +4772,29 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
 
         assert_eq!(query.expected, actual);
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_unnest_logical_plan() -> Result<()> {
+    let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
+        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n      TableScan: unnest_table";
+
+    assert_eq!(format!("{plan:?}"), expected);
 
     Ok(())
 }

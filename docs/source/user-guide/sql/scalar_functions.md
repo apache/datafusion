@@ -1464,6 +1464,7 @@ position(substr in origstr)
 - [to_timestamp_seconds](#to_timestamp_seconds)
 - [to_timestamp_nanos](#to_timestamp_nanos)
 - [from_unixtime](#from_unixtime)
+- [to_unixtime](#to_unixtime)
 
 ### `now`
 
@@ -1963,6 +1964,41 @@ from_unixtime(expression)
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `to_unixtime`
+
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Supports strings, dates, timestamps and double types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided.
+
+```
+to_unixtime(expression[, ..., format_n])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+> select to_unixtime('2020-09-08T12:00:00+00:00');
++------------------------------------------------+
+| to_unixtime(Utf8("2020-09-08T12:00:00+00:00")) |
++------------------------------------------------+
+| 1599566400                                     |
++------------------------------------------------+
+> select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
++-----------------------------------------------------------------------------------------------------------------------------+
+| to_unixtime(Utf8("01-14-2023 01:01:30+05:30"),Utf8("%q"),Utf8("%d-%m-%Y %H/%M/%S"),Utf8("%+"),Utf8("%m-%d-%Y %H:%M:%S%#z")) |
++-----------------------------------------------------------------------------------------------------------------------------+
+| 1673638290                                                                                                                  |
++-----------------------------------------------------------------------------------------------------------------------------+
+```
 
 ## Array Functions
 
