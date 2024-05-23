@@ -25,15 +25,13 @@ use sqlparser::keywords::ALL_KEYWORDS;
 ///
 /// **Note**: This trait will eventually be replaced by the Dialect in the SQLparser package
 ///
-/// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170> and
-/// <https://github.com/sqlparser-rs/sqlparser-rs/pull/1284>
+/// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
+/// See also the discussion in <https://github.com/apache/datafusion/pull/10625>
 pub trait Dialect {
     /// Return the character used to quote identifiers.
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
 
     /// Does the dialect support specifying `NULLS FIRST/LAST` in `ORDER BY` clauses?
-    ///
-    /// Upstream support is coming in <https://github.com/sqlparser-rs/sqlparser-rs/pull/1284>
     fn supports_nulls_first_in_sort(&self) -> bool {
         true
     }
