@@ -263,6 +263,248 @@ pub struct Constraints {
     #[prost(message, repeated, tag = "1")]
     pub constraints: ::prost::alloc::vec::Vec<Constraint>,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarValue {
+    #[prost(
+        oneof = "scalar_value::Value",
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
+    )]
+    pub value: ::core::option::Option<scalar_value::Value>,
+}
+/// Nested message and enum types in `ScalarValue`.
+pub mod scalar_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        /// was PrimitiveScalarType null_value = 19;
+        /// Null value of any type
+        #[prost(message, tag = "33")]
+        NullValue(super::ArrowType),
+        #[prost(bool, tag = "1")]
+        BoolValue(bool),
+        #[prost(string, tag = "2")]
+        Utf8Value(::prost::alloc::string::String),
+        #[prost(string, tag = "3")]
+        LargeUtf8Value(::prost::alloc::string::String),
+        #[prost(int32, tag = "4")]
+        Int8Value(i32),
+        #[prost(int32, tag = "5")]
+        Int16Value(i32),
+        #[prost(int32, tag = "6")]
+        Int32Value(i32),
+        #[prost(int64, tag = "7")]
+        Int64Value(i64),
+        #[prost(uint32, tag = "8")]
+        Uint8Value(u32),
+        #[prost(uint32, tag = "9")]
+        Uint16Value(u32),
+        #[prost(uint32, tag = "10")]
+        Uint32Value(u32),
+        #[prost(uint64, tag = "11")]
+        Uint64Value(u64),
+        #[prost(float, tag = "12")]
+        Float32Value(f32),
+        #[prost(double, tag = "13")]
+        Float64Value(f64),
+        /// Literal Date32 value always has a unit of day
+        #[prost(int32, tag = "14")]
+        Date32Value(i32),
+        #[prost(message, tag = "15")]
+        Time32Value(super::ScalarTime32Value),
+        #[prost(message, tag = "16")]
+        LargeListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "17")]
+        ListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "18")]
+        FixedSizeListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "32")]
+        StructValue(super::ScalarNestedValue),
+        #[prost(message, tag = "20")]
+        Decimal128Value(super::Decimal128),
+        #[prost(message, tag = "39")]
+        Decimal256Value(super::Decimal256),
+        #[prost(int64, tag = "21")]
+        Date64Value(i64),
+        #[prost(int32, tag = "24")]
+        IntervalYearmonthValue(i32),
+        #[prost(int64, tag = "25")]
+        IntervalDaytimeValue(i64),
+        #[prost(int64, tag = "35")]
+        DurationSecondValue(i64),
+        #[prost(int64, tag = "36")]
+        DurationMillisecondValue(i64),
+        #[prost(int64, tag = "37")]
+        DurationMicrosecondValue(i64),
+        #[prost(int64, tag = "38")]
+        DurationNanosecondValue(i64),
+        #[prost(message, tag = "26")]
+        TimestampValue(super::ScalarTimestampValue),
+        #[prost(message, tag = "27")]
+        DictionaryValue(::prost::alloc::boxed::Box<super::ScalarDictionaryValue>),
+        #[prost(bytes, tag = "28")]
+        BinaryValue(::prost::alloc::vec::Vec<u8>),
+        #[prost(bytes, tag = "29")]
+        LargeBinaryValue(::prost::alloc::vec::Vec<u8>),
+        #[prost(message, tag = "30")]
+        Time64Value(super::ScalarTime64Value),
+        #[prost(message, tag = "31")]
+        IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
+        #[prost(message, tag = "34")]
+        FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
+        #[prost(message, tag = "42")]
+        UnionValue(::prost::alloc::boxed::Box<super::UnionValue>),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTime32Value {
+    #[prost(oneof = "scalar_time32_value::Value", tags = "1, 2")]
+    pub value: ::core::option::Option<scalar_time32_value::Value>,
+}
+/// Nested message and enum types in `ScalarTime32Value`.
+pub mod scalar_time32_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int32, tag = "1")]
+        Time32SecondValue(i32),
+        #[prost(int32, tag = "2")]
+        Time32MillisecondValue(i32),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTime64Value {
+    #[prost(oneof = "scalar_time64_value::Value", tags = "1, 2")]
+    pub value: ::core::option::Option<scalar_time64_value::Value>,
+}
+/// Nested message and enum types in `ScalarTime64Value`.
+pub mod scalar_time64_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int64, tag = "1")]
+        Time64MicrosecondValue(i64),
+        #[prost(int64, tag = "2")]
+        Time64NanosecondValue(i64),
+    }
+}
+/// Used for List/FixedSizeList/LargeList/Struct
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarNestedValue {
+    #[prost(bytes = "vec", tag = "1")]
+    pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "4")]
+    pub dictionaries: ::prost::alloc::vec::Vec<scalar_nested_value::Dictionary>,
+}
+/// Nested message and enum types in `ScalarNestedValue`.
+pub mod scalar_nested_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Dictionary {
+        #[prost(bytes = "vec", tag = "1")]
+        pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "vec", tag = "2")]
+        pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal128 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal256 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTimestampValue {
+    #[prost(string, tag = "5")]
+    pub timezone: ::prost::alloc::string::String,
+    #[prost(oneof = "scalar_timestamp_value::Value", tags = "1, 2, 3, 4")]
+    pub value: ::core::option::Option<scalar_timestamp_value::Value>,
+}
+/// Nested message and enum types in `ScalarTimestampValue`.
+pub mod scalar_timestamp_value {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int64, tag = "1")]
+        TimeMicrosecondValue(i64),
+        #[prost(int64, tag = "2")]
+        TimeNanosecondValue(i64),
+        #[prost(int64, tag = "3")]
+        TimeSecondValue(i64),
+        #[prost(int64, tag = "4")]
+        TimeMillisecondValue(i64),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarDictionaryValue {
+    #[prost(message, optional, tag = "1")]
+    pub index_type: ::core::option::Option<ArrowType>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IntervalMonthDayNanoValue {
+    #[prost(int32, tag = "1")]
+    pub months: i32,
+    #[prost(int32, tag = "2")]
+    pub days: i32,
+    #[prost(int64, tag = "3")]
+    pub nanos: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarFixedSizeBinary {
+    #[prost(bytes = "vec", tag = "1")]
+    pub values: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int32, tag = "2")]
+    pub length: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionValue {
+    /// Note that a null union value must have one or more fields, so we
+    /// encode a null UnionValue as one with value_id == 128
+    #[prost(int32, tag = "1")]
+    pub value_id: i32,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+    #[prost(message, repeated, tag = "3")]
+    pub fields: ::prost::alloc::vec::Vec<UnionField>,
+    #[prost(enumeration = "UnionMode", tag = "4")]
+    pub mode: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionField {
+    #[prost(int32, tag = "1")]
+    pub field_id: i32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<Field>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum TimeUnit {

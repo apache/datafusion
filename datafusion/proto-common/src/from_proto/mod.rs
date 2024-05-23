@@ -15,18 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
+use arrow::array::ArrayRef;
+use arrow::array::AsArray;
+use arrow::buffer::Buffer;
 use arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
+    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    UnionFields, UnionMode,
 };
+use arrow::ipc::reader::read_record_batch;
+use arrow::ipc::root_as_message;
 
 use crate::protobuf_common as protobuf;
-use datafusion_common::{Constraint, Constraints, DataFusionError};
 use datafusion_common::{
-    plan_datafusion_err, Column, DFSchema, DFSchemaRef, TableReference,
+    arrow_datafusion_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef,
+    ScalarValue, TableReference,
 };
+use datafusion_common::{Constraint, Constraints, DataFusionError};
 
 #[derive(Debug)]
 pub enum Error {
@@ -403,4 +411,281 @@ impl From<protobuf::Constraint> for Constraint {
             ),
         }
     }
+}
+
+impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
+    type Error = Error;
+
+    fn try_from(
+        scalar: &protobuf::ScalarValue,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        use protobuf::scalar_value::Value;
+
+        let value = scalar
+            .value
+            .as_ref()
+            .ok_or_else(|| Error::required("value"))?;
+
+        Ok(match value {
+            Value::BoolValue(v) => Self::Boolean(Some(*v)),
+            Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
+            Value::LargeUtf8Value(v) => Self::LargeUtf8(Some(v.to_owned())),
+            Value::Int8Value(v) => Self::Int8(Some(*v as i8)),
+            Value::Int16Value(v) => Self::Int16(Some(*v as i16)),
+            Value::Int32Value(v) => Self::Int32(Some(*v)),
+            Value::Int64Value(v) => Self::Int64(Some(*v)),
+            Value::Uint8Value(v) => Self::UInt8(Some(*v as u8)),
+            Value::Uint16Value(v) => Self::UInt16(Some(*v as u16)),
+            Value::Uint32Value(v) => Self::UInt32(Some(*v)),
+            Value::Uint64Value(v) => Self::UInt64(Some(*v)),
+            Value::Float32Value(v) => Self::Float32(Some(*v)),
+            Value::Float64Value(v) => Self::Float64(Some(*v)),
+            Value::Date32Value(v) => Self::Date32(Some(*v)),
+            // ScalarValue::List is serialized using arrow IPC format
+            Value::ListValue(v)
+            | Value::FixedSizeListValue(v)
+            | Value::LargeListValue(v)
+            | Value::StructValue(v) => {
+                let protobuf::ScalarNestedValue {
+                    ipc_message,
+                    arrow_data,
+                    dictionaries,
+                    schema,
+                } = &v;
+
+                let schema: Schema = if let Some(schema_ref) = schema {
+                    schema_ref.try_into()?
+                } else {
+                    return Err(Error::General(
+                        "Invalid schema while deserializing ScalarValue::List"
+                            .to_string(),
+                    ));
+                };
+
+                let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
+                    Error::General(format!(
+                        "Error IPC message while deserializing ScalarValue::List: {e}"
+                    ))
+                })?;
+                let buffer = Buffer::from(arrow_data);
+
+                let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
+                    Error::General(
+                        "Unexpected message type deserializing ScalarValue::List"
+                            .to_string(),
+                    )
+                })?;
+
+                let dict_by_id: HashMap<i64,ArrayRef> = dictionaries.iter().map(|protobuf::scalar_nested_value::Dictionary { ipc_message, arrow_data }| {
+                    let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
+                        Error::General(format!(
+                            "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
+                        ))
+                    })?;
+                    let buffer = Buffer::from(arrow_data);
+
+                    let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
+                        Error::General(
+                            "Unexpected message type deserializing ScalarValue::List dictionary message"
+                                .to_string(),
+                        )
+                    })?;
+
+                    let id = dict_batch.id();
+
+                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
+                        Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
+                    })?;
+
+                    let values: ArrayRef = match first_field.data_type() {
+                        DataType::Dictionary(_, ref value_type) => {
+                            // Make a fake schema for the dictionary batch.
+                            let value = value_type.as_ref().clone();
+                            let schema = Schema::new(vec![Field::new("", value, true)]);
+                            // Read a single column
+                            let record_batch = read_record_batch(
+                                &buffer,
+                                dict_batch.data().unwrap(),
+                                Arc::new(schema),
+                                &Default::default(),
+                                None,
+                                &message.version(),
+                            )?;
+                            Ok(record_batch.column(0).clone())
+                        }
+                        _ => Err(Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())),
+                    }?;
+
+                    Ok((id,values))
+                }).collect::<datafusion_common::Result<HashMap<_, _>>>()?;
+
+                let record_batch = read_record_batch(
+                    &buffer,
+                    ipc_batch,
+                    Arc::new(schema),
+                    &dict_by_id,
+                    None,
+                    &message.version(),
+                )
+                .map_err(|e| arrow_datafusion_err!(e))
+                .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
+                let arr = record_batch.column(0);
+                match value {
+                    Value::ListValue(_) => {
+                        Self::List(arr.as_list::<i32>().to_owned().into())
+                    }
+                    Value::LargeListValue(_) => {
+                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
+                    }
+                    Value::FixedSizeListValue(_) => {
+                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
+                    Value::StructValue(_) => {
+                        Self::Struct(arr.as_struct().to_owned().into())
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Value::NullValue(v) => {
+                let null_type: DataType = v.try_into()?;
+                null_type.try_into().map_err(Error::DataFusionError)?
+            }
+            Value::Decimal128Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal128(
+                    Some(i128::from_be_bytes(array)),
+                    val.p as u8,
+                    val.s as i8,
+                )
+            }
+            Value::Decimal256Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal256(
+                    Some(i256::from_be_bytes(array)),
+                    val.p as u8,
+                    val.s as i8,
+                )
+            }
+            Value::Date64Value(v) => Self::Date64(Some(*v)),
+            Value::Time32Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time32_value::Value::Time32SecondValue(t) => {
+                        Self::Time32Second(Some(*t))
+                    }
+                    protobuf::scalar_time32_value::Value::Time32MillisecondValue(t) => {
+                        Self::Time32Millisecond(Some(*t))
+                    }
+                }
+            }
+            Value::Time64Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time64_value::Value::Time64MicrosecondValue(t) => {
+                        Self::Time64Microsecond(Some(*t))
+                    }
+                    protobuf::scalar_time64_value::Value::Time64NanosecondValue(t) => {
+                        Self::Time64Nanosecond(Some(*t))
+                    }
+                }
+            }
+            Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
+            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
+            Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
+            Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
+            Value::DurationNanosecondValue(v) => Self::DurationNanosecond(Some(*v)),
+            Value::TimestampValue(v) => {
+                let timezone = if v.timezone.is_empty() {
+                    None
+                } else {
+                    Some(v.timezone.as_str().into())
+                };
+
+                let ts_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+
+                match ts_value {
+                    protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(t) => {
+                        Self::TimestampMicrosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(t) => {
+                        Self::TimestampNanosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeSecondValue(t) => {
+                        Self::TimestampSecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(t) => {
+                        Self::TimestampMillisecond(Some(*t), timezone)
+                    }
+                }
+            }
+            Value::DictionaryValue(v) => {
+                let index_type: DataType = v
+                    .index_type
+                    .as_ref()
+                    .ok_or_else(|| Error::required("index_type"))?
+                    .try_into()?;
+
+                let value: Self = v
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::required("value"))?
+                    .as_ref()
+                    .try_into()?;
+
+                Self::Dictionary(Box::new(index_type), Box::new(value))
+            }
+            Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
+            Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
+            )),
+            Value::UnionValue(val) => {
+                let mode = match val.mode {
+                    0 => UnionMode::Sparse,
+                    1 => UnionMode::Dense,
+                    id => Err(Error::unknown("UnionMode", id))?,
+                };
+                let ids = val
+                    .fields
+                    .iter()
+                    .map(|f| f.field_id as i8)
+                    .collect::<Vec<_>>();
+                let fields = val
+                    .fields
+                    .iter()
+                    .map(|f| f.field.clone())
+                    .collect::<Option<Vec<_>>>();
+                let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
+                let fields = parse_proto_fields_to_fields(&fields)?;
+                let fields = UnionFields::new(ids, fields);
+                let v_id = val.value_id as i8;
+                let val = match &val.value {
+                    None => None,
+                    Some(val) => {
+                        let val: ScalarValue = val
+                            .as_ref()
+                            .try_into()
+                            .map_err(|_| Error::General("Invalid Scalar".to_string()))?;
+                        Some((v_id, Box::new(val)))
+                    }
+                };
+                Self::Union(val, fields, mode)
+            }
+            Value::FixedSizeBinaryValue(v) => {
+                Self::FixedSizeBinary(v.length, Some(v.clone().values))
+            }
+        })
+    }
+}
+
+// panic here because no better way to convert from Vec to Array
+fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
+    v.try_into().unwrap_or_else(|v: Vec<T>| {
+        panic!("Expected a Vec of length {} but it was {}", N, v.len())
+    })
 }

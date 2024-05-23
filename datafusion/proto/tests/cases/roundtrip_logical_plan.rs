@@ -1169,7 +1169,7 @@ fn round_trip_scalar_values() {
     ];
 
     for test_case in should_pass.into_iter() {
-        let proto: protobuf::ScalarValue = (&test_case)
+        let proto: protobuf_common::ScalarValue = (&test_case)
             .try_into()
             .expect("failed conversion to protobuf");
 
@@ -1436,7 +1436,7 @@ fn roundtrip_null_scalar_values() {
     ];
 
     for test_case in test_types.into_iter() {
-        let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
+        let proto_scalar: protobuf_common::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: datafusion::scalar::ScalarValue =
             (&proto_scalar).try_into().unwrap();
         assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));

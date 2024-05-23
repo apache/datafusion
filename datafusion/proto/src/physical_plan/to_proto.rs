@@ -60,9 +60,9 @@ use datafusion_common::{
 use crate::logical_plan::csv_writer_options_to_proto;
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
-    scalar_value::Value, ArrowOptions, AvroOptions, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection, ScalarValue,
+    ArrowOptions, AvroOptions, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
 };
+use datafusion_proto_common::protobuf_common::{scalar_value::Value, ScalarValue};
 
 use super::PhysicalExtensionCodec;
 

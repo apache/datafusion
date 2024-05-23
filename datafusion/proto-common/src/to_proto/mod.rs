@@ -18,10 +18,16 @@
 use crate::protobuf_common::arrow_type::ArrowTypeEnum;
 use crate::protobuf_common::EmptyMessage;
 use crate::{protobuf_common as protobuf, protobuf_common};
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
+    UnionMode,
 };
-use datafusion_common::{plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError, ScalarValue, Constraints, Constraint};
+use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
+use datafusion_common::{
+    plan_datafusion_err, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, ScalarValue,
+};
 use std::sync::Arc;
 
 impl From<Column> for protobuf::Column {
@@ -329,5 +335,404 @@ impl From<Constraint> for protobuf::Constraint {
         protobuf::Constraint {
             constraint_mode: Some(res),
         }
+    }
+}
+
+impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
+    type Error = Error;
+
+    fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
+        use protobuf::scalar_value::Value;
+
+        let data_type = val.data_type();
+        match val {
+            ScalarValue::Boolean(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::BoolValue(*s))
+            }
+            ScalarValue::Float32(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Float32Value(*s))
+            }
+            ScalarValue::Float64(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Float64Value(*s))
+            }
+            ScalarValue::Int8(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Int8Value(*s as i32)
+                })
+            }
+            ScalarValue::Int16(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Int16Value(*s as i32)
+                })
+            }
+            ScalarValue::Int32(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Int32Value(*s))
+            }
+            ScalarValue::Int64(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Int64Value(*s))
+            }
+            ScalarValue::UInt8(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Uint8Value(*s as u32)
+                })
+            }
+            ScalarValue::UInt16(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Uint16Value(*s as u32)
+                })
+            }
+            ScalarValue::UInt32(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Uint32Value(*s))
+            }
+            ScalarValue::UInt64(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Uint64Value(*s))
+            }
+            ScalarValue::Utf8(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Utf8Value(s.to_owned())
+                })
+            }
+            ScalarValue::LargeUtf8(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::LargeUtf8Value(s.to_owned())
+                })
+            }
+            ScalarValue::List(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::LargeList(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::Struct(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::Date32(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
+            }
+            ScalarValue::TimestampMicrosecond(val, tz) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
+                })
+            }
+            ScalarValue::TimestampNanosecond(val, tz) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
+                })
+            }
+            ScalarValue::Decimal128(val, p, s) => match *val {
+                Some(v) => {
+                    let array = v.to_be_bytes();
+                    let vec_val: Vec<u8> = array.to_vec();
+                    Ok(protobuf::ScalarValue {
+                        value: Some(Value::Decimal128Value(protobuf::Decimal128 {
+                            value: vec_val,
+                            p: *p as i64,
+                            s: *s as i64,
+                        })),
+                    })
+                }
+                None => Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullValue(
+                        (&data_type).try_into()?,
+                    )),
+                }),
+            },
+            ScalarValue::Decimal256(val, p, s) => match *val {
+                Some(v) => {
+                    let array = v.to_be_bytes();
+                    let vec_val: Vec<u8> = array.to_vec();
+                    Ok(protobuf::ScalarValue {
+                        value: Some(Value::Decimal256Value(protobuf::Decimal256 {
+                            value: vec_val,
+                            p: *p as i64,
+                            s: *s as i64,
+                        })),
+                    })
+                }
+                None => Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullValue(
+                        (&data_type).try_into()?,
+                    )),
+                }),
+            },
+            ScalarValue::Date64(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date64Value(*s))
+            }
+            ScalarValue::TimestampSecond(val, tz) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeSecondValue(*s),
+                        ),
+                    })
+                })
+            }
+            ScalarValue::TimestampMillisecond(val, tz) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
+                })
+            }
+            ScalarValue::IntervalYearMonth(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::IntervalYearmonthValue(*s)
+                })
+            }
+            ScalarValue::IntervalDayTime(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::IntervalDaytimeValue(*s)
+                })
+            }
+            ScalarValue::Null => Ok(protobuf::ScalarValue {
+                value: Some(Value::NullValue((&data_type).try_into()?)),
+            }),
+
+            ScalarValue::Binary(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::BinaryValue(s.to_owned())
+                })
+            }
+            ScalarValue::LargeBinary(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::LargeBinaryValue(s.to_owned())
+                })
+            }
+            ScalarValue::FixedSizeBinary(length, val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::FixedSizeBinaryValue(protobuf::ScalarFixedSizeBinary {
+                        values: s.to_owned(),
+                        length: *length,
+                    })
+                })
+            }
+
+            ScalarValue::Time32Second(v) => {
+                create_proto_scalar(v.as_ref(), &data_type, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32SecondValue(*v),
+                        ),
+                    })
+                })
+            }
+
+            ScalarValue::Time32Millisecond(v) => {
+                create_proto_scalar(v.as_ref(), &data_type, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32MillisecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
+                })
+            }
+
+            ScalarValue::Time64Microsecond(v) => {
+                create_proto_scalar(v.as_ref(), &data_type, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64MicrosecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
+                })
+            }
+
+            ScalarValue::Time64Nanosecond(v) => {
+                create_proto_scalar(v.as_ref(), &data_type, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64NanosecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
+                })
+            }
+
+            ScalarValue::IntervalMonthDayNano(v) => {
+                let value = if let Some(v) = v {
+                    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+                    Value::IntervalMonthDayNano(protobuf::IntervalMonthDayNanoValue {
+                        months,
+                        days,
+                        nanos,
+                    })
+                } else {
+                    Value::NullValue((&data_type).try_into()?)
+                };
+
+                Ok(protobuf::ScalarValue { value: Some(value) })
+            }
+
+            ScalarValue::DurationSecond(v) => {
+                let value = match v {
+                    Some(v) => Value::DurationSecondValue(*v),
+                    None => Value::NullValue((&data_type).try_into()?),
+                };
+                Ok(protobuf::ScalarValue { value: Some(value) })
+            }
+            ScalarValue::DurationMillisecond(v) => {
+                let value = match v {
+                    Some(v) => Value::DurationMillisecondValue(*v),
+                    None => Value::NullValue((&data_type).try_into()?),
+                };
+                Ok(protobuf::ScalarValue { value: Some(value) })
+            }
+            ScalarValue::DurationMicrosecond(v) => {
+                let value = match v {
+                    Some(v) => Value::DurationMicrosecondValue(*v),
+                    None => Value::NullValue((&data_type).try_into()?),
+                };
+                Ok(protobuf::ScalarValue { value: Some(value) })
+            }
+            ScalarValue::DurationNanosecond(v) => {
+                let value = match v {
+                    Some(v) => Value::DurationNanosecondValue(*v),
+                    None => Value::NullValue((&data_type).try_into()?),
+                };
+                Ok(protobuf::ScalarValue { value: Some(value) })
+            }
+
+            ScalarValue::Union(val, df_fields, mode) => {
+                let mut fields =
+                    Vec::<protobuf::UnionField>::with_capacity(df_fields.len());
+                for (id, field) in df_fields.iter() {
+                    let field_id = id as i32;
+                    let field = Some(field.as_ref().try_into()?);
+                    let field = protobuf::UnionField { field_id, field };
+                    fields.push(field);
+                }
+                let mode = match mode {
+                    UnionMode::Sparse => 0,
+                    UnionMode::Dense => 1,
+                };
+                let value = match val {
+                    None => None,
+                    Some((_id, v)) => Some(Box::new(v.as_ref().try_into()?)),
+                };
+                let val = protobuf::UnionValue {
+                    value_id: val.as_ref().map(|(id, _v)| *id as i32).unwrap_or(0),
+                    value,
+                    fields,
+                    mode,
+                };
+                let val = Value::UnionValue(Box::new(val));
+                let val = protobuf::ScalarValue { value: Some(val) };
+                Ok(val)
+            }
+
+            ScalarValue::Dictionary(index_type, val) => {
+                let value: protobuf::ScalarValue = val.as_ref().try_into()?;
+                Ok(protobuf::ScalarValue {
+                    value: Some(Value::DictionaryValue(Box::new(
+                        protobuf::ScalarDictionaryValue {
+                            index_type: Some(index_type.as_ref().try_into()?),
+                            value: Some(Box::new(value)),
+                        },
+                    ))),
+                })
+            }
+        }
+    }
+}
+
+/// Creates a scalar protobuf value from an optional value (T), and
+/// encoding None as the appropriate datatype
+fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
+    v: Option<&I>,
+    null_arrow_type: &DataType,
+    constructor: T,
+) -> Result<protobuf::ScalarValue, Error> {
+    let value = v
+        .map(constructor)
+        .unwrap_or(protobuf::scalar_value::Value::NullValue(
+            null_arrow_type.try_into()?,
+        ));
+
+    Ok(protobuf::ScalarValue { value: Some(value) })
+}
+
+// ScalarValue::List / FixedSizeList / LargeList / Struct are serialized using
+// Arrow IPC messages as a single column RecordBatch
+fn encode_scalar_nested_value(
+    arr: ArrayRef,
+    val: &ScalarValue,
+) -> Result<protobuf::ScalarValue, Error> {
+    let batch = RecordBatch::try_from_iter(vec![("field_name", arr)]).map_err(|e| {
+        Error::General(format!(
+            "Error creating temporary batch while encoding ScalarValue::List: {e}"
+        ))
+    })?;
+
+    let gen = IpcDataGenerator {};
+    let mut dict_tracker = DictionaryTracker::new(false);
+    let (encoded_dictionaries, encoded_message) = gen
+        .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+        .map_err(|e| {
+            Error::General(format!("Error encoding ScalarValue::List as IPC: {e}"))
+        })?;
+
+    let schema: protobuf_common::Schema = batch.schema().try_into()?;
+
+    let scalar_list_value = protobuf::ScalarNestedValue {
+        ipc_message: encoded_message.ipc_message,
+        arrow_data: encoded_message.arrow_data,
+        dictionaries: encoded_dictionaries
+            .into_iter()
+            .map(|data| protobuf::scalar_nested_value::Dictionary {
+                ipc_message: data.ipc_message,
+                arrow_data: data.arrow_data,
+            })
+            .collect(),
+        schema: Some(schema),
+    };
+
+    match val {
+        ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::ListValue(scalar_list_value)),
+        }),
+        ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::LargeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::Struct(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::StructValue(
+                scalar_list_value,
+            )),
+        }),
+        _ => unreachable!(),
     }
 }
