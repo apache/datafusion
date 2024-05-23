@@ -19,11 +19,18 @@ use crate::protobuf_common::arrow_type::ArrowTypeEnum;
 use crate::protobuf_common::EmptyMessage;
 use crate::{protobuf_common as protobuf, protobuf_common};
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
 };
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
+use datafusion_common::config::{
+    ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
+};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_datafusion_err, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, ScalarValue,
@@ -734,5 +741,187 @@ fn encode_scalar_nested_value(
             )),
         }),
         _ => unreachable!(),
+    }
+}
+
+impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetOptions) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(protobuf::ParquetOptions {
+            enable_page_index: value.enable_page_index,
+            pruning: value.pruning,
+            skip_metadata: value.skip_metadata,
+            metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
+            pushdown_filters: value.pushdown_filters,
+            reorder_filters: value.reorder_filters,
+            data_pagesize_limit: value.data_pagesize_limit as u64,
+            write_batch_size: value.write_batch_size as u64,
+            writer_version: value.writer_version.clone(),
+            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
+            dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
+            statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
+            max_row_group_size: value.max_row_group_size as u64,
+            created_by: value.created_by.clone(),
+            column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
+            data_page_row_count_limit: value.data_page_row_count_limit as u64,
+            encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
+            bloom_filter_on_read: value.bloom_filter_on_read,
+            bloom_filter_on_write: value.bloom_filter_on_write,
+            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
+            bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
+            allow_single_file_parallelism: value.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
+            maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
+        })
+    }
+}
+
+impl TryFrom<&ColumnOptions> for protobuf::ColumnOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ColumnOptions) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(protobuf::ColumnOptions {
+            compression_opt: value
+                .compression
+                .clone()
+                .map(protobuf::column_options::CompressionOpt::Compression),
+            dictionary_enabled_opt: value
+                .dictionary_enabled
+                .map(protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled),
+            statistics_enabled_opt: value
+                .statistics_enabled
+                .clone()
+                .map(protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            max_statistics_size_opt: value.max_statistics_size.map(|v| {
+                protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
+                    v as u32,
+                )
+            }),
+            encoding_opt: value
+                .encoding
+                .clone()
+                .map(protobuf::column_options::EncodingOpt::Encoding),
+            bloom_filter_enabled_opt: value
+                .bloom_filter_enabled
+                .map(protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
+            bloom_filter_fpp_opt: value
+                .bloom_filter_fpp
+                .map(protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp),
+            bloom_filter_ndv_opt: value
+                .bloom_filter_ndv
+                .map(protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv),
+        })
+    }
+}
+
+impl TryFrom<&TableParquetOptions> for protobuf::TableParquetOptions {
+    type Error = DataFusionError;
+    fn try_from(
+        value: &TableParquetOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let column_specific_options = value
+            .column_specific_options
+            .iter()
+            .map(|(k, v)| {
+                Ok(protobuf::ColumnSpecificOptions {
+                    column_name: k.into(),
+                    options: Some(v.try_into()?),
+                })
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Ok(protobuf::TableParquetOptions {
+            global: Some((&value.global).try_into()?),
+            column_specific_options,
+        })
+    }
+}
+
+impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
+    type Error = DataFusionError; // Define or use an appropriate error type
+
+    fn try_from(opts: &CsvOptions) -> datafusion_common::Result<Self, Self::Error> {
+        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        Ok(protobuf::CsvOptions {
+            has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
+            delimiter: vec![opts.delimiter],
+            quote: vec![opts.quote],
+            escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),
+            compression: compression.into(),
+            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            date_format: opts.date_format.clone().unwrap_or_default(),
+            datetime_format: opts.datetime_format.clone().unwrap_or_default(),
+            timestamp_format: opts.timestamp_format.clone().unwrap_or_default(),
+            timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
+            time_format: opts.time_format.clone().unwrap_or_default(),
+            null_value: opts.null_value.clone().unwrap_or_default(),
+        })
+    }
+}
+
+impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &JsonOptions) -> datafusion_common::Result<Self, Self::Error> {
+        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        Ok(protobuf::JsonOptions {
+            compression: compression.into(),
+            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+        })
+    }
+}
+
+impl From<&CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: &CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
+impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &CsvWriterOptions) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(csv_writer_options_to_proto(
+            &opts.writer_options,
+            &opts.compression,
+        ))
+    }
+}
+
+impl TryFrom<&JsonWriterOptions> for protobuf::JsonWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(
+        opts: &JsonWriterOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        Ok(protobuf::JsonWriterOptions {
+            compression: compression.into(),
+        })
+    }
+}
+
+pub(crate) fn csv_writer_options_to_proto(
+    csv_options: &WriterBuilder,
+    compression: &CompressionTypeVariant,
+) -> protobuf::CsvWriterOptions {
+    let compression: protobuf::CompressionTypeVariant = compression.into();
+    protobuf::CsvWriterOptions {
+        compression: compression.into(),
+        delimiter: (csv_options.delimiter() as char).to_string(),
+        has_header: csv_options.header(),
+        date_format: csv_options.date_format().unwrap_or("").to_owned(),
+        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
+        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
+        time_format: csv_options.time_format().unwrap_or("").to_owned(),
+        null_value: csv_options.null().to_owned(),
     }
 }

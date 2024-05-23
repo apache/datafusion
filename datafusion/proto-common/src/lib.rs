@@ -48,6 +48,7 @@
 //! # Example: Serializing [`ScalarValue`]s
 //! TODO: Add example
 
+pub mod common;
 pub mod from_proto;
 pub mod generated;
 pub mod to_proto;

@@ -315,3 +315,175 @@ message UnionField {
   int32 field_id = 1;
   Field field = 2;
 }
+
+message CsvFormat {
+  CsvOptions options = 5;
+}
+
+message ParquetFormat {
+  // Used to be bool enable_pruning = 1;
+  reserved 1;
+  TableParquetOptions options = 2;
+}
+
+message AvroFormat {}
+
+// Options controlling CSV format
+message CsvOptions {
+  bytes has_header = 1; // Indicates if the CSV has a header row
+  bytes delimiter = 2; // Delimiter character as a byte
+  bytes quote = 3; // Quote character as a byte
+  bytes escape = 4; // Optional escape character as a byte
+  CompressionTypeVariant compression = 5; // Compression type
+  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  string date_format = 7; // Optional date format
+  string datetime_format = 8; // Optional datetime format
+  string timestamp_format = 9; // Optional timestamp format
+  string timestamp_tz_format = 10; // Optional timestamp with timezone format
+  string time_format = 11; // Optional time format
+  string null_value = 12; // Optional representation of null value
+}
+
+// Options controlling CSV format
+message JsonOptions {
+  CompressionTypeVariant compression = 1; // Compression type
+  uint64 schema_infer_max_rec = 2; // Max records for schema inference
+}
+
+message TableParquetOptions {
+  ParquetOptions global = 1;
+  repeated ColumnSpecificOptions column_specific_options = 2;
+}
+
+message ColumnSpecificOptions {
+  string column_name = 1;
+  ColumnOptions options = 2;
+}
+
+message ColumnOptions {
+  oneof bloom_filter_enabled_opt {
+    bool bloom_filter_enabled = 1;
+  }
+
+  oneof encoding_opt {
+    string encoding = 2;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 3;
+  }
+
+  oneof compression_opt {
+    string compression = 4;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 5;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 6;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 7;
+  }
+
+  oneof max_statistics_size_opt {
+    uint32 max_statistics_size = 8;
+  }
+}
+
+enum CompressionTypeVariant {
+  GZIP = 0;
+  BZIP2 = 1;
+  XZ = 2;
+  ZSTD = 3;
+  UNCOMPRESSED = 4;
+}
+
+message ParquetOptions {
+  // Regular fields
+  bool enable_page_index = 1; // default = true
+  bool pruning = 2; // default = true
+  bool skip_metadata = 3; // default = true
+  bool pushdown_filters = 5; // default = false
+  bool reorder_filters = 6; // default = false
+  uint64 data_pagesize_limit = 7; // default = 1024 * 1024
+  uint64 write_batch_size = 8; // default = 1024
+  string writer_version = 9; // default = "1.0"
+  // bool bloom_filter_enabled = 20; // default = false
+  bool allow_single_file_parallelism = 23; // default = true
+  uint64 maximum_parallel_row_group_writers = 24; // default = 1
+  uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+  bool bloom_filter_on_read = 26; // default = true
+  bool bloom_filter_on_write = 27; // default = false
+
+  oneof metadata_size_hint_opt {
+    uint64 metadata_size_hint = 4;
+  }
+
+  oneof compression_opt {
+    string compression = 10;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 11;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 13;
+  }
+
+  oneof max_statistics_size_opt {
+    uint64 max_statistics_size = 14;
+  }
+
+  oneof column_index_truncate_length_opt {
+    uint64 column_index_truncate_length = 17;
+  }
+
+  oneof encoding_opt {
+    string encoding = 19;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 21;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 22;
+  }
+
+  uint64 dictionary_page_size_limit = 12;
+
+  uint64 data_page_row_count_limit = 18;
+
+  uint64 max_row_group_size = 15;
+
+  string created_by = 16;
+}
+
+message JsonWriterOptions {
+  datafusion_common.CompressionTypeVariant compression = 1;
+}
+
+
+message CsvWriterOptions {
+  // Compression type
+  datafusion_common.CompressionTypeVariant compression = 1;
+  // Optional column delimiter. Defaults to `b','`
+  string delimiter = 2;
+  // Whether to write column names as file headers. Defaults to `true`
+  bool has_header = 3;
+  // Optional date format for date arrays
+  string date_format = 4;
+  // Optional datetime format for datetime arrays
+  string datetime_format = 5;
+  // Optional timestamp format for timestamp arrays
+  string timestamp_format = 6;
+  // Optional time format for time arrays
+  string time_format = 7;
+  // Optional value to represent null
+  string null_value = 8;
+}

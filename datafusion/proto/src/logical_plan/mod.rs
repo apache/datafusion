@@ -30,7 +30,6 @@ use crate::{
     },
 };
 
-use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -45,8 +44,8 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err,
-    parsers::CompressionTypeVariant, DataFusionError, Result, TableReference,
+    context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
+    Result, TableReference,
 };
 use datafusion_expr::{
     dml,
@@ -341,14 +340,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))
                     })? {
                         #[cfg(feature = "parquet")]
-                        FileFormatType::Parquet(protobuf::ParquetFormat {options}) => {
+                        FileFormatType::Parquet(protobuf_common::ParquetFormat {options}) => {
                             let mut parquet = ParquetFormat::default();
                             if let Some(options) = options {
                                 parquet = parquet.with_options(options.try_into()?)
                             }
                             Arc::new(parquet)
                         }
-                        FileFormatType::Csv(protobuf::CsvFormat {
+                        FileFormatType::Csv(protobuf_common::CsvFormat {
                             options
                         }) => {
                             let mut csv = CsvFormat::default();
@@ -911,23 +910,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                         #[cfg(feature = "parquet")]
                         if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
                             let options = parquet.options();
-                            maybe_some_type =
-                                Some(FileFormatType::Parquet(protobuf::ParquetFormat {
+                            maybe_some_type = Some(FileFormatType::Parquet(
+                                protobuf_common::ParquetFormat {
                                     options: Some(options.try_into()?),
-                                }));
+                                },
+                            ));
                         };
 
                         if let Some(csv) = any.downcast_ref::<CsvFormat>() {
                             let options = csv.options();
                             maybe_some_type =
-                                Some(FileFormatType::Csv(protobuf::CsvFormat {
+                                Some(FileFormatType::Csv(protobuf_common::CsvFormat {
                                     options: Some(options.try_into()?),
                                 }));
                         }
 
                         if any.is::<AvroFormat>() {
                             maybe_some_type =
-                                Some(FileFormatType::Avro(protobuf::AvroFormat {}))
+                                Some(FileFormatType::Avro(protobuf_common::AvroFormat {}))
                         }
 
                         if let Some(file_format_type) = maybe_some_type {
@@ -1582,45 +1582,4 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
         }
     }
-}
-
-pub(crate) fn csv_writer_options_to_proto(
-    csv_options: &WriterBuilder,
-    compression: &CompressionTypeVariant,
-) -> protobuf::CsvWriterOptions {
-    let compression: protobuf::CompressionTypeVariant = compression.into();
-    protobuf::CsvWriterOptions {
-        compression: compression.into(),
-        delimiter: (csv_options.delimiter() as char).to_string(),
-        has_header: csv_options.header(),
-        date_format: csv_options.date_format().unwrap_or("").to_owned(),
-        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
-        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
-        time_format: csv_options.time_format().unwrap_or("").to_owned(),
-        null_value: csv_options.null().to_owned(),
-    }
-}
-
-pub(crate) fn csv_writer_options_from_proto(
-    writer_options: &protobuf::CsvWriterOptions,
-) -> Result<WriterBuilder> {
-    let mut builder = WriterBuilder::new();
-    if !writer_options.delimiter.is_empty() {
-        if let Some(delimiter) = writer_options.delimiter.chars().next() {
-            if delimiter.is_ascii() {
-                builder = builder.with_delimiter(delimiter as u8);
-            } else {
-                return Err(proto_error("CSV Delimiter is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Delimiter"));
-        }
-    }
-    Ok(builder
-        .with_header(writer_options.has_header)
-        .with_date_format(writer_options.date_format.clone())
-        .with_datetime_format(writer_options.datetime_format.clone())
-        .with_timestamp_format(writer_options.timestamp_format.clone())
-        .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone()))
 }
