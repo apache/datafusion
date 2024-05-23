@@ -22,11 +22,19 @@ use sqlparser::keywords::ALL_KEYWORDS;
 ///
 /// The default dialect tries to avoid quoting identifiers unless necessary (e.g. `a` instead of `"a"`)
 /// but this behavior can be overridden as needed
-/// Note: this trait will eventually be replaced by the Dialect in the SQLparser package
+///
+/// **Note**: This trait will eventually be replaced by the Dialect in the SQLparser package
 ///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
+/// See also the discussion in <https://github.com/apache/datafusion/pull/10625>
 pub trait Dialect {
+    /// Return the character used to quote identifiers.
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
+
+    /// Does the dialect support specifying `NULLS FIRST/LAST` in `ORDER BY` clauses?
+    fn supports_nulls_first_in_sort(&self) -> bool {
+        true
+    }
 }
 pub struct DefaultDialect {}
 
@@ -56,6 +64,10 @@ pub struct MySqlDialect {}
 impl Dialect for MySqlDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
+    }
+
+    fn supports_nulls_first_in_sort(&self) -> bool {
+        false
     }
 }
 

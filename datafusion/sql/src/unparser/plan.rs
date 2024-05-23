@@ -439,10 +439,17 @@ impl Unparser<'_> {
             .map(|expr: &Expr| match expr {
                 Expr::Sort(sort_expr) => {
                     let col = self.expr_to_sql(&sort_expr.expr)?;
+
+                    let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
+                        Some(sort_expr.nulls_first)
+                    } else {
+                        None
+                    };
+
                     Ok(ast::OrderByExpr {
                         asc: Some(sort_expr.asc),
                         expr: col,
-                        nulls_first: Some(sort_expr.nulls_first),
+                        nulls_first,
                     })
                 }
                 _ => plan_err!("Expecting Sort expr"),
