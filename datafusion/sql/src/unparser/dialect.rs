@@ -33,7 +33,7 @@ pub trait Dialect {
 
     /// Does the dialect support specifying `NULLS FIRST/LAST` in `ORDER BY` clauses?
     ///
-    /// Upstream support is coming in https://github.com/sqlparser-rs/sqlparser-rs/pull/1284
+    /// Upstream support is coming in <https://github.com/sqlparser-rs/sqlparser-rs/pull/1284>
     fn supports_nulls_first_in_sort(&self) -> bool {
         true
     }
