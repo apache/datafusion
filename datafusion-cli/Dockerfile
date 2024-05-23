@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:1.73-bullseye as builder
+FROM rust:1.78-bookworm as builder
 
 COPY . /usr/src/arrow-datafusion
 COPY ./datafusion /usr/src/arrow-datafusion/datafusion
@@ -28,7 +28,7 @@ RUN rustup component add rustfmt
 
 RUN cargo build --release
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 COPY --from=builder /usr/src/arrow-datafusion/datafusion-cli/target/release/datafusion-cli /usr/local/bin
 
