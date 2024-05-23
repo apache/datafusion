@@ -225,27 +225,11 @@ message WindowNode {
   repeated LogicalExprNode window_expr = 2;
 }
 
-enum JoinType {
-  INNER = 0;
-  LEFT = 1;
-  RIGHT = 2;
-  FULL = 3;
-  LEFTSEMI = 4;
-  LEFTANTI = 5;
-  RIGHTSEMI = 6;
-  RIGHTANTI = 7;
-}
-
-enum JoinConstraint {
-  ON = 0;
-  USING = 1;
-}
-
 message JoinNode {
   LogicalPlanNode left = 1;
   LogicalPlanNode right = 2;
-  JoinType join_type = 3;
-  JoinConstraint join_constraint = 4;
+  datafusion_common.JoinType join_type = 3;
+  datafusion_common.JoinConstraint join_constraint = 4;
   repeated LogicalExprNode left_join_key = 5;
   repeated LogicalExprNode right_join_key = 6;
   bool null_equals_null = 7;
@@ -988,7 +972,7 @@ message FileScanExecConf {
   datafusion_common.Schema schema = 2;
   repeated uint32 projection = 4;
   ScanLimit limit = 5;
-  Statistics statistics = 6;
+  datafusion_common.Statistics statistics = 6;
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
   repeated PhysicalSortExprNodeCollection output_ordering = 9;
@@ -1027,7 +1011,7 @@ message HashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
-  JoinType join_type = 4;
+  datafusion_common.JoinType join_type = 4;
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
@@ -1043,7 +1027,7 @@ message SymmetricHashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
-  JoinType join_type = 4;
+  datafusion_common.JoinType join_type = 4;
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
@@ -1178,7 +1162,7 @@ message SortPreservingMergeExecNode {
 message NestedLoopJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
-  JoinType join_type = 3;
+  datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
 }
 
@@ -1213,12 +1197,7 @@ message JoinFilter{
 
 message ColumnIndex{
   uint32 index = 1;
-  JoinSide side = 2;
-}
-
-enum JoinSide{
-  LEFT_SIDE = 0;
-  RIGHT_SIDE = 1;
+  datafusion_common.JoinSide side = 2;
 }
 
 message PartitionedFile {
@@ -1227,7 +1206,7 @@ message PartitionedFile {
   uint64 last_modified_ns = 3;
   repeated datafusion_common.ScalarValue partition_values = 4;
   FileRange range = 5;
-  Statistics statistics = 6;
+  datafusion_common.Statistics statistics = 6;
 }
 
 message FileRange {
@@ -1239,29 +1218,5 @@ message PartitionStats {
   int64 num_rows = 1;
   int64 num_batches = 2;
   int64 num_bytes = 3;
-  repeated ColumnStats column_stats = 4;
-}
-
-message Precision{
-  PrecisionInfo precision_info = 1;
-  datafusion_common.ScalarValue val = 2;
-}
-
-enum PrecisionInfo {
-  EXACT = 0;
-  INEXACT = 1;
-  ABSENT = 2;
-}
-
-message Statistics {
-  Precision num_rows = 1;
-  Precision total_byte_size = 2;
-  repeated ColumnStats column_stats = 3;
-}
-
-message ColumnStats {
-  Precision min_value = 1;
-  Precision max_value = 2;
-  Precision null_count = 3;
-  Precision distinct_count = 4;
+  repeated datafusion_common.ColumnStats column_stats = 4;
 }

@@ -40,12 +40,9 @@ use datafusion::physical_plan::expressions::{
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{
-    ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
-};
+use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_common::config::FormatOptions;
-use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 use crate::common::proto_error;
 use crate::convert_required;
@@ -555,134 +552,6 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
             .iter()
             .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()
-    }
-}
-
-impl From<&protobuf::ColumnStats> for ColumnStatistics {
-    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
-        ColumnStatistics {
-            null_count: if let Some(nc) = &cs.null_count {
-                nc.clone().into()
-            } else {
-                Precision::Absent
-            },
-            max_value: if let Some(max) = &cs.max_value {
-                max.clone().into()
-            } else {
-                Precision::Absent
-            },
-            min_value: if let Some(min) = &cs.min_value {
-                min.clone().into()
-            } else {
-                Precision::Absent
-            },
-            distinct_count: if let Some(dc) = &cs.distinct_count {
-                dc.clone().into()
-            } else {
-                Precision::Absent
-            },
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<usize> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Exact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Inexact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<ScalarValue> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Exact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Inexact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::JoinSide> for JoinSide {
-    fn from(t: protobuf::JoinSide) -> Self {
-        match t {
-            protobuf::JoinSide::LeftSide => JoinSide::Left,
-            protobuf::JoinSide::RightSide => JoinSide::Right,
-        }
-    }
-}
-
-impl TryFrom<&protobuf::Statistics> for Statistics {
-    type Error = DataFusionError;
-
-    fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
-        // Keep it sync with Statistics::to_proto
-        Ok(Statistics {
-            num_rows: if let Some(nr) = &s.num_rows {
-                nr.clone().into()
-            } else {
-                Precision::Absent
-            },
-            total_byte_size: if let Some(tbs) = &s.total_byte_size {
-                tbs.clone().into()
-            } else {
-                Precision::Absent
-            },
-            // No column statistic (None) is encoded with empty array
-            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
-        })
     }
 }
 

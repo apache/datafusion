@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::protobuf_common::arrow_type::ArrowTypeEnum;
+use crate::protobuf_common::scalar_value::Value;
 use crate::protobuf_common::EmptyMessage;
 use crate::{protobuf_common as protobuf, protobuf_common};
 use arrow::array::{ArrayRef, RecordBatch};
@@ -31,9 +32,10 @@ use datafusion_common::config::{
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, ScalarValue,
+    plan_datafusion_err, Column, ColumnStatistics, Constraint, Constraints, DFSchema,
+    DFSchemaRef, DataFusionError, JoinSide, ScalarValue, Statistics,
 };
 use std::sync::Arc;
 
@@ -923,5 +925,78 @@ pub(crate) fn csv_writer_options_to_proto(
         timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
         time_format: csv_options.time_format().unwrap_or("").to_owned(),
         null_value: csv_options.null().to_owned(),
+    }
+}
+
+impl From<&Precision<usize>> for protobuf::Precision {
+    fn from(s: &Precision<usize>) -> protobuf::Precision {
+        match s {
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
+                val: Some(crate::protobuf_common::ScalarValue {
+                    value: Some(Value::Uint64Value(*val as u64)),
+                }),
+            },
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
+                val: Some(crate::protobuf_common::ScalarValue {
+                    value: Some(Value::Uint64Value(*val as u64)),
+                }),
+            },
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
+                val: Some(crate::protobuf_common::ScalarValue { value: None }),
+            },
+        }
+    }
+}
+
+impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
+    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
+        match s {
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
+                val: val.try_into().ok(),
+            },
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
+                val: val.try_into().ok(),
+            },
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
+                val: Some(crate::protobuf_common::ScalarValue { value: None }),
+            },
+        }
+    }
+}
+
+impl From<&Statistics> for protobuf::Statistics {
+    fn from(s: &Statistics) -> protobuf::Statistics {
+        let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
+        protobuf::Statistics {
+            num_rows: Some(protobuf::Precision::from(&s.num_rows)),
+            total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
+            column_stats,
+        }
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(s: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: Some(protobuf::Precision::from(&s.min_value)),
+            max_value: Some(protobuf::Precision::from(&s.max_value)),
+            null_count: Some(protobuf::Precision::from(&s.null_count)),
+            distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
+        }
+    }
+}
+
+impl From<JoinSide> for protobuf::JoinSide {
+    fn from(t: JoinSide) -> Self {
+        match t {
+            JoinSide::Left => protobuf::JoinSide::LeftSide,
+            JoinSide::Right => protobuf::JoinSide::RightSide,
+        }
     }
 }

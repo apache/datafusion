@@ -34,9 +34,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
-use datafusion::physical_plan::{
-    AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
-};
+use datafusion::physical_plan::{AggregateExpr, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
         file_format::{csv::CsvSink, json::JsonSink},
@@ -46,15 +44,12 @@ use datafusion::{
     physical_plan::expressions::LikeExpr,
 };
 use datafusion_common::config::FormatOptions;
-use datafusion_common::{
-    internal_err, not_impl_err, stats::Precision, DataFusionError, JoinSide, Result,
-};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
     ArrowOptions, AvroOptions, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
 };
-use datafusion_proto_common::protobuf_common::{scalar_value::Value, ScalarValue};
 
 use super::PhysicalExtensionCodec;
 
@@ -624,70 +619,6 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
     }
 }
 
-impl From<&Precision<usize>> for protobuf::Precision {
-    fn from(s: &Precision<usize>) -> protobuf::Precision {
-        match s {
-            Precision::Exact(val) => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Exact.into(),
-                val: Some(ScalarValue {
-                    value: Some(Value::Uint64Value(*val as u64)),
-                }),
-            },
-            Precision::Inexact(val) => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Inexact.into(),
-                val: Some(ScalarValue {
-                    value: Some(Value::Uint64Value(*val as u64)),
-                }),
-            },
-            Precision::Absent => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Absent.into(),
-                val: Some(ScalarValue { value: None }),
-            },
-        }
-    }
-}
-
-impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
-    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
-        match s {
-            Precision::Exact(val) => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Exact.into(),
-                val: val.try_into().ok(),
-            },
-            Precision::Inexact(val) => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Inexact.into(),
-                val: val.try_into().ok(),
-            },
-            Precision::Absent => protobuf::Precision {
-                precision_info: protobuf::PrecisionInfo::Absent.into(),
-                val: Some(ScalarValue { value: None }),
-            },
-        }
-    }
-}
-
-impl From<&Statistics> for protobuf::Statistics {
-    fn from(s: &Statistics) -> protobuf::Statistics {
-        let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
-        protobuf::Statistics {
-            num_rows: Some(protobuf::Precision::from(&s.num_rows)),
-            total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
-            column_stats,
-        }
-    }
-}
-
-impl From<&ColumnStatistics> for protobuf::ColumnStats {
-    fn from(s: &ColumnStatistics) -> protobuf::ColumnStats {
-        protobuf::ColumnStats {
-            min_value: Some(protobuf::Precision::from(&s.min_value)),
-            max_value: Some(protobuf::Precision::from(&s.max_value)),
-            null_count: Some(protobuf::Precision::from(&s.null_count)),
-            distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
-        }
-    }
-}
-
 pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
     codec: &dyn PhysicalExtensionCodec,
@@ -740,15 +671,6 @@ pub fn serialize_file_scan_config(
             })
             .collect::<Vec<_>>(),
     })
-}
-
-impl From<JoinSide> for protobuf::JoinSide {
-    fn from(t: JoinSide) -> Self {
-        match t {
-            JoinSide::Left => protobuf::JoinSide::LeftSide,
-            JoinSide::Right => protobuf::JoinSide::RightSide,
-        }
-    }
 }
 
 pub fn serialize_maybe_filter(

@@ -371,9 +371,9 @@ pub struct JoinNode {
     pub left: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub right: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(enumeration = "JoinType", tag = "3")]
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "3")]
     pub join_type: i32,
-    #[prost(enumeration = "JoinConstraint", tag = "4")]
+    #[prost(enumeration = "super::datafusion_common::JoinConstraint", tag = "4")]
     pub join_constraint: i32,
     #[prost(message, repeated, tag = "5")]
     pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
@@ -1501,7 +1501,7 @@ pub struct FileScanExecConf {
     #[prost(message, optional, tag = "5")]
     pub limit: ::core::option::Option<ScanLimit>,
     #[prost(message, optional, tag = "6")]
-    pub statistics: ::core::option::Option<Statistics>,
+    pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
     #[prost(string, repeated, tag = "7")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "8")]
@@ -1555,7 +1555,7 @@ pub struct HashJoinExecNode {
     pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "3")]
     pub on: ::prost::alloc::vec::Vec<JoinOn>,
-    #[prost(enumeration = "JoinType", tag = "4")]
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
     pub join_type: i32,
     #[prost(enumeration = "PartitionMode", tag = "6")]
     pub partition_mode: i32,
@@ -1575,7 +1575,7 @@ pub struct SymmetricHashJoinExecNode {
     pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "3")]
     pub on: ::prost::alloc::vec::Vec<JoinOn>,
-    #[prost(enumeration = "JoinType", tag = "4")]
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "4")]
     pub join_type: i32,
     #[prost(enumeration = "StreamPartitionMode", tag = "6")]
     pub partition_mode: i32,
@@ -1789,7 +1789,7 @@ pub struct NestedLoopJoinExecNode {
     pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    #[prost(enumeration = "JoinType", tag = "3")]
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "3")]
     pub join_type: i32,
     #[prost(message, optional, tag = "4")]
     pub filter: ::core::option::Option<JoinFilter>,
@@ -1852,7 +1852,7 @@ pub struct JoinFilter {
 pub struct ColumnIndex {
     #[prost(uint32, tag = "1")]
     pub index: u32,
-    #[prost(enumeration = "JoinSide", tag = "2")]
+    #[prost(enumeration = "super::datafusion_common::JoinSide", tag = "2")]
     pub side: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1871,7 +1871,7 @@ pub struct PartitionedFile {
     #[prost(message, optional, tag = "5")]
     pub range: ::core::option::Option<FileRange>,
     #[prost(message, optional, tag = "6")]
-    pub statistics: ::core::option::Option<Statistics>,
+    pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1891,107 +1891,7 @@ pub struct PartitionStats {
     #[prost(int64, tag = "3")]
     pub num_bytes: i64,
     #[prost(message, repeated, tag = "4")]
-    pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Precision {
-    #[prost(enumeration = "PrecisionInfo", tag = "1")]
-    pub precision_info: i32,
-    #[prost(message, optional, tag = "2")]
-    pub val: ::core::option::Option<super::datafusion_common::ScalarValue>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Statistics {
-    #[prost(message, optional, tag = "1")]
-    pub num_rows: ::core::option::Option<Precision>,
-    #[prost(message, optional, tag = "2")]
-    pub total_byte_size: ::core::option::Option<Precision>,
-    #[prost(message, repeated, tag = "3")]
-    pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ColumnStats {
-    #[prost(message, optional, tag = "1")]
-    pub min_value: ::core::option::Option<Precision>,
-    #[prost(message, optional, tag = "2")]
-    pub max_value: ::core::option::Option<Precision>,
-    #[prost(message, optional, tag = "3")]
-    pub null_count: ::core::option::Option<Precision>,
-    #[prost(message, optional, tag = "4")]
-    pub distinct_count: ::core::option::Option<Precision>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum JoinType {
-    Inner = 0,
-    Left = 1,
-    Right = 2,
-    Full = 3,
-    Leftsemi = 4,
-    Leftanti = 5,
-    Rightsemi = 6,
-    Rightanti = 7,
-}
-impl JoinType {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            JoinType::Inner => "INNER",
-            JoinType::Left => "LEFT",
-            JoinType::Right => "RIGHT",
-            JoinType::Full => "FULL",
-            JoinType::Leftsemi => "LEFTSEMI",
-            JoinType::Leftanti => "LEFTANTI",
-            JoinType::Rightsemi => "RIGHTSEMI",
-            JoinType::Rightanti => "RIGHTANTI",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "INNER" => Some(Self::Inner),
-            "LEFT" => Some(Self::Left),
-            "RIGHT" => Some(Self::Right),
-            "FULL" => Some(Self::Full),
-            "LEFTSEMI" => Some(Self::Leftsemi),
-            "LEFTANTI" => Some(Self::Leftanti),
-            "RIGHTSEMI" => Some(Self::Rightsemi),
-            "RIGHTANTI" => Some(Self::Rightanti),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum JoinConstraint {
-    On = 0,
-    Using = 1,
-}
-impl JoinConstraint {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            JoinConstraint::On => "ON",
-            JoinConstraint::Using => "USING",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "ON" => Some(Self::On),
-            "USING" => Some(Self::Using),
-            _ => None,
-        }
-    }
+    pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2349,61 +2249,6 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum JoinSide {
-    LeftSide = 0,
-    RightSide = 1,
-}
-impl JoinSide {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            JoinSide::LeftSide => "LEFT_SIDE",
-            JoinSide::RightSide => "RIGHT_SIDE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "LEFT_SIDE" => Some(Self::LeftSide),
-            "RIGHT_SIDE" => Some(Self::RightSide),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum PrecisionInfo {
-    Exact = 0,
-    Inexact = 1,
-    Absent = 2,
-}
-impl PrecisionInfo {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            PrecisionInfo::Exact => "EXACT",
-            PrecisionInfo::Inexact => "INEXACT",
-            PrecisionInfo::Absent => "ABSENT",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "EXACT" => Some(Self::Exact),
-            "INEXACT" => Some(Self::Inexact),
-            "ABSENT" => Some(Self::Absent),
             _ => None,
         }
     }

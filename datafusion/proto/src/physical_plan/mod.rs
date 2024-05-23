@@ -610,7 +610,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf::JoinSide::try_from(i.side)
+                                let side = protobuf_common::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a HashJoinNode message with JoinSide in Filter {}",
                                         i.side))
@@ -724,7 +724,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf::JoinSide::try_from(i.side)
+                                let side = protobuf_common::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a HashJoinNode message with JoinSide in Filter {}",
                                         i.side))
@@ -977,7 +977,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf::JoinSide::try_from(i.side)
+                                let side = protobuf_common::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
                                         i.side))
@@ -1261,7 +1261,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            let side: protobuf_common::JoinSide =
+                                i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
@@ -1335,7 +1336,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            let side: protobuf_common::JoinSide =
+                                i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
@@ -1792,7 +1794,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            let side: protobuf_common::JoinSide =
+                                i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
