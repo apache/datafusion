@@ -251,41 +251,6 @@ pub struct EmptyRelationNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PrimaryKeyConstraint {
-    #[prost(uint64, repeated, tag = "1")]
-    pub indices: ::prost::alloc::vec::Vec<u64>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct UniqueConstraint {
-    #[prost(uint64, repeated, tag = "1")]
-    pub indices: ::prost::alloc::vec::Vec<u64>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Constraint {
-    #[prost(oneof = "constraint::ConstraintMode", tags = "1, 2")]
-    pub constraint_mode: ::core::option::Option<constraint::ConstraintMode>,
-}
-/// Nested message and enum types in `Constraint`.
-pub mod constraint {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum ConstraintMode {
-        #[prost(message, tag = "1")]
-        PrimaryKey(super::PrimaryKeyConstraint),
-        #[prost(message, tag = "2")]
-        Unique(super::UniqueConstraint),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Constraints {
-    #[prost(message, repeated, tag = "1")]
-    pub constraints: ::prost::alloc::vec::Vec<Constraint>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
@@ -311,7 +276,7 @@ pub struct CreateExternalTableNode {
         ::prost::alloc::string::String,
     >,
     #[prost(message, optional, tag = "12")]
-    pub constraints: ::core::option::Option<Constraints>,
+    pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
     #[prost(map = "string, message", tag = "13")]
     pub column_defaults: ::std::collections::HashMap<
         ::prost::alloc::string::String,

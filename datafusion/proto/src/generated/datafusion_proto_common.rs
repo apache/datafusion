@@ -228,6 +228,41 @@ pub struct Schema {
         ::prost::alloc::string::String,
     >,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrimaryKeyConstraint {
+    #[prost(uint64, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UniqueConstraint {
+    #[prost(uint64, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraint {
+    #[prost(oneof = "constraint::ConstraintMode", tags = "1, 2")]
+    pub constraint_mode: ::core::option::Option<constraint::ConstraintMode>,
+}
+/// Nested message and enum types in `Constraint`.
+pub mod constraint {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ConstraintMode {
+        #[prost(message, tag = "1")]
+        PrimaryKey(super::PrimaryKeyConstraint),
+        #[prost(message, tag = "2")]
+        Unique(super::UniqueConstraint),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraints {
+    #[prost(message, repeated, tag = "1")]
+    pub constraints: ::prost::alloc::vec::Vec<Constraint>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum TimeUnit {

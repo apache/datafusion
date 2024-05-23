@@ -30,7 +30,7 @@ use arrow::{
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, Constraint, Constraints,
+    arrow_datafusion_err, internal_err, plan_datafusion_err,
     DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::Unnest;
@@ -535,33 +535,6 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
         match t {
             protobuf::JoinConstraint::On => JoinConstraint::On,
             protobuf::JoinConstraint::Using => JoinConstraint::Using,
-        }
-    }
-}
-
-impl From<protobuf::Constraints> for Constraints {
-    fn from(constraints: protobuf::Constraints) -> Self {
-        Constraints::new_unverified(
-            constraints
-                .constraints
-                .into_iter()
-                .map(|item| item.into())
-                .collect(),
-        )
-    }
-}
-
-impl From<protobuf::Constraint> for Constraint {
-    fn from(value: protobuf::Constraint) -> Self {
-        match value.constraint_mode.unwrap() {
-            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
-                Constraint::PrimaryKey(
-                    elem.indices.into_iter().map(|item| item as usize).collect(),
-                )
-            }
-            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
-                elem.indices.into_iter().map(|item| item as usize).collect(),
-            ),
         }
     }
 }

@@ -163,3 +163,22 @@ message Schema {
   repeated datafusion_common.Field columns = 1;
   map<string, string> metadata = 2;
 }
+
+message PrimaryKeyConstraint{
+  repeated uint64 indices = 1;
+}
+
+message UniqueConstraint{
+  repeated uint64 indices = 1;
+}
+
+message Constraint{
+  oneof constraint_mode{
+    PrimaryKeyConstraint primary_key = 1;
+    UniqueConstraint unique = 2;
+  }
+}
+
+message Constraints{
+  repeated Constraint constraints = 1;
+}

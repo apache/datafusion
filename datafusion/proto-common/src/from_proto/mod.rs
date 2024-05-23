@@ -23,7 +23,7 @@ use arrow::datatypes::{
 };
 
 use crate::protobuf_common as protobuf;
-use datafusion_common::DataFusionError;
+use datafusion_common::{Constraint, Constraints, DataFusionError};
 use datafusion_common::{
     plan_datafusion_err, Column, DFSchema, DFSchemaRef, TableReference,
 };
@@ -375,5 +375,32 @@ impl TryFrom<&protobuf::Schema> for Schema {
             .map(Field::try_from)
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
         Ok(Self::new_with_metadata(fields, schema.metadata.clone()))
+    }
+}
+
+impl From<protobuf::Constraints> for Constraints {
+    fn from(constraints: protobuf::Constraints) -> Self {
+        Constraints::new_unverified(
+            constraints
+                .constraints
+                .into_iter()
+                .map(|item| item.into())
+                .collect(),
+        )
+    }
+}
+
+impl From<protobuf::Constraint> for Constraint {
+    fn from(value: protobuf::Constraint) -> Self {
+        match value.constraint_mode.unwrap() {
+            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
+                Constraint::PrimaryKey(
+                    elem.indices.into_iter().map(|item| item as usize).collect(),
+                )
+            }
+            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
+                elem.indices.into_iter().map(|item| item as usize).collect(),
+            ),
+        }
     }
 }

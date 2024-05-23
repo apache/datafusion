@@ -161,25 +161,6 @@ message EmptyRelationNode {
   bool produce_one_row = 1;
 }
 
-message PrimaryKeyConstraint{
-  repeated uint64 indices = 1;
-}
-
-message UniqueConstraint{
-  repeated uint64 indices = 1;
-}
-
-message Constraint{
-  oneof constraint_mode{
-    PrimaryKeyConstraint primary_key = 1;
-    UniqueConstraint unique = 2;
-  }
-}
-
-message Constraints{
-  repeated Constraint constraints = 1;
-}
-
 message CreateExternalTableNode {
   reserved 1; // was string name
   TableReference name = 9;
@@ -192,7 +173,7 @@ message CreateExternalTableNode {
   repeated LogicalExprNodeCollection order_exprs = 10;
   bool unbounded = 11;
   map<string, string> options = 8;
-  Constraints constraints = 12;
+  datafusion_common.Constraints constraints = 12;
   map<string, LogicalExprNode> column_defaults = 13;
  }
 
