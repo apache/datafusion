@@ -43,7 +43,7 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
-use substrait::proto::expression::literal::List;
+use substrait::proto::expression::literal::{List, Struct};
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::{CrossRel, ExchangeRel};
@@ -1751,6 +1751,18 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
         ScalarValue::LargeList(l) if !value.is_null() => {
             (convert_array_to_literal_list(l)?, LARGE_CONTAINER_TYPE_REF)
         }
+        ScalarValue::Struct(s) if !value.is_null() => (
+            LiteralType::Struct(Struct {
+                fields: s
+                    .columns()
+                    .iter()
+                    .map(|col| {
+                        to_substrait_literal(&ScalarValue::try_from_array(col, 0)?)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            }),
+            DEFAULT_TYPE_REF,
+        ),
         _ => (try_to_substrait_null(value)?, DEFAULT_TYPE_REF),
     };
 
@@ -1979,6 +1991,9 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
         ScalarValue::LargeList(l) => {
             Ok(LiteralType::Null(to_substrait_type(l.data_type())?))
         }
+        ScalarValue::Struct(s) => {
+            Ok(LiteralType::Null(to_substrait_type(s.data_type())?))
+        }
         // TODO: Extend support for remaining data types
         _ => not_impl_err!("Unsupported literal: {v:?}"),
     }
@@ -2061,6 +2076,7 @@ mod test {
     use crate::logical_plan::consumer::{from_substrait_literal, from_substrait_type};
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
+    use datafusion::common::scalar::ScalarStructBuilder;
 
     use super::*;
 
@@ -2125,6 +2141,17 @@ mod test {
             ),
         )))?;
 
+        let c0 = Field::new("c0", DataType::Boolean, true);
+        let c1 = Field::new("c1", DataType::Int32, true);
+        let c2 = Field::new("c2", DataType::Utf8, true);
+        round_trip_literal(
+            ScalarStructBuilder::new()
+                .with_scalar(c0, ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1, ScalarValue::Int32(Some(1)))
+                .with_scalar(c2, ScalarValue::Utf8(None))
+                .build()?,
+        )?;
+
         Ok(())
     }
 
@@ -2168,6 +2195,13 @@ mod test {
         ))?;
         round_trip_type(DataType::LargeList(
             Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::Struct(
+            vec![
+                Field::new("c0", DataType::Int32, true),
+                Field::new("c1", DataType::Utf8, true),
+            ]
+            .into(),
         ))?;
 
         Ok(())

@@ -261,9 +261,7 @@ mod tests {
         let state = session_ctx.state();
 
         let url = Url::parse("file://").unwrap();
-        state
-            .runtime_env()
-            .register_object_store(&url, store.clone());
+        session_ctx.register_object_store(&url, store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
