@@ -4374,6 +4374,42 @@ GROUP BY dummy
 ----
 text1, text1, text1
 
+# Tests for aggregating with NaN values
+statement ok
+CREATE TABLE float_table (
+    col_f32 FLOAT,
+    col_f32_nan FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128.2,  -128.2,                      -128.2, -128.2 ),
+( 32768.3, arrow_cast('NAN','Float32'), 32768.3, 32768.3 ),
+( 27.3,    arrow_cast('NAN','Float64'), 27.3,    27.3 );
+
+
+query RRRRI
+select min(col_f32), max(col_f32), avg(col_f32), sum(col_f32), count(col_f32) from float_table;
+----
+-128.2 32768.3 10889.13359451294 32667.40078353882 3
+
+query RRRRI
+select min(col_f32_nan), max(col_f32_nan), avg(col_f32_nan), sum(col_f32_nan), count(col_f32_nan) from float_table;
+----
+-128.2 NaN NaN NaN 3
+
+query RRRRI
+select min(col_f64), max(col_f64), avg(col_f64), sum(col_f64), count(col_f64) from float_table;
+----
+-128.2 32768.3 10889.133333333333 32667.4 3
+
+query RRRRI
+select min(col_f64_nan), max(col_f64_nan), avg(col_f64_nan), sum(col_f64_nan), count(col_f64_nan) from float_table;
+----
+-128.2 32768.3 10889.133333333333 32667.4 3
+
+statement ok
+drop table float_table
+
 
 # Queries with nested count(*)
 
