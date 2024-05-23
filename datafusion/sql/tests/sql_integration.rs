@@ -27,6 +27,7 @@ use datafusion_common::{
     assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
     ScalarValue, TableReference,
 };
+use datafusion_expr::{col, table_scan};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
@@ -4797,6 +4798,32 @@ fn test_unnest_logical_plan() -> Result<()> {
     assert_eq!(format!("{plan:?}"), expected);
 
     Ok(())
+}
+
+#[test]
+fn test_table_references_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+        let plan = table_scan(Some(table_name), &schema, None)
+            .unwrap()
+            .project(vec![col("id"), col("value")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
+    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "table",
+        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+    );
 }
 
 #[cfg(test)]
