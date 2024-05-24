@@ -311,7 +311,7 @@ pub(crate) fn recursive_transform_unnest(
             tnr: _,
         } = original_expr.transform_up(|expr: Expr| {
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                let (data_type, _) = expr.data_type_and_nullable(input.schema())?;
+                let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
                 if let DataType::Struct(_) = data_type {
                     return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                 }
