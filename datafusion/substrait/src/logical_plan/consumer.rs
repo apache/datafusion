@@ -1186,9 +1186,9 @@ fn is_substrait_type_nullable(dtype: &Type) -> Result<bool> {
     }
 
     let nullable = match dtype
-        .clone()
         .kind
-        .ok_or(substrait_datafusion_err!("Type must contain Kind"))?
+        .as_ref()
+        .ok_or_else(|| substrait_datafusion_err!("Type must contain Kind"))?
     {
         r#type::Kind::Bool(val) => is_nullable(val.nullability),
         r#type::Kind::I8(val) => is_nullable(val.nullability),
