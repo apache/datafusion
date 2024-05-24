@@ -63,7 +63,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ScalarUDF;
-use datafusion_proto_common::{self as protobuf_common, common::proto_error};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
@@ -79,7 +78,7 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{self, window_agg_exec_node};
+use crate::protobuf::{self, proto_error, window_agg_exec_node};
 
 use self::to_proto::serialize_physical_expr;
 
@@ -610,7 +609,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf_common::JoinSide::try_from(i.side)
+                                let side = protobuf::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a HashJoinNode message with JoinSide in Filter {}",
                                         i.side))
@@ -724,7 +723,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf_common::JoinSide::try_from(i.side)
+                                let side = protobuf::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a HashJoinNode message with JoinSide in Filter {}",
                                         i.side))
@@ -977,7 +976,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf_common::JoinSide::try_from(i.side)
+                                let side = protobuf::JoinSide::try_from(i.side)
                                     .map_err(|_| proto_error(format!(
                                         "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
                                         i.side))
@@ -1261,8 +1260,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf_common::JoinSide =
-                                i.side.to_owned().into();
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
@@ -1336,8 +1334,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf_common::JoinSide =
-                                i.side.to_owned().into();
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
@@ -1794,8 +1791,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         .column_indices()
                         .iter()
                         .map(|i| {
-                            let side: protobuf_common::JoinSide =
-                                i.side.to_owned().into();
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
                             protobuf::ColumnIndex {
                                 index: i.index as u32,
                                 side: side.into(),
@@ -1873,7 +1869,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
             let input_order_mode = match &exec.input_order_mode {
                 InputOrderMode::Linear => window_agg_exec_node::InputOrderMode::Linear(
-                    protobuf_common::EmptyMessage {},
+                    protobuf::EmptyMessage {},
                 ),
                 InputOrderMode::PartiallySorted(columns) => {
                     window_agg_exec_node::InputOrderMode::PartiallySorted(
@@ -1883,7 +1879,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )
                 }
                 InputOrderMode::Sorted => window_agg_exec_node::InputOrderMode::Sorted(
-                    protobuf_common::EmptyMessage {},
+                    protobuf::EmptyMessage {},
                 ),
             };
 

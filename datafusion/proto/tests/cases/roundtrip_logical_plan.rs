@@ -62,7 +62,6 @@ use datafusion_proto::logical_plan::{
     from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
-use datafusion_proto_common::protobuf_common;
 
 use prost::Message;
 
@@ -1169,7 +1168,7 @@ fn round_trip_scalar_values() {
     ];
 
     for test_case in should_pass.into_iter() {
-        let proto: protobuf_common::ScalarValue = (&test_case)
+        let proto: protobuf::ScalarValue = (&test_case)
             .try_into()
             .expect("failed conversion to protobuf");
 
@@ -1215,7 +1214,7 @@ fn round_trip_scalar_types() {
 
     for test_case in should_pass.into_iter() {
         let field = Field::new("item", test_case, true);
-        let proto: protobuf_common::Field = (&field).try_into().unwrap();
+        let proto: protobuf::Field = (&field).try_into().unwrap();
         let roundtrip: Field = (&proto).try_into().unwrap();
         assert_eq!(format!("{field:?}"), format!("{roundtrip:?}"));
     }
@@ -1371,7 +1370,7 @@ fn round_trip_datatype() {
     ];
 
     for test_case in test_cases.into_iter() {
-        let proto: protobuf_common::ArrowType = (&test_case).try_into().unwrap();
+        let proto: protobuf::ArrowType = (&test_case).try_into().unwrap();
         let roundtrip: DataType = (&proto).try_into().unwrap();
         assert_eq!(format!("{test_case:?}"), format!("{roundtrip:?}"));
     }
@@ -1395,11 +1394,11 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: protobuf_common::Schema = schema.try_into().unwrap();
+    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto = protobuf_common::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
     // assert
@@ -1436,7 +1435,7 @@ fn roundtrip_null_scalar_values() {
     ];
 
     for test_case in test_types.into_iter() {
-        let proto_scalar: protobuf_common::ScalarValue = (&test_case).try_into().unwrap();
+        let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: datafusion::scalar::ScalarValue =
             (&proto_scalar).try_into().unwrap();
         assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
@@ -1449,7 +1448,7 @@ fn roundtrip_field() {
         (String::from("k1"), String::from("v1")),
         (String::from("k2"), String::from("v2")),
     ]));
-    let proto_field: protobuf_common::Field = (&field).try_into().unwrap();
+    let proto_field: protobuf::Field = (&field).try_into().unwrap();
     let returned_field: Field = (&proto_field).try_into().unwrap();
     assert_eq!(field, returned_field);
 }
@@ -1467,7 +1466,7 @@ fn roundtrip_schema() {
             (String::from("k3"), String::from("v3")),
         ]),
     );
-    let proto_schema: protobuf_common::Schema = (&schema).try_into().unwrap();
+    let proto_schema: protobuf::Schema = (&schema).try_into().unwrap();
     let returned_schema: Schema = (&proto_schema).try_into().unwrap();
     assert_eq!(schema, returned_schema);
 }
@@ -1492,12 +1491,12 @@ fn roundtrip_dfschema() {
         ]),
     )
     .unwrap();
-    let proto_dfschema: protobuf_common::DfSchema = (&dfschema).try_into().unwrap();
+    let proto_dfschema: protobuf::DfSchema = (&dfschema).try_into().unwrap();
     let returned_dfschema: DFSchema = (&proto_dfschema).try_into().unwrap();
     assert_eq!(dfschema, returned_dfschema);
 
     let arc_dfschema = Arc::new(dfschema.clone());
-    let proto_dfschema: protobuf_common::DfSchema = (&arc_dfschema).try_into().unwrap();
+    let proto_dfschema: protobuf::DfSchema = (&arc_dfschema).try_into().unwrap();
     let returned_arc_dfschema: DFSchemaRef = proto_dfschema.try_into().unwrap();
     assert_eq!(arc_dfschema, returned_arc_dfschema);
     assert_eq!(dfschema, *returned_arc_dfschema);

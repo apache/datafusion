@@ -29,7 +29,6 @@ use datafusion_expr::{
     BuiltInWindowFunction, Expr, JoinConstraint, JoinType, TryCast, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion_proto_common::{protobuf_common, EmptyMessage, ToProtoError as Error};
 
 use crate::protobuf::{
     self,
@@ -39,8 +38,9 @@ use crate::protobuf::{
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
-    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, LogicalExprList,
+    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    ToProtoError as Error,
 };
 
 use super::LogicalExtensionCodec;
@@ -246,7 +246,7 @@ pub fn serialize_expr(
             }
         }
         Expr::Literal(value) => {
-            let pb_value: protobuf_common::ScalarValue = value.try_into()?;
+            let pb_value: protobuf::ScalarValue = value.try_into()?;
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Literal(pb_value)),
             }

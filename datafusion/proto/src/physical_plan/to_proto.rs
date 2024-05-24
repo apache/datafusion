@@ -45,7 +45,6 @@ use datafusion::{
 };
 use datafusion_common::config::FormatOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_proto_common::protobuf_common;
 
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
@@ -769,10 +768,10 @@ impl TryFrom<&FormatOptions> for copy_to_node::FormatOptions {
                 copy_to_node::FormatOptions::Parquet(options.try_into()?)
             }
             FormatOptions::AVRO => {
-                copy_to_node::FormatOptions::Avro(protobuf_common::AvroOptions {})
+                copy_to_node::FormatOptions::Avro(protobuf::AvroOptions {})
             }
             FormatOptions::ARROW => {
-                copy_to_node::FormatOptions::Arrow(protobuf_common::ArrowOptions {})
+                copy_to_node::FormatOptions::Arrow(protobuf::ArrowOptions {})
             }
         })
     }

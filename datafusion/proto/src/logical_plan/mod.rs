@@ -29,6 +29,7 @@ use crate::{
     },
 };
 
+use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -55,9 +56,6 @@ use datafusion_expr::{
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
-};
-use datafusion_proto_common::{
-    common::proto_error, protobuf_common, FromProtoError, ToProtoError,
 };
 
 use prost::bytes::BufMut;
@@ -339,14 +337,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))
                     })? {
                         #[cfg(feature = "parquet")]
-                        FileFormatType::Parquet(protobuf_common::ParquetFormat {options}) => {
+                        FileFormatType::Parquet(protobuf::ParquetFormat {options}) => {
                             let mut parquet = ParquetFormat::default();
                             if let Some(options) = options {
                                 parquet = parquet.with_options(options.try_into()?)
                             }
                             Arc::new(parquet)
                         }
-                        FileFormatType::Csv(protobuf_common::CsvFormat {
+                        FileFormatType::Csv(protobuf::CsvFormat {
                             options
                         }) => {
                             let mut csv = CsvFormat::default();
@@ -894,7 +892,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf_common::Schema = schema.as_ref().try_into()?;
+                let schema: protobuf::Schema = schema.as_ref().try_into()?;
 
                 let filters: Vec<protobuf::LogicalExprNode> = filters
                     .iter()
@@ -909,24 +907,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                         #[cfg(feature = "parquet")]
                         if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
                             let options = parquet.options();
-                            maybe_some_type = Some(FileFormatType::Parquet(
-                                protobuf_common::ParquetFormat {
+                            maybe_some_type =
+                                Some(FileFormatType::Parquet(protobuf::ParquetFormat {
                                     options: Some(options.try_into()?),
-                                },
-                            ));
+                                }));
                         };
 
                         if let Some(csv) = any.downcast_ref::<CsvFormat>() {
                             let options = csv.options();
                             maybe_some_type =
-                                Some(FileFormatType::Csv(protobuf_common::CsvFormat {
+                                Some(FileFormatType::Csv(protobuf::CsvFormat {
                                     options: Some(options.try_into()?),
                                 }));
                         }
 
                         if any.is::<AvroFormat>() {
                             maybe_some_type =
-                                Some(FileFormatType::Avro(protobuf_common::AvroFormat {}))
+                                Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
                         if let Some(file_format_type) = maybe_some_type {
