@@ -76,3 +76,11 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
+
+// For User Defined URLs
+/// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].
+pub const INTERVAL_YEAR_MONTH_TYPE_URL: &str = "interval-year-month";
+/// For [`DataType::Interval`] with [`IntervalUnit::DayTime`].
+pub const INTERVAL_DAY_TIME_TYPE_URL: &str = "interval-day-time";
+/// For [`DataType::Interval`] with [`IntervalUnit::MonthDayNano`].
+pub const INTERVAL_MONTH_DAY_NANO_TYPE_URL: &str = "interval-month-day-nano";

@@ -43,6 +43,8 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::user_defined::Val;
+use substrait::proto::expression::literal::UserDefined;
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::r#type::{parameter, Parameter};
@@ -85,9 +87,11 @@ use substrait::{
 use crate::variation_const::{
     DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
     DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF,
-    TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+    INTERVAL_DAY_TIME_TYPE_URL, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_URL, INTERVAL_YEAR_MONTH_TYPE_REF,
+    INTERVAL_YEAR_MONTH_TYPE_URL, LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF,
+    TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF,
+    UNSIGNED_INTEGER_TYPE_REF,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -1431,7 +1435,7 @@ fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
                     type_reference,
                     type_variation_reference: DEFAULT_TYPE_REF,
                     nullability: default_nullability,
-                    type_parameters: type_parameters,
+                    type_parameters,
                 })),
             })
         }
@@ -1761,6 +1765,75 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
         }
         ScalarValue::Date32(Some(d)) => (LiteralType::Date(*d), DATE_32_TYPE_REF),
         // Date64 literal is not supported in Substrait
+        ScalarValue::IntervalYearMonth(Some(i)) => {
+            let bytes = i.to_le_bytes();
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_YEAR_MONTH_TYPE_REF,
+                    type_parameters: vec![Parameter {
+                        parameter: Some(parameter::Parameter::DataType(
+                            substrait::proto::Type {
+                                kind: Some(r#type::Kind::I32(r#type::I32 {
+                                    type_variation_reference: DEFAULT_TYPE_REF,
+                                    nullability: r#type::Nullability::Required as i32,
+                                })),
+                            },
+                        )),
+                    }],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_YEAR_MONTH_TYPE_URL.to_string(),
+                        value: bytes.to_vec(),
+                    })),
+                }),
+                INTERVAL_YEAR_MONTH_TYPE_REF,
+            )
+        }
+        ScalarValue::IntervalMonthDayNano(Some(i)) => {
+            // treat `i128` as two contiguous `i64`
+            let bytes = i.to_le_bytes();
+            let i64_param = Parameter {
+                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
+                    kind: Some(r#type::Kind::I64(r#type::I64 {
+                        type_variation_reference: DEFAULT_TYPE_REF,
+                        nullability: r#type::Nullability::Required as i32,
+                    })),
+                })),
+            };
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                    type_parameters: vec![i64_param.clone(), i64_param],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
+                        value: bytes.to_vec(),
+                    })),
+                }),
+                INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+            )
+        }
+        ScalarValue::IntervalDayTime(Some(i)) => {
+            let bytes = i.to_le_bytes();
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_DAY_TIME_TYPE_REF,
+                    type_parameters: vec![Parameter {
+                        parameter: Some(parameter::Parameter::DataType(
+                            substrait::proto::Type {
+                                kind: Some(r#type::Kind::I64(r#type::I64 {
+                                    type_variation_reference: DEFAULT_TYPE_REF,
+                                    nullability: r#type::Nullability::Required as i32,
+                                })),
+                            },
+                        )),
+                    }],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_DAY_TIME_TYPE_URL.to_string(),
+                        value: bytes.to_vec(),
+                    })),
+                }),
+                INTERVAL_DAY_TIME_TYPE_REF,
+            )
+        }
         ScalarValue::Binary(Some(b)) => {
             (LiteralType::Binary(b.clone()), DEFAULT_CONTAINER_TYPE_REF)
         }

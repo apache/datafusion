@@ -39,6 +39,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
@@ -68,7 +69,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::variation_const::{
-    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF, DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF
+    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
+    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF,
+    TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
 };
 
 enum ScalarFunctionType {
@@ -1293,6 +1298,54 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             )
         }
         Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
+        Some(LiteralType::UserDefined(user_defined)) => {
+            match user_defined.type_reference {
+                INTERVAL_YEAR_MONTH_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval year month value is empty");
+                    };
+                    let value_slice: [u8; 4] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval year month value"
+                            )
+                        })?;
+                    ScalarValue::IntervalYearMonth(Some(i32::from_le_bytes(value_slice)))
+                }
+                INTERVAL_DAY_TIME_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval day time value is empty");
+                    };
+                    let value_slice: [u8; 8] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval day time value"
+                            )
+                        })?;
+                    ScalarValue::IntervalDayTime(Some(i64::from_le_bytes(value_slice)))
+                }
+                INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval month day nano value is empty");
+                    };
+                    let value_slice: [u8; 16] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval month day nano value"
+                            )
+                        })?;
+                    ScalarValue::IntervalMonthDayNano(Some(i128::from_le_bytes(
+                        value_slice,
+                    )))
+                }
+                _ => {
+                    return not_impl_err!(
+                        "Unsupported Substrait user defined type with ref {}",
+                        user_defined.type_reference
+                    )
+                }
+            }
+        }
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
 
