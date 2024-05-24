@@ -1106,12 +1106,12 @@ pub async fn from_substrait_rex(
 }
 
 pub(crate) fn from_substrait_type(dt: &Type) -> Result<DataType> {
-    from_substrait_type_with_names(dt, &vec![], &mut 0)
+    from_substrait_type_with_names(dt, &[], &mut 0)
 }
 
 fn from_substrait_type_with_names(
     dt: &Type,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<DataType> {
     match &dt.kind {
@@ -1226,7 +1226,7 @@ fn from_substrait_type_with_names(
 
 fn from_substrait_struct(
     s: &r#type::Struct,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<Fields> {
     let mut fields = vec![];
@@ -1243,7 +1243,7 @@ fn from_substrait_struct(
 
 fn next_struct_field_name(
     i: usize,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<String> {
     if dfs_names.is_empty() {
@@ -1482,7 +1482,7 @@ fn from_substrait_literal_with_names(
 
 fn from_substrait_null_with_names(
     null_type: &Type,
-    dfs_names: &Vec<String>,
+    dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<ScalarValue> {
     if let Some(kind) = &null_type.kind {
