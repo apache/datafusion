@@ -15,19 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod adapter;
-pub use adapter::GroupsAccumulatorAdapter;
+//! Utilities for implementing GroupsAccumulator
 
-// Backward compatibility
-pub(crate) mod accumulate {
-    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::{accumulate_indices, NullState};
-}
-
-pub use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
-
-pub(crate) mod bool_op {
-    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
-}
-pub(crate) mod prim_op {
-    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-}
+pub mod accumulate;
+pub mod bool_op;
+pub mod prim_op;

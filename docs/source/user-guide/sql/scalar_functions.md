@@ -1457,12 +1457,14 @@ position(substr in origstr)
 - [today](#today)
 - [make_date](#make_date)
 - [to_char](#to_char)
+- [to_date](#to_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_seconds](#to_timestamp_seconds)
 - [to_timestamp_nanos](#to_timestamp_nanos)
 - [from_unixtime](#from_unixtime)
+- [to_unixtime](#to_unixtime)
 
 ### `now`
 
@@ -1702,6 +1704,51 @@ Additional examples can be found [here]
 
 - date_format
 
+### `to_date`
+
+Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format]s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+
+Note: `to_date` returns Date32. The supported range for integer input is between `-96465293` and `95026237`.
+Supported range for string input is between `1677-09-21` and `2262-04-11` exclusive. To parse dates outside of
+that range use a [Chrono format].
+
+```
+to_date(expression[, ..., format_n])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+[chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
+
+#### Example
+
+```
+> select to_date('2023-01-31');
++-----------------------------+
+| to_date(Utf8("2023-01-31")) |
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------+
+| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
@@ -1917,6 +1964,41 @@ from_unixtime(expression)
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `to_unixtime`
+
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Supports strings, dates, timestamps and double types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided.
+
+```
+to_unixtime(expression[, ..., format_n])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+> select to_unixtime('2020-09-08T12:00:00+00:00');
++------------------------------------------------+
+| to_unixtime(Utf8("2020-09-08T12:00:00+00:00")) |
++------------------------------------------------+
+| 1599566400                                     |
++------------------------------------------------+
+> select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
++-----------------------------------------------------------------------------------------------------------------------------+
+| to_unixtime(Utf8("01-14-2023 01:01:30+05:30"),Utf8("%q"),Utf8("%d-%m-%Y %H/%M/%S"),Utf8("%+"),Utf8("%m-%d-%Y %H:%M:%S%#z")) |
++-----------------------------------------------------------------------------------------------------------------------------+
+| 1673638290                                                                                                                  |
++-----------------------------------------------------------------------------------------------------------------------------+
+```
 
 ## Array Functions
 

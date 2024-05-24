@@ -1133,15 +1133,15 @@ mod tests {
             None
         }
 
-        fn udfs_names(&self) -> Vec<String> {
+        fn udf_names(&self) -> Vec<String> {
             Vec::new()
         }
 
-        fn udafs_names(&self) -> Vec<String> {
+        fn udaf_names(&self) -> Vec<String> {
             Vec::new()
         }
 
-        fn udwfs_names(&self) -> Vec<String> {
+        fn udwf_names(&self) -> Vec<String> {
             Vec::new()
         }
     }

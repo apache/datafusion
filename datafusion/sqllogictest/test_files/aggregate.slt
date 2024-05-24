@@ -619,6 +619,258 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+# median decimal
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+0.0003 Decimal128(10, 4)
+
+statement ok
+drop table t;
+
+# median decimal with nulls
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (null), (0.0003), (0.0004), (0.0005);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+0.0003 Decimal128(10, 4)
+
+statement ok
+drop table t;
+
+# median decimal with all nulls
+statement ok
+create table t(c decimal(10, 4)) as values (null), (null), (null);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+NULL Decimal128(10, 4)
+
+statement ok
+drop table t;
+
+# median odd
+statement ok
+create table t(c int) as values (1), (2), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median even
+statement ok
+create table t(c int) as values (1), (2), (3), (4), (5), (6);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median with nulls
+statement ok
+create table t(c int) as values (1), (null), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median with all nulls
+statement ok
+create table t(c int) as values (null), (null), (null);
+
+query I
+select median(c) from t;
+----
+NULL
+
+statement ok
+drop table t;
+
+# median u32
+statement ok
+create table t(c int unsigned) as values (1), (2), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median f32
+statement ok
+create table t(c float) as values (1.1), (2.2), (3.3), (4.4), (5.5);
+
+query R
+select median(c) from t;
+----
+3.3
+
+statement ok
+drop table t;
+
+# median distinct decimal
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0001), (0.0001), (0.0001), (0.0002), (0.0002), (0.0003), (0.0003);
+
+query R
+select median(distinct c) from t;
+----
+0.0002
+
+statement ok
+drop table t;
+
+# median distinct decimal with nulls
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0001), (0.0001), (null), (null), (0.0002), (0.0003), (0.0003);
+
+query R
+select median(distinct c) from t;
+----
+0.0002
+
+statement ok
+drop table t;
+
+# distinct median i32 odd
+statement ok
+create table t(c int) as values (2), (1), (1), (2), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median i32 even
+statement ok
+create table t(c int) as values (1), (1), (3), (1), (1);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median i32 with nulls
+statement ok
+create table t(c int) as values (1), (null), (1), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median u32 odd
+statement ok
+create table t(c int unsigned) as values (1), (1), (2), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median u32 even
+statement ok
+create table t(c int unsigned) as values (1), (1), (1), (1), (3), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f32 odd
+statement ok
+create table t(c float) as values (3), (2), (1), (1), (1);
+
+query R
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f32 even
+statement ok
+create table t(c float) as values (1), (1), (1), (1), (2);
+
+query R
+select median(distinct c) from t;
+----
+1.5
+
+statement ok
+drop table t;
+
+# distinct median f64 odd
+statement ok
+create table t(c double) as values (1), (1), (1), (2), (3);
+
+query R
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f64 even
+statement ok
+create table t(c double) as values (1), (1), (1), (1), (2);
+
+query R
+select median(distinct c) from t;
+----
+1.5
+
+statement ok
+drop table t;
+
+# distinct median i32
+statement ok
+create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
 # median_multi
 # test case for https://github.com/apache/datafusion/issues/3105
 # has an intermediate grouping
