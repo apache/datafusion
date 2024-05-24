@@ -32,7 +32,7 @@ use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowNativeType;
 
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
@@ -72,7 +72,7 @@ impl Median {
     pub fn new() -> Self {
         Self {
             aliases: vec!["median".to_string()],
-            signature: Signature::user_defined(Volatility::Immutable), // signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
@@ -88,18 +88,6 @@ impl AggregateUDFImpl for Median {
 
     fn signature(&self) -> &Signature {
         &self.signature
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("Median takes exactly one argument");
-        }
-
-        if arg_types[0].is_numeric() {
-            Ok(vec![arg_types[0].clone()])
-        } else {
-            exec_err!("Median only accepts numeric types")
-        }
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -149,8 +137,7 @@ impl AggregateUDFImpl for Median {
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianAccumulator not supported for {} with {}",
-                // acc_args.name,
-                "name",
+                acc_args.name,
                 dt,
             ))),
         }

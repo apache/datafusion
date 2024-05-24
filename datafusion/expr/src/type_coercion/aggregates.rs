@@ -355,8 +355,9 @@ pub fn check_arg_count(
                 );
             }
         }
-        TypeSignature::UserDefined => {
-            // User-defined functions are not validated here
+        TypeSignature::UserDefined | TypeSignature::Numeric(_) => {
+            // User-defined signature is validated in `coerce_types`
+            // Numreic signature is validated in `get_valid_types`
         }
         _ => {
             return internal_err!(
