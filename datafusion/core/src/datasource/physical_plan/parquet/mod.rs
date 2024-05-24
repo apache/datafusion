@@ -165,6 +165,8 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 ///
 /// * Step 4: The stream begins reading data, by fetching the required pages
 /// and incrementally decoding them.
+///
+/// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     /// Base configuration for this scan
