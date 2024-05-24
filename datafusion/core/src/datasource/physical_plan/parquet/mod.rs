@@ -282,6 +282,11 @@ impl ParquetExecBuilder {
         self
     }
 
+    /// Convenience: build an `Arc`d `ParquetExec` from this builder
+    pub fn build_arc(self) -> Arc<ParquetExec> {
+        Arc::new(self.build())
+    }
+
     /// Build a [`ParquetExec`]
     pub fn build(self) -> ParquetExec {
         let Self {
@@ -355,7 +360,10 @@ impl ParquetExecBuilder {
 
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
-    //#[deprecated(since = "39.0.0", note = "use builder instead")]
+    #[deprecated(
+        since = "39.0.0",
+        note = "use `ParquetExec::builder` or `ParquetExecBuilder`"
+    )]
     pub fn new(
         base_config: FileScanConfig,
         predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -1157,14 +1165,16 @@ mod tests {
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
-            let mut parquet_exec = ParquetExec::new(
+            let mut builder = ParquetExec::builder(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_group(file_group)
                     .with_projection(projection),
-                predicate,
-                None,
-                Default::default(),
             );
+
+            if let Some(predicate) = predicate {
+                builder = builder.with_predicate(predicate);
+            }
+            let mut parquet_exec = builder.build();
 
             if pushdown_predicate {
                 parquet_exec = parquet_exec
@@ -1808,13 +1818,11 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = ParquetExec::new(
+            let parquet_exec = ParquetExec::builder(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_groups(file_groups),
-                None,
-                None,
-                Default::default(),
-            );
+            )
+            .build();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1910,7 +1918,7 @@ mod tests {
             ),
         ]);
 
-        let parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::builder(
             FileScanConfig::new(object_store_url, schema.clone())
                 .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
@@ -1927,10 +1935,8 @@ mod tests {
                         false,
                     ),
                 ]),
-            None,
-            None,
-            Default::default(),
-        );
+        )
+        .build();
         assert_eq!(
             parquet_exec.cache.output_partitioning().partition_count(),
             1
@@ -1985,13 +1991,11 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::builder(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file(partitioned_file),
-            None,
-            None,
-            Default::default(),
-        );
+        )
+        .build();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();

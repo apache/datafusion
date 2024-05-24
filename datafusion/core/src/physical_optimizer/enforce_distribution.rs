@@ -1431,14 +1431,12 @@ pub(crate) mod tests {
     pub(crate) fn parquet_exec_with_sort(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
+        ParquetExec::builder(
             FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
                 .with_file(PartitionedFile::new("x".to_string(), 100))
                 .with_output_ordering(output_ordering),
-            None,
-            None,
-            Default::default(),
-        ))
+        )
+        .build_arc()
     }
 
     fn parquet_exec_multiple() -> Arc<ParquetExec> {
@@ -1449,17 +1447,15 @@ pub(crate) mod tests {
     fn parquet_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
+        ParquetExec::builder(
             FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
                 .with_file_groups(vec![
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
                 ])
                 .with_output_ordering(output_ordering),
-            None,
-            None,
-            Default::default(),
-        ))
+        )
+        .build_arc()
     }
 
     fn csv_exec() -> Arc<CsvExec> {
