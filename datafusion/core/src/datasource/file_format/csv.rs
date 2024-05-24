@@ -537,7 +537,6 @@ mod tests {
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::{FileType, GetExt};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 
     use chrono::DateTime;
@@ -762,7 +761,7 @@ mod tests {
             .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
             .await;
         let (schema, records_read) = compressed_csv
-            .infer_schema_from_stream(&session_state, records_to_read, decoded_stream)
+            .infer_schema_from_stream(records_to_read, decoded_stream)
             .await?;
 
         assert_eq!(expected, schema);
