@@ -159,7 +159,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(Arc::new(LastValue::new()))
+        datafusion_expr::ReversedUDAF::Reversed(last_value_udaf().inner())
     }
 }
 
@@ -462,7 +462,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(Arc::new(FirstValue::new()))
+        datafusion_expr::ReversedUDAF::Reversed(first_value_udaf().inner())
     }
 }
 
