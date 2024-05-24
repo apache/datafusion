@@ -24,8 +24,7 @@ use arrow::array::{
     UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{Expr, TypeSignature};
+use datafusion_expr::TypeSignature;
 
 use datafusion_common::{plan_err, DataFusionError, Result};
 

@@ -46,18 +46,18 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
         funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udwfs_names());
+        funcs.extend(ctx.udwf_names());
 
         funcs
     } else {
         // All scalar functions and aggregate functions
         let mut funcs = Vec::new();
 
-        funcs.extend(ctx.udfs_names());
+        funcs.extend(ctx.udf_names());
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
 
         funcs
     };
@@ -229,12 +229,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                // TODO: Support filter and distinct for UDAFs
+                let filter: Option<Box<Expr>> = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                     fm,
                     args,
-                    false,
-                    None,
+                    distinct,
+                    filter,
                     order_by,
                     null_treatment,
                 )));
@@ -355,10 +358,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match arg.get_type(schema)? {
             DataType::List(_)
             | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _) => Ok(()),
-            DataType::Struct(_) => {
-                not_impl_err!("unnest() does not support struct yet")
-            }
+            | DataType::FixedSizeList(_, _)
+            | DataType::Struct(_) => Ok(()),
             DataType::Null => {
                 not_impl_err!("unnest() does not support null yet")
             }

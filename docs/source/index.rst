@@ -111,13 +111,16 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 
    contributor-guide/index
    contributor-guide/communication
+   contributor-guide/getting_started
    contributor-guide/architecture
+   contributor-guide/testing
+   contributor-guide/howtos
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/governance
    contributor-guide/specification/index
 
-.. _toc.contributor-guide:
+.. _toc.subprojects:
 
 .. toctree::
    :maxdepth: 1

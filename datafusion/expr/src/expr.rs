@@ -143,9 +143,6 @@ pub enum Expr {
     IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`arrow::array::ListArray`] or
-    /// [`arrow::array::StructArray`] by index or range
-    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -833,15 +830,16 @@ impl GroupingSet {
     /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
     /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
     /// the exprs in the underlying sets.
-    pub fn distinct_expr(&self) -> Vec<Expr> {
+    pub fn distinct_expr(&self) -> Vec<&Expr> {
         match self {
-            GroupingSet::Rollup(exprs) => exprs.clone(),
-            GroupingSet::Cube(exprs) => exprs.clone(),
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => {
+                exprs.iter().collect()
+            }
             GroupingSet::GroupingSets(groups) => {
-                let mut exprs: Vec<Expr> = vec![];
+                let mut exprs: Vec<&Expr> = vec![];
                 for exp in groups.iter().flatten() {
-                    if !exprs.contains(exp) {
-                        exprs.push(exp.clone());
+                    if !exprs.contains(&exp) {
+                        exprs.push(exp);
                     }
                 }
                 exprs
@@ -887,7 +885,6 @@ impl Expr {
             Expr::Column(..) => "Column",
             Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
-            Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery(..) => "InSubquery",
@@ -1179,91 +1176,6 @@ impl Expr {
         ))
     }
 
-    /// Return access to the named field. Example `expr["name"]`
-    ///
-    /// ## Access field "my_field" from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// {
-    ///   "my_field": 123.34,
-    ///   "other_field": "Boston",
-    /// }
-    /// ```
-    ///
-    /// You can access column "my_field" with
-    ///
-    /// ```
-    /// # use datafusion_expr::{col};
-    /// let expr = col("c1")
-    ///    .field("my_field");
-    /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
-    /// ```
-    pub fn field(self, name: impl Into<String>) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::NamedStructField {
-                name: ScalarValue::from(name.into()),
-            },
-        })
-    }
-
-    /// Return access to the element field. Example `expr["name"]`
-    ///
-    /// ## Example Access element 2 from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// [10, 20, 30, 40]
-    /// ```
-    ///
-    /// You can access the value "30" with
-    ///
-    /// ```
-    /// # use datafusion_expr::{lit, col, Expr};
-    /// let expr = col("c1")
-    ///    .index(lit(3));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
-    /// ```
-    pub fn index(self, key: Expr) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::ListIndex { key: Box::new(key) },
-        })
-    }
-
-    /// Return elements between `1` based `start` and `stop`, for
-    /// example `expr[1:3]`
-    ///
-    /// ## Example: Access element 2, 3, 4 from column "c1"
-    ///
-    /// For example if column "c1" holds documents like this
-    ///
-    /// ```json
-    /// [10, 20, 30, 40]
-    /// ```
-    ///
-    /// You can access the value `[20, 30, 40]` with
-    ///
-    /// ```
-    /// # use datafusion_expr::{lit, col};
-    /// let expr = col("c1")
-    ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
-    /// ```
-    pub fn range(self, start: Expr, stop: Expr) -> Self {
-        Expr::GetIndexedField(GetIndexedField {
-            expr: Box::new(self),
-            field: GetFieldAccess::ListRange {
-                start: Box::new(start),
-                stop: Box::new(stop),
-                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
-            },
-        })
-    }
-
     #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
@@ -1361,7 +1273,6 @@ impl Expr {
             | Expr::Cast(..)
             | Expr::Column(..)
             | Expr::Exists(..)
-            | Expr::GetIndexedField(..)
             | Expr::GroupingSet(..)
             | Expr::InList(..)
             | Expr::InSubquery(..)
@@ -1610,19 +1521,6 @@ impl fmt::Display for Expr {
                 Some(qualifier) => write!(f, "{qualifier}.*"),
                 None => write!(f, "*"),
             },
-            Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
-                GetFieldAccess::NamedStructField { name } => {
-                    write!(f, "({expr})[{name}]")
-                }
-                GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => {
-                    write!(f, "({expr})[{start}:{stop}:{stride}]")
-                }
-            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
@@ -1827,30 +1725,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::ScalarSubquery(subquery) => {
             w.write_str(subquery.subquery.schema().field(0).name().as_str())?;
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            write_name(w, expr)?;
-            match field {
-                GetFieldAccess::NamedStructField { name } => write!(w, "[{name}]")?,
-                GetFieldAccess::ListIndex { key } => {
-                    w.write_str("[")?;
-                    write_name(w, key)?;
-                    w.write_str("]")?;
-                }
-                GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => {
-                    w.write_str("[")?;
-                    write_name(w, start)?;
-                    w.write_str(":")?;
-                    write_name(w, stop)?;
-                    w.write_str(":")?;
-                    write_name(w, stride)?;
-                    w.write_str("]")?;
-                }
-            }
-        }
         Expr::Unnest(Unnest { expr }) => {
             w.write_str("unnest(")?;
             write_name(w, expr)?;
@@ -1891,16 +1765,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             order_by,
             null_treatment,
         }) => {
-            match func_def {
-                AggregateFunctionDefinition::BuiltIn(..) => {
-                    write_function_name(w, func_def.name(), *distinct, args)?;
-                }
-                AggregateFunctionDefinition::UDF(fun) => {
-                    write!(w, "{}(", fun.name())?;
-                    write_names_join(w, args, ",")?;
-                    write!(w, ")")?;
-                }
-            };
+            write_function_name(w, func_def.name(), *distinct, args)?;
+
             if let Some(fe) = filter {
                 write!(w, " FILTER (WHERE {fe})")?;
             };

@@ -616,8 +616,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Case(_)
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
-            | Expr::InList { .. }
-            | Expr::GetIndexedField { .. } => true,
+            | Expr::InList { .. } => true,
         }
     }
 
@@ -1759,7 +1758,9 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
-        function::AggregateFunctionSimplification, interval_arithmetic::Interval, *,
+        function::{AccumulatorArgs, AggregateFunctionSimplification},
+        interval_arithmetic::Interval,
+        *,
     };
     use std::{
         collections::HashMap,
@@ -3783,7 +3784,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
 
-        fn groups_accumulator_supported(&self) -> bool {
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
             unimplemented!("not needed for testing")
         }
 

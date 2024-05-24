@@ -15,13 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
-    compute::{and_kleene, is_not_null, SlicesIterator},
-};
-use datafusion_common::Result;
+use std::sync::Arc;
 
-use crate::sort_expr::PhysicalSortExpr;
+use crate::{
+    physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr, tree_node::ExprContext,
+};
+
+use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
+use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
+use datafusion_common::Result;
+use datafusion_expr::sort_properties::ExprProperties;
+
+/// Represents a [`PhysicalExpr`] node with associated properties (order and
+/// range) in a context where properties are tracked.
+pub type ExprPropertiesNode = ExprContext<ExprProperties>;
+
+impl ExprPropertiesNode {
+    /// Constructs a new `ExprPropertiesNode` with unknown properties for a
+    /// given physical expression. This node initializes with default properties
+    /// and recursively applies this to all child expressions.
+    pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr.children().into_iter().map(Self::new_unknown).collect();
+        Self {
+            expr,
+            data: ExprProperties::new_unknown(),
+            children,
+        }
+    }
+}
 
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
 /// are taken, when the mask evaluates `false` values null values are filled.

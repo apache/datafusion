@@ -22,11 +22,10 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
 };
 use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::{collect, InputOrderMode};
@@ -40,7 +39,6 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
@@ -276,7 +274,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 };
 
                 let extended_schema =
-                    schema_add_window_fields(&args, &schema, &window_fn, fn_name)?;
+                    schema_add_window_field(&args, &schema, &window_fn, fn_name)?;
 
                 let window_expr = create_window_expr(
                     &window_fn,
@@ -683,7 +681,7 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let extended_schema = schema_add_window_fields(&args, &schema, &window_fn, &fn_name)?;
+    let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
 
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(
@@ -752,32 +750,6 @@ async fn run_window_test(
         }
     }
     Ok(())
-}
-
-// The planner has fully updated schema before calling the `create_window_expr`
-// Replicate the same for this test
-fn schema_add_window_fields(
-    args: &[Arc<dyn PhysicalExpr>],
-    schema: &Arc<Schema>,
-    window_fn: &WindowFunctionDefinition,
-    fn_name: &str,
-) -> Result<Arc<Schema>> {
-    let data_types = args
-        .iter()
-        .map(|e| e.clone().as_ref().data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
-    let mut window_fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect_vec();
-    window_fields.extend_from_slice(&[Field::new(
-        fn_name,
-        window_expr_return_type,
-        true,
-    )]);
-    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Return randomly sized record batches with:

@@ -19,10 +19,11 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast,
+    Placeholder, TryCast, Unnest,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+    StateFieldsArgs,
 };
 use crate::{
     aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
@@ -488,6 +489,13 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
+/// Create a Unnest expression
+pub fn unnest(expr: Expr) -> Expr {
+    Expr::Unnest(Unnest {
+        expr: Box::new(expr),
+    })
+}
+
 /// Convenience method to create a new user defined scalar function (UDF) with a
 /// specific signature and specific return type.
 ///
@@ -690,12 +698,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_fields(
-        &self,
-        _name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
     }
 }

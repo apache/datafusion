@@ -17,13 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, Result};
-
 use crate::expressions::Column;
 use crate::PhysicalExpr;
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{internal_err, Result};
 
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
@@ -114,14 +113,7 @@ impl ProjectionMapping {
 
 #[cfg(test)]
 mod tests {
-
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SortOptions, TimeUnit};
-    use itertools::Itertools;
-
-    use datafusion_common::DFSchema;
-    use datafusion_expr::{Operator, ScalarUDF};
-
+    use super::*;
     use crate::equivalence::tests::{
         apply_projection, convert_to_orderings, convert_to_orderings_owned,
         create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
@@ -133,7 +125,12 @@ mod tests {
     use crate::utils::tests::TestScalarUDF;
     use crate::PhysicalSortExpr;
 
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::{SortOptions, TimeUnit};
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{Operator, ScalarUDF};
+
+    use itertools::Itertools;
 
     #[test]
     fn project_orderings() -> Result<()> {
@@ -941,7 +938,7 @@ mod tests {
         for (orderings, equal_columns, expected) in test_cases {
             let mut eq_properties = EquivalenceProperties::new(schema.clone());
             for (lhs, rhs) in equal_columns {
-                eq_properties.add_equal_conditions(lhs, rhs);
+                eq_properties.add_equal_conditions(lhs, rhs)?;
             }
 
             let orderings = convert_to_orderings(&orderings);

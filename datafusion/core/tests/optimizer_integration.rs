@@ -23,11 +23,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{Fields, SchemaBuilder};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::{plan_err, DFSchema, Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+use datafusion_expr::{
+    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
+    ScalarUDF, TableSource, WindowUDF,
+};
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
+use datafusion_optimizer::simplify_expressions::GuaranteeRewriter;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
@@ -207,15 +215,15 @@ impl ContextProvider for MyContextProvider {
         &self.options
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         Vec::new()
     }
 }
@@ -231,5 +239,122 @@ impl TableSource for MyTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+#[test]
+fn test_nested_schema_nullability() {
+    let mut builder = SchemaBuilder::new();
+    builder.push(Field::new("foo", DataType::Int32, true));
+    builder.push(Field::new(
+        "parent",
+        DataType::Struct(Fields::from(vec![Field::new(
+            "child",
+            DataType::Int64,
+            false,
+        )])),
+        true,
+    ));
+    let schema = builder.finish();
+
+    let dfschema = DFSchema::from_field_specific_qualified_schema(
+        vec![Some("table_name".into()), None],
+        &Arc::new(schema),
+    )
+    .unwrap();
+
+    let expr = col("parent").field("child");
+    assert!(expr.nullable(&dfschema).unwrap());
+}
+
+#[test]
+fn test_inequalities_non_null_bounded() {
+    let guarantees = vec![
+        // x ∈ [1, 3] (not null)
+        (
+            col("x"),
+            NullableInterval::NotNull {
+                values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
+            },
+        ),
+        // s.y ∈ [1, 3] (not null)
+        (
+            col("s").field("y"),
+            NullableInterval::NotNull {
+                values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
+            },
+        ),
+    ];
+
+    let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
+
+    // (original_expr, expected_simplification)
+    let simplified_cases = &[
+        (col("x").lt(lit(0)), false),
+        (col("s").field("y").lt(lit(0)), false),
+        (col("x").lt_eq(lit(3)), true),
+        (col("x").gt(lit(3)), false),
+        (col("x").gt(lit(0)), true),
+        (col("x").eq(lit(0)), false),
+        (col("x").not_eq(lit(0)), true),
+        (col("x").between(lit(0), lit(5)), true),
+        (col("x").between(lit(5), lit(10)), false),
+        (col("x").not_between(lit(0), lit(5)), false),
+        (col("x").not_between(lit(5), lit(10)), true),
+        (
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("x")),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(ScalarValue::Null)),
+            }),
+            true,
+        ),
+        (
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("x")),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(5)),
+            }),
+            true,
+        ),
+    ];
+
+    validate_simplified_cases(&mut rewriter, simplified_cases);
+
+    let unchanged_cases = &[
+        col("x").gt(lit(2)),
+        col("x").lt_eq(lit(2)),
+        col("x").eq(lit(2)),
+        col("x").not_eq(lit(2)),
+        col("x").between(lit(3), lit(5)),
+        col("x").not_between(lit(3), lit(10)),
+    ];
+
+    validate_unchanged_cases(&mut rewriter, unchanged_cases);
+}
+
+fn validate_simplified_cases<T>(rewriter: &mut GuaranteeRewriter, cases: &[(Expr, T)])
+where
+    ScalarValue: From<T>,
+    T: Clone,
+{
+    for (expr, expected_value) in cases {
+        let output = expr.clone().rewrite(rewriter).data().unwrap();
+        let expected = lit(ScalarValue::from(expected_value.clone()));
+        assert_eq!(
+            output, expected,
+            "{} simplified to {}, but expected {}",
+            expr, output, expected
+        );
+    }
+}
+fn validate_unchanged_cases(rewriter: &mut GuaranteeRewriter, cases: &[Expr]) {
+    for expr in cases {
+        let output = expr.clone().rewrite(rewriter).data().unwrap();
+        assert_eq!(
+            &output, expr,
+            "{} was simplified to {}, but expected it to be unchanged",
+            expr, output
+        );
     }
 }

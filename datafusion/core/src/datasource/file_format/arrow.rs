@@ -40,7 +40,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use datafusion_common::{not_impl_err, DataFusionError, FileType, Statistics};
+use datafusion_common::{not_impl_err, DataFusionError, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
@@ -135,10 +135,6 @@ impl FileFormat for ArrowFormat {
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::ARROW
     }
 }
 

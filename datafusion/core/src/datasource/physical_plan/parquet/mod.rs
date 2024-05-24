@@ -27,8 +27,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
-    FileMeta, FileScanConfig, SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DefaultSchemaAdapterFactory, DisplayAs,
+    FileGroupPartitioner, FileMeta, FileScanConfig,
 };
 use crate::{
     config::{ConfigOptions, TableParquetOptions},
@@ -67,9 +67,13 @@ mod metrics;
 mod page_filter;
 mod row_filter;
 mod row_groups;
+mod schema_adapter;
 mod statistics;
 
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
 pub use metrics::ParquetFileMetrics;
+pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
+pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -93,6 +97,8 @@ pub struct ParquetExec {
     cache: PlanProperties,
     /// Options for reading Parquet files
     table_parquet_options: TableParquetOptions,
+    /// Optional user defined schema adapter
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ParquetExec {
@@ -157,6 +163,7 @@ impl ParquetExec {
             parquet_file_reader_factory: None,
             cache,
             table_parquet_options,
+            schema_adapter_factory: None,
         }
     }
 
@@ -192,6 +199,19 @@ impl ParquetExec {
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+
+    /// Optional schema adapter factory.
+    ///
+    /// `SchemaAdapterFactory` allows user to specify how fields from the parquet file get mapped to
+    ///  that of the table schema.  The default schema adapter uses arrow's cast library to map
+    ///  the parquet fields to the table schema.
+    pub fn with_schema_adapter_factory(
+        mut self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        self.schema_adapter_factory = Some(schema_adapter_factory);
         self
     }
 
@@ -402,6 +422,11 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
+        let schema_adapter_factory = self
+            .schema_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory::default()));
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
@@ -418,6 +443,7 @@ impl ExecutionPlan for ParquetExec {
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
+            schema_adapter_factory,
         };
 
         let stream =
@@ -452,12 +478,12 @@ struct ParquetOpener {
     reorder_filters: bool,
     enable_page_index: bool,
     enable_bloom_filter: bool,
+    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
 }
 
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
-
         let file_metrics = ParquetFileMetrics::new(
             self.partition_index,
             file_meta.location().as_ref(),
@@ -475,7 +501,7 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
         let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
-        let schema_adapter = SchemaAdapter::new(projected_schema);
+        let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
@@ -531,32 +557,36 @@ impl FileOpener for ParquetOpener {
                 };
             };
 
-            // Row group pruning by statistics: attempt to skip entire row_groups
-            // using metadata on the row groups
+            // Determine which row groups to actually read. The idea is to skip
+            // as many row groups as possible based on the metadata and query
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
-            let mut row_groups = row_groups::prune_row_groups_by_statistics(
-                &file_schema,
-                builder.parquet_schema(),
-                file_metadata.row_groups(),
-                file_range,
-                predicate,
-                &file_metrics,
-            );
+            let rg_metadata = file_metadata.row_groups();
+            // track which row groups to actually read
+            let mut row_groups = RowGroupSet::new(rg_metadata.len());
+            // if there is a range restricting what parts of the file to read
+            if let Some(range) = file_range.as_ref() {
+                row_groups.prune_by_range(rg_metadata, range);
+            }
+            // If there is a predicate that can be evaluated against the metadata
+            if let Some(predicate) = predicate.as_ref() {
+                row_groups.prune_by_statistics(
+                    &file_schema,
+                    builder.parquet_schema(),
+                    rg_metadata,
+                    predicate,
+                    &file_metrics,
+                );
 
-            // Bloom filter pruning: if bloom filters are enabled and then attempt to skip entire row_groups
-            // using bloom filters on the row groups
-            if enable_bloom_filter && !row_groups.is_empty() {
-                if let Some(predicate) = predicate {
-                    row_groups = row_groups::prune_row_groups_by_bloom_filters(
-                        &file_schema,
-                        &mut builder,
-                        &row_groups,
-                        file_metadata.row_groups(),
-                        predicate,
-                        &file_metrics,
-                    )
-                    .await;
+                if enable_bloom_filter && !row_groups.is_empty() {
+                    row_groups
+                        .prune_by_bloom_filters(
+                            &file_schema,
+                            &mut builder,
+                            predicate,
+                            &file_metrics,
+                        )
+                        .await;
                 }
             }
 
@@ -585,7 +615,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_groups)
+                .with_row_groups(row_groups.indexes())
                 .build()?;
 
             let adapted = stream
@@ -966,7 +996,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
@@ -2022,7 +2052,7 @@ mod tests {
         // register a local file system object store for /tmp directory
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         // Configure listing options
         let file_format = ParquetFormat::default().with_enable_pruning(true);

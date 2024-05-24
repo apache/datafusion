@@ -29,15 +29,16 @@ use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
-use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-    TIMEZONE_WILDCARD,
+    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+
+use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 
 #[derive(Debug)]
 pub struct DateBinFunc {
@@ -146,8 +147,21 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![None, Some(true)]))
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // The DATE_BIN function preserves the order of its second argument.
+        let step = &input[0];
+        let date_value = &input[1];
+        let reference = input.get(2);
+
+        if step.sort_properties.eq(&SortProperties::Singleton)
+            && reference
+                .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
+                .unwrap_or(true)
+        {
+            Ok(date_value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 }
 
@@ -425,16 +439,16 @@ fn date_bin_impl(
 mod tests {
     use std::sync::Arc;
 
+    use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
-    use chrono::TimeDelta;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
+    use chrono::TimeDelta;
 
     #[test]
     fn test_date_bin() {
