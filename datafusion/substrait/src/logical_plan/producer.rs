@@ -171,60 +171,27 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Values(v) => {
-            fn field_names_dfs(dtype: &DataType) -> Result<Vec<String>> {
-                // Substrait wants a list of all field names, including nested fields from structs,
-                // also from within lists and maps. However, it does not want the list and map field names
-                // themselves - only structs are considered to have useful names.
-                match dtype {
-                    DataType::Struct(fields) => {
-                        let mut names = Vec::new();
-                        for field in fields {
-                            names.push(field.name().to_string());
-                            names.extend(field_names_dfs(field.data_type())?);
-                        }
-                        Ok(names)
-                    }
-                    DataType::List(l) => field_names_dfs(l.data_type()),
-                    DataType::Map(m, _) => match m.data_type() {
-                        DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                            let key_names = field_names_dfs(
-                                key_and_value.first().unwrap().data_type(),
-                            )?;
-                            let value_names = field_names_dfs(
-                                key_and_value.last().unwrap().data_type(),
-                            )?;
-                            Ok([key_names, value_names].concat())
-                        }
-                        _ => plan_err!(
-                            "Map fields must contain a Struct with exactly 2 fields"
-                        ),
-                    },
-                    _ => Ok(Vec::new()),
-                }
+        LogicalPlan::EmptyRelation(e) => {
+            if e.produce_one_row {
+                return not_impl_err!(
+                    "Producing a row from empty relation is unsupported"
+                );
             }
-            let names = v
-                .schema
-                .fields()
-                .iter()
-                .map(|f| {
-                    let mut names = vec![f.name().to_string()];
-                    names.extend(field_names_dfs(f.data_type())?);
-                    Ok(names)
-                })
-                .flatten_ok()
-                .collect::<Result<_>>()?;
-
-            let field_types = r#type::Struct {
-                types: v
-                    .schema
-                    .fields()
-                    .iter()
-                    .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
-                    .collect::<Result<_>>()?,
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: r#type::Nullability::Unspecified as i32,
-            };
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(to_substrait_named_struct(&e.schema)?),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection: None,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values: vec![],
+                    })),
+                }))),
+            }))
+        }
+        LogicalPlan::Values(v) => {
             let values = v
                 .values
                 .iter()
@@ -251,10 +218,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(NamedStruct {
-                        names,
-                        r#struct: Some(field_types),
-                    }),
+                    base_schema: Some(to_substrait_named_struct(&v.schema)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
@@ -606,6 +570,62 @@ pub fn to_substrait_rel(
         }
         _ => not_impl_err!("Unsupported operator: {plan:?}"),
     }
+}
+
+fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
+    // Substrait wants a list of all field names, including nested fields from structs,
+    // also from within lists and maps. However, it does not want the list and map field names
+    // themselves - only structs are considered to have useful names.
+    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
+        match dtype {
+            DataType::Struct(fields) => {
+                let mut names = Vec::new();
+                for field in fields {
+                    names.push(field.name().to_string());
+                    names.extend(names_dfs(field.data_type())?);
+                }
+                Ok(names)
+            }
+            DataType::List(l) => names_dfs(l.data_type()),
+            DataType::Map(m, _) => match m.data_type() {
+                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                    let key_names =
+                        names_dfs(key_and_value.first().unwrap().data_type())?;
+                    let value_names =
+                        names_dfs(key_and_value.last().unwrap().data_type())?;
+                    Ok([key_names, value_names].concat())
+                }
+                _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+            },
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    let names = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let mut names = vec![f.name().to_string()];
+            names.extend(names_dfs(f.data_type())?);
+            Ok(names)
+        })
+        .flatten_ok()
+        .collect::<Result<_>>()?;
+
+    let field_types = r#type::Struct {
+        types: schema
+            .fields()
+            .iter()
+            .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
+            .collect::<Result<_>>()?,
+        type_variation_reference: DEFAULT_TYPE_REF,
+        nullability: r#type::Nullability::Unspecified as i32,
+    };
+
+    Ok(NamedStruct {
+        names,
+        r#struct: Some(field_types),
+    })
 }
 
 fn to_substrait_join_expr(

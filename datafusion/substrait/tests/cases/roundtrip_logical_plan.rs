@@ -693,6 +693,11 @@ async fn roundtrip_values() -> Result<()> {
         .await
 }
 
+#[tokio::test]
+async fn roundtrip_empty_relation() -> Result<()> {
+    roundtrip("SELECT * FROM (VALUES (1)) LIMIT 0").await
+}
+
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
 #[tokio::test]
 async fn new_test_grammar() -> Result<()> {

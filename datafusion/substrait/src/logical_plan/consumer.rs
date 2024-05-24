@@ -23,8 +23,8 @@ use datafusion::common::{
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, Expr, LogicalPlan,
-    Operator, ScalarUDF, Values,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, EmptyRelation, Expr,
+    LogicalPlan, Operator, ScalarUDF, Values,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -520,6 +520,13 @@ pub async fn from_substrait_rel(
                     &mut 0,
                 );
                 let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?);
+
+                if vt.values.is_empty() {
+                    return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    }));
+                }
 
                 let values = vt
                     .values
