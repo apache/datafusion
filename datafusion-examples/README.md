@@ -56,6 +56,7 @@ cargo run --example csv_sql
 - [`dataframe_output.rs`](examples/dataframe_output.rs): Examples of methods which write data out from a DataFrame
 - [`deserialize_to_struct.rs`](examples/deserialize_to_struct.rs): Convert query results into rust structs using serde
 - [`expr_api.rs`](examples/expr_api.rs): Create, execute, simplify and analyze `Expr`s
+- [`file_stream_provider.rs`](examples/file_stream_provider.rs): Run a query on `FileStreamProvider` which implements `StreamProvider` for reading and writing to arbitrary stream sources / sinks.
 - [`flight_sql_server.rs`](examples/flight/flight_sql_server.rs): Run DataFusion as a standalone process and execute SQL queries from JDBC clients
 - [`function_factory.rs`](examples/function_factory.rs): Register `CREATE FUNCTION` handler to implement SQL macros
 - [`make_date.rs`](examples/make_date.rs): Examples of using the make_date function
