@@ -1689,8 +1689,8 @@ pub struct CsvWriterOptions {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvOptions {
     /// Indicates if the CSV has a header row
-    #[prost(bytes = "vec", tag = "1")]
-    pub has_header: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag = "1")]
+    pub has_header: bool,
     /// Delimiter character as a byte
     #[prost(bytes = "vec", tag = "2")]
     pub delimiter: ::prost::alloc::vec::Vec<u8>,
