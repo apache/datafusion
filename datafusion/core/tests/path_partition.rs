@@ -546,7 +546,7 @@ fn register_partitioned_aggregate_csv(
         partition_cols
             .iter()
             .map(|x| (x.0.to_owned(), x.1.clone()))
-            .collect::<Vec<_>>(),
+            .collect(),
     );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
