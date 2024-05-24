@@ -28,14 +28,13 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-
-use datafusion_common::{exec_err, not_impl_err, Result};
-use datafusion_expr::AggregateFunction;
-
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+
+use arrow::datatypes::Schema;
+use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_expr::AggregateFunction;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -381,17 +380,16 @@ pub fn create_aggregate_expr(
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
-    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
-    use datafusion_expr::type_coercion::aggregates::NUMERICS;
-    use datafusion_expr::{type_coercion, Signature};
-
+    use super::*;
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
         Max, Min, Stddev, Sum, Variance,
     };
 
-    use super::*;
+    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
+    use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_expr::{type_coercion, Signature};
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

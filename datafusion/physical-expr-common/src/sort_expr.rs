@@ -21,14 +21,14 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::PhysicalExpr;
+use crate::utils::convert_logical_expr_to_physical_expr;
+
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Expr};
-
-use crate::physical_expr::PhysicalExpr;
-use crate::utils::convert_logical_expr_to_physical_expr;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -269,26 +269,25 @@ pub type LexRequirement = Vec<PhysicalSortRequirement>;
 /// represents a reference to a lexicographical ordering requirement.
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
 
-/// Converts each `datafusion_expr::Expr` into corresponding `PhysicalSortExpr`.
-/// Assumes `datafusion_expr::Expr` is `datafusion_expr::Expr::Sort` otherwise returns Error.
+/// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
+/// Returns an error if the given logical expression is not a [`Expr::Sort`].
 pub fn convert_logical_sort_exprs_to_physical(
-    exprs: &[datafusion_expr::Expr],
+    exprs: &[Expr],
     schema: &Schema,
 ) -> Result<Vec<PhysicalSortExpr>> {
     // Construct PhysicalSortExpr objects from Expr objects:
     let mut sort_exprs = vec![];
     for expr in exprs {
-        if let Expr::Sort(sort) = expr {
-            sort_exprs.push(PhysicalSortExpr {
-                expr: convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
-                options: SortOptions {
-                    descending: !sort.asc,
-                    nulls_first: sort.nulls_first,
-                },
-            });
-        } else {
+        let Expr::Sort(sort) = expr else {
             return exec_err!("Expects to receive sort expression");
-        }
+        };
+        sort_exprs.push(PhysicalSortExpr {
+            expr: convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
+            options: SortOptions {
+                descending: !sort.asc,
+                nulls_first: sort.nulls_first,
+            },
+        });
     }
     Ok(sort_exprs)
 }

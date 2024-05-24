@@ -117,8 +117,8 @@ impl AggregateUDFImpl for FirstValue {
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        // When requirement is empty, or it is signalled by outside caller:
-        // accumulator assumes ordering requirement is satisfied.
+        // When requirement is empty, or it is signalled by outside caller that
+        // the ordering requirement is/will be satisfied.
         let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(

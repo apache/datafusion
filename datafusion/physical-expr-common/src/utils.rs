@@ -17,12 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::{
-    expressions, physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr,
-    tree_node::ExprContext,
-};
+use crate::expressions::{self, CastExpr};
+use crate::physical_expr::PhysicalExpr;
+use crate::sort_expr::PhysicalSortExpr;
+use crate::tree_node::ExprContext;
 
-use crate::expressions::CastExpr;
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::Schema;
@@ -104,53 +103,36 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .collect()
 }
 
-/// Reverses the ORDER BY expression()s.
-pub fn reverse_sort_exprs(sort_exprs: &[Expr]) -> Vec<Expr> {
-    sort_exprs
-        .iter()
-        .map(|e| {
-            if let Expr::Sort(s) = e {
-                Expr::Sort(s.reverse())
-            } else {
-                // Expects to receive `Expr::Sort`.
-                unreachable!()
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
 /// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
 /// If conversion is not supported yet, returns Error.
 pub fn convert_logical_expr_to_physical_expr(
-    expr: &datafusion_expr::Expr,
+    expr: &Expr,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(match expr {
-        Expr::Column(col) => expressions::column::col(&col.name, schema)?,
-        Expr::Cast(cast_expr) => Arc::new(CastExpr::new(
+    match expr {
+        Expr::Column(col) => expressions::column::col(&col.name, schema),
+        Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
             convert_logical_expr_to_physical_expr(cast_expr.expr.as_ref(), schema)?,
             cast_expr.data_type.clone(),
             None,
-        )),
+        ))),
         Expr::Alias(alias_expr) => {
-            convert_logical_expr_to_physical_expr(alias_expr.expr.as_ref(), schema)?
+            convert_logical_expr_to_physical_expr(alias_expr.expr.as_ref(), schema)
         }
-        _ => {
-            return exec_err!(
-                "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
-            );
-        }
-    })
+        _ => exec_err!(
+            "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
+
     use arrow::array::Int32Array;
     use datafusion_common::cast::{as_boolean_array, as_int32_array};
-
-    use super::*;
 
     #[test]
     fn scatter_int() -> Result<()> {

@@ -39,14 +39,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping,
+    equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
-    AggregateExpr, LexRequirement, PhysicalExpr,
-};
-use datafusion_physical_expr::{
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
+    physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
+    LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -838,12 +835,10 @@ fn get_aggregate_expr_req(
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
-    // If the aggregation function is ordering requirement is not absolutely necessary, or the aggregation
-    // is performing a "second stage" calculation, then ignore the ordering
-    // requirement.
-    if !aggr_expr.order_sensitivity().is_order_hard_required()
-        || !agg_mode.is_first_stage()
-    {
+    // If the aggregation function is ordering requirement is not absolutely
+    // necessary, or the aggregation is performing a "second stage" calculation,
+    // then ignore the ordering requirement.
+    if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
         return vec![];
     }
 

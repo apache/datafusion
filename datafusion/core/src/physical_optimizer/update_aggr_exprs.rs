@@ -134,11 +134,6 @@ fn try_convert_aggregate_if_better(
     prefix_requirement: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
 ) -> Result<Vec<Arc<dyn AggregateExpr>>> {
-    let err_fn = || {
-        plan_datafusion_err!(
-            "Expects an aggregate expression that can benefit from input ordering"
-        )
-    };
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
@@ -153,32 +148,32 @@ fn try_convert_aggregate_if_better(
             // there is an actual ordering enabling this, try to update the
             // aggregate expression to benefit from the existing ordering.
             // Otherwise, leave it as is.
-            if aggr_expr.order_sensitivity().is_order_beneficial()
-                && !aggr_sort_reqs.is_empty()
+            if aggr_expr.order_sensitivity().is_beneficial() && !aggr_sort_reqs.is_empty()
             {
                 let reqs = concat_slices(prefix_requirement, &aggr_sort_reqs);
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
-                    return aggr_expr
-                        .with_requirement_satisfied(true)?
-                        .ok_or_else(err_fn);
-                }
-                let reqs = concat_slices(prefix_requirement, &reverse_aggr_req);
-                if eq_properties.ordering_satisfy_requirement(&reqs) {
+                    aggr_expr.with_requirement_satisfied(true)?
+                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                    prefix_requirement,
+                    &reverse_aggr_req,
+                )) {
                     // Converting to reverse enables more efficient execution
                     // given the existing ordering (if possible):
                     aggr_expr
                         .reverse_expr()
                         .unwrap_or(aggr_expr)
                         .with_requirement_satisfied(true)?
-                        .ok_or_else(err_fn)
                 } else {
                     // There is no beneficial ordering present -- aggregation
                     // will still work albeit in a less efficient mode.
-                    aggr_expr
-                        .with_requirement_satisfied(false)?
-                        .ok_or_else(err_fn)
+                    aggr_expr.with_requirement_satisfied(false)?
                 }
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                    "Expects an aggregate expression that can benefit from input ordering"
+                )
+                })
             } else {
                 Ok(aggr_expr)
             }

@@ -19,22 +19,22 @@ pub mod groups_accumulator;
 pub mod stats;
 pub mod utils;
 
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
+
+use self::utils::{down_cast_any_ref, ordering_fields};
+use crate::physical_expr::PhysicalExpr;
+use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use crate::utils::reverse_order_bys;
+
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{exec_datafusion_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
-use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
-
-use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
-use crate::utils::{reverse_order_bys, reverse_sort_exprs};
-
-use self::utils::{down_cast_any_ref, ordering_fields};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -120,31 +120,33 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         None
     }
 
-    /// Indicates whether aggregator can produce correct result with any arbitrary ordering or not.
-    /// By default we assume aggregate expression is order insensitive.
+    /// Indicates whether aggregator can produce the correct result with any
+    /// arbitrary input ordering. By default, we assume that aggregate expressions
+    /// are order insensitive.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
 
-    /// Sets the indicator whether requirement of the aggregators is satisfied at the input.
-    /// If this is not the case: Aggregators with order sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
-    /// correct result with possibly more work internally.
+    /// Sets the indicator whether ordering requirements of the aggregator is
+    /// satisfied by its input. If this is not the case, aggregators with order
+    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
+    /// the correct result with possibly more work internally.
     ///
     /// # Returns
     ///
     /// Returns `Ok(Some(updated_expr))` if the process completes successfully.
-    /// If the expression which can benefit does not implement the method, it returns an error.
-    /// [`AggregateOrderSensitivity::Insensitive`] and [`AggregateOrderSensitivity::HardRequirement`]
-    /// expressions return Ok(None).
+    /// If the expression can benefit from existing input ordering, but does
+    /// not implement the method, returns an error. Order insensitive and hard
+    /// requirement aggregators return `Ok(None)`.
     fn with_requirement_satisfied(
         self: Arc<Self>,
         _requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        if self.order_bys().is_some() && self.order_sensitivity().is_order_beneficial() {
-            return Err(exec_datafusion_err!(
+        if self.order_bys().is_some() && self.order_sensitivity().is_beneficial() {
+            return exec_err!(
                 "Should implement with satisfied for aggregator :{:?}",
                 self.name()
-            ));
+            );
         }
         Ok(None)
     }
@@ -350,31 +352,41 @@ impl AggregateExpr for AggregateFunctionExpr {
         self: Arc<Self>,
         requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        if let Some(updated_fn) = self
+        let Some(updated_fn) = self
             .fun
             .clone()
             .with_requirement_satisfied(requirement_satisfied)?
-        {
-            let aggr_expr = create_aggregate_expr(
-                &updated_fn,
-                &self.args,
-                &self.sort_exprs,
-                &self.ordering_req,
-                &self.schema,
-                self.name(),
-                self.ignore_nulls,
-                self.is_distinct,
-            )
-            .unwrap();
-            return Ok(Some(aggr_expr));
-        }
-        Ok(None)
+        else {
+            return Ok(None);
+        };
+        create_aggregate_expr(
+            &updated_fn,
+            &self.args,
+            &self.sort_exprs,
+            &self.ordering_req,
+            &self.schema,
+            self.name(),
+            self.ignore_nulls,
+            self.is_distinct,
+        )
+        .map(Some)
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         if let Some(reverse_udf) = self.fun.reverse_udf() {
             let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
-            let reverse_sort_exprs = reverse_sort_exprs(&self.sort_exprs);
+            let reverse_sort_exprs = self
+                .sort_exprs
+                .iter()
+                .map(|e| {
+                    if let Expr::Sort(s) = e {
+                        Expr::Sort(s.reverse())
+                    } else {
+                        // Expects to receive `Expr::Sort`.
+                        unreachable!()
+                    }
+                })
+                .collect::<Vec<_>>();
             let mut name = self.name().to_string();
             replace_order_by_clause(&mut name);
             replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
@@ -428,7 +440,7 @@ fn replace_order_by_clause(order_by: &mut String) {
             let order_by_end = start + end;
 
             let column_order = &order_by[order_by_start..=order_by_end];
-            for &(suffix, replacement) in &suffixes {
+            for (suffix, replacement) in suffixes {
                 if column_order.ends_with(suffix) {
                     let new_order = column_order.replace(suffix, replacement);
                     order_by.replace_range(order_by_start..=order_by_end, &new_order);
