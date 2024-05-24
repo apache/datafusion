@@ -355,6 +355,9 @@ pub fn check_arg_count(
                 );
             }
         }
+        TypeSignature::UserDefined => {
+            // User-defined functions are not validated here
+        }
         _ => {
             return internal_err!(
                 "Aggregate functions do not support this {signature:?}"
