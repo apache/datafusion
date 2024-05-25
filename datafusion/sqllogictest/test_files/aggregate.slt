@@ -3403,21 +3403,11 @@ NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error
+query error
 SELECT sum(date32), sum(date64) FROM t;
-----
-DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("Sum not supported for Date32") and No function matches the given name and argument types 'SUM(Date32)'. You might need to add explicit type casts.
-	Candidate functions:
-	SUM(UserDefined)
 
-
-statement error
+query error
 SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
-----
-DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("Sum not supported for Date32") and No function matches the given name and argument types 'SUM(Date32)'. You might need to add explicit type casts.
-	Candidate functions:
-	SUM(UserDefined)
-
 
 # aggregate_timestamps_count
 query II
@@ -3510,21 +3500,11 @@ select * from t;
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
-statement error
+query error
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
-----
-DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("Sum not supported for Time64(Nanosecond)") and No function matches the given name and argument types 'SUM(Time64(Nanosecond))'. You might need to add explicit type casts.
-	Candidate functions:
-	SUM(UserDefined)
 
-
-statement error
+query error
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
-----
-DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("Sum not supported for Time64(Nanosecond)") and No function matches the given name and argument types 'SUM(Time64(Nanosecond))'. You might need to add explicit type casts.
-	Candidate functions:
-	SUM(UserDefined)
-
 
 # aggregate_times_count
 query IIII
