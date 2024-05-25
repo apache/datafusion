@@ -84,7 +84,7 @@ impl AggregateUDFImpl for BetterAvgUdaf {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         unimplemented!("should not get here");
     }
-    
+
     // we override method, to return new expression which would substitute
     // user defined function call
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
