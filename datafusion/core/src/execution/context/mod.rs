@@ -2498,6 +2498,7 @@ mod tests {
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use datafusion_functions_array::all_default_scalar_functions;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -2857,6 +2858,46 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_all() -> Result<()> {
+        let functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
+        let config = SessionConfig::new();
+        let catalog_list =
+            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
+        let mut new_state = SessionState {
+            session_id: Uuid::new_v4().to_string(),
+            analyzer: Analyzer::new(),
+            optimizer: Optimizer::new(),
+            physical_optimizers: PhysicalOptimizer::new(),
+            query_planner: Arc::new(DefaultQueryPlanner {}),
+            catalog_list,
+            table_functions: HashMap::new(),
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
+            serializer_registry: Arc::new(EmptySerializerRegistry),
+            table_option_namespace: TableOptions::default_from_session_config(
+                config.options(),
+            ),
+            config,
+            execution_props: ExecutionProps::new(),
+            runtime_env: Arc::new(RuntimeEnv::default()),
+            table_factories: HashMap::new(),
+            function_factory: None,
+        };
+
+        for function in functions {
+            let udf = new_state.register_udf(function).unwrap();
+            match udf {
+                Some(udf) => {
+                    assert!(false, "Function {} already registered", udf.name());
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
