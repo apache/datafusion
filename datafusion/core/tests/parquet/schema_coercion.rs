@@ -26,7 +26,7 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::Result;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
 use object_store::path::Path;
@@ -51,7 +51,7 @@ async fn multi_parquet_coercion() {
     let batch2 = RecordBatch::try_from_iter(vec![("c2", c2), ("c3", c3)]).unwrap();
 
     let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
-    let file_groups = meta.into_iter().map(Into::into).collect();
+    let file_group = meta.into_iter().map(Into::into).collect();
 
     // cast c1 to utf8, c2 to int32, c3 to float64
     let file_schema = Arc::new(Schema::new(vec![
@@ -60,16 +60,8 @@ async fn multi_parquet_coercion() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let parquet_exec = ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_groups: vec![file_groups],
-            statistics: Statistics::new_unknown(&file_schema),
-            file_schema,
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+            .with_file_group(file_group),
         None,
         None,
         Default::default(),
@@ -115,7 +107,7 @@ async fn multi_parquet_coercion_projection() {
         RecordBatch::try_from_iter(vec![("c2", c2), ("c1", c1s), ("c3", c3)]).unwrap();
 
     let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
-    let file_groups = meta.into_iter().map(Into::into).collect();
+    let file_group = meta.into_iter().map(Into::into).collect();
 
     // cast c1 to utf8, c2 to int32, c3 to float64
     let file_schema = Arc::new(Schema::new(vec![
@@ -124,16 +116,9 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let parquet_exec = ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_groups: vec![file_groups],
-            statistics: Statistics::new_unknown(&file_schema),
-            file_schema,
-            projection: Some(vec![1, 0, 2]),
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+            .with_file_group(file_group)
+            .with_projection(Some(vec![1, 0, 2])),
         None,
         None,
         Default::default(),

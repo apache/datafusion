@@ -203,7 +203,7 @@ mod tests {
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_plan::expressions::lit;
     use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::{displayable, Partitioning, Statistics};
+    use crate::physical_plan::{displayable, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_physical_expr::expressions::{col, Count, Sum};
@@ -246,16 +246,11 @@ mod tests {
 
     fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(schema),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100)),
             None,
             None,
             Default::default(),
