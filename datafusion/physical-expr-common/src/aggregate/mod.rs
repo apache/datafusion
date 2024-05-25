@@ -327,7 +327,10 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+        if self.fun.has_ordering_requirements() && !self.ordering_req.is_empty() {
+            return Some(&self.ordering_req);
+        }
+        None
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

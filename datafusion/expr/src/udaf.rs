@@ -217,6 +217,10 @@ impl AggregateUDF {
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
     }
+
+    pub fn has_ordering_requirements(&self) -> bool {
+        self.inner.has_ordering_requirements()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -437,6 +441,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
+
+    /// Returns true if the function has ordering requirements.
+    fn has_ordering_requirements(&self) -> bool {
+        false
     }
 }
 
