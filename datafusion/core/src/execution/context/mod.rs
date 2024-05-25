@@ -2499,8 +2499,8 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use datafusion_functions::all_default_functions;
-    use datafusion_functions_array::all_default_array_functions;
     use datafusion_functions_aggregate::all_default_aggregate_functions;
+    use datafusion_functions_array::all_default_array_functions;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -2910,7 +2910,7 @@ mod tests {
                 assert!(false, "Function {} already registered", udaf.name());
             }
         }
-        
+
         Ok(())
     }
 

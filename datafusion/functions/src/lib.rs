@@ -80,8 +80,8 @@
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
-use std::sync::Arc;
 use log::debug;
+use std::sync::Arc;
 
 #[macro_use]
 pub mod macros;
@@ -155,15 +155,15 @@ pub mod expr_fn {
 /// Return all default functions
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
     let all_functions = core::functions()
-    .into_iter()
-    .chain(datetime::functions())
-    .chain(encoding::functions())
-    .chain(math::functions())
-    .chain(regex::functions())
-    .chain(crypto::functions())
-    .chain(unicode::functions())
-    .chain(string::functions())
-    .collect::<Vec<_>>();
+        .into_iter()
+        .chain(datetime::functions())
+        .chain(encoding::functions())
+        .chain(math::functions())
+        .chain(regex::functions())
+        .chain(crypto::functions())
+        .chain(unicode::functions())
+        .chain(string::functions())
+        .collect::<Vec<_>>();
     all_functions
 }
 
