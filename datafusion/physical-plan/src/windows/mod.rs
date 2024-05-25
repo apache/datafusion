@@ -70,12 +70,17 @@ pub fn schema_add_window_field(
         .iter()
         .map(|f| f.as_ref().clone())
         .collect_vec();
-    window_fields.extend_from_slice(&[Field::new(
-        fn_name,
-        window_expr_return_type,
-        false,
-    )]);
-    Ok(Arc::new(Schema::new(window_fields)))
+    // Skip extending schema for UDAF
+    if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
+        Ok(Arc::new(Schema::new(window_fields)))
+    } else {
+        window_fields.extend_from_slice(&[Field::new(
+            fn_name,
+            window_expr_return_type,
+            false,
+        )]);
+        Ok(Arc::new(Schema::new(window_fields)))
+    }
 }
 
 /// Create a physical expression for window function
