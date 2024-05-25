@@ -992,13 +992,12 @@ mod test {
             None,
             None,
         ));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "")
-            .err()
-            .unwrap();
+
+        let err = Projection::try_new(vec![udaf], empty).err().unwrap();
+
         assert_eq!(
-            "type_coercion\ncaused by\nError during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
-            err.strip_backtrace()
+            err.strip_backtrace(),
+            "Error during planning: Error during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed. and No function matches the given name and argument types 'MY_AVG(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tMY_AVG(Float64)"
         );
         Ok(())
     }
