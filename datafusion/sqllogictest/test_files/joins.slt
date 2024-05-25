@@ -1778,7 +1778,7 @@ AS VALUES
 ('BB', 6, 1);
 
 query TII
-select col1, col2, coalesce(sum_col3, arrow_cast(0, 'UInt64')) as sum_col3
+select col1, col2, coalesce(sum_col3, 0) as sum_col3
 from (select distinct col2 from tbl) AS q1
 cross join (select distinct col1 from tbl) AS q2
 left outer join (SELECT col1, col2, sum(col3) as sum_col3 FROM tbl GROUP BY col1, col2) AS q3
