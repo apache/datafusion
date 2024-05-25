@@ -154,7 +154,7 @@ pub mod expr_fn {
 
 /// Return all default functions
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
-    let all_functions = core::functions()
+    core::functions()
         .into_iter()
         .chain(datetime::functions())
         .chain(encoding::functions())
@@ -163,8 +163,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         .chain(crypto::functions())
         .chain(unicode::functions())
         .chain(string::functions())
-        .collect::<Vec<_>>();
-    all_functions
+        .collect::<Vec<_>>()
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
