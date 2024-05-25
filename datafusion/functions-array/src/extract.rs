@@ -79,7 +79,11 @@ impl ArrayElement {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_index(Volatility::Immutable),
-            aliases: vec![String::from("array_extract"), String::from("list_extract")],
+            aliases: vec![
+                String::from("array_extract"),
+                String::from("list_element"),
+                String::from("list_extract"),
+            ],
         }
     }
 }
