@@ -17,9 +17,9 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
+use ahash::RandomState;
 use std::any::Any;
 use std::collections::HashSet;
-use ahash::RandomState;
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
@@ -157,7 +157,7 @@ impl AggregateUDFImpl for Sum {
         if args.is_distinct {
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt.clone())))
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::try_new(&$dt)?))
                 };
             }
             downcast_sum!(args, helper)
@@ -191,8 +191,8 @@ impl AggregateUDFImpl for Sum {
         &self.aliases
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
     }
 
     fn create_groups_accumulator(

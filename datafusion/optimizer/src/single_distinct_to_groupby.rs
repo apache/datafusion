@@ -257,6 +257,55 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 )))
                             }
                         }
+                        Expr::AggregateFunction(AggregateFunction {
+                            func_def: AggregateFunctionDefinition::UDF(udf),
+                            mut args,
+                            distinct,
+                            ..
+                        }) => {
+                            if distinct {
+                                if args.len() != 1 {
+                                    return internal_err!("DISTINCT aggregate should have exactly one argument");
+                                }
+                                let arg = args.swap_remove(0);
+
+                                if group_fields_set.insert(arg.display_name()?) {
+                                    inner_group_exprs
+                                        .push(arg.alias(SINGLE_DISTINCT_ALIAS));
+                                }
+                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                    udf,
+                                    vec![col(SINGLE_DISTINCT_ALIAS)],
+                                    false, // intentional to remove distinct here
+                                    None,
+                                    None,
+                                    None,
+                                )))
+                                // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
+                            } else {
+                                index += 1;
+                                let alias_str = format!("alias{}", index);
+                                inner_aggr_exprs.push(
+                                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                                        udf.clone(),
+                                        args,
+                                        false,
+                                        None,
+                                        None,
+                                        None,
+                                    ))
+                                    .alias(&alias_str),
+                                );
+                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                    udf,
+                                    vec![col(&alias_str)],
+                                    false,
+                                    None,
+                                    None,
+                                    None,
+                                )))
+                            }
+                        }
                         _ => Ok(aggr_expr),
                     })
                     .collect::<Result<Vec<_>>>()?;
