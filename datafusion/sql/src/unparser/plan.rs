@@ -52,7 +52,7 @@ use super::{
 ///     .unwrap();
 /// let sql = plan_to_sql(&plan).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "SELECT \"table\".\"id\", \"table\".\"value\" FROM \"table\"")
+/// assert_eq!(format!("{}", sql), "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"")
 /// ```
 pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
     let unparser = Unparser::default();
@@ -140,10 +140,17 @@ impl Unparser<'_> {
             LogicalPlan::TableScan(scan) => {
                 let mut builder = TableRelationBuilder::default();
                 let mut table_parts = vec![];
-                if let Some(schema_name) = scan.table_name.schema() {
-                    table_parts.push(self.new_ident(schema_name.to_string()));
+                if let Some(catalog_name) = scan.table_name.catalog() {
+                    table_parts
+                        .push(self.new_ident_quoted_if_needs(catalog_name.to_string()));
                 }
-                table_parts.push(self.new_ident(scan.table_name.table().to_string()));
+                if let Some(schema_name) = scan.table_name.schema() {
+                    table_parts
+                        .push(self.new_ident_quoted_if_needs(schema_name.to_string()));
+                }
+                table_parts.push(
+                    self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
+                );
                 builder.name(ast::ObjectName(table_parts));
                 relation.table(builder);
 
@@ -416,7 +423,7 @@ impl Unparser<'_> {
 
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident(name.to_string()),
+                    alias: self.new_ident_quoted_if_needs(name.to_string()),
                 })
             }
             _ => {
@@ -433,10 +440,17 @@ impl Unparser<'_> {
             .map(|expr: &Expr| match expr {
                 Expr::Sort(sort_expr) => {
                     let col = self.expr_to_sql(&sort_expr.expr)?;
+
+                    let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
+                        Some(sort_expr.nulls_first)
+                    } else {
+                        None
+                    };
+
                     Ok(ast::OrderByExpr {
                         asc: Some(sort_expr.asc),
                         expr: col,
-                        nulls_first: Some(sort_expr.nulls_first),
+                        nulls_first,
                     })
                 }
                 _ => plan_err!("Expecting Sort expr"),
@@ -487,7 +501,7 @@ impl Unparser<'_> {
 
     fn new_table_alias(&self, alias: String) -> ast::TableAlias {
         ast::TableAlias {
-            name: self.new_ident(alias),
+            name: self.new_ident_quoted_if_needs(alias),
             columns: Vec::new(),
         }
     }

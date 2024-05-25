@@ -263,7 +263,7 @@ impl DataFrame {
         self.unnest_columns_with_options(&[column], options)
     }
 
-    /// Expand multiple list columns into a set of rows.
+    /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
     /// See also:
     ///
@@ -277,8 +277,8 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_columns(&["a", "b"])?;
+    /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
+    /// let df = df.unnest_columns(&["b","c","d"])?;
     /// # Ok(())
     /// # }
     /// ```
