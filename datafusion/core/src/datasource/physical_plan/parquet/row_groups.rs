@@ -93,7 +93,11 @@ impl RowGroupSet {
     /// Prune remaining row groups to only those  within the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
+    ///
+    /// # Panics
+    /// if `groups.len() != self.len()`
     pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
+        assert_eq!(groups.len(), self.len());
         for (idx, metadata) in groups.iter().enumerate() {
             if !self.should_scan(idx) {
                 continue;
@@ -120,6 +124,9 @@ impl RowGroupSet {
     ///
     /// Note: This method currently ignores ColumnOrder
     /// <https://github.com/apache/datafusion/issues/8335>
+    ///
+    /// # Panics
+    /// if `groups.len() != self.len()`
     pub fn prune_by_statistics(
         &mut self,
         arrow_schema: &Schema,
@@ -128,6 +135,7 @@ impl RowGroupSet {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        assert_eq!(groups.len(), self.len());
         for (idx, metadata) in groups.iter().enumerate() {
             if !self.should_scan(idx) {
                 continue;
@@ -161,6 +169,9 @@ impl RowGroupSet {
     /// [`PruningPredicate`].
     ///
     /// Updates this set with row groups that should not be scanned
+    ///
+    /// # Panics
+    /// if the builder does not have the same number of row groups as this set
     pub async fn prune_by_bloom_filters<T: AsyncFileReader + Send + 'static>(
         &mut self,
         arrow_schema: &Schema,
@@ -168,6 +179,7 @@ impl RowGroupSet {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        assert_eq!(builder.metadata().num_row_groups(), self.len());
         for idx in 0..self.len() {
             if !self.should_scan(idx) {
                 continue;
