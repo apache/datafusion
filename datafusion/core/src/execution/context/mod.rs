@@ -2893,21 +2893,21 @@ mod tests {
         for function in all_default_functions() {
             let udf = new_state.register_udf(function).unwrap();
             if let Some(udf) = udf {
-                assert!(false, "Function {} already registered", udf.name());
+                unreachable!("Function {} already registered", udf.name());
             }
         }
 
         for function in all_default_array_functions() {
             let udf = new_state.register_udf(function).unwrap();
             if let Some(udf) = udf {
-                assert!(false, "Function {} already registered", udf.name());
+                unreachable!("Function {} already registered", udf.name());
             }
         }
 
         for function in all_default_aggregate_functions() {
             let udaf = new_state.register_udaf(function).unwrap();
             if let Some(udaf) = udaf {
-                assert!(false, "Function {} already registered", udaf.name());
+                unreachable!("Function {} already registered", udaf.name());
             }
         }
 
