@@ -566,7 +566,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -622,8 +622,6 @@ pub mod logical_expr_node {
         /// Scalar UDF expressions
         #[prost(message, tag = "20")]
         ScalarUdfExpr(super::ScalarUdfExprNode),
-        #[prost(message, tag = "21")]
-        GetIndexedField(::prost::alloc::boxed::Box<super::GetIndexedField>),
         #[prost(message, tag = "22")]
         GroupingSet(super::GroupingSetNode),
         #[prost(message, tag = "23")]
@@ -701,24 +699,24 @@ pub struct NamedStructField {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListIndex {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub key: ::core::option::Option<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListRange {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "3")]
-    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub start: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "2")]
+    pub stop: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "3")]
+    pub stride: ::core::option::Option<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetIndexedField {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<LogicalExprNode>,
     #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4")]
     pub field: ::core::option::Option<get_indexed_field::Field>,
 }
@@ -730,9 +728,9 @@ pub mod get_indexed_field {
         #[prost(message, tag = "2")]
         NamedStructField(super::NamedStructField),
         #[prost(message, tag = "3")]
-        ListIndex(::prost::alloc::boxed::Box<super::ListIndex>),
+        ListIndex(super::ListIndex),
         #[prost(message, tag = "4")]
-        ListRange(::prost::alloc::boxed::Box<super::ListRange>),
+        ListRange(super::ListRange),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]

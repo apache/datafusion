@@ -246,7 +246,7 @@ pub fn map_origin_col_to_filter_col(
     Ok(col_to_col_map)
 }
 
-/// This function analyzes [`PhysicalSortExpr`] graphs with respect to monotonicity
+/// This function analyzes [`PhysicalSortExpr`] graphs with respect to output orderings
 /// (sorting) properties. This is necessary since monotonically increasing and/or
 /// decreasing expressions are required when using join filter expressions for
 /// data pruning purposes.

@@ -17,9 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::AsArray;
-use arrow_array::{ArrayRef, BooleanArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
+use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 

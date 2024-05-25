@@ -61,7 +61,9 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
+use datafusion::arrow::array::GenericListArray;
 use datafusion::common::plan_err;
+use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -551,7 +553,8 @@ pub async fn from_substrait_rel(
                 );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
-            let plan = plan.from_template(&plan.expressions(), &[input_plan]);
+            let plan =
+                plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
@@ -567,7 +570,7 @@ pub async fn from_substrait_rel(
                 let input_plan = from_substrait_rel(ctx, input, extensions).await?;
                 inputs.push(input_plan);
             }
-            let plan = plan.from_template(&plan.expressions(), &inputs);
+            let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::Exchange(exchange)) => {
@@ -1057,7 +1060,7 @@ pub async fn from_substrait_rex(
     }
 }
 
-fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+pub(crate) fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),
@@ -1137,7 +1140,7 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                     from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
                         substrait_datafusion_err!("List type must have inner type")
                     })?)?;
-                let field = Arc::new(Field::new("list_item", inner_type, true));
+                let field = Arc::new(Field::new_list_field(inner_type, true));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
@@ -1157,6 +1160,15 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
+            r#type::Kind::Struct(s) => {
+                let mut fields = vec![];
+                for (i, f) in s.types.iter().enumerate() {
+                    let field =
+                        Field::new(&format!("c{i}"), from_substrait_type(f)?, true);
+                    fields.push(field);
+                }
+                Ok(DataType::Struct(fields.into()))
+            }
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
@@ -1277,6 +1289,57 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                 s,
             )
         }
+        Some(LiteralType::List(l)) => {
+            let elements = l
+                .values
+                .iter()
+                .map(from_substrait_literal)
+                .collect::<Result<Vec<_>>>()?;
+            if elements.is_empty() {
+                return substrait_err!(
+                    "Empty list must be encoded as EmptyList literal type, not List"
+                );
+            }
+            let element_type = elements[0].data_type();
+            match lit.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => ScalarValue::List(ScalarValue::new_list(
+                    elements.as_slice(),
+                    &element_type,
+                )),
+                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                    ScalarValue::new_large_list(elements.as_slice(), &element_type),
+                ),
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            }
+        }
+        Some(LiteralType::EmptyList(l)) => {
+            let element_type = from_substrait_type(l.r#type.clone().unwrap().as_ref())?;
+            match lit.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => {
+                    ScalarValue::List(ScalarValue::new_list(&[], &element_type))
+                }
+                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                    ScalarValue::new_large_list(&[], &element_type),
+                ),
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            }
+        }
+        Some(LiteralType::Struct(s)) => {
+            let mut builder = ScalarStructBuilder::new();
+            for (i, field) in s.fields.iter().enumerate() {
+                let sv = from_substrait_literal(field)?;
+                // c0, c1, ... align with e.g. SqlToRel::create_named_struct
+                builder = builder.with_scalar(
+                    Field::new(&format!("c{i}"), sv.data_type(), field.nullable),
+                    sv,
+                );
+            }
+            builder.build()?
+        }
         Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
@@ -1360,7 +1423,24 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                 d.precision as u8,
                 d.scale as i8,
             )),
-            _ => not_impl_err!("Unsupported Substrait type: {kind:?}"),
+            r#type::Kind::List(l) => {
+                let field = Field::new_list_field(
+                    from_substrait_type(l.r#type.clone().unwrap().as_ref())?,
+                    true,
+                );
+                match l.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::List(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeList(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {kind:?}"
+                    ),
+                }
+            }
+            _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
         }
     } else {
         not_impl_err!("Null type without kind is not supported")

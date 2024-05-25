@@ -313,13 +313,19 @@ impl TreeNode for LogicalPlan {
             }
             LogicalPlan::Unnest(Unnest {
                 input,
-                columns,
+                exec_columns: input_columns,
+                list_type_columns,
+                struct_type_columns,
+                dependency_indices,
                 schema,
                 options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Unnest(Unnest {
                     input,
-                    columns,
+                    exec_columns: input_columns,
+                    dependency_indices,
+                    list_type_columns,
+                    struct_type_columns,
                     schema,
                     options,
                 })
@@ -417,7 +423,7 @@ where
         .map_data(|new_inputs| {
             let exprs = node.expressions();
             Ok(Extension {
-                node: node.from_template(&exprs, &new_inputs),
+                node: node.with_exprs_and_inputs(exprs, new_inputs)?,
             })
         })
 }
@@ -492,7 +498,9 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().apply_until_stop(f)
             }
-            LogicalPlan::Unnest(Unnest { columns, .. }) => {
+            LogicalPlan::Unnest(unnest) => {
+                let columns = unnest.exec_columns.clone();
+
                 let exprs = columns
                     .iter()
                     .map(|c| Expr::Column(c.clone()))
@@ -658,22 +666,18 @@ impl LogicalPlan {
             LogicalPlan::Extension(Extension { node }) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
-                node.expressions()
+                let exprs = node
+                    .expressions()
                     .into_iter()
-                    .map_until_stop_and_collect(f)?
-                    .update_data(|exprs| {
-                        LogicalPlan::Extension(Extension {
-                            node: UserDefinedLogicalNode::from_template(
-                                node.as_ref(),
-                                exprs.as_slice(),
-                                node.inputs()
-                                    .into_iter()
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .as_slice(),
-                            ),
-                        })
-                    })
+                    .map_until_stop_and_collect(f)?;
+                let plan = LogicalPlan::Extension(Extension {
+                    node: UserDefinedLogicalNode::with_exprs_and_inputs(
+                        node.as_ref(),
+                        exprs.data,
+                        node.inputs().into_iter().cloned().collect::<Vec<_>>(),
+                    )?,
+                });
+                Transformed::new(plan, exprs.transformed, exprs.tnr)
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,

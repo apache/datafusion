@@ -35,9 +35,8 @@ use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction, Sort,
-    Unnest,
+    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GroupingSet,
+    InList, Like, Placeholder, ScalarFunction, Sort, Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -957,45 +956,6 @@ pub fn serialize_expr(
             // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let field = match field {
-                GetFieldAccess::NamedStructField { name } => {
-                    protobuf::get_indexed_field::Field::NamedStructField(
-                        protobuf::NamedStructField {
-                            name: Some(name.try_into()?),
-                        },
-                    )
-                }
-                GetFieldAccess::ListIndex { key } => {
-                    protobuf::get_indexed_field::Field::ListIndex(Box::new(
-                        protobuf::ListIndex {
-                            key: Some(Box::new(serialize_expr(key.as_ref(), codec)?)),
-                        },
-                    ))
-                }
-                GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => protobuf::get_indexed_field::Field::ListRange(Box::new(
-                    protobuf::ListRange {
-                        start: Some(Box::new(serialize_expr(start.as_ref(), codec)?)),
-                        stop: Some(Box::new(serialize_expr(stop.as_ref(), codec)?)),
-                        stride: Some(Box::new(serialize_expr(stride.as_ref(), codec)?)),
-                    },
-                )),
-            };
-
-            protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::GetIndexedField(Box::new(
-                    protobuf::GetIndexedField {
-                        expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                        field: Some(field),
-                    },
-                ))),
-            }
-        }
-
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
                 expr: serialize_exprs(exprs, codec)?,

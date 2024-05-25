@@ -1,6 +1,4 @@
 /*
-
-
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -397,7 +395,7 @@ message LogicalExprNode {
     // Scalar UDF expressions
     ScalarUDFExprNode scalar_udf_expr = 20;
 
-    GetIndexedField get_indexed_field = 21;
+    // GetIndexedField get_indexed_field = 21;
 
     GroupingSetNode grouping_set = 22;
 

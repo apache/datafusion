@@ -157,7 +157,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &[]
     }
 
-    fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }
 }

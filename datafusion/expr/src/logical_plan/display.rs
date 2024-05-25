@@ -30,7 +30,7 @@ use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::DataFusionError;
+use datafusion_common::{Column, DataFusionError};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -638,10 +638,25 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "DescribeTable"
                 })
             }
-            LogicalPlan::Unnest(Unnest { columns, .. }) => {
+            LogicalPlan::Unnest(Unnest {
+                input: plan,
+                list_type_columns: list_col_indices,
+                struct_type_columns: struct_col_indices,
+                ..
+            }) => {
+                let input_columns = plan.schema().columns();
+                let list_type_columns = list_col_indices
+                    .iter()
+                    .map(|i| &input_columns[*i])
+                    .collect::<Vec<&Column>>();
+                let struct_type_columns = struct_col_indices
+                    .iter()
+                    .map(|i| &input_columns[*i])
+                    .collect::<Vec<&Column>>();
                 json!({
                     "Node Type": "Unnest",
-                    "Column": expr_vec_fmt!(columns),
+                    "ListColumn": expr_vec_fmt!(list_type_columns),
+                    "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
             }
         }

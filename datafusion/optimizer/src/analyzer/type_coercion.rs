@@ -450,7 +450,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Negative(_)
-            | Expr::GetIndexedField(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
             | Expr::Sort(_)

@@ -13763,9 +13763,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::ScalarUdfExpr(v) => {
                     struct_ser.serialize_field("scalarUdfExpr", v)?;
                 }
-                logical_expr_node::ExprType::GetIndexedField(v) => {
-                    struct_ser.serialize_field("getIndexedField", v)?;
-                }
                 logical_expr_node::ExprType::GroupingSet(v) => {
                     struct_ser.serialize_field("groupingSet", v)?;
                 }
@@ -13850,8 +13847,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "aggregateUdfExpr",
             "scalar_udf_expr",
             "scalarUdfExpr",
-            "get_indexed_field",
-            "getIndexedField",
             "grouping_set",
             "groupingSet",
             "cube",
@@ -13897,7 +13892,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             WindowExpr,
             AggregateUdfExpr,
             ScalarUdfExpr,
-            GetIndexedField,
             GroupingSet,
             Cube,
             Rollup,
@@ -13952,7 +13946,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "aggregateUdfExpr" | "aggregate_udf_expr" => Ok(GeneratedField::AggregateUdfExpr),
                             "scalarUdfExpr" | "scalar_udf_expr" => Ok(GeneratedField::ScalarUdfExpr),
-                            "getIndexedField" | "get_indexed_field" => Ok(GeneratedField::GetIndexedField),
                             "groupingSet" | "grouping_set" => Ok(GeneratedField::GroupingSet),
                             "cube" => Ok(GeneratedField::Cube),
                             "rollup" => Ok(GeneratedField::Rollup),
@@ -14120,13 +14113,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("scalarUdfExpr"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::ScalarUdfExpr)
-;
-                        }
-                        GeneratedField::GetIndexedField => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("getIndexedField"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::GetIndexedField)
 ;
                         }
                         GeneratedField::GroupingSet => {

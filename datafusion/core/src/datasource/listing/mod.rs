@@ -48,6 +48,13 @@ pub struct FileRange {
     pub end: i64,
 }
 
+impl FileRange {
+    /// returns true if this file range contains the specified offset
+    pub fn contains(&self, offset: i64) -> bool {
+        offset >= self.start && offset < self.end
+    }
+}
+
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.

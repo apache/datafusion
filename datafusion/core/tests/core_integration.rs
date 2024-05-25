@@ -27,6 +27,15 @@ mod macro_hygiene;
 /// Run all tests that are found in the `expr_api` directory
 mod expr_api;
 
+/// Run all tests that are found in the `fifo` directory
+mod fifo;
+
+/// Run all tests that are found in the `memory_limit` directory
+mod memory_limit;
+
+/// Run all tests that are found in the `custom_sources_cases` directory
+mod custom_sources_cases;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
