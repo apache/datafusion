@@ -50,7 +50,7 @@ impl ArrayDims {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec!["array_dims".to_string(), "list_dims".to_string()],
+            aliases: vec!["list_dims".to_string()],
         }
     }
 }
@@ -104,7 +104,7 @@ impl ArrayNdims {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![String::from("array_ndims"), String::from("list_ndims")],
+            aliases: vec![String::from("list_ndims")],
         }
     }
 }

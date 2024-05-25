@@ -99,9 +99,8 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
 }
 
-/// Registers all enabled packages with a [`FunctionRegistry`]
-pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<ScalarUDF>> = vec![
+pub fn all_default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
         string::array_to_string_udf(),
         string::string_to_array_udf(),
         range::range_udf(),
@@ -139,7 +138,12 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         replace::array_replace_n_udf(),
         replace::array_replace_all_udf(),
         replace::array_replace_udf(),
-    ];
+    ]
+}
+
+/// Registers all enabled packages with a [`FunctionRegistry`]
+pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
+    let functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {

@@ -79,12 +79,7 @@ impl ArrayElement {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_index(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_element"),
-                String::from("array_extract"),
-                String::from("list_element"),
-                String::from("list_extract"),
-            ],
+            aliases: vec![String::from("array_extract"), String::from("list_extract")],
         }
     }
 }
@@ -241,7 +236,7 @@ impl ArraySlice {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_slice"), String::from("list_slice")],
+            aliases: vec![String::from("list_slice")],
         }
     }
 }
@@ -513,10 +508,7 @@ impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_pop_front"),
-                String::from("list_pop_front"),
-            ],
+            aliases: vec![String::from("list_pop_front")],
         }
     }
 }
@@ -591,10 +583,7 @@ impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_pop_back"),
-                String::from("list_pop_back"),
-            ],
+            aliases: vec![String::from("list_pop_back")],
         }
     }
 }
