@@ -120,7 +120,7 @@ pub enum TypeSignature {
     /// Specifies Signatures for array functions
     ArraySignature(ArrayFunctionSignature),
     /// Fixed number of arguments of numeric types.
-    /// See https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric to know which type is considered numeric
+    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
 }
 
