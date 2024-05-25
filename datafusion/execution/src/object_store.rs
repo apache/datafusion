@@ -51,7 +51,14 @@ impl ObjectStoreUrl {
         Ok(Self { url: parsed })
     }
 
-    /// An [`ObjectStoreUrl`] for the local filesystem
+    /// An [`ObjectStoreUrl`] for the local filesystem (`file://`)
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_execution::object_store::ObjectStoreUrl;
+    /// let local_fs = ObjectStoreUrl::parse("file://").unwrap();
+    /// assert_eq!(local_fs, ObjectStoreUrl::local_filesystem())
+    /// ```
     pub fn local_filesystem() -> Self {
         Self::parse("file://").unwrap()
     }
