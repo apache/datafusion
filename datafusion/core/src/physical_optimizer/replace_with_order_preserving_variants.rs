@@ -291,7 +291,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{Result, Statistics};
+    use datafusion_common::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{JoinType, Operator};
     use datafusion_physical_expr::expressions::{self, col, Column};
@@ -1491,19 +1491,13 @@ mod tests {
         let projection: Vec<usize> = vec![0, 2, 3];
 
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new(
-                    "file_path".to_string(),
-                    100,
-                )]],
-                statistics: Statistics::new_unknown(schema),
-                projection: Some(projection),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![sort_exprs],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("file_path".to_string(), 100))
+            .with_projection(Some(projection))
+            .with_output_ordering(vec![sort_exprs]),
             true,
             0,
             b'"',

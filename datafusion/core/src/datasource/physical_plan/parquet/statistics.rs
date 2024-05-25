@@ -75,6 +75,18 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Int8) => {
+                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Int16) => {
+                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Date32) => {
+                        Some(ScalarValue::Date32(Some(*s.$func())))
+                    }
+                    Some(DataType::Date64) => {
+                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -104,6 +116,9 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
+                    }
+                    Some(DataType::Binary) => {
+                        Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
                     }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())
@@ -363,10 +378,12 @@ impl<'a> StatisticsConverter<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::compute::kernels::cast_utils::Parser;
+    use arrow::datatypes::{Date32Type, Date64Type};
     use arrow_array::{
-        new_null_array, Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array,
-        Float64Array, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
-        TimestampNanosecondArray,
+        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -630,10 +647,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
-    )]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![
@@ -660,6 +673,68 @@ mod test {
                 Some(b"ZZ"),
                 None,
             ])),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date32() {
+        Test {
+            input: date32_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date32_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date32_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date64() {
+        Test {
+            input: date64_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date64_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date64_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
         }
         .run()
     }
@@ -786,13 +861,13 @@ mod test {
             })
             .with_column(ExpectedColumn {
                 name: "tinyint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i8_array([Some(0)]),
+                expected_max: i8_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "smallint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i16_array([Some(0)]),
+                expected_max: i16_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "int_col",
@@ -1018,6 +1093,16 @@ mod test {
         Arc::new(array)
     }
 
+    fn i8_array(input: impl IntoIterator<Item = Option<i8>>) -> ArrayRef {
+        let array: Int8Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i16_array(input: impl IntoIterator<Item = Option<i16>>) -> ArrayRef {
+        let array: Int16Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
     fn i32_array(input: impl IntoIterator<Item = Option<i32>>) -> ArrayRef {
         let array: Int32Array = input.into_iter().collect();
         Arc::new(array)
@@ -1068,5 +1153,25 @@ mod test {
             ),
         ]);
         Arc::new(struct_array)
+    }
+
+    fn date32_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date32Array::from(
+            input
+                .into_iter()
+                .map(|s| Date32Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
+    }
+
+    fn date64_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date64Array::from(
+            input
+                .into_iter()
+                .map(|s| Date64Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
     }
 }

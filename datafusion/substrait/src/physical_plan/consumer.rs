@@ -24,7 +24,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 
 use async_recursion::async_recursion;
@@ -104,16 +104,11 @@ pub async fn from_substrait_rel(
                         file_groups[part_index].push(partitioned_file)
                     }
 
-                    let mut base_config = FileScanConfig {
-                        object_store_url: ObjectStoreUrl::local_filesystem(),
-                        file_schema: Arc::new(Schema::empty()),
-                        file_groups,
-                        statistics: Statistics::new_unknown(&Schema::empty()),
-                        projection: None,
-                        limit: None,
-                        table_partition_cols: vec![],
-                        output_ordering: vec![],
-                    };
+                    let mut base_config = FileScanConfig::new(
+                        ObjectStoreUrl::local_filesystem(),
+                        Arc::new(Schema::empty()),
+                    )
+                    .with_file_groups(file_groups);
 
                     if let Some(MaskExpression { select, .. }) = &read.projection {
                         if let Some(projection) = &select.as_ref() {

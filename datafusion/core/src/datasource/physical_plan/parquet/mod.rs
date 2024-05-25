@@ -70,6 +70,7 @@ mod row_groups;
 mod schema_adapter;
 mod statistics;
 
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
 pub use metrics::ParquetFileMetrics;
 pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
 pub use statistics::{RequestedStatistics, StatisticsConverter};
@@ -556,32 +557,36 @@ impl FileOpener for ParquetOpener {
                 };
             };
 
-            // Row group pruning by statistics: attempt to skip entire row_groups
-            // using metadata on the row groups
+            // Determine which row groups to actually read. The idea is to skip
+            // as many row groups as possible based on the metadata and query
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
-            let mut row_groups = row_groups::prune_row_groups_by_statistics(
-                &file_schema,
-                builder.parquet_schema(),
-                file_metadata.row_groups(),
-                file_range,
-                predicate,
-                &file_metrics,
-            );
+            let rg_metadata = file_metadata.row_groups();
+            // track which row groups to actually read
+            let mut row_groups = RowGroupSet::new(rg_metadata.len());
+            // if there is a range restricting what parts of the file to read
+            if let Some(range) = file_range.as_ref() {
+                row_groups.prune_by_range(rg_metadata, range);
+            }
+            // If there is a predicate that can be evaluated against the metadata
+            if let Some(predicate) = predicate.as_ref() {
+                row_groups.prune_by_statistics(
+                    &file_schema,
+                    builder.parquet_schema(),
+                    rg_metadata,
+                    predicate,
+                    &file_metrics,
+                );
 
-            // Bloom filter pruning: if bloom filters are enabled and then attempt to skip entire row_groups
-            // using bloom filters on the row groups
-            if enable_bloom_filter && !row_groups.is_empty() {
-                if let Some(predicate) = predicate {
-                    row_groups = row_groups::prune_row_groups_by_bloom_filters(
-                        &file_schema,
-                        &mut builder,
-                        &row_groups,
-                        file_metadata.row_groups(),
-                        predicate,
-                        &file_metrics,
-                    )
-                    .await;
+                if enable_bloom_filter && !row_groups.is_empty() {
+                    row_groups
+                        .prune_by_bloom_filters(
+                            &file_schema,
+                            &mut builder,
+                            predicate,
+                            &file_metrics,
+                        )
+                        .await;
                 }
             }
 
@@ -610,7 +615,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_groups)
+                .with_row_groups(row_groups.indexes())
                 .build()?;
 
             let adapted = stream
@@ -920,23 +925,16 @@ mod tests {
             // files with multiple pages
             let multi_page = page_index_predicate;
             let (meta, _files) = store_parquet(batches, multi_page).await.unwrap();
-            let file_groups = meta.into_iter().map(Into::into).collect();
+            let file_group = meta.into_iter().map(Into::into).collect();
 
             // set up predicate (this is normally done by a layer higher up)
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
             let mut parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: vec![file_groups],
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_group(file_group)
+                    .with_projection(projection),
                 predicate,
                 None,
                 Default::default(),
@@ -991,7 +989,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
@@ -1585,16 +1583,8 @@ mod tests {
             file_schema: SchemaRef,
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups,
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_groups(file_groups),
                 None,
                 None,
                 Default::default(),
@@ -1695,15 +1685,11 @@ mod tests {
         ]);
 
         let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: schema.clone(),
-                statistics: Statistics::new_unknown(&schema),
+            FileScanConfig::new(object_store_url, schema.clone())
+                .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
-                projection: Some(vec![0, 1, 2, 12, 13]),
-                limit: None,
-                table_partition_cols: vec![
+                .with_projection(Some(vec![0, 1, 2, 12, 13]))
+                .with_table_partition_cols(vec![
                     Field::new("year", DataType::Utf8, false),
                     Field::new("month", DataType::UInt8, false),
                     Field::new(
@@ -1714,9 +1700,7 @@ mod tests {
                         ),
                         false,
                     ),
-                ],
-                output_ordering: vec![],
-            },
+                ]),
             None,
             None,
             Default::default(),
@@ -1774,17 +1758,10 @@ mod tests {
             extensions: None,
         };
 
+        let file_schema = Arc::new(Schema::empty());
         let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::new_unknown(&Schema::empty()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                .with_file(partitioned_file),
             None,
             None,
             Default::default(),
@@ -2047,7 +2024,7 @@ mod tests {
         // register a local file system object store for /tmp directory
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         // Configure listing options
         let file_format = ParquetFormat::default().with_enable_pruning(true);
