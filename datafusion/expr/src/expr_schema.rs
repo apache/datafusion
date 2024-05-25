@@ -24,7 +24,7 @@ use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf,
 };
-use crate::{utils, LogicalPlan, Projection, Subquery};
+use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
@@ -160,7 +160,29 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(udf) => {
+                        let new_types = data_types_with_aggregate_udf(&data_types, udf).map_err(|err| {
+                            plan_datafusion_err!(
+                                "{} and {}",
+                                err,
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types
+                                )
+                            )
+                        })?;
+                        Ok(fun.return_type(&new_types)?)
+                    }
+                    _ => {
+                        let data_types = args
+                            .iter()
+                            .map(|e| e.get_type(schema))
+                            .collect::<Result<Vec<_>>>()?;
+                        fun.return_type(&data_types)
+                    }
+                }
             }
             Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
                 let data_types = args

@@ -1286,6 +1286,7 @@ dependencies = [
 name = "datafusion-functions-aggregate"
 version = "38.0.0"
 dependencies = [
+ "ahash",
  "arrow",
  "datafusion-common",
  "datafusion-execution",

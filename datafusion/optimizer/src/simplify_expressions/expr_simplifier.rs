@@ -3788,7 +3788,10 @@ mod tests {
             unimplemented!("not needed for testing")
         }
 
-        fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
             unimplemented!("not needed for testing")
         }
 

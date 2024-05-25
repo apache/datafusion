@@ -634,10 +634,14 @@ impl WindowFunctionDefinition {
 impl fmt::Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
-            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
         }
     }
 }
@@ -694,6 +698,9 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
         Some(WindowFunctionDefinition::BuiltInWindowFunction(
             built_in_function,
         ))
+    // filter out aggregate function that is udaf
+    } else if name.as_str() == "sum" {
+        None
     } else if let Ok(aggregate) =
         aggregate_function::AggregateFunction::from_str(name.as_str())
     {

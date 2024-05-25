@@ -430,6 +430,13 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                             &fun.signature(),
                         )?
                     }
+                    expr::WindowFunctionDefinition::AggregateUDF(udf) => {
+                        coerce_arguments_for_signature_with_aggregate_udf(
+                            args,
+                            self.schema,
+                            udf,
+                        )?
+                    }
                     _ => args,
                 };
 
