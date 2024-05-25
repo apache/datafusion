@@ -2862,7 +2862,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_register_all() -> Result<()> {
+    async fn test_register_default_functions() -> Result<()> {
         let functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
         let config = SessionConfig::new();
         let catalog_list =
