@@ -2498,7 +2498,9 @@ mod tests {
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use datafusion_functions_array::all_default_scalar_functions;
+    use datafusion_functions::all_default_functions;
+    use datafusion_functions_array::all_default_array_functions;
+    use datafusion_functions_aggregate::all_default_aggregate_functions;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -2863,7 +2865,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_default_functions() -> Result<()> {
-        let functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
         let config = SessionConfig::new();
         let catalog_list =
             Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
@@ -2889,15 +2890,27 @@ mod tests {
             function_factory: None,
         };
 
-        for function in functions {
+        for function in all_default_functions() {
             let udf = new_state.register_udf(function).unwrap();
-            match udf {
-                Some(udf) => {
-                    assert!(false, "Function {} already registered", udf.name());
-                }
-                _ => {}
+            if let Some(udf) = udf {
+                assert!(false, "Function {} already registered", udf.name());
             }
         }
+
+        for function in all_default_array_functions() {
+            let udf = new_state.register_udf(function).unwrap();
+            if let Some(udf) = udf {
+                assert!(false, "Function {} already registered", udf.name());
+            }
+        }
+
+        for function in all_default_aggregate_functions() {
+            let udaf = new_state.register_udaf(function).unwrap();
+            if let Some(udaf) = udaf {
+                assert!(false, "Function {} already registered", udaf.name());
+            }
+        }
+        
         Ok(())
     }
 

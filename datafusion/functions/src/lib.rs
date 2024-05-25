@@ -79,6 +79,8 @@
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
+use datafusion_expr::ScalarUDF;
+use std::sync::Arc;
 use log::debug;
 
 #[macro_use]
@@ -150,19 +152,25 @@ pub mod expr_fn {
     pub use super::unicode::expr_fn::*;
 }
 
+pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
+    let mut all_functions = core::functions()
+    .into_iter()
+    .chain(datetime::functions())
+    .chain(encoding::functions())
+    .chain(math::functions())
+    .chain(regex::functions())
+    .chain(crypto::functions())
+    .chain(unicode::functions())
+    .chain(string::functions())
+    .collect::<Vec<_>>();
+    all_functions
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let mut all_functions = core::functions()
-        .into_iter()
-        .chain(datetime::functions())
-        .chain(encoding::functions())
-        .chain(math::functions())
-        .chain(regex::functions())
-        .chain(crypto::functions())
-        .chain(unicode::functions())
-        .chain(string::functions());
+    let mut all_functions = all_default_functions();
 
-    all_functions.try_for_each(|udf| {
+    all_functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {
             debug!("Overwrite existing UDF: {}", existing_udf.name());
