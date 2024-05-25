@@ -107,8 +107,9 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 ///
 /// Supports the following optimizations:
 ///
-/// * Multi-threaded (aka multi-partition): read from one or more files in
-/// parallel. Can read concurrently from multiple row groups from a single file.
+/// * Concurrent reads: Can read from one or more files in parallel as multiple
+/// partitions, including concurrently reading multiple row groups from a single
+/// file.
 ///
 /// * Predicate push down: skips row groups and pages based on
 /// min/max/null_counts in the row group metadata, the page index and bloom
@@ -118,15 +119,18 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 ///
 /// * Limit pushdown: stop execution early after some number of rows are read.
 ///
-/// * Custom readers: controls I/O for accessing pages. See
-/// [`ParquetFileReaderFactory`] for more details.
+/// * Custom readers: customize reading  parquet files, e.g. to cache metadata,
+/// coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
+/// details.
 ///
 /// * Schema adapters: read parquet files with different schemas into a unified
 /// table schema. This can be used to implement "schema evolution". See
 /// [`SchemaAdapterFactory`] for more details.
 ///
 /// * metadata_size_hint: controls the number of bytes read from the end of the
-/// file in the initial I/O.
+/// file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
+/// custom reader is used, it supplies the metadata directly and this parameter
+/// is ignored. See [`Self::with_parquet_file_reader_factory`] for more details.
 ///
 /// # Execution Overview
 ///
@@ -136,9 +140,9 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 /// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
 /// the file.
 ///
-/// * Step 3: The `ParquetOpener` gets the file metadata by reading the footer,
-/// and applies any predicates and projections to determine what pages must be
-/// read.
+/// * Step 3: The `ParquetOpener` gets the file metadata via
+/// [`ParquetFileReaderFactory`] and applies any predicates
+/// and projections to determine what pages must be read.
 ///
 /// * Step 4: The stream begins reading data, fetching the required pages
 /// and incrementally decoding them.
@@ -261,11 +265,13 @@ impl ParquetExec {
 
     /// Optional user defined parquet file reader factory.
     ///
-    /// `ParquetFileReaderFactory` complements `TableProvider`, It enables users to provide custom
-    /// implementation for data access operations.
+    /// You can use [`ParquetFileReaderFactory`] to more precisely control how
+    /// data is read from parquet files (e.g. skip re-reading metadata, coalesce
+    /// I/O operations, etc).
     ///
-    /// If custom `ParquetFileReaderFactory` is provided, then data access operations will be routed
-    /// to this factory instead of `ObjectStore`.
+    /// The default reader factory reads directly from an [`ObjectStore`]
+    /// instance using individual I/O operations for the footer and then  for
+    /// each page.
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
@@ -714,14 +720,13 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
-/// Interface for creating [`AsyncFileReader`]s to read parquet files.
+/// Interface for reading parquet files.
 ///
-/// This interface is used by [`ParquetOpener`] in order to create readers for
-/// parquet files. Implementations of this trait can be used to provide custom
-/// data access operations such as pre-cached data, I/O coalescing, etc.
+/// The combined implementations of [`ParquetFileReaderFactory`] and
+/// [`AsyncFileReader`] can be used to provide custom data access operations
+/// such as pre-cached data, I/O coalescing, etc.
 ///
-/// [`DefaultParquetFileReaderFactory`] by default returns a
-/// [`ParquetObjectReader`].
+/// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
 pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
     ///
@@ -739,7 +744,12 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
-/// Default parquet reader factory.
+/// Default implementation of [`ParquetFileReaderFactory`]
+///
+/// This implementation:
+/// 1. Reads parquet directly from an underlying [`ObjectStore`] instance.
+/// 2. Reads the footer and page metadata on demand.
+/// 3. Does not cache metadata or coalesce I/O operations.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
