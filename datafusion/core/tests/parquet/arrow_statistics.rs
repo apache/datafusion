@@ -218,13 +218,15 @@ impl Test {
         let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
         assert_eq!(
             &null_counts, &expected_null_counts,
-            "{column_name}: Mismatch with expected null counts. Actual: {null_counts}. Expected: {expected_null_counts}"
+            "{column_name}: Mismatch with expected null counts. \
+            Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
         );
 
         let row_counts = StatisticsConverter::row_counts(reader.metadata()).unwrap();
         assert_eq!(
             row_counts, expected_row_counts,
-            "{column_name}: Mismatch with expected row counts. Actual: {row_counts}. Expected: {expected_row_counts}"
+            "{column_name}: Mismatch with expected row counts. \
+            Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
         );
     }
 
