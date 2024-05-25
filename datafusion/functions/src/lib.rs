@@ -153,7 +153,7 @@ pub mod expr_fn {
 }
 
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
-    let mut all_functions = core::functions()
+    let all_functions = core::functions()
     .into_iter()
     .chain(datetime::functions())
     .chain(encoding::functions())
@@ -168,7 +168,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let mut all_functions = all_default_functions();
+    let all_functions = all_default_functions();
 
     all_functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
