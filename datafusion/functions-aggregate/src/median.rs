@@ -48,6 +48,14 @@ make_udaf_expr_and_func!(
     median_udaf
 );
 
+/// MEDIAN aggregate expression. If using the non-distinct variation, then this uses a
+/// lot of memory because all values need to be stored in memory before a result can be
+/// computed. If an approximation is sufficient then APPROX_MEDIAN provides a much more
+/// efficient solution.
+///
+/// If using the distinct variation, the memory usage will be similarly high if the
+/// cardinality is high as it stores all distinct values in memory before computing the
+/// result, but if cardinality is low then memory usage will also be lower.
 pub struct Median {
     signature: Signature,
     aliases: Vec<String>,
