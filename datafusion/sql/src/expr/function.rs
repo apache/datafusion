@@ -297,14 +297,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         name: &str,
     ) -> Result<WindowFunctionDefinition> {
-        expr::find_df_window_func(name)
-            // next check user defined aggregates
-            .or_else(|| {
-                self.context_provider
-                    .get_aggregate_meta(name)
-                    .map(WindowFunctionDefinition::AggregateUDF)
-            })
-            // next check user defined window functions
+        // check udaf first
+        self.context_provider
+            .get_aggregate_meta(name)
+            .map(WindowFunctionDefinition::AggregateUDF)
+            .or_else(|| expr::find_df_window_func(name))
             .or_else(|| {
                 self.context_provider
                     .get_window_meta(name)
