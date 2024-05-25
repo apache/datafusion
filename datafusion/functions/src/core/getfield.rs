@@ -106,6 +106,9 @@ impl ScalarUDFImpl for GetFieldFunc {
         };
         let access_schema = GetFieldAccessSchema::NamedStructField { name: name.clone() };
         let arg_dt = args[0].get_type(schema)?;
+        if arg_dt.is_null() {
+            return Ok(DataType::Null);
+        }
         access_schema
             .get_accessed_field(&arg_dt)
             .map(|f| f.data_type().clone())
@@ -117,6 +120,10 @@ impl ScalarUDFImpl for GetFieldFunc {
                 "get_field function requires 2 arguments, got {}",
                 args.len()
             );
+        }
+
+        if args[0].data_type().is_null() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
