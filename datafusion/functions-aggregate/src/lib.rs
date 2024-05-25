@@ -72,6 +72,7 @@ pub mod expr_fn {
     pub use super::median::median;
 }
 
+/// Returns all default aggregate functions
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
         first_last::first_value_udaf(),

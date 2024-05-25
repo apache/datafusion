@@ -152,6 +152,7 @@ pub mod expr_fn {
     pub use super::unicode::expr_fn::*;
 }
 
+/// Return all default functions
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
     let all_functions = core::functions()
     .into_iter()

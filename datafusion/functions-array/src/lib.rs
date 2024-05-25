@@ -99,6 +99,7 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
 }
 
+/// Return all default array functions
 pub fn all_default_array_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         string::array_to_string_udf(),
