@@ -1588,9 +1588,8 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        array_agg, cast, count_distinct, create_udf, expr, lit,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        array_agg, cast, count_distinct, create_udf, expr, lit, BuiltInWindowFunction,
+        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
