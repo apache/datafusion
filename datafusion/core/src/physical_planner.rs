@@ -2258,8 +2258,9 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
-        col, lit, sum, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
+        col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
     };
+    use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
 
     fn make_session_state() -> SessionState {

@@ -69,6 +69,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+    pub use super::sum::sum;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
