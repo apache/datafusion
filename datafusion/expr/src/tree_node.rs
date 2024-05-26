@@ -332,7 +332,7 @@ impl TreeNode for Expr {
                         Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                             fun,
                             new_args,
-                            false,
+                            distinct,
                             new_filter,
                             new_order_by,
                             null_treatment,

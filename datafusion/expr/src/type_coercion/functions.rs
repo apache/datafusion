@@ -30,7 +30,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
 };
 
-use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
+use super::binary::comparison_coercion;
 
 /// Performs type coercion for scalar function arguments.
 ///
@@ -66,20 +66,7 @@ pub fn data_types_with_scalar_udf(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
-        }
-    }
-
-    // none possible -> Error
-    plan_err!(
-        "[data_types_with_scalar_udf] Coercion from {:?} to the signature {:?} failed.",
-        current_types,
-        &signature.type_signature
-    )
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
 pub fn data_types_with_aggregate_udf(
@@ -112,20 +99,7 @@ pub fn data_types_with_aggregate_udf(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
-        }
-    }
-
-    // none possible -> Error
-    plan_err!(
-        "[data_types_with_aggregate_udf] Coercion from {:?} to the signature {:?} failed.",
-        current_types,
-        &signature.type_signature
-    )
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
 /// Performs type coercion for function arguments.
@@ -152,7 +126,6 @@ pub fn data_types(
     }
 
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
-
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -160,19 +133,39 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    // Try and coerce the argument types to match the signature, returning the
-    // coerced types from the first matching signature.
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
+    try_coerce_types(valid_types, current_types, &signature.type_signature)
+}
+
+fn try_coerce_types(
+    valid_types: Vec<Vec<DataType>>,
+    current_types: &[DataType],
+    type_signature: &TypeSignature,
+) -> Result<Vec<DataType>> {
+    let mut valid_types = valid_types;
+
+    // Well-supported signature that returns exact valid types.
+    if !valid_types.is_empty() && matches!(type_signature, TypeSignature::UserDefined) {
+        // exact valid types
+        assert_eq!(valid_types.len(), 1);
+        let valid_types = valid_types.swap_remove(0);
+        if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
+            return Ok(t);
+        }
+    } else {
+        // Try and coerce the argument types to match the signature, returning the
+        // coerced types from the first matching signature.
+        for valid_types in valid_types {
+            if let Some(types) = maybe_data_types(&valid_types, current_types) {
+                return Ok(types);
+            }
         }
     }
 
     // none possible -> Error
     plan_err!(
-        "[data_types] Coercion from {:?} to the signature {:?} failed.",
+        "Coercion from {:?} to the signature {:?} failed.",
         current_types,
-        &signature.type_signature
+        type_signature
     )
 }
 
@@ -322,6 +315,38 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::Numeric(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            let mut valid_type = current_types.first().unwrap().clone();
+            for t in current_types.iter().skip(1) {
+                if let Some(coerced_type) =
+                    comparison_binary_numeric_coercion(&valid_type, t)
+                {
+                    valid_type = coerced_type;
+                } else {
+                    return plan_err!(
+                        "{} and {} are not coercible to a common numeric type",
+                        valid_type,
+                        t
+                    );
+                }
+            }
+
+            vec![vec![valid_type; *number]]
+        }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
@@ -406,12 +431,41 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
+            // TODO: Replace with `can_cast_types` after failing cases are resolved
+            // (they need new signature that returns exactly valid types instead of list of possible valid types).
             if let Some(coerced_type) = coerced_from(valid_type, current_type) {
                 new_type.push(coerced_type)
             } else {
                 // not possible
                 return None;
             }
+        }
+    }
+    Some(new_type)
+}
+
+/// Check if the current argument types can be coerced to match the given `valid_types`
+/// unlike `maybe_data_types`, this function does not coerce the types.
+/// TODO: I think this function should replace `maybe_data_types` after signature are well-supported.
+fn maybe_data_types_without_coercion(
+    valid_types: &[DataType],
+    current_types: &[DataType],
+) -> Option<Vec<DataType>> {
+    if valid_types.len() != current_types.len() {
+        return None;
+    }
+
+    let mut new_type = Vec::with_capacity(valid_types.len());
+    for (i, valid_type) in valid_types.iter().enumerate() {
+        let current_type = &current_types[i];
+
+        if current_type == valid_type {
+            new_type.push(current_type.clone())
+        } else if can_cast_types(current_type, valid_type) {
+            // validate the valid type is castable from the current type
+            new_type.push(valid_type.clone())
+        } else {
+            return None;
         }
     }
     Some(new_type)
@@ -431,11 +485,18 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     false
 }
 
+/// Find the coerced type for the given `type_into` and `type_from`.
+/// Returns `None` if coercion is not possible.
+///
+/// Expect uni-directional coercion, for example, i32 is coerced to i64, but i64 is not coerced to i32.
+///
+/// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
 fn coerced_from<'a>(
     type_into: &'a DataType,
     type_from: &'a DataType,
 ) -> Option<DataType> {
     use self::DataType::*;
+
     // match Dictionary first
     match (type_into, type_from) {
         // coerced dictionary first
@@ -553,7 +614,6 @@ fn coerced_from<'a>(
             }
             _ => None,
         },
-
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
@@ -574,19 +634,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // More coerce rules.
-        // Note that not all rules in `comparison_coercion` can be reused here.
-        // For example, all numeric types can be coerced into Utf8 for comparison,
-        // but not for function arguments.
-        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
-            |coerced_type| {
-                if *type_into == coerced_type {
-                    Some(coerced_type)
-                } else {
-                    None
-                }
-            },
-        ),
+        _ => None,
     }
 }
 
