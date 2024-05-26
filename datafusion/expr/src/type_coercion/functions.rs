@@ -30,7 +30,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
 };
 
-use super::binary::comparison_coercion;
+use super::binary::{binary_numeric_coercion, comparison_coercion};
 
 /// Performs type coercion for scalar function arguments.
 ///
@@ -332,9 +332,7 @@ fn get_valid_types(
 
             let mut valid_type = current_types.first().unwrap().clone();
             for t in current_types.iter().skip(1) {
-                if let Some(coerced_type) =
-                    comparison_binary_numeric_coercion(&valid_type, t)
-                {
+                if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
                     valid_type = coerced_type;
                 } else {
                     return plan_err!(
