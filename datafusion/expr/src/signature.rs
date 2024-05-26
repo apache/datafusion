@@ -119,6 +119,9 @@ pub enum TypeSignature {
     OneOf(Vec<TypeSignature>),
     /// Specifies Signatures for array functions
     ArraySignature(ArrayFunctionSignature),
+    /// Fixed number of arguments of numeric types.
+    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
+    Numeric(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -177,6 +180,9 @@ impl TypeSignature {
                     .take(*arg_count)
                     .collect::<Vec<String>>()
                     .join(", ")]
+            }
+            TypeSignature::Numeric(num) => {
+                vec![format!("Numeric({})", num)]
             }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -259,6 +265,14 @@ impl Signature {
             volatility,
         }
     }
+
+    pub fn numeric(num: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Numeric(num),
+            volatility,
+        }
+    }
+
     /// An arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {

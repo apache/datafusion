@@ -283,9 +283,9 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median
-        | AggregateFunction::FirstValue
-        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
+        AggregateFunction::FirstValue | AggregateFunction::LastValue => {
+            Ok(input_types.to_vec())
+        }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
         AggregateFunction::StringAgg => {
@@ -354,6 +354,10 @@ pub fn check_arg_count(
                     "The function {func_name} expects at least one argument"
                 );
             }
+        }
+        TypeSignature::UserDefined | TypeSignature::Numeric(_) => {
+            // User-defined signature is validated in `coerce_types`
+            // Numreic signature is validated in `get_valid_types`
         }
         _ => {
             return internal_err!(
