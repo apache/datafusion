@@ -179,3 +179,31 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::all_default_functions;
+    use datafusion_common::Result;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_no_duplicate_name() -> Result<()> {
+        let mut names = HashSet::new();
+        for func in all_default_functions() {
+            assert!(
+                names.insert(func.name().to_string().to_lowercase()),
+                "duplicate function name: {}",
+                func.name()
+            );
+            for alias in func.aliases() {
+                assert!(
+                    names.insert(alias.to_string().to_lowercase()),
+                    "duplicate function name: {}",
+                    alias
+                );
+            }
+        }
+        dbg!(names);
+        Ok(())
+    }
+}
