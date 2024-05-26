@@ -322,6 +322,38 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::Numeric(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            let mut valid_type = current_types.first().unwrap().clone();
+            for t in current_types.iter().skip(1) {
+                if let Some(coerced_type) =
+                    comparison_binary_numeric_coercion(&valid_type, t)
+                {
+                    valid_type = coerced_type;
+                } else {
+                    return plan_err!(
+                        "{} and {} are not coercible to a common numeric type",
+                        valid_type,
+                        t
+                    );
+                }
+            }
+
+            vec![vec![valid_type; *number]]
+        }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())

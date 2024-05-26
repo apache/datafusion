@@ -296,18 +296,6 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     ))
 }
 
-/// Calculate the median for `expr`.
-pub fn median(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Median,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Calculate an approximation of the median for `expr`.
 pub fn approx_median(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(

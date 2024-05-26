@@ -50,10 +50,11 @@ use datafusion_common::{
 };
 use datafusion_expr::lit;
 use datafusion_expr::{
-    avg, count, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    avg, count, max, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_expr::{case, is_null, sum};
+use datafusion_functions_aggregate::expr_fn::median;
 
 use async_trait::async_trait;
 
