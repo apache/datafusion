@@ -17,7 +17,6 @@
 
 use std::{sync::Arc, vec};
 
-use datafusion::common::Statistics;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -58,16 +57,11 @@ async fn main() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: schema.clone(),
-        file_groups: vec![vec![PartitionedFile::new(path.display().to_string(), 10)]],
-        statistics: Statistics::new_unknown(&schema),
-        projection: Some(vec![12, 0]),
-        limit: Some(5),
-        table_partition_cols: vec![],
-        output_ordering: vec![],
-    };
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema.clone())
+            .with_projection(Some(vec![12, 0]))
+            .with_limit(Some(5))
+            .with_file(PartitionedFile::new(path.display().to_string(), 10));
 
     let result =
         FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())

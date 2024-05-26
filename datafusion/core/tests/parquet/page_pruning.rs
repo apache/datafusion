@@ -27,7 +27,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
+use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
@@ -71,17 +71,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let parquet_exec = ParquetExec::new(
-        FileScanConfig {
-            object_store_url,
-            file_groups: vec![vec![partitioned_file]],
-            file_schema: schema.clone(),
-            statistics: Statistics::new_unknown(&schema),
-            // file has 10 cols so index 12 should be month
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
+        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),
         Some(predicate),
         None,
         Default::default(),

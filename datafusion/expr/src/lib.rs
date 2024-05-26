@@ -44,7 +44,6 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
-pub mod field_util;
 pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;

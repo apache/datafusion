@@ -1288,6 +1288,7 @@ version = "38.0.0"
 dependencies = [
  "ahash",
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
