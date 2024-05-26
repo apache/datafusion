@@ -1484,16 +1484,16 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(0), MIN(person.age)",
-            err.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 0 in SELECT clause",
+        err.strip_backtrace()
+    );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(5), MIN(person.age)",
-            err2.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 5 in SELECT clause",
+        err2.strip_backtrace()
+    );
 }
 
 #[test]
