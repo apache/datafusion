@@ -203,7 +203,6 @@ mod tests {
                 );
             }
         }
-        dbg!(names);
         Ok(())
     }
 }
