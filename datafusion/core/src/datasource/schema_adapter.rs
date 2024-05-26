@@ -208,8 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn can_override_schema_adapter() {
-        // Create several parquet files in same directoty / table with
-        // same schema but different metadata
+        // Test shows that SchemaAdapter can add a column that doesn't existin in the
+        // record batches returned from parquet.  This can be useful for schema evolution
+        // where older files may not have all columns.
         let tmp_dir = TempDir::new().unwrap();
         let table_dir = tmp_dir.path().join("parquet_test");
         fs::DirBuilder::new().create(table_dir.as_path()).unwrap();
