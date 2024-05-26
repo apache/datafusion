@@ -86,8 +86,8 @@ impl<T: Display> Display for PlanContext<T> {
 }
 
 impl<T> ConcreteTreeNode for PlanContext<T> {
-    fn children(&self) -> Vec<&Self> {
-        self.children.iter().collect()
+    fn children(&self) -> &[Self] {
+        &self.children
     }
 
     fn take_children(mut self) -> (Self, Vec<Self>) {
