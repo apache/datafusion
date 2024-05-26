@@ -994,9 +994,8 @@ mod test {
         ));
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
-
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Error during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
