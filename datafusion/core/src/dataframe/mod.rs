@@ -54,8 +54,8 @@ use datafusion_expr::{
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_expr::{case, is_null};
-use datafusion_functions_aggregate::expr_fn::sum;
 use datafusion_functions_aggregate::expr_fn::median;
+use datafusion_functions_aggregate::expr_fn::sum;
 
 use async_trait::async_trait;
 

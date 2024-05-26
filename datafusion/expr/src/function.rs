@@ -85,9 +85,6 @@ pub struct AccumulatorArgs<'a> {
 
     /// The number of arguments the aggregate function takes.
     pub args_num: usize,
-
-    /// The name of the expression
-    pub name: &'a str,
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an
