@@ -42,7 +42,7 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
 ///
 /// 2. After reading a record batch map the read columns back to the expected
 ///    columns indexes and insert null-valued columns wherever the file schema was
-///    missing a colum present in the table schema.
+///    missing a column present in the table schema.
 pub trait SchemaAdapter: Send + Sync {
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
