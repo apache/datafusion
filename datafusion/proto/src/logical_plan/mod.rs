@@ -20,6 +20,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::common::proto_error;
+use crate::into_required;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
@@ -49,6 +50,7 @@ use datafusion_common::{
     parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, Result,
     TableReference,
 };
+use datafusion_expr::Unnest;
 use datafusion_expr::{
     dml,
     logical_plan::{
@@ -852,6 +854,31 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))
             }
+            LogicalPlanType::Unnest(unnest) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(unnest.input, ctx, extension_codec)?;
+                Ok(datafusion_expr::LogicalPlan::Unnest(Unnest {
+                    input: Arc::new(input),
+                    exec_columns: unnest.exec_columns.iter().map(|c| c.into()).collect(),
+                    list_type_columns: unnest
+                        .list_type_columns
+                        .iter()
+                        .map(|c| *c as usize)
+                        .collect(),
+                    struct_type_columns: unnest
+                        .struct_type_columns
+                        .iter()
+                        .map(|c| *c as usize)
+                        .collect(),
+                    dependency_indices: unnest
+                        .dependency_indices
+                        .iter()
+                        .map(|c| *c as usize)
+                        .collect(),
+                    schema: Arc::new(convert_required!(unnest.schema)?),
+                    options: into_required!(unnest.options)?,
+                }))
+            }
         }
     }
 
@@ -1524,9 +1551,42 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Unnest(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for Unnest",
-            )),
+            LogicalPlan::Unnest(Unnest {
+                input,
+                exec_columns,
+                list_type_columns,
+                struct_type_columns,
+                dependency_indices,
+                schema,
+                options,
+            }) => {
+                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                    input,
+                    extension_codec,
+                )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Unnest(Box::new(
+                        protobuf::UnnestNode {
+                            input: Some(Box::new(input)),
+                            exec_columns: exec_columns.iter().map(|c| c.into()).collect(),
+                            list_type_columns: list_type_columns
+                                .iter()
+                                .map(|c| *c as u64)
+                                .collect(),
+                            struct_type_columns: struct_type_columns
+                                .iter()
+                                .map(|c| *c as u64)
+                                .collect(),
+                            dependency_indices: dependency_indices
+                                .iter()
+                                .map(|c| *c as u64)
+                                .collect(),
+                            schema: Some(schema.try_into()?),
+                            options: Some(options.into()),
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),

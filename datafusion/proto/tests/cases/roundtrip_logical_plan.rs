@@ -525,6 +525,31 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_unnest() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            true,
+        ),
+    ]);
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+    let query = "SELECT unnest(b) FROM t1";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_expr_api() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())

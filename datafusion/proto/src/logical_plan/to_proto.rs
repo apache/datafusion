@@ -33,6 +33,7 @@ use arrow::{
 
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, ScalarValue, TableReference,
+    UnnestOptions,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GroupingSet,
@@ -227,6 +228,14 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
         };
 
         Ok(res)
+    }
+}
+
+impl From<&UnnestOptions> for protobuf::UnnestOptions {
+    fn from(opts: &UnnestOptions) -> Self {
+        Self {
+            preserve_nulls: opts.preserve_nulls,
+        }
     }
 }
 

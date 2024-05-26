@@ -33,7 +33,7 @@ use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
     Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    TableReference, UnnestOptions,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
@@ -146,6 +146,14 @@ where
         match self {
             None => Err(Error::required(field)),
             Some(t) => t.try_into(),
+        }
+    }
+}
+
+impl From<&protobuf::UnnestOptions> for UnnestOptions {
+    fn from(opts: &protobuf::UnnestOptions) -> Self {
+        Self {
+            preserve_nulls: opts.preserve_nulls,
         }
     }
 }
