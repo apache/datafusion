@@ -169,7 +169,8 @@ impl PhysicalExpr for CastExpr {
         let target_type = &self.cast_type;
 
         let unbounded = Interval::make_unbounded(target_type)?;
-        if source_datatype.is_numeric() && target_type.is_numeric()
+        if (source_datatype.is_numeric() || source_datatype == Boolean)
+            && target_type.is_numeric()
             || source_datatype.is_temporal() && target_type.is_temporal()
             || source_datatype.eq(target_type)
         {
