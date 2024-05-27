@@ -1422,7 +1422,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                         return substrait_err!("Interval year month value is empty");
                     };
                     let value_slice: [u8; 4] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval year month value"
                             )
@@ -1434,7 +1434,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                         return substrait_err!("Interval day time value is empty");
                     };
                     let value_slice: [u8; 8] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval day time value"
                             )
@@ -1446,7 +1446,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                         return substrait_err!("Interval month day nano value is empty");
                     };
                     let value_slice: [u8; 16] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval month day nano value"
                             )
