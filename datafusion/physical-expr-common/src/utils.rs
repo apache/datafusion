@@ -105,20 +105,24 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
 
 /// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
 /// If conversion is not supported yet, returns Error.
-pub fn convert_logical_expr_to_physical_expr(
+pub fn limited_convert_logical_expr_to_physical_expr(
     expr: &Expr,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     match expr {
         Expr::Column(col) => expressions::column::col(&col.name, schema),
         Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
-            convert_logical_expr_to_physical_expr(cast_expr.expr.as_ref(), schema)?,
+            limited_convert_logical_expr_to_physical_expr(
+                cast_expr.expr.as_ref(),
+                schema,
+            )?,
             cast_expr.data_type.clone(),
             None,
         ))),
-        Expr::Alias(alias_expr) => {
-            convert_logical_expr_to_physical_expr(alias_expr.expr.as_ref(), schema)
-        }
+        Expr::Alias(alias_expr) => limited_convert_logical_expr_to_physical_expr(
+            alias_expr.expr.as_ref(),
+            schema,
+        ),
         _ => exec_err!(
             "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
         ),

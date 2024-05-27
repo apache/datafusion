@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::convert_logical_expr_to_physical_expr;
+use crate::utils::limited_convert_logical_expr_to_physical_expr;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
@@ -271,7 +271,7 @@ pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
 
 /// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
 /// Returns an error if the given logical expression is not a [`Expr::Sort`].
-pub fn convert_logical_sort_exprs_to_physical(
+pub fn limited_convert_logical_sort_exprs_to_physical(
     exprs: &[Expr],
     schema: &Schema,
 ) -> Result<Vec<PhysicalSortExpr>> {
@@ -282,7 +282,10 @@ pub fn convert_logical_sort_exprs_to_physical(
             return exec_err!("Expects to receive sort expression");
         };
         sort_exprs.push(PhysicalSortExpr {
-            expr: convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
+            expr: limited_convert_logical_expr_to_physical_expr(
+                sort.expr.as_ref(),
+                schema,
+            )?,
             options: SortOptions {
                 descending: !sort.asc,
                 nulls_first: sort.nulls_first,
