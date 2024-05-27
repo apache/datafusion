@@ -82,8 +82,8 @@ impl PhysicalExpr for IsNotNullExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.arg.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.arg]
     }
 
     fn with_new_children(

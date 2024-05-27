@@ -23,11 +23,9 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{internal_err, Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{
-    aggregate_function::AggregateFunction as AggregateFunctionFunc, col,
-    expr::AggregateFunction, LogicalPlanBuilder,
-};
+use datafusion_expr::{col, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
+use datafusion_functions_aggregate::first_last::first_value;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -99,17 +97,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
                 let aggr_expr = select_expr
                     .into_iter()
-                    .map(|e| {
-                        Expr::AggregateFunction(AggregateFunction::new(
-                            AggregateFunctionFunc::FirstValue,
-                            vec![e],
-                            false,
-                            None,
-                            sort_expr.clone(),
-                            None,
-                        ))
-                    })
-                    .collect::<Vec<Expr>>();
+                    .map(|e| first_value(vec![e], false, None, sort_expr.clone(), None));
 
                 let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
                 let group_expr = normalize_cols(on_expr, input.as_ref())?;

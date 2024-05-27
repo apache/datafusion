@@ -39,15 +39,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::aggregate::is_order_sensitive;
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping,
+    equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
-    AggregateExpr, LexRequirement, PhysicalExpr,
-};
-use datafusion_physical_expr::{
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
+    physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
+    LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -274,20 +270,15 @@ pub struct AggregateExec {
 impl AggregateExec {
     /// Function used in `ConvertFirstLast` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
-    pub fn new_with_aggr_expr_and_ordering_info(
-        &self,
-        required_input_ordering: Option<LexRequirement>,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        cache: PlanProperties,
-        input_order_mode: InputOrderMode,
-    ) -> Self {
+    /// Rewrites aggregate exec with new aggregate expressions.
+    pub fn with_new_aggr_exprs(&self, aggr_expr: Vec<Arc<dyn AggregateExpr>>) -> Self {
         Self {
             aggr_expr,
-            required_input_ordering,
-            metrics: ExecutionPlanMetricsSet::new(),
-            input_order_mode,
-            cache,
             // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
             mode: self.mode,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
@@ -696,8 +687,8 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn with_new_children(
@@ -844,11 +835,10 @@ fn get_aggregate_expr_req(
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
-    // If the aggregation function is not order sensitive, or the aggregation
-    // is performing a "second stage" calculation, or all aggregate function
-    // requirements are inside the GROUP BY expression, then ignore the ordering
-    // requirement.
-    if !is_order_sensitive(aggr_expr) || !agg_mode.is_first_stage() {
+    // If the aggregation function is ordering requirement is not absolutely
+    // necessary, or the aggregation is performing a "second stage" calculation,
+    // then ignore the ordering requirement.
+    if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
         return vec![];
     }
 
@@ -1203,11 +1193,12 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_expr::expr::Sort;
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Count, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
-    use datafusion_physical_expr::{reverse_order_bys, PhysicalSortExpr};
+    use datafusion_physical_expr::PhysicalSortExpr;
 
     use futures::{FutureExt, Stream};
 
@@ -1641,7 +1632,7 @@ mod tests {
             &self.cache
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
 
@@ -1958,6 +1949,66 @@ mod tests {
         Ok(())
     }
 
+    // FIRST_VALUE(b ORDER BY b <SortOptions>)
+    fn test_first_value_agg_expr(
+        schema: &Schema,
+        sort_options: SortOptions,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
+            expr: Box::new(datafusion_expr::Expr::Column(
+                datafusion_common::Column::new(Some("table1"), "b"),
+            )),
+            asc: !sort_options.descending,
+            nulls_first: sort_options.nulls_first,
+        })];
+        let ordering_req = vec![PhysicalSortExpr {
+            expr: col("b", schema)?,
+            options: sort_options,
+        }];
+        let args = vec![col("b", schema)?];
+        let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
+        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+            &func,
+            &args,
+            &sort_exprs,
+            &ordering_req,
+            schema,
+            "FIRST_VALUE(b)",
+            false,
+            false,
+        )
+    }
+
+    // LAST_VALUE(b ORDER BY b <SortOptions>)
+    fn test_last_value_agg_expr(
+        schema: &Schema,
+        sort_options: SortOptions,
+    ) -> Result<Arc<dyn AggregateExpr>> {
+        let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
+            expr: Box::new(datafusion_expr::Expr::Column(
+                datafusion_common::Column::new(Some("table1"), "b"),
+            )),
+            asc: !sort_options.descending,
+            nulls_first: sort_options.nulls_first,
+        })];
+        let ordering_req = vec![PhysicalSortExpr {
+            expr: col("b", schema)?,
+            options: sort_options,
+        }];
+        let args = vec![col("b", schema)?];
+        let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
+        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+            &func,
+            &args,
+            &sort_exprs,
+            &ordering_req,
+            schema,
+            "LAST_VALUE(b)",
+            false,
+            false,
+        )
+    }
+
     // This function either constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
@@ -1995,27 +2046,14 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let ordering_req = vec![PhysicalSortExpr {
-            expr: col("b", &schema)?,
-            options: SortOptions::default(),
-        }];
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
         let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
-            vec![Arc::new(FirstValue::new(
-                col("b", &schema)?,
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-                vec![],
-            ))]
+            vec![test_first_value_agg_expr(&schema, sort_options)?]
         } else {
-            vec![Arc::new(LastValue::new(
-                col("b", &schema)?,
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                ordering_req.clone(),
-                vec![DataType::Float64],
-            ))]
+            vec![test_last_value_agg_expr(&schema, sort_options)?]
         };
 
         let memory_exec = Arc::new(MemoryExec::try_new(
@@ -2170,34 +2208,15 @@ mod tests {
         ]));
 
         let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
         let option_desc = SortOptions {
             descending: true,
             nulls_first: true,
         };
-        let sort_expr = vec![PhysicalSortExpr {
-            expr: col_b.clone(),
-            options: option_desc,
-        }];
-        let sort_expr_reverse = reverse_order_bys(&sort_expr);
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            Arc::new(FirstValue::new(
-                col_b.clone(),
-                "FIRST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr_reverse.clone(),
-                vec![DataType::Float64],
-                vec![],
-            )),
-            Arc::new(LastValue::new(
-                col_b.clone(),
-                "LAST_VALUE(b)".to_string(),
-                DataType::Float64,
-                sort_expr.clone(),
-                vec![DataType::Float64],
-            )),
+            test_first_value_agg_expr(&schema, option_desc)?,
+            test_last_value_agg_expr(&schema, option_desc)?,
         ];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let aggregate_exec = Arc::new(AggregateExec::try_new(

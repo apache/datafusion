@@ -1972,6 +1972,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
                     .children()
                     .into_iter()
+                    .cloned()
                     .map(|i| {
                         protobuf::PhysicalPlanNode::try_from_physical_plan(
                             i,

@@ -903,8 +903,8 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

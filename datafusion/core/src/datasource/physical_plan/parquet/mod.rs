@@ -27,8 +27,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DefaultSchemaAdapterFactory, DisplayAs,
-    FileGroupPartitioner, FileMeta, FileScanConfig,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    FileMeta, FileScanConfig,
 };
 use crate::{
     config::{ConfigOptions, TableParquetOptions},
@@ -67,12 +67,13 @@ mod metrics;
 mod page_filter;
 mod row_filter;
 mod row_groups;
-mod schema_adapter;
 mod statistics;
 
 use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+};
 pub use metrics::ParquetFileMetrics;
-pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
 pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for reading one or more Parquet files.
@@ -442,7 +443,7 @@ impl ExecutionPlan for ParquetExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
     }

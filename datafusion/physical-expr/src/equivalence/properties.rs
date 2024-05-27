@@ -22,7 +22,7 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastExpr, Literal};
+use crate::expressions::Literal;
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -35,6 +35,7 @@ use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_physical_expr_common::expressions::CastExpr;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::{IndexMap, IndexSet};

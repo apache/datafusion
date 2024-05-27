@@ -75,7 +75,7 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
 
