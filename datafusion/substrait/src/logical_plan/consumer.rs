@@ -538,7 +538,7 @@ pub async fn from_substrait_rel(
                             .iter()
                             .map(|lit| {
                                 name_idx += 1; // top-level names are provided through schema
-                                Ok(Expr::Literal(from_substrait_literal_with_names(
+                                Ok(Expr::Literal(from_substrait_literal(
                                     lit,
                                     &base_schema.names,
                                     &mut name_idx,
@@ -998,7 +998,7 @@ pub async fn from_substrait_rex(
             }
         }
         Some(RexType::Literal(lit)) => {
-            let scalar_value = from_substrait_literal(lit)?;
+            let scalar_value = from_substrait_literal_without_names(lit)?;
             Ok(Arc::new(Expr::Literal(scalar_value)))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
@@ -1014,9 +1014,9 @@ pub async fn from_substrait_rex(
                     .as_ref()
                     .clone(),
                 ),
-                from_substrait_type(output_type)?,
+                from_substrait_type_without_names(output_type)?,
             )))),
-            None => substrait_err!("Cast experssion without output type is not allowed"),
+            None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
             let fun = match extensions.get(&window.function_reference) {
@@ -1112,11 +1112,11 @@ pub async fn from_substrait_rex(
     }
 }
 
-pub(crate) fn from_substrait_type(dt: &Type) -> Result<DataType> {
-    from_substrait_type_with_names(dt, &[], &mut 0)
+pub(crate) fn from_substrait_type_without_names(dt: &Type) -> Result<DataType> {
+    from_substrait_type(dt, &[], &mut 0)
 }
 
-fn from_substrait_type_with_names(
+fn from_substrait_type(
     dt: &Type,
     dfs_names: &[String],
     name_idx: &mut usize,
@@ -1200,7 +1200,7 @@ fn from_substrait_type_with_names(
                     substrait_datafusion_err!("List type must have inner type")
                 })?;
                 let field = Arc::new(Field::new_list_field(
-                    from_substrait_type(inner_type)?,
+                    from_substrait_type(inner_type, dfs_names, name_idx)?,
                     is_substrait_type_nullable(inner_type)?,
                 ));
                 match list.type_variation_reference {
@@ -1240,7 +1240,7 @@ fn from_substrait_struct(
     for (i, f) in s.types.iter().enumerate() {
         let field = Field::new(
             next_struct_field_name(i, dfs_names, name_idx)?,
-            from_substrait_type_with_names(f, dfs_names, name_idx)?,
+            from_substrait_type(f, dfs_names, name_idx)?,
             is_substrait_type_nullable(f)?,
         );
         fields.push(field);
@@ -1343,11 +1343,11 @@ fn from_substrait_bound(
     }
 }
 
-pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
-    from_substrait_literal_with_names(lit, &vec![], &mut 0)
+pub(crate) fn from_substrait_literal_without_names(lit: &Literal) -> Result<ScalarValue> {
+    from_substrait_literal(lit, &vec![], &mut 0)
 }
 
-fn from_substrait_literal_with_names(
+fn from_substrait_literal(
     lit: &Literal,
     dfs_names: &Vec<String>,
     name_idx: &mut usize,
@@ -1433,7 +1433,7 @@ fn from_substrait_literal_with_names(
             let elements = l
                 .values
                 .iter()
-                .map(from_substrait_literal)
+                .map(|el| from_substrait_literal(el, dfs_names, name_idx))
                 .collect::<Result<Vec<_>>>()?;
             if elements.is_empty() {
                 return substrait_err!(
@@ -1455,7 +1455,11 @@ fn from_substrait_literal_with_names(
             }
         }
         Some(LiteralType::EmptyList(l)) => {
-            let element_type = from_substrait_type(l.r#type.clone().unwrap().as_ref())?;
+            let element_type = from_substrait_type(
+                l.r#type.clone().unwrap().as_ref(),
+                dfs_names,
+                name_idx,
+            )?;
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_REF => {
                     ScalarValue::List(ScalarValue::new_list(&[], &element_type))
@@ -1472,14 +1476,14 @@ fn from_substrait_literal_with_names(
             let mut builder = ScalarStructBuilder::new();
             for (i, field) in s.fields.iter().enumerate() {
                 let name = next_struct_field_name(i, dfs_names, name_idx)?;
-                let sv = from_substrait_literal_with_names(field, dfs_names, name_idx)?;
+                let sv = from_substrait_literal(field, dfs_names, name_idx)?;
                 builder = builder
                     .with_scalar(Field::new(name, sv.data_type(), field.nullable), sv);
             }
             builder.build()?
         }
         Some(LiteralType::Null(ntype)) => {
-            from_substrait_null_with_names(ntype, dfs_names, name_idx)?
+            from_substrait_null(ntype, dfs_names, name_idx)?
         }
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
@@ -1487,7 +1491,7 @@ fn from_substrait_literal_with_names(
     Ok(scalar_value)
 }
 
-fn from_substrait_null_with_names(
+fn from_substrait_null(
     null_type: &Type,
     dfs_names: &[String],
     name_idx: &mut usize,
@@ -1569,7 +1573,11 @@ fn from_substrait_null_with_names(
             )),
             r#type::Kind::List(l) => {
                 let field = Field::new_list_field(
-                    from_substrait_type(l.r#type.clone().unwrap().as_ref())?,
+                    from_substrait_type(
+                        l.r#type.clone().unwrap().as_ref(),
+                        dfs_names,
+                        name_idx,
+                    )?,
                     true,
                 );
                 match l.type_variation_reference {

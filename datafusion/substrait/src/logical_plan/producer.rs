@@ -2039,7 +2039,9 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
-    use crate::logical_plan::consumer::{from_substrait_literal, from_substrait_type};
+    use crate::logical_plan::consumer::{
+        from_substrait_literal_without_names, from_substrait_type_without_names,
+    };
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
     use datafusion::common::scalar::ScalarStructBuilder;
@@ -2126,7 +2128,7 @@ mod test {
         println!("Checking round trip of {scalar:?}");
 
         let substrait_literal = to_substrait_literal(&scalar)?;
-        let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
+        let roundtrip_scalar = from_substrait_literal_without_names(&substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }
@@ -2184,7 +2186,7 @@ mod test {
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt = from_substrait_type(&substrait)?;
+        let roundtrip_dt = from_substrait_type_without_names(&substrait)?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
     }

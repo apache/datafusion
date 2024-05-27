@@ -235,7 +235,8 @@ async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
         "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[AVG(data.b)]]\
-        \n  TableScan: data projection=[a, b, c, e]"
+        \n  TableScan: data projection=[a, b, c, e]",
+        true
     ).await
 }
 
@@ -368,6 +369,7 @@ async fn aggregate_case() -> Result<()> {
         "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
         "Aggregate: groupBy=[[]], aggr=[[SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
          \n  TableScan: data projection=[a]",
+        false // NULL vs Int64(NULL)
     )
         .await
 }
@@ -414,7 +416,8 @@ async fn roundtrip_inlist_5() -> Result<()> {
     \n    Subquery:\
     \n      Projection: data2.a\
     \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2 projection=[a, b, c, d, e, f]").await
+    \n          TableScan: data2 projection=[a, b, c, d, e, f]",
+    true).await
 }
 
 #[tokio::test]
@@ -450,7 +453,8 @@ async fn roundtrip_exists_filter() -> Result<()> {
         "Projection: data.b\
         \n  LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)\
         \n    TableScan: data projection=[a, b, e]\
-        \n    TableScan: data2 projection=[a, e]"
+        \n    TableScan: data2 projection=[a, e]",
+        false // "d1" vs "data" field qualifier
     ).await
 }
 
@@ -462,6 +466,7 @@ async fn inner_join() -> Result<()> {
          \n  Inner Join: data.a = data2.a\
          \n    TableScan: data projection=[a]\
          \n    TableScan: data2 projection=[a]",
+        true,
     )
     .await
 }
@@ -574,6 +579,7 @@ async fn simple_intersect() -> Result<()> {
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
          \n        TableScan: data projection=[a]\
          \n      TableScan: data2 projection=[a]",
+        false // COUNT(*) vs COUNT(Int64(1))
     )
         .await
 }
@@ -588,6 +594,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
          \n        TableScan: data projection=[a]\
          \n      TableScan: data projection=[a]",
+        false // COUNT(*) vs COUNT(Int64(1))
     )
         .await
 }
@@ -615,6 +622,7 @@ async fn roundtrip_inner_join_table_reuse_zero_index() -> Result<()> {
          \n  Inner Join: data.a = data.a\
          \n    TableScan: data projection=[a, b]\
          \n    TableScan: data projection=[a, c]",
+        false, // "d1" vs "data" field qualifier
     )
     .await
 }
@@ -627,6 +635,7 @@ async fn roundtrip_inner_join_table_reuse_non_zero_index() -> Result<()> {
          \n  Inner Join: data.b = data.b\
          \n    TableScan: data projection=[b]\
          \n    TableScan: data projection=[b, c]",
+        false, // "d1" vs "data" field qualifier
     )
     .await
 }
@@ -671,6 +680,7 @@ async fn roundtrip_literal_list() -> Result<()> {
         "SELECT [[1,2,3], [], NULL, [NULL]] FROM data",
         "Projection: List([[1, 2, 3], [], , []])\
         \n  TableScan: data projection=[]",
+        false, // "List(..)" vs "make_array(..)"
     )
     .await
 }
@@ -681,6 +691,7 @@ async fn roundtrip_literal_struct() -> Result<()> {
         "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
         "Projection: Struct({c0:1,c1:true,c2:})\
         \n  TableScan: data projection=[]",
+        false, // "Struct(..)" vs "struct(..)"
     )
     .await
 }
@@ -688,14 +699,19 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     assert_expected_plan(
-        "VALUES (1, 'a', [[-213.1, NULL, 5.5, 2.0, 1.0], []], STRUCT(true, 1, CAST(NULL AS STRING))), (NULL, NULL, NULL, NULL)",
-        "Values: (Int64(1), Utf8(\"a\"), List([[-213.1, , 5.5, 2.0, 1.0], []]), Struct({c0:true,c1:1,c2:})), (Int64(NULL), Utf8(NULL), List(), Struct({c0:,c1:,c2:}))")
+        "VALUES \
+            (1, 'a', [[-213.1, NULL, 5.5, 2.0, 1.0], []], STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), [STRUCT(STRUCT('a' AS string_field) AS struct_field)]), \
+            (NULL, NULL, NULL, NULL, NULL)",
+        "Values: \
+            (Int64(1), Utf8(\"a\"), List([[-213.1, , 5.5, 2.0, 1.0], []]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}])), \
+            (Int64(NULL), Utf8(NULL), List(), Struct({c0:,int_field:,c2:}), List())",
+    true)
         .await
 }
 
 #[tokio::test]
 async fn roundtrip_empty_relation() -> Result<()> {
-    roundtrip("SELECT * FROM (VALUES (1)) LIMIT 0").await
+    roundtrip("SELECT * FROM (VALUES ([STRUCT(STRUCT(1 AS inner_int_field) AS outer_struct_field)], 2)) LIMIT 0").await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
@@ -913,31 +929,47 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
     Ok(())
 }
 
-async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
+async fn assert_expected_plan(
+    sql: &str,
+    expected_plan_str: &str,
+    assert_schema: bool,
+) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
+
+    println!("{plan:#?}");
+    println!("{plan2:#?}");
+
+    println!("{proto:?}");
+
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
+
+    if assert_schema {
+        assert_eq!(plan.schema(), plan2.schema());
+    }
     Ok(())
 }
 
 async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
-    let plan1 = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan1, &ctx)?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
-    let plan1str = format!("{plan1:?}").replace("None", "0");
+    let plan1str = format!("{plan:?}").replace("None", "0");
     let plan2str = format!("{plan2:?}").replace("None", "0");
 
     assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
     Ok(())
 }
 
@@ -961,6 +993,8 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let plan1str = format!("{plan_with_alias:?}");
     let plan2str = format!("{plan:?}");
     assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan_with_alias.schema(), plan.schema());
     Ok(())
 }
 
@@ -974,9 +1008,13 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     println!("{plan:#?}");
     println!("{plan2:#?}");
 
+    println!("{proto:?}");
+
     let plan1str = format!("{plan:?}");
     let plan2str = format!("{plan2:?}");
     assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
     Ok(())
 }
 
@@ -999,25 +1037,14 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     let plan2str = format!("{plan2:?}");
     assert_eq!(plan1str, plan2str);
 
+    assert_eq!(plan.schema(), plan2.schema());
+
     // verify that the join filters are None
     verify_post_join_filter_value(proto).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
-    let ctx = create_all_type_context().await?;
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
-
-    println!("{plan:#?}");
-    println!("{plan2:#?}");
-
-    let plan1str = format!("{plan:?}");
-    let plan2str = format!("{plan2:?}");
-    assert_eq!(plan1str, plan2str);
-    Ok(())
+    roundtrip_with_ctx(sql, create_all_type_context().await?).await
 }
 
 async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
