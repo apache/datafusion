@@ -16,49 +16,39 @@
 # under the License.
 
 [package]
-name = "datafusion-proto"
-description = "Protobuf serialization of DataFusion logical plan expressions"
+name = "datafusion-proto-common"
+description = "Protobuf serialization of DataFusion common types"
 keywords = ["arrow", "query", "sql"]
-readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
+readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.73"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
 
-[lints]
-workspace = true
-
 [lib]
-name = "datafusion_proto"
+name = "datafusion_proto_common"
 path = "src/lib.rs"
 
 [features]
-default = ["parquet"]
-json = ["pbjson", "serde", "serde_json"]
-parquet = ["datafusion/parquet", "datafusion-common/parquet"]
+default = []
+json = ["serde", "serde_json", "pbjson"]
 
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true }
-datafusion-proto-common = { workspace = true }
-object_store = { workspace = true }
+datafusion-common = { workspace = true }
+object_store = { version = "0.9.0" }
 pbjson = { version = "0.6.0", optional = true }
 prost = "0.12.0"
 serde = { version = "1.0", optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { version = "1.0", optional = true }
 
 [dev-dependencies]
-datafusion-functions = { workspace = true, default-features = true }
-doc-comment = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+doc-comment = "0.3"
+tokio = "1.18"

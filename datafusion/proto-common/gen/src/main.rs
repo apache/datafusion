@@ -21,16 +21,15 @@ type Error = Box<dyn std::error::Error>;
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn main() -> Result<(), String> {
-    let proto_dir = Path::new("datafusion/proto");
-    let proto_path = Path::new("datafusion/proto/proto/datafusion.proto");
-    let out_dir = Path::new("datafusion/proto/src");
+    let proto_dir = Path::new("proto");
+    let proto_path = Path::new("proto/datafusion_common.proto");
 
     // proto definitions has to be there
-    let descriptor_path = proto_dir.join("proto/proto_descriptor.bin");
+    let descriptor_path = proto_dir.join("proto_descriptor.bin");
 
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor_path)
-        .out_dir(out_dir)
+        .out_dir("src")
         .compile_well_known_types()
         .extern_path(".google.protobuf", "::pbjson_types")
         .compile_protos(&[proto_path], &["proto"])
@@ -40,25 +39,19 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|e| panic!("Cannot read {:?}: {}", &descriptor_path, e));
 
     pbjson_build::Builder::new()
-        .out_dir(out_dir)
+        .out_dir("src")
         .register_descriptors(&descriptor_set)
         .unwrap_or_else(|e| {
             panic!("Cannot register descriptors {:?}: {}", &descriptor_set, e)
         })
-        .build(&[".datafusion"])
+        .build(&[".datafusion_common"])
         .map_err(|e| format!("pbjson compilation failed: {e}"))?;
 
-    let prost = proto_dir.join("src/datafusion.rs");
-    let pbjson = proto_dir.join("src/datafusion.serde.rs");
-    let common_path = proto_dir.join("src/datafusion_common.rs");
+    let prost = Path::new("src/datafusion_common.rs");
+    let pbjson = Path::new("src/datafusion_common.serde.rs");
 
-    std::fs::copy(prost, proto_dir.join("src/generated/prost.rs")).unwrap();
-    std::fs::copy(pbjson, proto_dir.join("src/generated/pbjson.rs")).unwrap();
-    std::fs::copy(
-        common_path,
-        proto_dir.join("src/generated/datafusion_proto_common.rs"),
-    )
-    .unwrap();
+    std::fs::copy(prost, "src/generated/prost.rs").unwrap();
+    std::fs::copy(pbjson, "src/generated/pbjson.rs").unwrap();
 
     Ok(())
 }

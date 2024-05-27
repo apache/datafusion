@@ -1394,13 +1394,11 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: datafusion_proto::generated::datafusion::Schema =
-        schema.try_into().unwrap();
+    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto =
-        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
     // assert
