@@ -181,9 +181,8 @@ config_namespace! {
         /// Type of `TableProvider` to use when loading `default` schema
         pub format: Option<String>, default = None
 
-        /// Default value for `format.has_header` in `CREATE EXTERNAL TABLE`
-        /// statements when not explicitly specified. If intended for use as a default,
-        /// this setting must be established during [`TableProvider`] creation.
+        /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
         pub has_header: bool, default = false
     }
 }
@@ -1554,8 +1553,9 @@ config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
         /// Specifies whether there is a CSV header (i.e. the first line
-        /// consists of is column names).
-        pub has_header: bool, default = false
+        /// consists of is column names). The value `None` indicates that
+        /// the configuration should be consulted.
+        pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
@@ -1591,14 +1591,14 @@ impl CsvOptions {
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.has_header = Some(has_header);
         self
     }
 
     /// Returns true if the first line is a header. If format options does not
     /// specify whether there is a header, returns `None` (indicating that the
     /// configuration should be consulted).
-    pub fn has_header(&self) -> bool {
+    pub fn has_header(&self) -> Option<bool> {
         self.has_header
     }
 

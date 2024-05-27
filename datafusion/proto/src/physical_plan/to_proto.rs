@@ -971,7 +971,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
     fn try_from(opts: &CsvOptions) -> Result<Self, Self::Error> {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
         Ok(protobuf::CsvOptions {
-            has_header: opts.has_header,
+            has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
             delimiter: vec![opts.delimiter],
             quote: vec![opts.quote],
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),

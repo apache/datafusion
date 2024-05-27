@@ -137,13 +137,13 @@ impl CsvFormat {
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.options.has_header = has_header;
+        self.options.has_header = Some(has_header);
         self
     }
 
     /// Returns `Some(true)` if the first line is a header, `Some(false)` if
     /// it is not, and `None` if it is not specified.
-    pub fn has_header(&self) -> bool {
+    pub fn has_header(&self) -> Option<bool> {
         self.options.has_header
     }
 
@@ -202,7 +202,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -213,7 +213,7 @@ impl FileFormat for CsvFormat {
         for object in objects {
             let stream = self.read_to_delimited_chunks(store, object).await;
             let (schema, records_read) = self
-                .infer_schema_from_stream(records_to_read, stream)
+                .infer_schema_from_stream(state, records_to_read, stream)
                 .await?;
             records_to_read -= records_read;
             schemas.push(schema);
@@ -238,13 +238,17 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
-            self.options.has_header,
+            // If format options does not specify whether there is a header,
+            // we consult configuration options.
+            self.options
+                .has_header
+                .unwrap_or(state.config_options().catalog.has_header),
             self.options.delimiter,
             self.options.quote,
             self.options.escape,
@@ -284,6 +288,7 @@ impl CsvFormat {
     /// number of lines that were read
     async fn infer_schema_from_stream(
         &self,
+        state: &SessionState,
         mut records_to_read: usize,
         stream: impl Stream<Item = Result<Bytes>>,
     ) -> Result<(Schema, usize)> {
@@ -296,7 +301,13 @@ impl CsvFormat {
 
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
-                .with_header(first_chunk && self.options.has_header)
+                .with_header(
+                    first_chunk
+                        && self
+                            .options
+                            .has_header
+                            .unwrap_or(state.config_options().catalog.has_header),
+                )
                 .with_delimiter(self.options.delimiter);
 
             let (Schema { fields, .. }, records_read) =
@@ -537,6 +548,7 @@ mod tests {
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::{FileType, GetExt};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 
     use chrono::DateTime;
@@ -718,9 +730,10 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
-
+        let session_state = SessionState::new_with_config_rt(cfg, runtime);
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);
@@ -761,7 +774,7 @@ mod tests {
             .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
             .await;
         let (schema, records_read) = compressed_csv
-            .infer_schema_from_stream(records_to_read, decoded_stream)
+            .infer_schema_from_stream(&session_state, records_to_read, decoded_stream)
             .await?;
 
         assert_eq!(expected, schema);

@@ -34,6 +34,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common::Result;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -56,18 +57,12 @@ impl TableProviderFactory for ListingTableFactory {
         &self,
         state: &SessionState,
         cmd: &CreateExternalTable,
-    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableProvider>> {
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
         let mut table_options = state.default_table_options();
         table_options.set_file_format(file_type.clone());
-        // If format options does not specify whether there is a header,
-        // we consult configuration options. That option is overwritten
-        // by format options, if it is explicitly defined there.
-        table_options.csv = table_options
-            .csv
-            .with_has_header(state.config_options().catalog.has_header);
         table_options.alter_with_string_hash_map(&cmd.options)?;
 
         let file_extension = get_extension(cmd.location.as_str());

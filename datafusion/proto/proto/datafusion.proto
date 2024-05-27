@@ -1106,7 +1106,7 @@ message CsvWriterOptions {
 
 // Options controlling CSV format
 message CsvOptions {
-  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes has_header = 1; // Indicates if the CSV has a header row
   bytes delimiter = 2; // Delimiter character as a byte
   bytes quote = 3; // Quote character as a byte
   bytes escape = 4; // Optional escape character as a byte

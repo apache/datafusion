@@ -538,16 +538,13 @@ fn register_partitioned_aggregate_csv(
         MirroringObjectStore::new_arc(csv_file_path, store_paths),
     );
 
-    let options = ListingOptions::new(Arc::new(
-        CsvFormat::default()
-            .with_has_header(ctx.state().config_options().catalog.has_header),
-    ))
-    .with_table_partition_cols(
-        partition_cols
-            .iter()
-            .map(|x| (x.0.to_owned(), x.1.clone()))
-            .collect(),
-    );
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+        .with_table_partition_cols(
+            partition_cols
+                .iter()
+                .map(|x| (x.0.to_owned(), x.1.clone()))
+                .collect::<Vec<_>>(),
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(table_path)

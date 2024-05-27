@@ -5398,7 +5398,7 @@ impl serde::Serialize for CsvOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.has_header {
+        if !self.has_header.is_empty() {
             len += 1;
         }
         if !self.delimiter.is_empty() {
@@ -5435,8 +5435,9 @@ impl serde::Serialize for CsvOptions {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvOptions", len)?;
-        if self.has_header {
-            struct_ser.serialize_field("hasHeader", &self.has_header)?;
+        if !self.has_header.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("hasHeader", pbjson::private::base64::encode(&self.has_header).as_str())?;
         }
         if !self.delimiter.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -5593,7 +5594,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             if has_header__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("hasHeader"));
                             }
-                            has_header__ = Some(map_.next_value()?);
+                            has_header__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
                         GeneratedField::Delimiter => {
                             if delimiter__.is_some() {
