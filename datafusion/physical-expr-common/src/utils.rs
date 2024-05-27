@@ -38,7 +38,12 @@ impl ExprPropertiesNode {
     /// given physical expression. This node initializes with default properties
     /// and recursively applies this to all child expressions.
     pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children().into_iter().map(Self::new_unknown).collect();
+        let children = expr
+            .children()
+            .into_iter()
+            .cloned()
+            .map(Self::new_unknown)
+            .collect();
         Self {
             expr,
             data: ExprProperties::new_unknown(),

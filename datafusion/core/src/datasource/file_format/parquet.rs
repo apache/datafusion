@@ -30,9 +30,9 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::physical_plan::{
-    DefaultSchemaAdapterFactory, FileGroupDisplay, FileSinkConfig, ParquetExec,
-    SchemaAdapterFactory,
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, ParquetExec};
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;

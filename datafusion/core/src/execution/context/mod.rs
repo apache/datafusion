@@ -2465,10 +2465,10 @@ impl<'a> BadPlanVisitor<'a> {
     }
 }
 
-impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
+impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
     type Node = LogicalPlan;
 
-    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
