@@ -47,6 +47,13 @@ use sqlparser::ast::NullTreatment;
 /// and nullability, and has functions for building up complex
 /// expressions.
 ///
+/// # Visiting and Rewriting `Expr`s
+///
+/// The `Expr` struct implements the [`TreeNode`] trait for walking and
+/// rewriting expressions. For example [`TreeNode::apply`] recursively visits an
+/// `Expr` and [`TreeNode::transform`] can be used to rewrite an expression. See
+/// the examples below and [`TreeNode`] for more information.
+///
 /// # Examples
 ///
 /// ## Create an expression `c1` referring to column named "c1"
@@ -107,6 +114,56 @@ use sqlparser::ast::NullTreatment;
 ///   Expr::from(Column::from_qualified_name("t1.c2")),
 /// ]);
 /// ```
+///
+/// # Visiting and Rewriting `Expr`s
+///
+/// Here is an example that finds all literals in an `Expr` tree:
+/// ```
+/// # use std::collections::{HashSet};
+/// use datafusion_common::ScalarValue;
+/// # use datafusion_expr::{col, Expr, lit};
+/// use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+/// // Expression a = 5 AND b = 6
+/// let expr = col("a").eq(lit(5)) & col("b").eq(lit(6));
+/// // find all literals in a HashMap
+/// let mut scalars = HashSet::new();
+/// // apply recursively visits all nodes in the expression tree
+/// expr.apply(|e| {
+///    if let Expr::Literal(scalar) = e {
+///       scalars.insert(scalar);
+///    }
+///    // The return value controls whether to continue visiting the tree
+///    Ok(TreeNodeRecursion::Continue)
+/// }).unwrap();;
+/// // All subtrees have been visited and literals found
+/// assert_eq!(scalars.len(), 2);
+/// assert!(scalars.contains(&ScalarValue::Int32(Some(5))));
+/// assert!(scalars.contains(&ScalarValue::Int32(Some(6))));
+/// ```
+///
+/// Rewrite an expression, replacing references to column "a" in an
+/// to the literal `42`:
+///
+///  ```
+/// # use datafusion_common::tree_node::{Transformed, TreeNode};
+/// # use datafusion_expr::{col, Expr, lit};
+/// // expression a = 5 AND b = 6
+/// let expr = col("a").eq(lit(5)).and(col("b").eq(lit(6)));
+/// // rewrite all references to column "a" to the literal 42
+/// let rewritten = expr.transform(|e| {
+///   if let Expr::Column(c) = &e {
+///     if &c.name == "a" {
+///       // return Transformed::yes to indicate the node was changed
+///       return Ok(Transformed::yes(lit(42)))
+///     }
+///   }
+///   // return Transformed::no to indicate the node was not changed
+///   Ok(Transformed::no(e))
+/// }).unwrap();
+/// // The expression has been rewritten
+/// assert!(rewritten.transformed);
+/// // to 42 = 5 AND b = 6
+/// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
