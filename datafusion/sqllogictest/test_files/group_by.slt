@@ -5060,7 +5060,7 @@ SELECT a + 1 AS d, a + 1 + b AS c FROM (SELECT 1 AS a, 2 AS b) GROUP BY a + 1, a
 ----
 2 4
 
-statement error DataFusion error: Error during planning: Cannot find column with position 4 in SELECT clause
+statement error DataFusion error: Error during planning: Cannot find column with position 4 in SELECT clause. Valid columns: 1 to 3
 SELECT a, b, COUNT(1)
 FROM multiple_ordered_table
 GROUP BY 1, 2, 4, 5, 6;

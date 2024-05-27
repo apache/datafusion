@@ -171,8 +171,7 @@ pub(crate) fn resolve_positions_to_exprs(
         }
         Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
-            select_exprs.len()
-            position
+            position, select_exprs.len()
         ),
         _ => Ok(expr),
     }
@@ -453,12 +452,14 @@ mod tests {
 
         // Assert error if index out of select clause bounds
         let resolved = resolve_positions_to_exprs(lit(-1i64), &select_exprs);
-        assert!(resolved
-            .is_err_and(|e| e.message().contains("Cannot find column with position -1")));
+        assert!(resolved.is_err_and(|e| e.message().contains(
+            "Cannot find column with position -1 in SELECT clause. Valid columns: 1 to 3"
+        )));
 
         let resolved = resolve_positions_to_exprs(lit(5i64), &select_exprs);
-        assert!(resolved
-            .is_err_and(|e| e.message().contains("Cannot find column with position 5")));
+        assert!(resolved.is_err_and(|e| e.message().contains(
+            "Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 3"
+        )));
 
         // Assert expression returned as-is
         let resolved = resolve_positions_to_exprs(lit("text"), &select_exprs)?;

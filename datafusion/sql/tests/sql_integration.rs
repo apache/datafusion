@@ -1484,14 +1484,14 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Cannot find column with position 0 in SELECT clause",
+        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
         err.strip_backtrace()
     );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Cannot find column with position 5 in SELECT clause",
+        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
         err2.strip_backtrace()
     );
 }
