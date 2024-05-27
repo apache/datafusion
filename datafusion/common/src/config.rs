@@ -181,8 +181,9 @@ config_namespace! {
         /// Type of `TableProvider` to use when loading `default` schema
         pub format: Option<String>, default = None
 
-        /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
-        /// if not specified explicitly in the statement.
+        /// Default value for `format.has_header` in `CREATE EXTERNAL TABLE`
+        /// statements when not explicitly specified. If intended for use as a default,
+        /// this setting must be established during [`TableProvider`] creation.
         pub has_header: bool, default = false
     }
 }
@@ -1553,9 +1554,8 @@ config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
         /// Specifies whether there is a CSV header (i.e. the first line
-        /// consists of is column names). The value `None` indicates that
-        /// the configuration should be consulted.
-      pub has_header: bool, default = false
+        /// consists of is column names).
+        pub has_header: bool, default = false
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
