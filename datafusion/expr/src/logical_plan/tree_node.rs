@@ -56,8 +56,8 @@ use datafusion_common::{
 };
 
 impl TreeNode for LogicalPlan {
-    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
         self.inputs().into_iter().apply_until_stop(f)
@@ -71,10 +71,10 @@ impl TreeNode for LogicalPlan {
     /// subqueries, for example such as are in [`Expr::Exists`].
     ///
     /// [`Expr::Exists`]: crate::Expr::Exists
-    fn map_children<F>(self, mut f: F) -> Result<Transformed<Self>>
-    where
-        F: FnMut(Self) -> Result<Transformed<Self>>,
-    {
+    fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
         Ok(match self {
             LogicalPlan::Projection(Projection {
                 expr,
@@ -379,24 +379,18 @@ pub fn unwrap_arc(plan: Arc<LogicalPlan>) -> LogicalPlan {
 }
 
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
-fn rewrite_arc<F>(
+fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
-) -> Result<Transformed<Arc<LogicalPlan>>>
-where
-    F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
-{
+) -> Result<Transformed<Arc<LogicalPlan>>> {
     f(unwrap_arc(plan))?.map_data(|new_plan| Ok(Arc::new(new_plan)))
 }
 
 /// rewrite a `Vec` of `Arc<LogicalPlan>` without copying, if possible
-fn rewrite_arcs<F>(
+fn rewrite_arcs<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     input_plans: Vec<Arc<LogicalPlan>>,
     mut f: F,
-) -> Result<Transformed<Vec<Arc<LogicalPlan>>>>
-where
-    F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
-{
+) -> Result<Transformed<Vec<Arc<LogicalPlan>>>> {
     input_plans
         .into_iter()
         .map_until_stop_and_collect(|plan| rewrite_arc(plan, &mut f))
@@ -407,13 +401,10 @@ where
 ///
 /// Should be removed when we have an API for in place modifications of the
 /// extension to avoid these copies
-fn rewrite_extension_inputs<F>(
+fn rewrite_extension_inputs<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     extension: Extension,
     f: F,
-) -> Result<Transformed<Extension>>
-where
-    F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
-{
+) -> Result<Transformed<Extension>> {
     let Extension { node } = extension;
 
     node.inputs()
@@ -744,7 +735,7 @@ impl LogicalPlan {
 
     /// Visits a plan similarly to [`Self::visit`], including subqueries that
     /// may appear in expressions such as `IN (SELECT ...)`.
-    pub fn visit_with_subqueries<V: TreeNodeVisitor<Node = Self>>(
+    pub fn visit_with_subqueries<V: for<'n> TreeNodeVisitor<'n, Node = Self>>(
         &self,
         visitor: &mut V,
     ) -> Result<TreeNodeRecursion> {
