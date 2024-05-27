@@ -574,8 +574,8 @@ pub fn to_substrait_rel(
 
 fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
     // Substrait wants a list of all field names, including nested fields from structs,
-    // also from within lists and maps. However, it does not want the list and map field names
-    // themselves - only structs are considered to have useful names.
+    // also from within e.g. lists and maps. However, it does not want the list and map field names
+    // themselves - only proper structs fields are considered to have useful names.
     fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
         match dtype {
             DataType::Struct(fields) => {
@@ -587,6 +587,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
                 Ok(names)
             }
             DataType::List(l) => names_dfs(l.data_type()),
+            DataType::LargeList(l) => names_dfs(l.data_type()),
             DataType::Map(m, _) => match m.data_type() {
                 DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
                     let key_names =
