@@ -122,7 +122,7 @@ fn scalar_function_type_from_str(
     name: &str,
 ) -> Result<ScalarFunctionType> {
     let s = ctx.state();
-    let name = match name.rsplit_once(":") {
+    let name = match name.rsplit_once(':') {
         // Since 0.32.0, Substrait requires the function names to be in a compound format
         // https://substrait.io/extensions/#function-signature-compound-names
         // On the consumer side, we don't really care about the signature though, just the name.
