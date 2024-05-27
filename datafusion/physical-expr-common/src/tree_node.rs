@@ -89,8 +89,8 @@ impl<T: Display> Display for ExprContext<T> {
 }
 
 impl<T> ConcreteTreeNode for ExprContext<T> {
-    fn children(&self) -> Vec<&Self> {
-        self.children.iter().collect()
+    fn children(&self) -> &[Self] {
+        &self.children
     }
 
     fn take_children(mut self) -> (Self, Vec<Self>) {

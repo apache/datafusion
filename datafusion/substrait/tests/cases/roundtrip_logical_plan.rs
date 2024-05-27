@@ -25,7 +25,7 @@ use datafusion_substrait::logical_plan::{
 use std::hash::Hash;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
@@ -497,6 +497,24 @@ async fn roundtrip_arithmetic_ops() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_interval_literal() -> Result<()> {
+    roundtrip(
+        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(YearMonth)')",
+    )
+    .await?;
+    roundtrip(
+        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(DayTime)')",
+    )
+    .await?;
+    roundtrip(
+    "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(MonthDayNano)')",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_like() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
 }
@@ -663,6 +681,26 @@ async fn all_type_literal() -> Result<()> {
             large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8');",
     )
         .await
+}
+
+#[tokio::test]
+async fn roundtrip_literal_list() -> Result<()> {
+    assert_expected_plan(
+        "SELECT [[1,2,3], [], NULL, [NULL]] FROM data",
+        "Projection: List([[1, 2, 3], [], , []])\
+        \n  TableScan: data projection=[]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_literal_struct() -> Result<()> {
+    assert_expected_plan(
+        "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
+        "Projection: Struct({c0:1,c1:true,c2:})\
+        \n  TableScan: data projection=[]",
+    )
+    .await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
@@ -1015,14 +1053,16 @@ async fn create_context() -> Result<SessionContext> {
     .with_serializer_registry(Arc::new(MockSerializerRegistry));
     let ctx = SessionContext::new_with_state(state);
     let mut explicit_options = CsvReadOptions::new();
-    let schema = Schema::new(vec![
+    let fields = vec![
         Field::new("a", DataType::Int64, true),
         Field::new("b", DataType::Decimal128(5, 2), true),
         Field::new("c", DataType::Date32, true),
         Field::new("d", DataType::Boolean, true),
         Field::new("e", DataType::UInt32, true),
         Field::new("f", DataType::Utf8, true),
-    ]);
+        Field::new("g", DataType::Interval(IntervalUnit::DayTime), true),
+    ];
+    let schema = Schema::new(fields);
     explicit_options.schema = Some(&schema);
     ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)
         .await?;

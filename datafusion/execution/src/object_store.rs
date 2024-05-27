@@ -27,7 +27,12 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 use url::Url;
 
-/// A parsed URL identifying a particular [`ObjectStore`]
+/// A parsed URL identifying a particular [`ObjectStore`] instance
+///
+/// For example:
+/// * `file://` for local file system
+/// * `s3://bucket` for AWS S3 bucket
+/// * `oss://bucket` for Aliyun OSS bucket
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectStoreUrl {
     url: Url,
@@ -35,6 +40,19 @@ pub struct ObjectStoreUrl {
 
 impl ObjectStoreUrl {
     /// Parse an [`ObjectStoreUrl`] from a string
+    ///
+    /// # Example
+    /// ```
+    /// # use url::Url;
+    /// # use datafusion_execution::object_store::ObjectStoreUrl;
+    /// let object_store_url = ObjectStoreUrl::parse("s3://bucket").unwrap();
+    /// assert_eq!(object_store_url.as_str(), "s3://bucket/");
+    /// // can also access the underlying `Url`
+    /// let url: &Url = object_store_url.as_ref();
+    /// assert_eq!(url.scheme(), "s3");
+    /// assert_eq!(url.host_str(), Some("bucket"));
+    /// assert_eq!(url.path(), "/");
+    /// ```
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let mut parsed =
             Url::parse(s.as_ref()).map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -51,7 +69,14 @@ impl ObjectStoreUrl {
         Ok(Self { url: parsed })
     }
 
-    /// An [`ObjectStoreUrl`] for the local filesystem
+    /// An [`ObjectStoreUrl`] for the local filesystem (`file://`)
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_execution::object_store::ObjectStoreUrl;
+    /// let local_fs = ObjectStoreUrl::parse("file://").unwrap();
+    /// assert_eq!(local_fs, ObjectStoreUrl::local_filesystem())
+    /// ```
     pub fn local_filesystem() -> Self {
         Self::parse("file://").unwrap()
     }
@@ -212,7 +237,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             .map(|o| o.value().clone())
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
-                    "No suitable object store found for {url}"
+                    "No suitable object store found for {url}. See `RuntimeEnv::register_object_store`"
                 ))
             })
     }

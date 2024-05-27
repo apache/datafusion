@@ -667,12 +667,12 @@ impl LogicalPlan {
             LogicalPlan::DescribeTable(_) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
-                columns,
-                schema: _,
+                exec_columns,
                 options,
+                ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(unwrap_arc(input), columns, options)
+                unnest_with_options(unwrap_arc(input), exec_columns, options)
             }
         }
     }
@@ -1017,11 +1017,15 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                columns, options, ..
+                exec_columns: columns,
+                options,
+                ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                unnest_with_options(input, columns.clone(), options.clone())
+                let new_plan =
+                    unnest_with_options(input, columns.clone(), options.clone())?;
+                Ok(new_plan)
             }
         }
     }
@@ -1790,8 +1794,23 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { columns, .. }) => {
-                        write!(f, "Unnest: {}", expr_vec_fmt!(columns))
+                    LogicalPlan::Unnest(Unnest {
+                        input: plan,
+                        list_type_columns: list_col_indices,
+                        struct_type_columns: struct_col_indices, .. }) => {
+                        let input_columns = plan.schema().columns();
+                        let list_type_columns = list_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        let struct_type_columns = struct_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        // get items from input_columns indexed by list_col_indices
+                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        expr_vec_fmt!(list_type_columns),
+                        expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }
@@ -2783,8 +2802,17 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The columns to unnest
-    pub columns: Vec<Column>,
+    /// Columns to run unnest on, can be a list of (List/Struct) columns
+    pub exec_columns: Vec<Column>,
+    /// refer to the indices(in the input schema) of columns
+    /// that have type list to run unnest on
+    pub list_type_columns: Vec<usize>,
+    /// refer to the indices (in the input schema) of columns
+    /// that have type struct to run unnest on
+    pub struct_type_columns: Vec<usize>,
+    /// Having items aligned with the output columns
+    /// representing which column in the input schema each output column depends on
+    pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options

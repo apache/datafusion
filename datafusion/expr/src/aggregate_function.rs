@@ -43,8 +43,6 @@ pub enum AggregateFunction {
     Max,
     /// Average
     Avg,
-    /// Median
-    Median,
     /// Approximate distinct function
     ApproxDistinct,
     /// Aggregation into an array
@@ -114,7 +112,6 @@ impl AggregateFunction {
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
-            Median => "MEDIAN",
             ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             FirstValue => "FIRST_VALUE",
@@ -168,7 +165,6 @@ impl FromStr for AggregateFunction {
             "count" => AggregateFunction::Count,
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
-            "median" => AggregateFunction::Median,
             "min" => AggregateFunction::Min,
             "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
@@ -275,9 +271,7 @@ impl AggregateFunction {
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::ApproxMedian | AggregateFunction::Median => {
-                Ok(coerced_data_types[0].clone())
-            }
+            AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::FirstValue
             | AggregateFunction::LastValue
@@ -335,7 +329,6 @@ impl AggregateFunction {
             | AggregateFunction::VariancePop
             | AggregateFunction::Stddev
             | AggregateFunction::StddevPop
-            | AggregateFunction::Median
             | AggregateFunction::ApproxMedian
             | AggregateFunction::FirstValue
             | AggregateFunction::LastValue => {

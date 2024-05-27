@@ -91,6 +91,7 @@ use sqlparser::dialect::dialect_from_str;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 use uuid::Uuid;
@@ -352,6 +353,29 @@ impl SessionContext {
     ) -> Self {
         self.state.write().set_function_factory(function_factory);
         self
+    }
+
+    /// Registers an [`ObjectStore`] to be used with a specific URL prefix.
+    ///
+    /// See [`RuntimeEnv::register_object_store`] for more details.
+    ///
+    /// # Example: register a local object store for the "file://" URL prefix
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion_execution::object_store::ObjectStoreUrl;
+    /// let object_store_url = ObjectStoreUrl::parse("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// let mut ctx = SessionContext::new();
+    /// // All files with the file:// url prefix will be read from the local file system
+    /// ctx.register_object_store(object_store_url.as_ref(), Arc::new(object_store));
+    /// ```
+    pub fn register_object_store(
+        &self,
+        url: &Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.runtime_env().register_object_store(url, object_store)
     }
 
     /// Registers the [`RecordBatch`] as the specified table name

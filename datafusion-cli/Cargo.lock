@@ -1287,6 +1287,7 @@ name = "datafusion-functions-aggregate"
 version = "38.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -1412,6 +1413,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "log",
+ "regex",
  "sqlparser",
  "strum 0.26.2",
 ]

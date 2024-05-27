@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_fs = Arc::new(LocalFileSystem::default());
 
     let u = url::Url::parse("file://./")?;
-    ctx.runtime_env().register_object_store(&u, local_fs);
+    ctx.register_object_store(&u, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query
