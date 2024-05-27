@@ -379,7 +379,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let store = get_object_store(&ctx.state(), scheme, url, &table_options).await?;
 
     // Register the retrieved object store in the session context's runtime environment
-    ctx.runtime_env().register_object_store(url, store);
+    ctx.register_object_store(url, store);
 
     Ok(())
 }

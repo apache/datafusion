@@ -224,9 +224,10 @@ impl AggregateUDF {
         }
     }
 
-    pub fn coerce_types(&self, _args: &[DataType]) -> Result<Vec<DataType>> {
+    pub fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
     }
+
     /// Do the function rewrite
     ///
     /// See [`AggregateUDFImpl::simplify`] for more details.

@@ -32,7 +32,6 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
-use datafusion::functions_aggregate::first_last::first_value;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -624,6 +623,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         first_value(vec![lit(1)], false, None, None, None),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
+        median(lit(2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

@@ -253,6 +253,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             args_num: self.args.len(),
+            name: &self.name,
         };
 
         self.fun.accumulator(acc_args)
@@ -326,6 +327,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             args_num: self.args.len(),
+            name: &self.name,
         };
         self.fun.groups_accumulator_supported(args)
     }

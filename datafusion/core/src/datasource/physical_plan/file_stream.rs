@@ -524,7 +524,7 @@ mod tests {
     use crate::test::{make_partition, object_store::register_test_store};
 
     use arrow_schema::Schema;
-    use datafusion_common::{internal_err, Statistics};
+    use datafusion_common::internal_err;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -643,16 +643,12 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let config = FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                statistics: Statistics::new_unknown(&file_schema),
+            let config = FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
-                file_groups: vec![file_group],
-                projection: None,
-                limit: self.limit,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            };
+            )
+            .with_file_group(file_group)
+            .with_limit(self.limit);
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream = FileStream::new(&config, 0, self.opener, &metrics_set)
                 .unwrap()

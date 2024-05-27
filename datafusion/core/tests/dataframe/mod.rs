@@ -2070,7 +2070,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
     let local_url = Url::parse("file://local").unwrap();
-    ctx.runtime_env().register_object_store(&local_url, local);
+    ctx.register_object_store(&local_url, local);
 
     // execute a simple query and write the results to parquet
     let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
@@ -2140,7 +2140,7 @@ async fn write_parquet_results() -> Result<()> {
     // register a local file system object store for /tmp directory
     let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
     let local_url = Url::parse("file://local").unwrap();
-    ctx.runtime_env().register_object_store(&local_url, local);
+    ctx.register_object_store(&local_url, local);
 
     // execute a simple query and write the results to parquet
     let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";

@@ -1288,6 +1288,7 @@ name = "datafusion-functions-aggregate"
 version = "38.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",

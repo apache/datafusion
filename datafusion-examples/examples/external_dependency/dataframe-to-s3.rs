@@ -49,8 +49,7 @@ async fn main() -> Result<()> {
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
     let arc_s3 = Arc::new(s3);
-    ctx.runtime_env()
-        .register_object_store(&s3_url, arc_s3.clone());
+    ctx.register_object_store(&s3_url, arc_s3.clone());
 
     let path = format!("s3://{bucket_name}/test_data/");
     let file_format = ParquetFormat::default().with_enable_pruning(true);

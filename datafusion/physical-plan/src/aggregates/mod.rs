@@ -1194,8 +1194,9 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, Median, OrderSensitiveArrayAgg,
+        lit, ApproxDistinct, Count, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -1764,6 +1765,22 @@ mod tests {
         check_grouping_sets(input, true).await
     }
 
+    // Median(a)
+    fn test_median_agg_expr(schema: &Schema) -> Result<Arc<dyn AggregateExpr>> {
+        let args = vec![col("a", schema)?];
+        let fun = median_udaf();
+        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+            &fun,
+            &args,
+            &[],
+            &[],
+            schema,
+            "MEDIAN(a)",
+            false,
+            false,
+        )
+    }
+
     #[tokio::test]
     async fn test_oom() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
@@ -1783,12 +1800,8 @@ mod tests {
         };
 
         // something that allocates within the aggregator
-        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
-            col("a", &input_schema)?,
-            "MEDIAN(a)".to_string(),
-            DataType::UInt32,
-            false,
-        ))];
+        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> =
+            vec![test_median_agg_expr(&input_schema)?];
 
         // use slow-path in `hash.rs`
         let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
