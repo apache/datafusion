@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[allow(clippy::all)]
-#[rustfmt::skip]
-pub mod datafusion {
-    include!("prost.rs");
-    include!("datafusion_proto_common.rs");
+use datafusion_common::{internal_datafusion_err, DataFusionError};
 
-    #[cfg(feature = "json")]
-    include!("pbjson.rs");
+pub fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
+    internal_datafusion_err!("{}", message.into())
 }
-
-pub use datafusion_proto_common::protobuf_common as datafusion_common;
