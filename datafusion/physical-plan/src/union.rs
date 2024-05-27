@@ -196,8 +196,8 @@ impl ExecutionPlan for UnionExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        self.inputs.clone()
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -387,8 +387,8 @@ impl ExecutionPlan for InterleaveExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        self.inputs.clone()
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

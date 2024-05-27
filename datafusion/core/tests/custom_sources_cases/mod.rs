@@ -148,7 +148,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -303,6 +303,6 @@ fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
     } else if plan.children().len() != 1 {
         false
     } else {
-        contains_place_holder_exec(Arc::clone(&plan.children()[0]))
+        contains_place_holder_exec(Arc::clone(plan.children()[0]))
     }
 }

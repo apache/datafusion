@@ -123,7 +123,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                         return Some(child);
                     }
                 }
-                if let [ref childrens_child] = child.children().as_slice() {
+                if let [childrens_child] = child.children().as_slice() {
                     child = Arc::clone(childrens_child);
                 } else {
                     break;

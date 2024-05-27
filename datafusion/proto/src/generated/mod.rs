@@ -19,7 +19,10 @@
 #[rustfmt::skip]
 pub mod datafusion {
     include!("prost.rs");
+    include!("datafusion_proto_common.rs");
 
     #[cfg(feature = "json")]
     include!("pbjson.rs");
 }
+
+pub use datafusion_proto_common::protobuf_common as datafusion_common;

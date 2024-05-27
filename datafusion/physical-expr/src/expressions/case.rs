@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::{try_cast, NoOp};
+use crate::expressions::try_cast;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
@@ -314,20 +314,18 @@ impl PhysicalExpr for CaseExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
-        match &self.expr {
-            Some(expr) => children.push(expr.clone()),
-            None => children.push(Arc::new(NoOp::new())),
+        if let Some(expr) = &self.expr {
+            children.push(expr)
         }
         self.when_then_expr.iter().for_each(|(cond, value)| {
-            children.push(cond.clone());
-            children.push(value.clone());
+            children.push(cond);
+            children.push(value);
         });
 
-        match &self.else_expr {
-            Some(expr) => children.push(expr.clone()),
-            None => children.push(Arc::new(NoOp::new())),
+        if let Some(else_expr) = &self.else_expr {
+            children.push(else_expr)
         }
         children
     }
@@ -340,29 +338,27 @@ impl PhysicalExpr for CaseExpr {
         if children.len() != self.children().len() {
             internal_err!("CaseExpr: Wrong number of children")
         } else {
-            assert_eq!(children.len() % 2, 0);
-            let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {
-                Some(_) => None,
-                _ => Some(children[0].clone()),
-            };
-            let else_expr = match children[children.len() - 1]
-                .clone()
-                .as_any()
-                .downcast_ref::<NoOp>()
-            {
-                Some(_) => None,
-                _ => Some(children[children.len() - 1].clone()),
-            };
-
-            let branches = children[1..children.len() - 1].to_vec();
-            let mut when_then_expr: Vec<WhenThen> = vec![];
-            for (prev, next) in branches.into_iter().tuples() {
-                when_then_expr.push((prev, next));
-            }
+            let (expr, when_then_expr, else_expr) =
+                match (self.expr().is_some(), self.else_expr().is_some()) {
+                    (true, true) => (
+                        Some(&children[0]),
+                        &children[1..children.len() - 1],
+                        Some(&children[children.len() - 1]),
+                    ),
+                    (true, false) => {
+                        (Some(&children[0]), &children[1..children.len()], None)
+                    }
+                    (false, true) => (
+                        None,
+                        &children[0..children.len() - 1],
+                        Some(&children[children.len() - 1]),
+                    ),
+                    (false, false) => (None, &children[0..children.len()], None),
+                };
             Ok(Arc::new(CaseExpr::try_new(
-                expr,
-                when_then_expr,
-                else_expr,
+                expr.cloned(),
+                when_then_expr.iter().cloned().tuples().collect(),
+                else_expr.cloned(),
             )?))
         }
     }

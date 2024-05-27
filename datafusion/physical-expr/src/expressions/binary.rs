@@ -312,8 +312,8 @@ impl PhysicalExpr for BinaryExpr {
             .map(ColumnarValue::Array)
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.left.clone(), self.right.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.left, &self.right]
     }
 
     fn with_new_children(

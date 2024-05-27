@@ -19,19 +19,17 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::common::proto_error;
-use crate::into_required;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
-    convert_required,
+    convert_required, into_required,
     protobuf::{
         self, listing_table_scan_node::FileFormatType,
         logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
     },
 };
 
-use arrow::csv::WriterBuilder;
+use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -46,9 +44,8 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err,
-    parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, Result,
-    TableReference,
+    context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
+    Result, TableReference,
 };
 use datafusion_expr::Unnest;
 use datafusion_expr::{
@@ -69,18 +66,6 @@ use self::to_proto::serialize_expr;
 
 pub mod from_proto;
 pub mod to_proto;
-
-impl From<from_proto::Error> for DataFusionError {
-    fn from(e: from_proto::Error) -> Self {
-        plan_datafusion_err!("{}", e)
-    }
-}
-
-impl From<to_proto::Error> for DataFusionError {
-    fn from(e: to_proto::Error) -> Self {
-        plan_datafusion_err!("{}", e)
-    }
-}
 
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_decode(buf: &[u8]) -> Result<Self>
@@ -247,7 +232,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .map(|expr| {
                                     from_proto::parse_expr(expr, ctx, extension_codec)
                                 })
-                                .collect::<Result<Vec<_>, from_proto::Error>>()
+                                .collect::<Result<Vec<_>, FromProtoError>>()
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
@@ -985,7 +970,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                         };
                         exprs_vec.push(expr_vec);
                     }
@@ -1066,7 +1051,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             expr: expr
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                             optional_alias: None,
                         },
                     ))),
@@ -1215,7 +1200,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             serialize_expr(r, extension_codec)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, to_proto::Error>>()?
+                    .collect::<Result<Vec<_>, ToProtoError>>()?
                     .into_iter()
                     .unzip();
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
@@ -1283,7 +1268,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let selection_expr: Vec<protobuf::LogicalExprNode> = expr
                     .iter()
                     .map(|expr| serialize_expr(expr, extension_codec))
-                    .collect::<Result<Vec<_>, to_proto::Error>>()?;
+                    .collect::<Result<Vec<_>, ToProtoError>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
@@ -1315,7 +1300,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             hash_expr: exprs
                                 .iter()
                                 .map(|expr| serialize_expr(expr, extension_codec))
-                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                                .collect::<Result<Vec<_>, ToProtoError>>()?,
                             partition_count: *partition_count as u64,
                         })
                     }
@@ -1367,7 +1352,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         logical_expr_nodes: order
                             .iter()
                             .map(|expr| serialize_expr(expr, extension_codec))
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                            .collect::<Result<Vec<_>, ToProtoError>>()?,
                     };
                     converted_order_exprs.push(temp);
                 }
@@ -1652,45 +1637,4 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
         }
     }
-}
-
-pub(crate) fn csv_writer_options_to_proto(
-    csv_options: &WriterBuilder,
-    compression: &CompressionTypeVariant,
-) -> protobuf::CsvWriterOptions {
-    let compression: protobuf::CompressionTypeVariant = compression.into();
-    protobuf::CsvWriterOptions {
-        compression: compression.into(),
-        delimiter: (csv_options.delimiter() as char).to_string(),
-        has_header: csv_options.header(),
-        date_format: csv_options.date_format().unwrap_or("").to_owned(),
-        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
-        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
-        time_format: csv_options.time_format().unwrap_or("").to_owned(),
-        null_value: csv_options.null().to_owned(),
-    }
-}
-
-pub(crate) fn csv_writer_options_from_proto(
-    writer_options: &protobuf::CsvWriterOptions,
-) -> Result<WriterBuilder> {
-    let mut builder = WriterBuilder::new();
-    if !writer_options.delimiter.is_empty() {
-        if let Some(delimiter) = writer_options.delimiter.chars().next() {
-            if delimiter.is_ascii() {
-                builder = builder.with_delimiter(delimiter as u8);
-            } else {
-                return Err(proto_error("CSV Delimiter is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Delimiter"));
-        }
-    }
-    Ok(builder
-        .with_header(writer_options.has_header)
-        .with_date_format(writer_options.date_format.clone())
-        .with_datetime_format(writer_options.datetime_format.clone())
-        .with_timestamp_format(writer_options.timestamp_format.clone())
-        .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone()))
 }

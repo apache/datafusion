@@ -1,0 +1,54 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-proto-common"
+description = "Protobuf serialization of DataFusion common types"
+keywords = ["arrow", "query", "sql"]
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = "1.73"
+
+# Exclude proto files so crates.io consumers don't need protoc
+exclude = ["*.proto"]
+
+[lib]
+name = "datafusion_proto_common"
+path = "src/lib.rs"
+
+[features]
+default = []
+json = ["serde", "serde_json", "pbjson"]
+
+[dependencies]
+arrow = { workspace = true }
+chrono = { workspace = true }
+datafusion-common = { workspace = true }
+object_store = { version = "0.9.0" }
+pbjson = { version = "0.6.0", optional = true }
+prost = "0.12.0"
+serde = { version = "1.0", optional = true }
+serde_json = { version = "1.0", optional = true }
+
+[dev-dependencies]
+doc-comment = "0.3"
+tokio = "1.18"
