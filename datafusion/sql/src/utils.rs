@@ -170,7 +170,8 @@ pub(crate) fn resolve_positions_to_exprs(
             })
         }
         Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
-            "Cannot find column with position {} in SELECT clause",
+            "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
+            select_exprs.len()
             position
         ),
         _ => Ok(expr),
