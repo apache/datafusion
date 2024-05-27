@@ -23,7 +23,6 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
-use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
 };
@@ -35,14 +34,8 @@ use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
 use crate::utils::reverse_order_bys;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{exec_err, not_impl_err, Result};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_common::exec_err;
 use datafusion_expr::utils::AggregateOrderSensitivity;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -372,14 +365,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             return Some(&self.ordering_req);
         }
         None
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        match self.fun.reverse_expr() {
-            ReversedUDAF::NotSupported => None,
-            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
-            ReversedUDAF::Reversed(fun) => todo!("Reverse UDAF: {:?}", fun),
-        }
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

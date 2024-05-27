@@ -420,7 +420,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ) -> Result<Box<dyn Accumulator>> {
         self.accumulator(args)
     }
-    
+
     /// Sets the indicator whether ordering requirements of the AggregateUDFImpl is
     /// satisfied by its input. If this is not the case, UDFs with order
     /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
