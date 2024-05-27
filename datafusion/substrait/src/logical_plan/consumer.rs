@@ -16,7 +16,9 @@
 // under the License.
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+};
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
