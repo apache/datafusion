@@ -1553,9 +1553,8 @@ config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
         /// Specifies whether there is a CSV header (i.e. the first line
-        /// consists of is column names). The value `None` indicates that
-        /// the configuration should be consulted.
-      pub has_header: bool, default = false
+        /// consists of is column names).
+        pub has_header: bool, default = false
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
