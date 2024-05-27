@@ -117,6 +117,9 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Binary) => {
+                        Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
+                    }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
@@ -644,10 +647,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
-    )]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![

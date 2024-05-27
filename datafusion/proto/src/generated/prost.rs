@@ -2848,7 +2848,7 @@ pub enum AggregateFunction {
     ApproxMedian = 15,
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
-    Median = 18,
+    /// MEDIAN = 18;
     BitAnd = 19,
     BitOr = 20,
     BitXor = 21,
@@ -2895,7 +2895,6 @@ impl AggregateFunction {
                 "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
             }
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::Median => "MEDIAN",
             AggregateFunction::BitAnd => "BIT_AND",
             AggregateFunction::BitOr => "BIT_OR",
             AggregateFunction::BitXor => "BIT_XOR",
@@ -2937,7 +2936,6 @@ impl AggregateFunction {
                 Some(Self::ApproxPercentileContWithWeight)
             }
             "GROUPING" => Some(Self::Grouping),
-            "MEDIAN" => Some(Self::Median),
             "BIT_AND" => Some(Self::BitAnd),
             "BIT_OR" => Some(Self::BitOr),
             "BIT_XOR" => Some(Self::BitXor),

@@ -521,16 +521,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -599,16 +592,9 @@ mod tests {
         let missing_field_idx = file_schema.fields.len() - 1;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -646,16 +632,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();
@@ -698,16 +677,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![3, 0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![3, 0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();

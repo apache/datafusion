@@ -161,3 +161,44 @@ physical_plan
 01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=false
+
+
+# ensure that correct quote character is used when writing to csv
+statement ok
+CREATE TABLE table_with_necessary_quoting (
+  int_col INT,
+  string_col TEXT,
+) AS VALUES
+(1, 'e|e|e'),
+(2, 'f|f|f'),
+(3, 'g|g|g'),
+(4, 'h|h|h');
+
+# quote is required because `|` is delimiter and part of the data
+query IT
+COPY table_with_necessary_quoting TO 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
+STORED AS csv
+OPTIONS ('format.quote' '~',
+         'format.delimiter' '|',
+         'format.has_header' 'true');
+----
+4
+
+# read the stored csv file with quote character
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_necessary_quoting (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
+OPTIONS ('format.quote' '~',
+         'format.delimiter' '|',
+         'format.has_header' 'true');
+
+query TT
+select * from stored_table_with_necessary_quoting;
+----
+1 e|e|e
+2 f|f|f
+3 g|g|g
+4 h|h|h

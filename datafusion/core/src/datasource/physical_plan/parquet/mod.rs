@@ -27,8 +27,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DefaultSchemaAdapterFactory, DisplayAs,
-    FileGroupPartitioner, FileMeta, FileScanConfig,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    FileMeta, FileScanConfig,
 };
 use crate::{
     config::{ConfigOptions, TableParquetOptions},
@@ -67,12 +67,13 @@ mod metrics;
 mod page_filter;
 mod row_filter;
 mod row_groups;
-mod schema_adapter;
 mod statistics;
 
 use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+};
 pub use metrics::ParquetFileMetrics;
-pub use schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
 pub use statistics::{RequestedStatistics, StatisticsConverter};
 
 /// Execution plan for scanning one or more Parquet partitions
@@ -925,23 +926,16 @@ mod tests {
             // files with multiple pages
             let multi_page = page_index_predicate;
             let (meta, _files) = store_parquet(batches, multi_page).await.unwrap();
-            let file_groups = meta.into_iter().map(Into::into).collect();
+            let file_group = meta.into_iter().map(Into::into).collect();
 
             // set up predicate (this is normally done by a layer higher up)
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
             let mut parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: vec![file_groups],
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_group(file_group)
+                    .with_projection(projection),
                 predicate,
                 None,
                 Default::default(),
@@ -1590,16 +1584,8 @@ mod tests {
             file_schema: SchemaRef,
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups,
-                    statistics: Statistics::new_unknown(&file_schema),
-                    file_schema,
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_groups(file_groups),
                 None,
                 None,
                 Default::default(),
@@ -1700,15 +1686,11 @@ mod tests {
         ]);
 
         let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: schema.clone(),
-                statistics: Statistics::new_unknown(&schema),
+            FileScanConfig::new(object_store_url, schema.clone())
+                .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
-                projection: Some(vec![0, 1, 2, 12, 13]),
-                limit: None,
-                table_partition_cols: vec![
+                .with_projection(Some(vec![0, 1, 2, 12, 13]))
+                .with_table_partition_cols(vec![
                     Field::new("year", DataType::Utf8, false),
                     Field::new("month", DataType::UInt8, false),
                     Field::new(
@@ -1719,9 +1701,7 @@ mod tests {
                         ),
                         false,
                     ),
-                ],
-                output_ordering: vec![],
-            },
+                ]),
             None,
             None,
             Default::default(),
@@ -1779,17 +1759,10 @@ mod tests {
             extensions: None,
         };
 
+        let file_schema = Arc::new(Schema::empty());
         let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: vec![vec![partitioned_file]],
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::new_unknown(&Schema::empty()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                .with_file(partitioned_file),
             None,
             None,
             Default::default(),

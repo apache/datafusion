@@ -386,7 +386,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             }
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
             AggregateFunction::Grouping => Self::Grouping,
-            AggregateFunction::Median => Self::Median,
             AggregateFunction::FirstValue => Self::FirstValueAgg,
             AggregateFunction::LastValue => Self::LastValueAgg,
             AggregateFunction::NthValue => Self::NthValueAgg,
@@ -697,7 +696,6 @@ pub fn serialize_expr(
                         protobuf::AggregateFunction::ApproxMedian
                     }
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
-                    AggregateFunction::Median => protobuf::AggregateFunction::Median,
                     AggregateFunction::FirstValue => {
                         protobuf::AggregateFunction::FirstValueAgg
                     }
