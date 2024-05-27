@@ -903,7 +903,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
 /// involving payloads, by enforcing rules for detaching and reattaching child nodes.
 pub trait ConcreteTreeNode: Sized {
     /// Provides read-only access to child nodes.
-    fn children(&self) -> Vec<&Self>;
+    fn children(&self) -> &[Self];
 
     /// Detaches the node from its children, returning the node itself and its detached children.
     fn take_children(self) -> (Self, Vec<Self>);
@@ -917,7 +917,7 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         &self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
-        self.children().into_iter().apply_until_stop(f)
+        self.children().iter().apply_until_stop(f)
     }
 
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(

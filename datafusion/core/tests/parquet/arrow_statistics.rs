@@ -24,9 +24,9 @@ use std::sync::Arc;
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
-    make_array, Array, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    FixedSizeBinaryArray, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    RecordBatch, StringArray, UInt64Array,
+    make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, FixedSizeBinaryArray, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, RecordBatch, StringArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -905,18 +905,17 @@ async fn test_byte() {
     .run();
 
     // column "service_binary"
+
+    let expected_service_binary_min_values: Vec<&[u8]> =
+        vec![b"frontend five", b"backend one", b"backend eight"];
+
+    let expected_service_binary_max_values: Vec<&[u8]> =
+        vec![b"frontend two", b"frontend six", b"backend six"];
+
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(StringArray::from(vec![
-            "frontend five",
-            "backend one",
-            "backend eight",
-        ])), // Shuld be BinaryArray
-        expected_max: Arc::new(StringArray::from(vec![
-            "frontend two",
-            "frontend six",
-            "backend six",
-        ])), // Shuld be BinaryArray
+        expected_min: Arc::new(BinaryArray::from(expected_service_binary_min_values)), // Shuld be BinaryArray
+        expected_max: Arc::new(BinaryArray::from(expected_service_binary_max_values)), // Shuld be BinaryArray
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "service_binary",

@@ -22,8 +22,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
-use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::type_coercion::binary::type_union_resolution;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -124,21 +124,11 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type = arg_types.iter().skip(1).try_fold(
-            arg_types.first().unwrap().clone(),
-            |acc, x| {
-                // The coerced types found by `comparison_coercion` are not guaranteed to be
-                // coercible for the arguments. `comparison_coercion` returns more loose
-                // types that can be coerced to both `acc` and `x` for comparison purpose.
-                // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
-                if let Some(coerced_type) = coerced_type {
-                    Ok(coerced_type)
-                } else {
-                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
-                }
-            },
-        )?;
+        if arg_types.is_empty() {
+            return exec_err!("coalesce must have at least one argument");
+        }
+        let new_type = type_union_resolution(arg_types)
+            .unwrap_or(arg_types.first().unwrap().clone());
         Ok(vec![new_type; arg_types.len()])
     }
 }
