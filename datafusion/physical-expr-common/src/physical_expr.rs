@@ -65,7 +65,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     }
 
     /// Get a list of child PhysicalExpr that provide the input for this expr.
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
     fn with_new_children(

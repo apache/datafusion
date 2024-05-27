@@ -112,8 +112,8 @@ impl PhysicalExpr for LikeExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone(), self.pattern.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.expr, &self.pattern]
     }
 
     fn with_new_children(

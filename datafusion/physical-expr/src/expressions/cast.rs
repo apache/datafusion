@@ -123,8 +123,8 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.expr]
     }
 
     fn with_new_children(

@@ -1375,8 +1375,8 @@ pub(crate) mod tests {
             vec![false]
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-            vec![self.input.clone()]
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
         }
 
         // model that it requires the output ordering of its input
