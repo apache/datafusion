@@ -153,6 +153,7 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 /// filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
+/// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     /// Base configuration for this scan
