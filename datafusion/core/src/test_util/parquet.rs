@@ -37,8 +37,6 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_common::Statistics;
-
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -144,22 +142,15 @@ impl TestParquetFile {
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan_config = FileScanConfig {
-            object_store_url: self.object_store_url.clone(),
-            file_schema: self.schema.clone(),
-            file_groups: vec![vec![PartitionedFile {
-                object_meta: self.object_meta.clone(),
-                partition_values: vec![],
-                range: None,
-                statistics: None,
-                extensions: None,
-            }]],
-            statistics: Statistics::new_unknown(&self.schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        };
+        let scan_config =
+            FileScanConfig::new(self.object_store_url.clone(), self.schema.clone())
+                .with_file(PartitionedFile {
+                    object_meta: self.object_meta.clone(),
+                    partition_values: vec![],
+                    range: None,
+                    statistics: None,
+                    extensions: None,
+                });
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;
 
@@ -195,7 +186,7 @@ impl TestParquetFile {
     ///
     /// Recursively searches for ParquetExec and returns the metrics
     /// on the first one it finds
-    pub fn parquet_metrics(plan: Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
+    pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(parquet) = plan.as_any().downcast_ref::<ParquetExec>() {
             return parquet.metrics();
         }

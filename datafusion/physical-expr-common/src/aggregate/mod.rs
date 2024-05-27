@@ -19,20 +19,22 @@ pub mod groups_accumulator;
 pub mod stats;
 pub mod utils;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
+use self::utils::{down_cast_any_ref, ordering_fields};
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use crate::utils::reverse_order_bys;
 
-use self::utils::{down_cast_any_ref, ordering_fields};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -47,6 +49,7 @@ pub fn create_aggregate_expr(
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
+    debug_assert_eq!(sort_exprs.len(), ordering_req.len());
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(schema))
@@ -115,6 +118,37 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    /// Indicates whether aggregator can produce the correct result with any
+    /// arbitrary input ordering. By default, we assume that aggregate expressions
+    /// are order insensitive.
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
+    /// Sets the indicator whether ordering requirements of the aggregator is
+    /// satisfied by its input. If this is not the case, aggregators with order
+    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
+    /// the correct result with possibly more work internally.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(updated_expr))` if the process completes successfully.
+    /// If the expression can benefit from existing input ordering, but does
+    /// not implement the method, returns an error. Order insensitive and hard
+    /// requirement aggregators return `Ok(None)`.
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        _requirement_satisfied: bool,
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        if self.order_bys().is_some() && self.order_sensitivity().is_beneficial() {
+            return exec_err!(
+                "Should implement with satisfied for aggregator :{:?}",
+                self.name()
+            );
+        }
+        Ok(None)
     }
 
     /// Human readable name such as `"MIN(c2)"`. The default
@@ -219,6 +253,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             args_num: self.args.len(),
+            name: &self.name,
         };
 
         self.fun.accumulator(acc_args)
@@ -292,6 +327,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             args_num: self.args.len(),
+            name: &self.name,
         };
         self.fun.groups_accumulator_supported(args)
     }
@@ -302,6 +338,74 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        if !self.ordering_req.is_empty() {
+            // If there is requirement, use the sensitivity of the implementation
+            self.fun.order_sensitivity()
+        } else {
+            // If no requirement, aggregator is order insensitive
+            AggregateOrderSensitivity::Insensitive
+        }
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        let Some(updated_fn) = self
+            .fun
+            .clone()
+            .with_beneficial_ordering(beneficial_ordering)?
+        else {
+            return Ok(None);
+        };
+        create_aggregate_expr(
+            &updated_fn,
+            &self.args,
+            &self.sort_exprs,
+            &self.ordering_req,
+            &self.schema,
+            self.name(),
+            self.ignore_nulls,
+            self.is_distinct,
+        )
+        .map(Some)
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        if let Some(reverse_udf) = self.fun.reverse_udf() {
+            let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
+            let reverse_sort_exprs = self
+                .sort_exprs
+                .iter()
+                .map(|e| {
+                    if let Expr::Sort(s) = e {
+                        Expr::Sort(s.reverse())
+                    } else {
+                        // Expects to receive `Expr::Sort`.
+                        unreachable!()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut name = self.name().to_string();
+            replace_order_by_clause(&mut name);
+            replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
+            let reverse_aggr = create_aggregate_expr(
+                &reverse_udf,
+                &self.args,
+                &reverse_sort_exprs,
+                &reverse_ordering_req,
+                &self.schema,
+                name,
+                self.ignore_nulls,
+                self.is_distinct,
+            )
+            .unwrap();
+            return Some(reverse_aggr);
+        }
+        None
     }
 }
 
@@ -322,4 +426,33 @@ impl PartialEq<dyn Any> for AggregateFunctionExpr {
             })
             .unwrap_or(false)
     }
+}
+
+fn replace_order_by_clause(order_by: &mut String) {
+    let suffixes = [
+        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
+        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
+        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
+        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
+    ];
+
+    if let Some(start) = order_by.find("ORDER BY [") {
+        if let Some(end) = order_by[start..].find(']') {
+            let order_by_start = start + 9;
+            let order_by_end = start + end;
+
+            let column_order = &order_by[order_by_start..=order_by_end];
+            for (suffix, replacement) in suffixes {
+                if column_order.ends_with(suffix) {
+                    let new_order = column_order.replace(suffix, replacement);
+                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
+    *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }

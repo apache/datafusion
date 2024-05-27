@@ -120,8 +120,8 @@ impl ExecutionPlan for RecursiveQueryExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.static_term.clone(), self.recursive_term.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.static_term, &self.recursive_term]
     }
 
     // TODO: control these hints and see whether we can
@@ -358,7 +358,9 @@ fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
         if plan.as_any().is::<WorkTableExec>() {
             Ok(Transformed::no(plan))
         } else {
-            let new_plan = plan.clone().with_new_children(plan.children())?;
+            let new_plan = plan
+                .clone()
+                .with_new_children(plan.children().into_iter().cloned().collect())?;
             Ok(Transformed::yes(new_plan))
         }
     })

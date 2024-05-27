@@ -91,7 +91,7 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let config = partitioned_csv_config(schema, file_groups)?;
+    let config = partitioned_csv_config(schema, file_groups);
     Ok(Arc::new(CsvExec::new(
         config,
         true,
@@ -196,17 +196,9 @@ pub fn partitioned_file_groups(
 pub fn partitioned_csv_config(
     schema: SchemaRef,
     file_groups: Vec<Vec<PartitionedFile>>,
-) -> Result<FileScanConfig> {
-    Ok(FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: schema.clone(),
-        file_groups,
-        statistics: Statistics::new_unknown(&schema),
-        projection: None,
-        limit: None,
-        table_partition_cols: vec![],
-        output_ordering: vec![],
-    })
+) -> FileScanConfig {
+    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+        .with_file_groups(file_groups)
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
@@ -283,16 +275,9 @@ pub fn csv_exec_sorted(
     let sort_exprs = sort_exprs.into_iter().collect();
 
     Arc::new(CsvExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![sort_exprs],
-        },
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
         false,
         0,
         0,
@@ -345,16 +330,9 @@ pub fn csv_exec_ordered(
     let sort_exprs = sort_exprs.into_iter().collect();
 
     Arc::new(CsvExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("file_path".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![sort_exprs],
-        },
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("file_path".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
         true,
         0,
         b'"',
@@ -426,7 +404,7 @@ impl ExecutionPlan for StatisticsExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 

@@ -44,7 +44,6 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
-pub mod field_util;
 pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
@@ -81,7 +80,7 @@ pub use signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl};
+pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

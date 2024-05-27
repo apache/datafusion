@@ -173,7 +173,7 @@ impl ExecutionPlan for CsvExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
     }
@@ -561,7 +561,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.projection = Some(vec![0, 2, 4]);
 
         let csv = CsvExec::new(
@@ -627,7 +627,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.projection = Some(vec![4, 0, 2]);
 
         let csv = CsvExec::new(
@@ -693,7 +693,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.limit = Some(5);
 
         let csv = CsvExec::new(
@@ -756,7 +756,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.limit = Some(5);
 
         let csv = CsvExec::new(
@@ -809,7 +809,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
 
         // Add partition columns
         config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
@@ -914,7 +914,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = partitioned_csv_config(file_schema, file_groups).unwrap();
+        let config = partitioned_csv_config(file_schema, file_groups);
         let csv = CsvExec::new(
             config,
             true,
