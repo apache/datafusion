@@ -1106,3 +1106,29 @@ physical_plan
 03)----ProjectionExec: expr=[abs(c@0) as abs_c]
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+# Boolean to integer casts preserve the order.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite (
+  ts INTEGER,
+  inc_col INTEGER,
+  desc_col INTEGER,
+)
+STORED AS CSV
+WITH ORDER (inc_col ASC)
+WITH ORDER (desc_col DESC)
+LOCATION '../core/tests/data/window_1.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT CAST((inc_col>desc_col) as integer) as c from annotated_data_finite order by c;
+----
+logical_plan
+01)Sort: c ASC NULLS LAST
+02)--Projection: CAST(annotated_data_finite.inc_col > annotated_data_finite.desc_col AS Int32) AS c
+03)----TableScan: annotated_data_finite projection=[inc_col, desc_col]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], has_header=true
