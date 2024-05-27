@@ -26,11 +26,10 @@ use datafusion::physical_plan::expressions::{
     ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
     ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
     CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
-    DistinctCount, DistinctSum, FirstValue, Grouping, InListExpr, IsNotNullExpr,
-    IsNullExpr, LastValue, Literal, Max, Min, NegativeExpr, NotExpr, NthValue,
-    NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType,
-    RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr, Variance, VariancePop,
-    WindowShift,
+    DistinctCount, DistinctSum, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
+    Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
+    OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop,
+    StringAgg, Sum, TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -318,10 +317,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::ApproxPercentileContWithWeight
     } else if aggr_expr.downcast_ref::<ApproxMedian>().is_some() {
         protobuf::AggregateFunction::ApproxMedian
-    } else if aggr_expr.downcast_ref::<FirstValue>().is_some() {
-        protobuf::AggregateFunction::FirstValueAgg
-    } else if aggr_expr.downcast_ref::<LastValue>().is_some() {
-        protobuf::AggregateFunction::LastValueAgg
     } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
         protobuf::AggregateFunction::StringAgg
     } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
