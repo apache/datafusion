@@ -128,8 +128,7 @@ async fn main() -> Result<()> {
     // register object store provider for urls like `file://` work
     let url = Url::try_from("file://").unwrap();
     let object_store = object_store::local::LocalFileSystem::new();
-    ctx.runtime_env()
-        .register_object_store(&url, Arc::new(object_store));
+    ctx.register_object_store(&url, Arc::new(object_store));
 
     // Select data from the table without any predicates (and thus no pruning)
     println!("** Select data, no predicates:");
