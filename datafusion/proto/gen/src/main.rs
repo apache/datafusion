@@ -48,8 +48,6 @@ fn main() -> Result<(), String> {
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {e}"))?;
 
-    // let prost = Path::new("src/datafusion.rs");
-    // let pbjson = Path::new("src/datafusion.serde.rs");
     let prost = proto_dir.join("src/datafusion.rs");
     let pbjson = proto_dir.join("src/datafusion.serde.rs");
     let common_path = proto_dir.join("src/datafusion_common.rs");
