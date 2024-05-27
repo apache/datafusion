@@ -233,12 +233,8 @@ impl AggregateUDF {
     /// Reserves the `AggregateUDF` (e.g. returns the `AggregateUDF` that will
     /// generate same result with this `AggregateUDF` when iterated in reverse
     /// order, and `None` if there is no such `AggregateUDF`).
-    pub fn reverse_udf(&self) -> Option<AggregateUDF> {
-        match self.inner.reverse_expr() {
-            ReversedUDAF::NotSupported => None,
-            ReversedUDAF::Identical => Some(self.clone()),
-            ReversedUDAF::Reversed(reverse) => Some(Self { inner: reverse }),
-        }
+    pub fn reverse_udf(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
     }
 
     /// Do the function rewrite
@@ -519,7 +515,7 @@ pub enum ReversedUDAF {
     /// The expression does not support reverse calculation, like ArrayAgg
     NotSupported,
     /// The expression is different from the original expression
-    Reversed(Arc<dyn AggregateUDFImpl>),
+    Reversed(Arc<AggregateUDF>),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to

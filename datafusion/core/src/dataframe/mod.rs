@@ -1589,10 +1589,9 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        array_agg, cast, count_distinct, create_udf, expr, lit,
+        array_agg, cast, count_distinct, create_udf, expr, lit, BuiltInWindowFunction,
         ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
-    use datafusion_functions_aggregate::first_last::first_value_udaf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
@@ -1756,7 +1755,9 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateUDF(first_value_udaf()),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::FirstValue,
+            ),
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],

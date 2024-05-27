@@ -298,18 +298,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         name: &str,
     ) -> Result<WindowFunctionDefinition> {
         // check udaf first
-        self.context_provider
-            .get_aggregate_meta(name)
-            .map(WindowFunctionDefinition::AggregateUDF)
-            .or_else(|| expr::find_df_window_func(name))
-            .or_else(|| {
-                self.context_provider
-                    .get_window_meta(name)
-                    .map(WindowFunctionDefinition::WindowUDF)
-            })
-            .ok_or_else(|| {
-                plan_datafusion_err!("There is no window function named {name}")
-            })
+        let udaf = self.context_provider.get_aggregate_meta(name);
+        // Skip first value and last value, since we expect window builtin first/last value not udaf version
+        if udaf.as_ref().is_some_and(|udaf| {
+            udaf.name() != "FIRST_VALUE" && udaf.name() != "LAST_VALUE"
+        }) {
+            Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
+        } else {
+            expr::find_df_window_func(name)
+                .or_else(|| {
+                    self.context_provider
+                        .get_window_meta(name)
+                        .map(WindowFunctionDefinition::WindowUDF)
+                })
+                .ok_or_else(|| {
+                    plan_datafusion_err!("There is no window function named {name}")
+                })
+        }
     }
 
     fn sql_fn_arg_to_logical_expr(

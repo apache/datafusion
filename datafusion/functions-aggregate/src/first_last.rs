@@ -162,7 +162,11 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(last_value_udaf().inner())
+        datafusion_expr::ReversedUDAF::Reversed(last_value_udaf())
+    }
+
+    fn has_ordering_requirements(&self) -> bool {
+        true
     }
 }
 
@@ -467,7 +471,11 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(first_value_udaf().inner())
+        datafusion_expr::ReversedUDAF::Reversed(first_value_udaf())
+    }
+
+    fn has_ordering_requirements(&self) -> bool {
+        true
     }
 }
 
