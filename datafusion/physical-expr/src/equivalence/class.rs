@@ -374,7 +374,7 @@ impl EquivalenceGroup {
         }
         children
             .into_iter()
-            .map(|child| self.project_expr(mapping, &child))
+            .map(|child| self.project_expr(mapping, child))
             .collect::<Option<Vec<_>>>()
             .map(|children| expr.clone().with_new_children(children).unwrap())
     }

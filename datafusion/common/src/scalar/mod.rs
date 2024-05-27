@@ -3089,46 +3089,21 @@ impl TryFrom<&DataType> for ScalarValue {
                 Box::new(value_type.as_ref().try_into()?),
             ),
             // `ScalaValue::List` contains single element `ListArray`.
-            DataType::List(field) => ScalarValue::List(
-                new_null_array(
-                    &DataType::List(Arc::new(Field::new(
-                        "item",
-                        field.data_type().clone(),
-                        true,
-                    ))),
-                    1,
-                )
-                .as_list::<i32>()
-                .to_owned()
-                .into(),
-            ),
-            // 'ScalarValue::LargeList' contains single element `LargeListArray
-            DataType::LargeList(field) => ScalarValue::LargeList(
-                new_null_array(
-                    &DataType::LargeList(Arc::new(Field::new(
-                        "item",
-                        field.data_type().clone(),
-                        true,
-                    ))),
-                    1,
-                )
-                .as_list::<i64>()
-                .to_owned()
-                .into(),
-            ),
+            DataType::List(field_ref) => ScalarValue::List(Arc::new(
+                GenericListArray::new_null(field_ref.clone(), 1),
+            )),
+            // `ScalarValue::LargeList` contains single element `LargeListArray`.
+            DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
+                GenericListArray::new_null(field_ref.clone(), 1),
+            )),
             // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
-            DataType::FixedSizeList(field, _) => ScalarValue::FixedSizeList(
-                new_null_array(
-                    &DataType::FixedSizeList(
-                        Arc::new(Field::new("item", field.data_type().clone(), true)),
-                        1,
-                    ),
+            DataType::FixedSizeList(field_ref, fixed_length) => {
+                ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
+                    field_ref.clone(),
+                    *fixed_length,
                     1,
-                )
-                .as_fixed_size_list()
-                .to_owned()
-                .into(),
-            ),
+                )))
+            }
             DataType::Struct(fields) => ScalarValue::Struct(
                 new_null_array(&DataType::Struct(fields.to_owned()), 1)
                     .as_struct()
@@ -4470,23 +4445,44 @@ mod tests {
     }
 
     #[test]
-    fn scalar_try_from_list() {
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-        let data_type = &data_type;
+    fn scalar_try_from_list_datatypes() {
+        let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Test for List
+        let data_type = &DataType::List(inner_field.clone());
         let scalar: ScalarValue = data_type.try_into().unwrap();
-
         let expected = ScalarValue::List(
-            new_null_array(
-                &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                1,
-            )
-            .as_list::<i32>()
-            .to_owned()
-            .into(),
+            new_null_array(data_type, 1)
+                .as_list::<i32>()
+                .to_owned()
+                .into(),
         );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
 
-        assert_eq!(expected, scalar)
+        // Test for LargeList
+        let data_type = &DataType::LargeList(inner_field.clone());
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::LargeList(
+            new_null_array(data_type, 1)
+                .as_list::<i64>()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
+
+        // Test for FixedSizeList(5)
+        let data_type = &DataType::FixedSizeList(inner_field.clone(), 5);
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::FixedSizeList(
+            new_null_array(data_type, 1)
+                .as_fixed_size_list()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
     }
 
     #[test]

@@ -25,8 +25,8 @@ use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, RecordBatch, StringArray, UInt64Array,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -189,7 +189,10 @@ impl Test {
         .extract(reader.metadata())
         .unwrap();
 
-        assert_eq!(&min, &expected_min, "Mismatch with expected minimums");
+        assert_eq!(
+            &min, &expected_min,
+            "{column_name}: Mismatch with expected minimums"
+        );
 
         let max = StatisticsConverter::try_new(
             column_name,
@@ -199,7 +202,10 @@ impl Test {
         .unwrap()
         .extract(reader.metadata())
         .unwrap();
-        assert_eq!(&max, &expected_max, "Mismatch with expected maximum");
+        assert_eq!(
+            &max, &expected_max,
+            "{column_name}: Mismatch with expected maximum"
+        );
 
         let null_counts = StatisticsConverter::try_new(
             column_name,
@@ -212,13 +218,15 @@ impl Test {
         let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
         assert_eq!(
             &null_counts, &expected_null_counts,
-            "Mismatch with expected null counts"
+            "{column_name}: Mismatch with expected null counts. \
+            Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
         );
 
         let row_counts = StatisticsConverter::row_counts(reader.metadata()).unwrap();
         assert_eq!(
             row_counts, expected_row_counts,
-            "Mismatch with expected row counts"
+            "{column_name}: Mismatch with expected row counts. \
+            Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
         );
     }
 
@@ -803,6 +811,152 @@ async fn test_uint32_range() {
 }
 
 #[tokio::test]
+async fn test_numeric_limits_unsigned() {
+    // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
+    let reader = TestReader {
+        scenario: Scenario::NumericLimits,
+        row_per_group: 5,
+    };
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int8Array::from(vec![i8::MIN, -100])),
+        expected_max: Arc::new(Int8Array::from(vec![100, i8::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i8",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int16Array::from(vec![i16::MIN, -100])),
+        expected_max: Arc::new(Int16Array::from(vec![100, i16::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i16",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int32Array::from(vec![i32::MIN, -100])),
+        expected_max: Arc::new(Int32Array::from(vec![100, i32::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i32",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int64Array::from(vec![i64::MIN, -100])),
+        expected_max: Arc::new(Int64Array::from(vec![100, i64::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i64",
+    }
+    .run();
+}
+#[tokio::test]
+async fn test_numeric_limits_signed() {
+    // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
+    let reader = TestReader {
+        scenario: Scenario::NumericLimits,
+        row_per_group: 5,
+    };
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int8Array::from(vec![i8::MIN, -100])),
+        expected_max: Arc::new(Int8Array::from(vec![100, i8::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i8",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int16Array::from(vec![i16::MIN, -100])),
+        expected_max: Arc::new(Int16Array::from(vec![100, i16::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i16",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int32Array::from(vec![i32::MIN, -100])),
+        expected_max: Arc::new(Int32Array::from(vec![100, i32::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i32",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int64Array::from(vec![i64::MIN, -100])),
+        expected_max: Arc::new(Int64Array::from(vec![100, i64::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "i64",
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_numeric_limits_float() {
+    // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
+    let reader = TestReader {
+        scenario: Scenario::NumericLimits,
+        row_per_group: 5,
+    };
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Float32Array::from(vec![f32::MIN, -100.0])),
+        expected_max: Arc::new(Float32Array::from(vec![100.0, f32::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "f32",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Float64Array::from(vec![f64::MIN, -100.0])),
+        expected_max: Arc::new(Float64Array::from(vec![100.0, f64::MAX])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "f64",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Float32Array::from(vec![-1.0, -100.0])),
+        expected_max: Arc::new(Float32Array::from(vec![100.0, -100.0])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "f32_nan",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Float64Array::from(vec![-1.0, -100.0])),
+        expected_max: Arc::new(Float64Array::from(vec![100.0, -100.0])),
+        expected_null_counts: UInt64Array::from(vec![0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "f64_nan",
+    }
+    .run();
+}
+
+#[tokio::test]
 async fn test_float64() {
     // This creates a parquet file of 1 column "f"
     // file has 4 record batches, each has 5 rows. They will be saved into 4 row groups
@@ -914,8 +1068,8 @@ async fn test_byte() {
 
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(BinaryArray::from(expected_service_binary_min_values)), // Shuld be BinaryArray
-        expected_max: Arc::new(BinaryArray::from(expected_service_binary_max_values)), // Shuld be BinaryArray
+        expected_min: Arc::new(BinaryArray::from(expected_service_binary_min_values)),
+        expected_max: Arc::new(BinaryArray::from(expected_service_binary_max_values)),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "service_binary",

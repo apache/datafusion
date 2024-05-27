@@ -76,6 +76,7 @@ pub mod expr_fn {
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
         first_last::first_value_udaf(),
+        first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
         median::median_udaf(),
