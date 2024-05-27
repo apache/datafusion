@@ -60,7 +60,7 @@ use substrait::proto::{
     rel::RelType,
     set_rel,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel, Type,
+    AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
 use substrait::proto::{FunctionArgument, SortField};
 
@@ -516,14 +516,7 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Virtual Table")
                 })?;
 
-                let fields = from_substrait_struct_type(
-                    base_schema.r#struct.as_ref().ok_or_else(|| {
-                        substrait_datafusion_err!("Named struct must contain a struct")
-                    })?,
-                    &base_schema.names,
-                    &mut 0,
-                );
-                let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?);
+                let schema = from_substrait_named_struct(base_schema)?;
 
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -550,14 +543,13 @@ pub async fn from_substrait_rel(
                             })
                             .collect::<Result<_>>()?;
                         if name_idx != base_schema.names.len() {
-                            Err(substrait_datafusion_err!(
-                                "Names list must match exactly to nested ®schema, but found {} uses for {} names",
+                            return substrait_err!(
+                                "Names list must match exactly to nested schema, but found {} uses for {} names",
                                 name_idx,
                                 base_schema.names.len()
-                            ))
-                        } else {
-                            Ok(lits)
+                            );
                         }
+                        Ok(lits)
                     })
                     .collect::<Result<_>>()?;
 
@@ -1286,6 +1278,25 @@ fn next_struct_field_name(
         *name_idx += 1;
         Ok(name)
     }
+}
+
+fn from_substrait_named_struct(base_schema: &NamedStruct) -> Result<DFSchemaRef> {
+    let mut name_idx = 0;
+    let fields = from_substrait_struct_type(
+        base_schema.r#struct.as_ref().ok_or_else(|| {
+            substrait_datafusion_err!("Named struct must contain a struct")
+        })?,
+        &base_schema.names,
+        &mut name_idx,
+    );
+    if name_idx != base_schema.names.len() {
+        return substrait_err!(
+                                "Names list must match exactly to nested schema, but found {} uses for {} names",
+                                name_idx,
+                                base_schema.names.len()
+                            );
+    }
+    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
 }
 
 fn is_substrait_type_nullable(dtype: &Type) -> Result<bool> {
