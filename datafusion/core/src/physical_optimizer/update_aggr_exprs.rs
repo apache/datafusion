@@ -153,7 +153,7 @@ fn try_convert_aggregate_if_better(
                 let reqs = concat_slices(prefix_requirement, &aggr_sort_reqs);
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
-                    aggr_expr.has_beneficial_ordering(true)?
+                    aggr_expr.with_beneficial_ordering(true)?
                 } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
                     &reverse_aggr_req,
@@ -163,11 +163,11 @@ fn try_convert_aggregate_if_better(
                     aggr_expr
                         .reverse_expr()
                         .unwrap_or(aggr_expr)
-                        .has_beneficial_ordering(true)?
+                        .with_beneficial_ordering(true)?
                 } else {
                     // There is no beneficial ordering present -- aggregation
                     // will still work albeit in a less efficient mode.
-                    aggr_expr.has_beneficial_ordering(false)?
+                    aggr_expr.with_beneficial_ordering(false)?
                 }
                 .ok_or_else(|| {
                     plan_datafusion_err!(

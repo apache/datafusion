@@ -147,12 +147,12 @@ impl AggregateUDFImpl for FirstValue {
         &self.aliases
     }
 
-    fn has_beneficial_ordering(
+    fn with_beneficial_ordering(
         self: Arc<Self>,
-        requirement_satisfied: bool,
+        beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         Ok(Some(Arc::new(
-            FirstValue::new().with_requirement_satisfied(requirement_satisfied),
+            FirstValue::new().with_requirement_satisfied(beneficial_ordering),
         )))
     }
 
@@ -452,12 +452,12 @@ impl AggregateUDFImpl for LastValue {
         &self.aliases
     }
 
-    fn has_beneficial_ordering(
+    fn with_beneficial_ordering(
         self: Arc<Self>,
-        requirement_satisfied: bool,
+        beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         Ok(Some(Arc::new(
-            LastValue::new().with_requirement_satisfied(requirement_satisfied),
+            LastValue::new().with_requirement_satisfied(beneficial_ordering),
         )))
     }
 

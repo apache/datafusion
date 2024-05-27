@@ -194,13 +194,13 @@ impl AggregateUDF {
         self.inner.create_groups_accumulator()
     }
 
-    /// See [`AggregateUDFImpl::has_beneficial_ordering`] for more details.
-    pub fn has_beneficial_ordering(
+    /// See [`AggregateUDFImpl::with_beneficial_ordering`] for more details.
+    pub fn with_beneficial_ordering(
         self,
-        requirement_satisfied: bool,
+        beneficial_ordering: bool,
     ) -> Result<Option<AggregateUDF>> {
         self.inner
-            .has_beneficial_ordering(requirement_satisfied)
+            .with_beneficial_ordering(beneficial_ordering)
             .map(|updated_udf| updated_udf.map(|udf| Self { inner: udf }))
     }
 
@@ -400,9 +400,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// If the expression can benefit from existing input ordering, but does
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
-    fn has_beneficial_ordering(
+    fn with_beneficial_ordering(
         self: Arc<Self>,
-        _requirement_satisfied: bool,
+        _beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         if self.order_sensitivity().is_beneficial() {
             return exec_err!(
