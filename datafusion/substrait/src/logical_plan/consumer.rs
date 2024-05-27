@@ -512,7 +512,7 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Virtual Table")
                 })?;
 
-                let fields = from_substrait_struct(
+                let fields = from_substrait_struct_type(
                     base_schema.r#struct.as_ref().ok_or_else(|| {
                         substrait_datafusion_err!("Named struct must contain a struct")
                     })?,
@@ -1222,7 +1222,7 @@ fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct(
+            r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
                 s, dfs_names, name_idx,
             )?)),
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
@@ -1231,7 +1231,7 @@ fn from_substrait_type(
     }
 }
 
-fn from_substrait_struct(
+fn from_substrait_struct_type(
     s: &r#type::Struct,
     dfs_names: &[String],
     name_idx: &mut usize,
@@ -1593,7 +1593,7 @@ fn from_substrait_null(
                 }
             }
             r#type::Kind::Struct(s) => {
-                let fields = from_substrait_struct(s, dfs_names, name_idx)?;
+                let fields = from_substrait_struct_type(s, dfs_names, name_idx)?;
                 Ok(ScalarStructBuilder::new_null(fields))
             }
             _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
