@@ -138,7 +138,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// If the expression can benefit from existing input ordering, but does
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
-    fn with_requirement_satisfied(
+    fn has_beneficial_ordering(
         self: Arc<Self>,
         _requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
@@ -350,14 +350,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         }
     }
 
-    fn with_requirement_satisfied(
+    fn has_beneficial_ordering(
         self: Arc<Self>,
         requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateExpr>>> {
         let Some(updated_fn) = self
             .fun
             .clone()
-            .with_requirement_satisfied(requirement_satisfied)?
+            .has_beneficial_ordering(requirement_satisfied)?
         else {
             return Ok(None);
         };

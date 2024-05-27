@@ -26,7 +26,7 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -194,16 +194,13 @@ impl AggregateUDF {
         self.inner.create_groups_accumulator()
     }
 
-    /// Sets the flag specifying whether the requirement of the UDF is satisfied.
-    /// A return value of `None` indicates that the UDF doesn't have support for
-    /// requirement satisfied mode (In this case, its requirement should be
-    /// definitely satisfied).
-    pub fn with_requirement_satisfied(
+    /// See [`AggregateUDFImpl::has_beneficial_ordering`] for more details.
+    pub fn has_beneficial_ordering(
         self,
         requirement_satisfied: bool,
     ) -> Result<Option<AggregateUDF>> {
         self.inner
-            .with_requirement_satisfied(requirement_satisfied)
+            .has_beneficial_ordering(requirement_satisfied)
             .map(|updated_udf| updated_udf.map(|udf| Self { inner: udf }))
     }
 
@@ -392,15 +389,27 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &[]
     }
 
-    /// Sets the flag specifying whether the requirement of the UDF is satisfied.
-    /// A return value of `None` indicates that the UDF doesn't have support for
-    /// requirement satisfied mode (In this case, its requirement should be
-    /// definitely satisfied).
-    fn with_requirement_satisfied(
+    /// Sets the indicator whether ordering requirements of the AggregateUDFImpl is
+    /// satisfied by its input. If this is not the case, UDFs with order
+    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
+    /// the correct result with possibly more work internally.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(updated_udf))` if the process completes successfully.
+    /// If the expression can benefit from existing input ordering, but does
+    /// not implement the method, returns an error. Order insensitive and hard
+    /// requirement aggregators return `Ok(None)`.
+    fn has_beneficial_ordering(
         self: Arc<Self>,
         _requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        // By default, no support for this optimization
+        if self.order_sensitivity().is_beneficial() {
+            return exec_err!(
+                "Should implement with satisfied for aggregator :{:?}",
+                self.name()
+            );
+        }
         Ok(None)
     }
 

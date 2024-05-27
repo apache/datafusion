@@ -147,7 +147,7 @@ impl AggregateUDFImpl for FirstValue {
         &self.aliases
     }
 
-    fn with_requirement_satisfied(
+    fn has_beneficial_ordering(
         self: Arc<Self>,
         requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
@@ -452,7 +452,7 @@ impl AggregateUDFImpl for LastValue {
         &self.aliases
     }
 
-    fn with_requirement_satisfied(
+    fn has_beneficial_ordering(
         self: Arc<Self>,
         requirement_satisfied: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
