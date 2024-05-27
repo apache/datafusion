@@ -1411,7 +1411,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
                     kind: Some(r#type::Kind::I32(r#type::I32 {
                         type_variation_reference: DEFAULT_TYPE_REF,
-                        nullability: default_nullability,
+                        nullability: r#type::Nullability::Unspecified as i32,
                     })),
                 })),
             };
@@ -1419,7 +1419,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
                     kind: Some(r#type::Kind::I64(r#type::I64 {
                         type_variation_reference: DEFAULT_TYPE_REF,
-                        nullability: default_nullability,
+                        nullability: r#type::Nullability::Unspecified as i32,
                     })),
                 })),
             };
@@ -1443,7 +1443,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
                     type_reference,
                     type_variation_reference: DEFAULT_TYPE_REF,
-                    nullability: default_nullability,
+                    nullability,
                     type_parameters,
                 })),
             })
