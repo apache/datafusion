@@ -716,20 +716,36 @@ async fn roundtrip_literal_struct() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
-    assert_expected_plan(
-        "VALUES \
-            (1, 'a', [[-213.1, NULL, 5.5, 2.0, 1.0], []], STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), [STRUCT(STRUCT('a' AS string_field) AS struct_field)]), \
-            (NULL, NULL, NULL, NULL, NULL)",
-        "Values: \
-            (Int64(1), Utf8(\"a\"), List([[-213.1, , 5.5, 2.0, 1.0], []]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}])), \
-            (Int64(NULL), Utf8(NULL), List(), Struct({c0:,int_field:,c2:}), List())",
-    true)
-        .await
-}
+    // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
+    let values = "(\
+                1, \
+                'a', \
+                [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
+                arrow_cast([1,2,3], 'LargeList(Int64)'), \
+                STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
+                [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
+            )";
 
-#[tokio::test]
-async fn roundtrip_empty_relation() -> Result<()> {
-    roundtrip("SELECT * FROM (VALUES ([STRUCT(STRUCT(1 AS inner_int_field) AS outer_struct_field)], 2)) LIMIT 0").await
+    // Test LogicalPlan::Values
+    assert_expected_plan(
+        format!("VALUES \
+            {values}, \
+            (NULL, NULL, NULL, NULL, NULL, NULL)").as_str(),
+        "Values: \
+            (\
+                Int64(1), \
+                Utf8(\"a\"), \
+                List([[-213.1, , 5.5, 2.0, 1.0], []]), \
+                LargeList([1, 2, 3]), \
+                Struct({c0:true,int_field:1,c2:}), \
+                List([{struct_field: {string_field: a}}])\
+            ), \
+            (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
+    true)
+        .await?;
+
+    // Test LogicalPlan::EmptyRelation
+    roundtrip(format!("SELECT * FROM (VALUES {values}) LIMIT 0").as_str()).await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
