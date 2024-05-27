@@ -20,7 +20,7 @@ use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
-use datafusion_common::DFSchema;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
@@ -79,6 +79,21 @@ fn test_get_field() {
 }
 
 #[test]
+fn test_get_field_null() {
+    #[rustfmt::skip]
+    evaluate_expr_test(
+        lit(ScalarValue::Null).field("a"),
+        vec![
+            "+------+",
+            "| expr |",
+            "+------+",
+            "|      |",
+            "+------+",
+        ],
+    );
+}
+
+#[test]
 fn test_nested_get_field() {
     evaluate_expr_test(
         col("props")
@@ -98,11 +113,17 @@ fn test_nested_get_field() {
 }
 
 #[test]
-fn test_list() {
+fn test_list_index() {
+    #[rustfmt::skip]
     evaluate_expr_test(
         col("list").index(lit(1i64)),
         vec![
-            "+------+", "| expr |", "+------+", "| one  |", "| two  |", "| five |",
+            "+------+",
+            "| expr |",
+            "+------+",
+            "| one  |",
+            "| two  |",
+            "| five |",
             "+------+",
         ],
     );

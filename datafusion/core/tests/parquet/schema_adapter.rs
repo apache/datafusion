@@ -30,7 +30,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileScanConfig, ParquetExec, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
-use datafusion::physical_plan::{collect, Statistics};
+use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 
 use datafusion::datasource::listing::PartitionedFile;
@@ -83,16 +83,8 @@ async fn can_override_schema_adapter() {
 
     // prepare the scan
     let parquet_exec = ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_groups: vec![vec![partitioned_file]],
-            statistics: Statistics::new_unknown(&schema),
-            file_schema: schema,
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+            .with_file(partitioned_file),
         None,
         None,
         Default::default(),

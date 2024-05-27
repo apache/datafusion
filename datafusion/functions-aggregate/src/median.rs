@@ -15,22 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! # Median
-
-use crate::aggregate::utils::{down_cast_any_ref, Hashable};
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
-use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::{DataType, Field};
-use arrow_array::cast::AsArray;
-use arrow_array::{downcast_integer, ArrowNativeTypeOp, ArrowNumericType};
-use arrow_buffer::ArrowNativeType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::Accumulator;
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
+
+use arrow::array::{downcast_integer, ArrowNumericType};
+use arrow::{
+    array::{ArrayRef, AsArray},
+    datatypes::{
+        DataType, Decimal128Type, Decimal256Type, Field, Float16Type, Float32Type,
+        Float64Type,
+    },
+};
+
+use arrow::array::Array;
+use arrow::array::ArrowNativeTypeOp;
+use arrow::datatypes::ArrowNativeType;
+
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::{
+    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
+    Signature, Volatility,
+};
+use datafusion_physical_expr_common::aggregate::utils::Hashable;
+
+make_udaf_expr_and_func!(
+    Median,
+    median,
+    expression,
+    "Computes the median of a set of numbers",
+    median_udaf
+);
 
 /// MEDIAN aggregate expression. If using the non-distinct variation, then this uses a
 /// lot of memory because all values need to be stored in memory before a result can be
@@ -40,46 +56,72 @@ use std::sync::Arc;
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
-#[derive(Debug)]
 pub struct Median {
-    name: String,
-    expr: Arc<dyn PhysicalExpr>,
-    data_type: DataType,
-    distinct: bool,
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl Debug for Median {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Median")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for Median {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Median {
-    /// Create a new MEDIAN aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-        distinct: bool,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            name: name.into(),
-            expr,
-            data_type,
-            distinct,
+            aliases: vec!["median".to_string()],
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
 
-impl AggregateExpr for Median {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
+impl AggregateUDFImpl for Median {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+    fn name(&self) -> &str {
+        "MEDIAN"
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        use arrow_array::types::*;
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        //Intermediate state is a list of the elements we have collected so far
+        let field = Field::new("item", args.input_type.clone(), true);
+        let state_name = if args.is_distinct {
+            "distinct_median"
+        } else {
+            "median"
+        };
+
+        Ok(vec![Field::new(
+            format_state_name(args.name, state_name),
+            DataType::List(Arc::new(field)),
+            true,
+        )])
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                if self.distinct {
+                if acc_args.is_distinct {
                     Ok(Box::new(DistinctMedianAccumulator::<$t> {
                         data_type: $dt.clone(),
                         distinct_values: HashSet::new(),
@@ -92,7 +134,8 @@ impl AggregateExpr for Median {
                 }
             };
         }
-        let dt = &self.data_type;
+
+        let dt = acc_args.input_type;
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
@@ -102,49 +145,14 @@ impl AggregateExpr for Median {
             DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianAccumulator not supported for {} with {}",
-                self.name(),
-                self.data_type
+                acc_args.name,
+                dt,
             ))),
         }
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new("item", self.data_type.clone(), true);
-        let data_type = DataType::List(Arc::new(field));
-        let state_name = if self.distinct {
-            "distinct_median"
-        } else {
-            "median"
-        };
-
-        Ok(vec![Field::new(
-            format_state_name(&self.name, state_name),
-            data_type,
-            true,
-        )])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl PartialEq<dyn Any> for Median {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.expr.eq(&x.expr)
-                    && self.distinct == x.distinct
-            })
-            .unwrap_or(false)
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 
