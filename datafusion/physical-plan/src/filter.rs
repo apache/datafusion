@@ -242,8 +242,8 @@ impl ExecutionPlan for FilterExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

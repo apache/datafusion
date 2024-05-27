@@ -143,8 +143,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.args.iter().collect()
     }
 
     fn with_new_children(

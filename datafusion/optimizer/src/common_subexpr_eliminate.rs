@@ -682,10 +682,10 @@ impl ExprIdentifierVisitor<'_> {
     }
 }
 
-impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
+impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_> {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
+    fn f_down(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         // TODO: propagate is_volatile state bottom-up + consider non-volatile sub-expressions for CSE
@@ -704,7 +704,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
+    fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
         let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
             return Ok(TreeNodeRecursion::Continue);
         };
