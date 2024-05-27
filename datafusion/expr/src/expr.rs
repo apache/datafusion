@@ -504,6 +504,15 @@ impl Sort {
             nulls_first,
         }
     }
+
+    /// Create a new Sort expression with the opposite sort direction
+    pub fn reverse(&self) -> Self {
+        Self {
+            expr: self.expr.clone(),
+            asc: !self.asc,
+            nulls_first: !self.nulls_first,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

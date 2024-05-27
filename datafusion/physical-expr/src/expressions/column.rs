@@ -77,7 +77,7 @@ impl PhysicalExpr for UnKnownColumn {
         internal_err!("UnKnownColumn::evaluate() should not be called")
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
 

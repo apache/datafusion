@@ -46,7 +46,7 @@ pub fn create_aggregate_expr(
     ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
-    ignore_nulls: bool,
+    _ignore_nulls: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the result data type for this aggregate function
@@ -325,27 +325,6 @@ pub fn create_aggregate_expr(
                 "APPROX_MEDIAN(DISTINCT) aggregations are not available"
             );
         }
-        (AggregateFunction::FirstValue, _) => Arc::new(
-            expressions::FirstValue::new(
-                input_phy_exprs[0].clone(),
-                name,
-                input_phy_types[0].clone(),
-                ordering_req.to_vec(),
-                ordering_types,
-                vec![],
-            )
-            .with_ignore_nulls(ignore_nulls),
-        ),
-        (AggregateFunction::LastValue, _) => Arc::new(
-            expressions::LastValue::new(
-                input_phy_exprs[0].clone(),
-                name,
-                input_phy_types[0].clone(),
-                ordering_req.to_vec(),
-                ordering_types,
-            )
-            .with_ignore_nulls(ignore_nulls),
-        ),
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]
@@ -389,17 +368,16 @@ pub fn create_aggregate_expr(
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
-    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
-    use datafusion_expr::type_coercion::aggregates::NUMERICS;
-    use datafusion_expr::{type_coercion, Signature};
-
+    use super::*;
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
         Max, Min, Stddev, Variance,
     };
 
-    use super::*;
+    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
+    use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_expr::{type_coercion, Signature};
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

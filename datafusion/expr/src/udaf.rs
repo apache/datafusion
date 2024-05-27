@@ -22,10 +22,11 @@ use crate::function::{
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
+use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -209,12 +210,35 @@ impl AggregateUDF {
         self.inner.create_sliding_accumulator(args)
     }
 
-    pub fn reverse_expr(&self) -> ReversedUDAF {
-        self.inner.reverse_expr()
-    }
-
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
+    }
+
+    /// See [`AggregateUDFImpl::with_beneficial_ordering`] for more details.
+    pub fn with_beneficial_ordering(
+        self,
+        beneficial_ordering: bool,
+    ) -> Result<Option<AggregateUDF>> {
+        self.inner
+            .with_beneficial_ordering(beneficial_ordering)
+            .map(|updated_udf| updated_udf.map(|udf| Self { inner: udf }))
+    }
+
+    /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`]
+    /// for possible options.
+    pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        self.inner.order_sensitivity()
+    }
+
+    /// Reserves the `AggregateUDF` (e.g. returns the `AggregateUDF` that will
+    /// generate same result with this `AggregateUDF` when iterated in reverse
+    /// order, and `None` if there is no such `AggregateUDF`).
+    pub fn reverse_udf(&self) -> Option<AggregateUDF> {
+        match self.inner.reverse_expr() {
+            ReversedUDAF::NotSupported => None,
+            ReversedUDAF::Identical => Some(self.clone()),
+            ReversedUDAF::Reversed(reverse) => Some(Self { inner: reverse }),
+        }
     }
 
     /// Do the function rewrite
@@ -224,6 +248,7 @@ impl AggregateUDF {
         self.inner.simplify()
     }
 
+    /// See [`AggregateUDFImpl::has_ordering_requirements`] for more details.
     pub fn has_ordering_requirements(&self) -> bool {
         self.inner.has_ordering_requirements()
     }
@@ -394,6 +419,39 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         self.accumulator(args)
+    }
+    
+    /// Sets the indicator whether ordering requirements of the AggregateUDFImpl is
+    /// satisfied by its input. If this is not the case, UDFs with order
+    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
+    /// the correct result with possibly more work internally.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(updated_udf))` if the process completes successfully.
+    /// If the expression can benefit from existing input ordering, but does
+    /// not implement the method, returns an error. Order insensitive and hard
+    /// requirement aggregators return `Ok(None)`.
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        _beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        if self.order_sensitivity().is_beneficial() {
+            return exec_err!(
+                "Should implement with satisfied for aggregator :{:?}",
+                self.name()
+            );
+        }
+        Ok(None)
+    }
+
+    /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`]
+    /// for possible options.
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        // We have hard ordering requirements by default, meaning that order
+        // sensitive UDFs need their input orderings to satisfy their ordering
+        // requirements to generate correct results.
+        AggregateOrderSensitivity::HardRequirement
     }
 
     /// Optionally apply per-UDaF simplification / rewrite rules.

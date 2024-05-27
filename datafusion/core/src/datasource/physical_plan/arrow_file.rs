@@ -134,7 +134,7 @@ impl ExecutionPlan for ArrowExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
     }
 

@@ -78,6 +78,7 @@ pub mod expr_fn {
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<AggregateUDF>> = vec![
         first_last::first_value_udaf(),
+        first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
         sum::sum_udaf(),
         covariance::covar_pop_udaf(),
