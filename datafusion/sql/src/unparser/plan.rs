@@ -16,8 +16,8 @@
 // under the License.
 
 use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_expr::{expr::Alias, Expr, JoinConstraint, JoinType, LogicalPlan};
-use sqlparser::ast::{self, SetExpr};
+use datafusion_expr::{expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan};
+use sqlparser::ast::{self};
 
 use crate::unparser::utils::unproject_agg_exprs;
 
@@ -271,8 +271,27 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Distinct(_distinct) => {
-                not_impl_err!("Unsupported operator: {plan:?}")
+            LogicalPlan::Distinct(distinct) => {
+                let now_distinct = match distinct {
+                    Distinct::All(_) => {
+                        ast::Distinct::Distinct
+                    },
+                    Distinct::On(on) => {
+                        let exprs = on.on_expr.iter().map(|e| self.expr_to_sql(e)).collect::<Result<Vec<_>>>()?;
+                        ast::Distinct::On(exprs)
+                    },
+                };
+                let input = match distinct {
+                    Distinct::All(input) => input,
+                    Distinct::On(on) => on.input.as_ref(),
+                };
+                select.distinct(Some(now_distinct));
+                self.select_to_sql_recursively(
+                    input,
+                    query,
+                    select,
+                    relation,
+                )
             }
             LogicalPlan::Join(join) => {
                 match join.join_constraint {
