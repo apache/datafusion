@@ -19,7 +19,7 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use datafusion_common::TableReference;
+use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GroupingSet,
     InList, Like, Placeholder, ScalarFunction, Sort, Unnest,
@@ -44,6 +44,14 @@ use crate::protobuf::{
 };
 
 use super::LogicalExtensionCodec;
+
+impl From<&UnnestOptions> for protobuf::UnnestOptions {
+    fn from(opts: &UnnestOptions) -> Self {
+        Self {
+            preserve_nulls: opts.preserve_nulls,
+        }
+    }
+}
 
 impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
     fn from(stringified_plan: &StringifiedPlan) -> Self {

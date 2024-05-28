@@ -58,6 +58,7 @@ message LogicalPlanNode {
     DropViewNode drop_view = 27;
     DistinctOnNode distinct_on = 28;
     CopyToNode copy_to = 29;
+    UnnestNode unnest = 30;
   }
 }
 
@@ -258,6 +259,20 @@ message CopyToNode {
       datafusion_common.ArrowOptions arrow = 12;
     }
     repeated string partition_by = 7;
+}
+
+message UnnestNode {
+    LogicalPlanNode input = 1;
+    repeated datafusion_common.Column exec_columns = 2;
+    repeated uint64 list_type_columns = 3;
+    repeated uint64 struct_type_columns = 4;
+    repeated uint64 dependency_indices = 5;
+    datafusion_common.DfSchema schema = 6;
+    UnnestOptions options = 7;
+}
+
+message UnnestOptions {
+    bool preserve_nulls = 1;
 }
 
 message UnionNode {
