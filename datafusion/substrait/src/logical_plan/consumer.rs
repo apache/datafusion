@@ -16,15 +16,17 @@
 // under the License.
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+};
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, Expr, LogicalPlan,
-    Operator, ScalarUDF,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, EmptyRelation, Expr,
+    LogicalPlan, Operator, ScalarUDF, Values,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -39,6 +41,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
@@ -57,11 +60,13 @@ use substrait::proto::{
     rel::RelType,
     set_rel,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel, Type,
+    AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
 use substrait::proto::{FunctionArgument, SortField};
 
+use datafusion::arrow::array::GenericListArray;
 use datafusion::common::plan_err;
+use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -69,9 +74,10 @@ use std::sync::Arc;
 
 use crate::variation_const::{
     DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
-    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
-    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
-    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF,
+    TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
 };
 
 enum ScalarFunctionType {
@@ -505,7 +511,51 @@ pub async fn from_substrait_rel(
                     _ => Ok(t),
                 }
             }
-            _ => not_impl_err!("Only NamedTable reads are supported"),
+            Some(ReadType::VirtualTable(vt)) => {
+                let base_schema = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Virtual Table")
+                })?;
+
+                let schema = from_substrait_named_struct(base_schema)?;
+
+                if vt.values.is_empty() {
+                    return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    }));
+                }
+
+                let values = vt
+                    .values
+                    .iter()
+                    .map(|row| {
+                        let mut name_idx = 0;
+                        let lits = row
+                            .fields
+                            .iter()
+                            .map(|lit| {
+                                name_idx += 1; // top-level names are provided through schema
+                                Ok(Expr::Literal(from_substrait_literal(
+                                    lit,
+                                    &base_schema.names,
+                                    &mut name_idx,
+                                )?))
+                            })
+                            .collect::<Result<_>>()?;
+                        if name_idx != base_schema.names.len() {
+                            return substrait_err!(
+                                "Names list must match exactly to nested schema, but found {} uses for {} names",
+                                name_idx,
+                                base_schema.names.len()
+                            );
+                        }
+                        Ok(lits)
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(LogicalPlan::Values(Values { schema, values }))
+            }
+            _ => not_impl_err!("Only NamedTable and VirtualTable reads are supported"),
         },
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => match set_op {
@@ -551,7 +601,8 @@ pub async fn from_substrait_rel(
                 );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
-            let plan = plan.from_template(&plan.expressions(), &[input_plan]);
+            let plan =
+                plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
@@ -567,7 +618,7 @@ pub async fn from_substrait_rel(
                 let input_plan = from_substrait_rel(ctx, input, extensions).await?;
                 inputs.push(input_plan);
             }
-            let plan = plan.from_template(&plan.expressions(), &inputs);
+            let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::Exchange(exchange)) => {
@@ -943,7 +994,7 @@ pub async fn from_substrait_rex(
             }
         }
         Some(RexType::Literal(lit)) => {
-            let scalar_value = from_substrait_literal(lit)?;
+            let scalar_value = from_substrait_literal_without_names(lit)?;
             Ok(Arc::new(Expr::Literal(scalar_value)))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
@@ -959,9 +1010,9 @@ pub async fn from_substrait_rex(
                     .as_ref()
                     .clone(),
                 ),
-                from_substrait_type(output_type)?,
+                from_substrait_type_without_names(output_type)?,
             )))),
-            None => substrait_err!("Cast experssion without output type is not allowed"),
+            None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
             let fun = match extensions.get(&window.function_reference) {
@@ -1057,7 +1108,15 @@ pub async fn from_substrait_rex(
     }
 }
 
-fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+pub(crate) fn from_substrait_type_without_names(dt: &Type) -> Result<DataType> {
+    from_substrait_type(dt, &[], &mut 0)
+}
+
+fn from_substrait_type(
+    dt: &Type,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> Result<DataType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),
@@ -1133,11 +1192,13 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                 ),
             },
             r#type::Kind::List(list) => {
-                let inner_type =
-                    from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
-                        substrait_datafusion_err!("List type must have inner type")
-                    })?)?;
-                let field = Arc::new(Field::new("list_item", inner_type, true));
+                let inner_type = list.r#type.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("List type must have inner type")
+                })?;
+                let field = Arc::new(Field::new_list_field(
+                    from_substrait_type(inner_type, dfs_names, name_idx)?,
+                    is_substrait_type_nullable(inner_type)?,
+                ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
@@ -1157,10 +1218,126 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
+            r#type::Kind::UserDefined(u) => {
+                match u.type_reference {
+                    INTERVAL_YEAR_MONTH_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::YearMonth))
+                    }
+                    INTERVAL_DAY_TIME_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::DayTime))
+                    }
+                    INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                    }
+                    _ => not_impl_err!(
+                        "Unsupported Substrait user defined type with ref {} and variation {}",
+                        u.type_reference,
+                        u.type_variation_reference
+                    ),
+                }
+            },
+            r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
+                s, dfs_names, name_idx,
+            )?)),
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
     }
+}
+
+fn from_substrait_struct_type(
+    s: &r#type::Struct,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> Result<Fields> {
+    let mut fields = vec![];
+    for (i, f) in s.types.iter().enumerate() {
+        let field = Field::new(
+            next_struct_field_name(i, dfs_names, name_idx)?,
+            from_substrait_type(f, dfs_names, name_idx)?,
+            is_substrait_type_nullable(f)?,
+        );
+        fields.push(field);
+    }
+    Ok(fields.into())
+}
+
+fn next_struct_field_name(
+    i: usize,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> Result<String> {
+    if dfs_names.is_empty() {
+        // If names are not given, create dummy names
+        // c0, c1, ... align with e.g. SqlToRel::create_named_struct
+        Ok(format!("c{i}"))
+    } else {
+        let name = dfs_names.get(*name_idx).cloned().ok_or_else(|| {
+            substrait_datafusion_err!("Named schema must contain names for all fields")
+        })?;
+        *name_idx += 1;
+        Ok(name)
+    }
+}
+
+fn from_substrait_named_struct(base_schema: &NamedStruct) -> Result<DFSchemaRef> {
+    let mut name_idx = 0;
+    let fields = from_substrait_struct_type(
+        base_schema.r#struct.as_ref().ok_or_else(|| {
+            substrait_datafusion_err!("Named struct must contain a struct")
+        })?,
+        &base_schema.names,
+        &mut name_idx,
+    );
+    if name_idx != base_schema.names.len() {
+        return substrait_err!(
+                                "Names list must match exactly to nested schema, but found {} uses for {} names",
+                                name_idx,
+                                base_schema.names.len()
+                            );
+    }
+    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+}
+
+fn is_substrait_type_nullable(dtype: &Type) -> Result<bool> {
+    fn is_nullable(nullability: i32) -> bool {
+        nullability != substrait::proto::r#type::Nullability::Required as i32
+    }
+
+    let nullable = match dtype
+        .kind
+        .as_ref()
+        .ok_or_else(|| substrait_datafusion_err!("Type must contain Kind"))?
+    {
+        r#type::Kind::Bool(val) => is_nullable(val.nullability),
+        r#type::Kind::I8(val) => is_nullable(val.nullability),
+        r#type::Kind::I16(val) => is_nullable(val.nullability),
+        r#type::Kind::I32(val) => is_nullable(val.nullability),
+        r#type::Kind::I64(val) => is_nullable(val.nullability),
+        r#type::Kind::Fp32(val) => is_nullable(val.nullability),
+        r#type::Kind::Fp64(val) => is_nullable(val.nullability),
+        r#type::Kind::String(val) => is_nullable(val.nullability),
+        r#type::Kind::Binary(val) => is_nullable(val.nullability),
+        r#type::Kind::Timestamp(val) => is_nullable(val.nullability),
+        r#type::Kind::Date(val) => is_nullable(val.nullability),
+        r#type::Kind::Time(val) => is_nullable(val.nullability),
+        r#type::Kind::IntervalYear(val) => is_nullable(val.nullability),
+        r#type::Kind::IntervalDay(val) => is_nullable(val.nullability),
+        r#type::Kind::TimestampTz(val) => is_nullable(val.nullability),
+        r#type::Kind::Uuid(val) => is_nullable(val.nullability),
+        r#type::Kind::FixedChar(val) => is_nullable(val.nullability),
+        r#type::Kind::Varchar(val) => is_nullable(val.nullability),
+        r#type::Kind::FixedBinary(val) => is_nullable(val.nullability),
+        r#type::Kind::Decimal(val) => is_nullable(val.nullability),
+        r#type::Kind::PrecisionTimestamp(val) => is_nullable(val.nullability),
+        r#type::Kind::PrecisionTimestampTz(val) => is_nullable(val.nullability),
+        r#type::Kind::Struct(val) => is_nullable(val.nullability),
+        r#type::Kind::List(val) => is_nullable(val.nullability),
+        r#type::Kind::Map(val) => is_nullable(val.nullability),
+        r#type::Kind::UserDefined(val) => is_nullable(val.nullability),
+        r#type::Kind::UserDefinedTypeReference(_) => true, // not implemented, assume nullable
+    };
+    Ok(nullable)
 }
 
 fn from_substrait_bound(
@@ -1199,7 +1376,15 @@ fn from_substrait_bound(
     }
 }
 
-pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
+pub(crate) fn from_substrait_literal_without_names(lit: &Literal) -> Result<ScalarValue> {
+    from_substrait_literal(lit, &vec![], &mut 0)
+}
+
+fn from_substrait_literal(
+    lit: &Literal,
+    dfs_names: &Vec<String>,
+    name_idx: &mut usize,
+) -> Result<ScalarValue> {
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
         Some(LiteralType::I8(n)) => match lit.type_variation_reference {
@@ -1277,14 +1462,121 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
                 s,
             )
         }
-        Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
+        Some(LiteralType::List(l)) => {
+            let elements = l
+                .values
+                .iter()
+                .map(|el| from_substrait_literal(el, dfs_names, name_idx))
+                .collect::<Result<Vec<_>>>()?;
+            if elements.is_empty() {
+                return substrait_err!(
+                    "Empty list must be encoded as EmptyList literal type, not List"
+                );
+            }
+            let element_type = elements[0].data_type();
+            match lit.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => ScalarValue::List(ScalarValue::new_list(
+                    elements.as_slice(),
+                    &element_type,
+                )),
+                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                    ScalarValue::new_large_list(elements.as_slice(), &element_type),
+                ),
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            }
+        }
+        Some(LiteralType::EmptyList(l)) => {
+            let element_type = from_substrait_type(
+                l.r#type.clone().unwrap().as_ref(),
+                dfs_names,
+                name_idx,
+            )?;
+            match lit.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => {
+                    ScalarValue::List(ScalarValue::new_list(&[], &element_type))
+                }
+                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                    ScalarValue::new_large_list(&[], &element_type),
+                ),
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            }
+        }
+        Some(LiteralType::Struct(s)) => {
+            let mut builder = ScalarStructBuilder::new();
+            for (i, field) in s.fields.iter().enumerate() {
+                let name = next_struct_field_name(i, dfs_names, name_idx)?;
+                let sv = from_substrait_literal(field, dfs_names, name_idx)?;
+                builder = builder
+                    .with_scalar(Field::new(name, sv.data_type(), field.nullable), sv);
+            }
+            builder.build()?
+        }
+        Some(LiteralType::Null(ntype)) => {
+            from_substrait_null(ntype, dfs_names, name_idx)?
+        }
+        Some(LiteralType::UserDefined(user_defined)) => {
+            match user_defined.type_reference {
+                INTERVAL_YEAR_MONTH_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval year month value is empty");
+                    };
+                    let value_slice: [u8; 4] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval year month value"
+                            )
+                        })?;
+                    ScalarValue::IntervalYearMonth(Some(i32::from_le_bytes(value_slice)))
+                }
+                INTERVAL_DAY_TIME_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval day time value is empty");
+                    };
+                    let value_slice: [u8; 8] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval day time value"
+                            )
+                        })?;
+                    ScalarValue::IntervalDayTime(Some(i64::from_le_bytes(value_slice)))
+                }
+                INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                        return substrait_err!("Interval month day nano value is empty");
+                    };
+                    let value_slice: [u8; 16] =
+                        raw_val.value.clone().try_into().map_err(|_| {
+                            substrait_datafusion_err!(
+                                "Failed to parse interval month day nano value"
+                            )
+                        })?;
+                    ScalarValue::IntervalMonthDayNano(Some(i128::from_le_bytes(
+                        value_slice,
+                    )))
+                }
+                _ => {
+                    return not_impl_err!(
+                        "Unsupported Substrait user defined type with ref {}",
+                        user_defined.type_reference
+                    )
+                }
+            }
+        }
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
 
     Ok(scalar_value)
 }
 
-fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
+fn from_substrait_null(
+    null_type: &Type,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> Result<ScalarValue> {
     if let Some(kind) = &null_type.kind {
         match kind {
             r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
@@ -1360,7 +1652,32 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                 d.precision as u8,
                 d.scale as i8,
             )),
-            _ => not_impl_err!("Unsupported Substrait type: {kind:?}"),
+            r#type::Kind::List(l) => {
+                let field = Field::new_list_field(
+                    from_substrait_type(
+                        l.r#type.clone().unwrap().as_ref(),
+                        dfs_names,
+                        name_idx,
+                    )?,
+                    true,
+                );
+                match l.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::List(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeList(Arc::new(
+                        GenericListArray::new_null(field.into(), 1),
+                    ))),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {kind:?}"
+                    ),
+                }
+            }
+            r#type::Kind::Struct(s) => {
+                let fields = from_substrait_struct_type(s, dfs_names, name_idx)?;
+                Ok(ScalarStructBuilder::new_null(fields))
+            }
+            _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
         }
     } else {
         not_impl_err!("Null type without kind is not supported")

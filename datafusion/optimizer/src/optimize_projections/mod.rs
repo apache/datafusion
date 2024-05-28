@@ -30,6 +30,7 @@ use datafusion_common::{
     JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
     TableScan, Window,
@@ -289,7 +290,6 @@ fn optimize_projections(
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
-        | LogicalPlan::Unnest(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Distinct(Distinct::On(_)) => {
@@ -398,6 +398,13 @@ fn optimize_projections(
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
+        }
+        LogicalPlan::Unnest(Unnest {
+            dependency_indices, ..
+        }) => {
+            vec![RequiredIndicies::new_from_indices(
+                dependency_indices.clone(),
+            )]
         }
     };
 
@@ -870,12 +877,16 @@ mod tests {
             write!(f, "NoOpUserDefined")
         }
 
-        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-            Self {
-                exprs: exprs.to_vec(),
-                input: Arc::new(inputs[0].clone()),
+        fn with_exprs_and_inputs(
+            &self,
+            exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                exprs,
+                input: Arc::new(inputs.swap_remove(0)),
                 schema: self.schema.clone(),
-            }
+            })
         }
 
         fn necessary_children_exprs(
@@ -932,14 +943,18 @@ mod tests {
             write!(f, "UserDefinedCrossJoin")
         }
 
-        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        fn with_exprs_and_inputs(
+            &self,
+            exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
             assert_eq!(inputs.len(), 2);
-            Self {
-                exprs: exprs.to_vec(),
-                left_child: Arc::new(inputs[0].clone()),
-                right_child: Arc::new(inputs[1].clone()),
+            Ok(Self {
+                exprs,
+                left_child: Arc::new(inputs.remove(0)),
+                right_child: Arc::new(inputs.remove(0)),
                 schema: self.schema.clone(),
-            }
+            })
         }
 
         fn necessary_children_exprs(
@@ -1034,29 +1049,6 @@ mod tests {
         \n  Projection: \
         \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n      TableScan: ?table? projection=[]";
-        assert_optimized_plan_equal(plan, expected)
-    }
-
-    #[test]
-    fn test_struct_field_push_down() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new_struct(
-                "s",
-                vec![
-                    Field::new("x", DataType::Int64, false),
-                    Field::new("y", DataType::Int64, false),
-                ],
-                false,
-            ),
-        ]));
-
-        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("s").field("x")])?
-            .build()?;
-        let expected = "Projection: (?table?.s)[x]\
-        \n  TableScan: ?table? projection=[s]";
         assert_optimized_plan_equal(plan, expected)
     }
 

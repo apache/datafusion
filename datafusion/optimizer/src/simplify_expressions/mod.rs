@@ -30,3 +30,6 @@ pub use datafusion_expr::simplify::{SimplifyContext, SimplifyInfo};
 
 pub use expr_simplifier::*;
 pub use simplify_exprs::*;
+
+// Export for test in datafusion/core/tests/optimizer_integration.rs
+pub use guarantees::GuaranteeRewriter;

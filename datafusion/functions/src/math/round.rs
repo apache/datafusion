@@ -80,7 +80,7 @@ impl ScalarUDFImpl for RoundFunc {
         make_scalar_function(round, vec![])(args)
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // round preserves the order of the first argument
         let value = &input[0];
         let precision = input.get(1);

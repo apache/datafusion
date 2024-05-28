@@ -50,6 +50,9 @@ impl QueryBuilder {
         new.body = Option::Some(value);
         new
     }
+    pub fn take_body(&mut self) -> Option<Box<ast::SetExpr>> {
+        self.body.take()
+    }
     pub fn order_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
         let new = self;
         new.order_by = value;

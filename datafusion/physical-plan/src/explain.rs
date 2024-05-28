@@ -111,7 +111,7 @@ impl ExecutionPlan for ExplainExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
     }

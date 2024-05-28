@@ -143,11 +143,11 @@ ORDER BY "ticker", "time";
 ----
 logical_plan
 01)Sort: data.ticker ASC NULLS LAST, data.time ASC NULLS LAST
-02)--Filter: data.date = Date32("13150")
+02)--Filter: data.date = Date32("2006-01-02")
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)SortPreservingMergeExec: [ticker@1 ASC NULLS LAST,time@2 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: date@0 = 13150
+03)----FilterExec: date@0 = 2006-01-02
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]

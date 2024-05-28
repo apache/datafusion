@@ -378,7 +378,7 @@ fn try_swapping_with_coalesce_partitions(
         return Ok(None);
     }
     // CoalescePartitionsExec always has a single child, so zero indexing is safe.
-    make_with_child(projection, &projection.input().children()[0])
+    make_with_child(projection, projection.input().children()[0])
         .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
 }
 
@@ -526,7 +526,7 @@ fn try_pushdown_through_union(
     let new_children = union
         .children()
         .into_iter()
-        .map(|child| make_with_child(projection, &child))
+        .map(|child| make_with_child(projection, child))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Some(Arc::new(UnionExec::new(new_children))))
@@ -813,8 +813,8 @@ fn try_swapping_with_sort_merge_join(
         projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
-        &sm_join.children()[0],
-        &sm_join.children()[1],
+        sm_join.children()[0],
+        sm_join.children()[1],
     )?;
 
     Ok(Some(Arc::new(SortMergeJoinExec::try_new(
@@ -1297,7 +1297,7 @@ mod tests {
     use crate::physical_plan::joins::StreamJoinPartitionMode;
 
     use arrow_schema::{DataType, Field, Schema, SortOptions};
-    use datafusion_common::{JoinType, ScalarValue, Statistics};
+    use datafusion_common::{JoinType, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::{
@@ -1676,16 +1676,12 @@ mod tests {
             Field::new("e", DataType::Int32, true),
         ]));
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema),
-                projection: Some(vec![0, 1, 2, 3, 4]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![vec![]],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_projection(Some(vec![0, 1, 2, 3, 4])),
             false,
             0,
             0,
@@ -1702,16 +1698,12 @@ mod tests {
             Field::new("d", DataType::Int32, true),
         ]));
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema),
-                projection: Some(vec![3, 2, 1]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![vec![]],
-            },
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_projection(Some(vec![3, 2, 1])),
             false,
             0,
             0,

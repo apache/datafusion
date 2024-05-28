@@ -1140,6 +1140,7 @@ dependencies = [
  "datafusion-functions-array",
  "datafusion-optimizer",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-sql",
  "flate2",
@@ -1206,6 +1207,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
+ "hashbrown 0.14.5",
  "instant",
  "libc",
  "num_cpus",
@@ -1286,6 +1288,7 @@ name = "datafusion-functions-aggregate"
 version = "38.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -1322,6 +1325,7 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
@@ -1366,6 +1370,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "rand",
 ]
 
 [[package]]
@@ -1410,6 +1415,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "log",
+ "regex",
  "sqlparser",
  "strum 0.26.2",
 ]

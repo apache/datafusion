@@ -88,7 +88,7 @@ impl TopKAggregation {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
-        let child = children.iter().exactly_one().ok()?;
+        let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;

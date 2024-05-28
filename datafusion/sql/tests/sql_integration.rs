@@ -27,13 +27,18 @@ use datafusion_common::{
     assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
     ScalarValue, TableReference,
 };
+use datafusion_expr::{col, table_scan};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
 use datafusion_functions::{string, unicode};
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
+use datafusion_sql::unparser::dialect::{
+    DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
+    MySqlDialect as UnparserMySqlDialect,
+};
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
@@ -1479,16 +1484,16 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(0), MIN(person.age)",
-            err.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
+        err.strip_backtrace()
+    );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(5), MIN(person.age)",
-            err2.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
+        err2.strip_backtrace()
+    );
 }
 
 #[test]
@@ -2905,6 +2910,21 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
+            "unnest_table" => Ok(Schema::new(vec![
+                Field::new(
+                    "array_col",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "struct_col",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("field1", DataType::Int64, true),
+                        Field::new("field2", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+            ])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -2942,15 +2962,15 @@ impl ContextProvider for MockContextProvider {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udf_names(&self) -> Vec<String> {
         self.udfs.keys().cloned().collect()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         self.udafs.keys().cloned().collect()
     }
 
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         Vec::new()
     }
 }
@@ -4555,25 +4575,21 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (
-            TableReference::bare("person"),
-            "age > 35",
-            r#"("age" > 35)"#,
-        ),
+        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
         (
             TableReference::bare("person"),
             "id = '10'",
-            r#"("id" = '10')"#,
+            r#"(id = '10')"#,
         ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
-            r#"CAST("id" AS VARCHAR)"#,
+            r#"CAST(id AS VARCHAR)"#,
         ),
         (
             TableReference::bare("person"),
             "SUM((age * 2))",
-            r#"SUM(("age" * 2))"#,
+            r#"SUM((age * 2))"#,
         ),
     ];
 
@@ -4615,6 +4631,9 @@ fn roundtrip_statement() -> Result<()> {
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
             "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
             r#"select "First Name" from person_quoted_cols"#,
+            "select DISTINCT id FROM person",
+            "select DISTINCT on (id) id, first_name from person",
+            "select DISTINCT on (id) id, first_name from person order by id",
             r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
             "select id, count(*), first_name from person group by first_name, id",
@@ -4641,6 +4660,14 @@ fn roundtrip_statement() -> Result<()> {
             group by "Last Name", p.id 
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2"#,
+            r#"SELECT j1_string as string FROM j1
+            UNION ALL
+            SELECT j2_string as string FROM j2
+            ORDER BY string DESC
+            LIMIT 10"#
         ];
 
     // For each test sql string, we transform as follows:
@@ -4705,6 +4732,101 @@ fn roundtrip_crossjoin() -> Result<()> {
     assert_eq!(format!("{plan_roundtrip:?}"), expected);
 
     Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect() -> Result<()> {
+    struct TestStatementWithDialect {
+        sql: &'static str,
+        expected: &'static str,
+        parser_dialect: Box<dyn Dialect>,
+        unparser_dialect: Box<dyn UnparserDialect>,
+    }
+    let tests: Vec<TestStatementWithDialect> = vec![
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected:
+                "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+            expected: r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+    ];
+
+    for query in tests {
+        let statement = Parser::new(&*query.parser_dialect)
+            .try_with_sql(query.sql)?
+            .parse_statement()?;
+
+        let context = MockContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+        let unparser = Unparser::new(&*query.unparser_dialect);
+        let roundtrip_statement = unparser.plan_to_sql(&plan)?;
+
+        let actual = format!("{}", &roundtrip_statement);
+        println!("roundtrip sql: {actual}");
+        println!("plan {}", plan.display_indent());
+
+        assert_eq!(query.expected, actual);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_unnest_logical_plan() -> Result<()> {
+    let query = "select unnest(struct_col), unnest(array_col), struct_col, array_col from unnest_table";
+
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
+        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+        \n      TableScan: unnest_table";
+
+    assert_eq!(format!("{plan:?}"), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_table_references_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+        let plan = table_scan(Some(table_name), &schema, None)
+            .unwrap()
+            .project(vec![col("id"), col("value")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
+    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "table",
+        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+    );
 }
 
 #[cfg(test)]

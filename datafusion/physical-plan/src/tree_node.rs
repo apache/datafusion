@@ -26,7 +26,7 @@ use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
 use datafusion_common::Result;
 
 impl DynTreeNode for dyn ExecutionPlan {
-    fn arc_children(&self) -> Vec<Arc<Self>> {
+    fn arc_children(&self) -> Vec<&Arc<Self>> {
         self.children()
     }
 
@@ -71,7 +71,12 @@ impl<T> PlanContext<T> {
 
 impl<T: Default> PlanContext<T> {
     pub fn new_default(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children().into_iter().map(Self::new_default).collect();
+        let children = plan
+            .children()
+            .into_iter()
+            .cloned()
+            .map(Self::new_default)
+            .collect();
         Self::new(plan, Default::default(), children)
     }
 }
@@ -86,8 +91,8 @@ impl<T: Display> Display for PlanContext<T> {
 }
 
 impl<T> ConcreteTreeNode for PlanContext<T> {
-    fn children(&self) -> Vec<&Self> {
-        self.children.iter().collect()
+    fn children(&self) -> &[Self] {
+        &self.children
     }
 
     fn take_children(mut self) -> (Self, Vec<Self>) {

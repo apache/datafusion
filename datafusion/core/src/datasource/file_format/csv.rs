@@ -734,9 +734,7 @@ mod tests {
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
         let session_state = SessionState::new_with_config_rt(cfg, runtime);
-
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
-
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);
         let records_to_read = csv.options().schema_infer_max_rec;

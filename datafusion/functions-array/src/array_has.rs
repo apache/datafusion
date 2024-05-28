@@ -68,7 +68,6 @@ impl ArrayHas {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
-                String::from("array_has"),
                 String::from("list_has"),
                 String::from("array_contains"),
                 String::from("list_contains"),
@@ -140,7 +139,7 @@ impl ArrayHasAll {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("array_has_all"), String::from("list_has_all")],
+            aliases: vec![String::from("list_has_all")],
         }
     }
 }
@@ -203,7 +202,7 @@ impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("array_has_any"), String::from("list_has_any")],
+            aliases: vec![String::from("list_has_any")],
         }
     }
 }

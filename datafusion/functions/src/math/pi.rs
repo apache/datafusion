@@ -69,7 +69,7 @@ impl ScalarUDFImpl for PiFunc {
         ))))
     }
 
-    fn monotonicity(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         // This function returns a constant value.
         Ok(SortProperties::Singleton)
     }

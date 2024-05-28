@@ -47,7 +47,7 @@ impl ArrayExcept {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec!["array_except".to_string(), "list_except".to_string()],
+            aliases: vec!["list_except".to_string()],
         }
     }
 }

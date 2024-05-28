@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::make_array;
+use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -41,6 +41,7 @@ use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod arrow_statistics;
 mod custom_reader;
 mod file_statistics;
 #[cfg(not(target_family = "windows"))]
@@ -48,7 +49,6 @@ mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
 mod schema;
-mod schema_adapter;
 mod schema_coercion;
 
 #[cfg(test)]
@@ -63,13 +63,18 @@ fn init() {
 // ----------------------
 
 /// What data to use
+#[derive(Debug, Clone, Copy)]
 enum Scenario {
+    Boolean,
     Timestamps,
     Dates,
     Int,
     Int32Range,
     UInt,
     UInt32Range,
+    /// 7 Rows, for each i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
+    /// -MIN, -100, -1, 0, 1, 100, MAX
+    NumericLimits,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
@@ -80,6 +85,7 @@ enum Scenario {
     PeriodsInColumnNames,
     WithNullValues,
     WithNullValuesPageLevel,
+    StructArray,
 }
 
 enum Unit {
@@ -311,6 +317,16 @@ impl ContextWithParquet {
     }
 }
 
+fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "bool",
+        DataType::Boolean,
+        true,
+    )]));
+    let array = Arc::new(BooleanArray::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with a few rows of data for all of the supported timestamp types
 /// values with the specified offset
 ///
@@ -426,7 +442,7 @@ fn make_int_batches(start: i8, end: i8) -> RecordBatch {
     .unwrap()
 }
 
-/// Return record batch with i8, i16, i32, and i64 sequences
+/// Return record batch with u8, u16, u32, and u64 sequences
 ///
 /// Columns are named
 /// "u8" -> UInt8Array
@@ -696,8 +712,59 @@ fn make_int_batches_with_null(
     .unwrap()
 }
 
+fn make_numeric_limit_batch() -> RecordBatch {
+    let i8 = Int8Array::from(vec![i8::MIN, 100, -1, 0, 1, -100, i8::MAX]);
+    let i16 = Int16Array::from(vec![i16::MIN, 100, -1, 0, 1, -100, i16::MAX]);
+    let i32 = Int32Array::from(vec![i32::MIN, 100, -1, 0, 1, -100, i32::MAX]);
+    let i64 = Int64Array::from(vec![i64::MIN, 100, -1, 0, 1, -100, i64::MAX]);
+    let u8 = UInt8Array::from(vec![u8::MIN, 100, 1, 0, 1, 100, u8::MAX]);
+    let u16 = UInt16Array::from(vec![u16::MIN, 100, 1, 0, 1, 100, u16::MAX]);
+    let u32 = UInt32Array::from(vec![u32::MIN, 100, 1, 0, 1, 100, u32::MAX]);
+    let u64 = UInt64Array::from(vec![u64::MIN, 100, 1, 0, 1, 100, u64::MAX]);
+    let f32 = Float32Array::from(vec![f32::MIN, 100.0, -1.0, 0.0, 1.0, -100.0, f32::MAX]);
+    let f64 = Float64Array::from(vec![f64::MIN, 100.0, -1.0, 0.0, 1.0, -100.0, f64::MAX]);
+    let f32_nan =
+        Float32Array::from(vec![f32::NAN, 100.0, -1.0, 0.0, 1.0, -100.0, f32::NAN]);
+    let f64_nan =
+        Float64Array::from(vec![f64::NAN, 100.0, -1.0, 0.0, 1.0, -100.0, f64::NAN]);
+
+    RecordBatch::try_from_iter(vec![
+        ("i8", Arc::new(i8) as _),
+        ("i16", Arc::new(i16) as _),
+        ("i32", Arc::new(i32) as _),
+        ("i64", Arc::new(i64) as _),
+        ("u8", Arc::new(u8) as _),
+        ("u16", Arc::new(u16) as _),
+        ("u32", Arc::new(u32) as _),
+        ("u64", Arc::new(u64) as _),
+        ("f32", Arc::new(f32) as _),
+        ("f64", Arc::new(f64) as _),
+        ("f32_nan", Arc::new(f32_nan) as _),
+        ("f64_nan", Arc::new(f64_nan) as _),
+    ])
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
+        Scenario::Boolean => {
+            vec![
+                make_boolean_batch(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                ]),
+                make_boolean_batch(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                ]),
+            ]
+        }
         Scenario::Timestamps => {
             vec![
                 make_timestamp_batch(TimeDelta::try_seconds(0).unwrap()),
@@ -735,6 +802,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         }
         Scenario::UInt32Range => {
             vec![make_uint32_range(0, 10), make_uint32_range(200000, 300000)]
+        }
+        Scenario::NumericLimits => {
+            vec![make_numeric_limit_batch()]
         }
         Scenario::Float64 => {
             vec![
@@ -880,6 +950,20 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_int_batches_with_null(5, 1, 6),
             ]
         }
+        Scenario::StructArray => {
+            let struct_array_data = struct_array(vec![
+                (Some(1), Some(6.0), Some(12.0)),
+                (Some(2), Some(8.5), None),
+                (None, Some(8.5), Some(14.0)),
+            ]);
+
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "struct",
+                struct_array_data.data_type().clone(),
+                true,
+            )]));
+            vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
     }
 }
 
@@ -934,4 +1018,28 @@ async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTe
     }
     writer.close().unwrap();
     output_file
+}
+
+// returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
+fn struct_array(input: Vec<(Option<i32>, Option<f32>, Option<f64>)>) -> ArrayRef {
+    let int_32: Int32Array = input.iter().map(|(i, _, _)| i).collect();
+    let float_32: Float32Array = input.iter().map(|(_, f, _)| f).collect();
+    let float_64: Float64Array = input.iter().map(|(_, _, f)| f).collect();
+
+    let nullable = true;
+    let struct_array = StructArray::from(vec![
+        (
+            Arc::new(Field::new("int32_col", DataType::Int32, nullable)),
+            Arc::new(int_32) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("float32_col", DataType::Float32, nullable)),
+            Arc::new(float_32) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("float64_col", DataType::Float64, nullable)),
+            Arc::new(float_64) as ArrayRef,
+        ),
+    ]);
+    Arc::new(struct_array)
 }

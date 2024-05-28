@@ -372,10 +372,10 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
-        children.push(self.expr.clone());
-        children.extend(self.list.clone());
+        children.push(&self.expr);
+        children.extend(&self.list);
         children
     }
 

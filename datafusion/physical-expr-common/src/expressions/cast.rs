@@ -20,8 +20,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, Schema};
@@ -123,8 +122,8 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.expr]
     }
 
     fn with_new_children(
@@ -170,7 +169,8 @@ impl PhysicalExpr for CastExpr {
         let target_type = &self.cast_type;
 
         let unbounded = Interval::make_unbounded(target_type)?;
-        if source_datatype.is_numeric() && target_type.is_numeric()
+        if (source_datatype.is_numeric() || source_datatype == Boolean)
+            && target_type.is_numeric()
             || source_datatype.is_temporal() && target_type.is_temporal()
             || source_datatype.eq(target_type)
         {
@@ -229,7 +229,8 @@ pub fn cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+
+    use crate::expressions::column::col;
 
     use arrow::{
         array::{

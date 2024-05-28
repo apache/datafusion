@@ -20,11 +20,15 @@
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-use arrow_array::new_empty_array;
-use arrow_schema::{FieldRef, Schema};
-use datafusion_common::{Result, ScalarValue};
+use arrow_array::{new_empty_array, new_null_array, UInt64Array};
+use arrow_schema::{Field, FieldRef, Schema};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
+};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
+use std::sync::Arc;
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
@@ -71,6 +75,18 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Int8) => {
+                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Int16) => {
+                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::Date32) => {
+                        Some(ScalarValue::Date32(Some(*s.$func())))
+                    }
+                    Some(DataType::Date64) => {
+                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -100,6 +116,9 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
+                    }
+                    Some(DataType::Binary) => {
+                        Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
                     }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())
@@ -210,13 +229,161 @@ fn collect_scalars<I: Iterator<Item = Option<ScalarValue>>>(
     }
 }
 
+/// What type of statistics should be extracted?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RequestedStatistics {
+    /// Minimum Value
+    Min,
+    /// Maximum Value
+    Max,
+    /// Null Count, returned as a [`UInt64Array`])
+    NullCount,
+}
+
+/// Extracts Parquet statistics as Arrow arrays
+///
+/// This is used to convert Parquet statistics to Arrow arrays, with proper type
+/// conversions. This information can be used for pruning parquet files or row
+/// groups based on the statistics embedded in parquet files
+///
+/// # Schemas
+///
+/// The schema of the parquet file and the arrow schema are used to convert the
+/// underlying statistics value (stored as a parquet value) into the
+/// corresponding Arrow  value. For example, Decimals are stored as binary in
+/// parquet files.
+///
+/// The parquet_schema and arrow _schema do not have to be identical (for
+/// example, the columns may be in different orders and one or the other schemas
+/// may have additional columns). The function [`parquet_column`] is used to
+/// match the column in the parquet file to the column in the arrow schema.
+///
+/// # Multiple parquet files
+///
+/// This API is designed to support efficiently extracting statistics from
+/// multiple parquet files (hence why the parquet schema is passed in as an
+/// argument). This is useful when building an index for a directory of parquet
+/// files.
+///
+#[derive(Debug)]
+pub struct StatisticsConverter<'a> {
+    /// The name of the column to extract statistics for
+    column_name: &'a str,
+    /// The type of statistics to extract
+    statistics_type: RequestedStatistics,
+    /// The arrow schema of the query
+    arrow_schema: &'a Schema,
+    /// The field (with data type) of the column in the arrow schema
+    arrow_field: &'a Field,
+}
+
+impl<'a> StatisticsConverter<'a> {
+    /// Returns a [`UInt64Array`] with counts for each row group
+    ///
+    /// The returned array has no nulls, and has one value for each row group.
+    /// Each value is the number of rows in the row group.
+    pub fn row_counts(metadata: &ParquetMetaData) -> Result<UInt64Array> {
+        let row_groups = metadata.row_groups();
+        let mut builder = UInt64Array::builder(row_groups.len());
+        for row_group in row_groups {
+            let row_count = row_group.num_rows();
+            let row_count: u64 = row_count.try_into().map_err(|e| {
+                internal_datafusion_err!(
+                    "Parquet row count {row_count} too large to convert to u64: {e}"
+                )
+            })?;
+            builder.append_value(row_count);
+        }
+        Ok(builder.finish())
+    }
+
+    /// create an new statistics converter
+    pub fn try_new(
+        column_name: &'a str,
+        statistics_type: RequestedStatistics,
+        arrow_schema: &'a Schema,
+    ) -> Result<Self> {
+        // ensure the requested column is in the arrow schema
+        let Some((_idx, arrow_field)) = arrow_schema.column_with_name(column_name) else {
+            return plan_err!(
+                "Column '{}' not found in schema for statistics conversion",
+                column_name
+            );
+        };
+
+        Ok(Self {
+            column_name,
+            statistics_type,
+            arrow_schema,
+            arrow_field,
+        })
+    }
+
+    /// extract the statistics from a parquet file, given the parquet file's metadata
+    ///
+    /// The returned array contains 1 value for each row group in the parquet
+    /// file in order
+    ///
+    /// Each value is either
+    /// * the requested statistics type for the column
+    /// * a null value, if the statistics can not be extracted
+    ///
+    /// Note that a null value does NOT mean the min or max value was actually
+    /// `null` it means it the requested statistic is unknown
+    ///
+    /// Reasons for not being able to extract the statistics include:
+    /// * the column is not present in the parquet file
+    /// * statistics for the column are not present in the row group
+    /// * the stored statistic value can not be converted to the requested type
+    pub fn extract(&self, metadata: &ParquetMetaData) -> Result<ArrayRef> {
+        let data_type = self.arrow_field.data_type();
+        let num_row_groups = metadata.row_groups().len();
+
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let row_groups = metadata.row_groups();
+
+        // find the column in the parquet schema, if not, return a null array
+        let Some((parquet_idx, matched_field)) =
+            parquet_column(parquet_schema, self.arrow_schema, self.column_name)
+        else {
+            // column was in the arrow schema but not in the parquet schema, so return a null array
+            return Ok(new_null_array(data_type, num_row_groups));
+        };
+
+        // sanity check that matching field matches the arrow field
+        if matched_field.as_ref() != self.arrow_field {
+            return internal_err!(
+                "Matched column '{:?}' does not match original matched column '{:?}'",
+                matched_field,
+                self.arrow_field
+            );
+        }
+
+        // Get an iterator over the column statistics
+        let iter = row_groups
+            .iter()
+            .map(|x| x.column(parquet_idx).statistics());
+
+        match self.statistics_type {
+            RequestedStatistics::Min => min_statistics(data_type, iter),
+            RequestedStatistics::Max => max_statistics(data_type, iter),
+            RequestedStatistics::NullCount => {
+                let null_counts = iter.map(|stats| stats.map(|s| s.null_count()));
+                Ok(Arc::new(UInt64Array::from_iter(null_counts)))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::compute::kernels::cast_utils::Parser;
+    use arrow::datatypes::{Date32Type, Date64Type};
     use arrow_array::{
-        new_null_array, Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array,
-        Float64Array, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
-        TimestampNanosecondArray,
+        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -480,10 +647,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
-    )]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![
@@ -510,6 +673,68 @@ mod test {
                 Some(b"ZZ"),
                 None,
             ])),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date32() {
+        Test {
+            input: date32_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date32_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date32_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_date64() {
+        Test {
+            input: date64_array(vec![
+                // row group 1
+                Some("2021-01-01"),
+                None,
+                Some("2021-01-03"),
+                // row group 2
+                Some("2021-01-01"),
+                Some("2021-01-05"),
+                None,
+                // row group 3
+                None,
+                None,
+                None,
+            ]),
+            expected_min: date64_array(vec![
+                Some("2021-01-01"),
+                Some("2021-01-01"),
+                None,
+            ]),
+            expected_max: date64_array(vec![
+                Some("2021-01-03"),
+                Some("2021-01-05"),
+                None,
+            ]),
         }
         .run()
     }
@@ -636,13 +861,13 @@ mod test {
             })
             .with_column(ExpectedColumn {
                 name: "tinyint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i8_array([Some(0)]),
+                expected_max: i8_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "smallint_col",
-                expected_min: i32_array([Some(0)]),
-                expected_max: i32_array([Some(9)]),
+                expected_min: i16_array([Some(0)]),
+                expected_max: i16_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "int_col",
@@ -868,6 +1093,16 @@ mod test {
         Arc::new(array)
     }
 
+    fn i8_array(input: impl IntoIterator<Item = Option<i8>>) -> ArrayRef {
+        let array: Int8Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn i16_array(input: impl IntoIterator<Item = Option<i16>>) -> ArrayRef {
+        let array: Int16Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
     fn i32_array(input: impl IntoIterator<Item = Option<i32>>) -> ArrayRef {
         let array: Int32Array = input.into_iter().collect();
         Arc::new(array)
@@ -918,5 +1153,25 @@ mod test {
             ),
         ]);
         Arc::new(struct_array)
+    }
+
+    fn date32_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date32Array::from(
+            input
+                .into_iter()
+                .map(|s| Date32Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
+    }
+
+    fn date64_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array = Date64Array::from(
+            input
+                .into_iter()
+                .map(|s| Date64Type::parse(s.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(array)
     }
 }

@@ -47,7 +47,7 @@ impl ArraySort {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec!["array_sort".to_string(), "list_sort".to_string()],
+            aliases: vec!["list_sort".to_string()],
         }
     }
 }

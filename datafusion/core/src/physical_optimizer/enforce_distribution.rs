@@ -1375,8 +1375,8 @@ pub(crate) mod tests {
             vec![false]
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-            vec![self.input.clone()]
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
         }
 
         // model that it requires the output ordering of its input
@@ -1432,16 +1432,9 @@ pub(crate) mod tests {
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_output_ordering(output_ordering),
             None,
             None,
             Default::default(),
@@ -1457,19 +1450,12 @@ pub(crate) mod tests {
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                .with_file_groups(vec![
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
-                ],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
+                ])
+                .with_output_ordering(output_ordering),
             None,
             None,
             Default::default(),
@@ -1482,16 +1468,9 @@ pub(crate) mod tests {
 
     fn csv_exec_with_sort(output_ordering: Vec<Vec<PhysicalSortExpr>>) -> Arc<CsvExec> {
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_output_ordering(output_ordering),
             false,
             b',',
             b'"',
@@ -1509,19 +1488,12 @@ pub(crate) mod tests {
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<CsvExec> {
         Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema(),
-                file_groups: vec![
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                .with_file_groups(vec![
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
-                ],
-                statistics: Statistics::new_unknown(&schema()),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering,
-            },
+                ])
+                .with_output_ordering(output_ordering),
             false,
             b',',
             b'"',
@@ -3790,19 +3762,11 @@ pub(crate) mod tests {
 
             let plan = aggregate_exec_with_alias(
                 Arc::new(CsvExec::new(
-                    FileScanConfig {
-                        object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                        file_schema: schema(),
-                        file_groups: vec![vec![PartitionedFile::new(
-                            "x".to_string(),
-                            100,
-                        )]],
-                        statistics: Statistics::new_unknown(&schema()),
-                        projection: None,
-                        limit: None,
-                        table_partition_cols: vec![],
-                        output_ordering: vec![],
-                    },
+                    FileScanConfig::new(
+                        ObjectStoreUrl::parse("test:///").unwrap(),
+                        schema(),
+                    )
+                    .with_file(PartitionedFile::new("x".to_string(), 100)),
                     false,
                     b',',
                     b'"',

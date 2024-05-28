@@ -46,8 +46,8 @@ logical_plan
 04)------Projection: orders.o_orderpriority
 05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 06)----------Projection: orders.o_orderkey, orders.o_orderpriority
-07)------------Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
-08)--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("8582"), orders.o_orderdate < Date32("8674")]
+07)------------Filter: orders.o_orderdate >= Date32("1993-07-01") AND orders.o_orderdate < Date32("1993-10-01")
+08)--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("1993-07-01"), orders.o_orderdate < Date32("1993-10-01")]
 09)----------SubqueryAlias: __correlated_sq_1
 10)------------Projection: lineitem.l_orderkey
 11)--------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
@@ -66,7 +66,7 @@ physical_plan
 11)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 12)----------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_orderpriority@2 as o_orderpriority]
 13)------------------------CoalesceBatchesExec: target_batch_size=8192
-14)--------------------------FilterExec: o_orderdate@1 >= 8582 AND o_orderdate@1 < 8674
+14)--------------------------FilterExec: o_orderdate@1 >= 1993-07-01 AND o_orderdate@1 < 1993-10-01
 15)----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate, o_orderpriority], has_header=false
 16)------------------CoalesceBatchesExec: target_batch_size=8192
 17)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4

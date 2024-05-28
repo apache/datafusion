@@ -154,16 +154,11 @@ pub(crate) mod test_util {
         let exec = format
             .create_physical_plan(
                 state,
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection,
-                    limit,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_groups(file_groups)
+                    .with_statistics(statistics)
+                    .with_projection(projection)
+                    .with_limit(limit),
                 None,
             )
             .await?;

@@ -65,7 +65,7 @@ impl ArrayReplace {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
-            aliases: vec![String::from("array_replace"), String::from("list_replace")],
+            aliases: vec![String::from("list_replace")],
         }
     }
 }
@@ -106,10 +106,7 @@ impl ArrayReplaceN {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(4, Volatility::Immutable),
-            aliases: vec![
-                String::from("array_replace_n"),
-                String::from("list_replace_n"),
-            ],
+            aliases: vec![String::from("list_replace_n")],
         }
     }
 }
@@ -150,10 +147,7 @@ impl ArrayReplaceAll {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
-            aliases: vec![
-                String::from("array_replace_all"),
-                String::from("list_replace_all"),
-            ],
+            aliases: vec![String::from("list_replace_all")],
         }
     }
 }
