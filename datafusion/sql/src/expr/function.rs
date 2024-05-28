@@ -164,6 +164,16 @@ impl FunctionArgs {
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
                     )
                 }
+                FunctionArgumentClause::Having(having) => {
+                    return not_impl_err!(
+                        "Calling {name}: HAVING not supported in function arguments: {having}"
+                    )
+                }
+                FunctionArgumentClause::Separator(sep) => {
+                    return not_impl_err!(
+                        "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
+                    )
+                }
             }
         }
 
