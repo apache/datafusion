@@ -341,13 +341,13 @@ fn get_valid_types(
                 ValidType::Numeric | ValidType::Integer => {
                     check_number_of_args(*number, current_types.len())?;
 
-                    if *valid_type == ValidType::Integer {
-                        if current_types.iter().any(|t| !t.is_integer()) {
-                            return plan_err!(
-                                "The function expected integer arguments but received {:?}",
-                                current_types
-                            );
-                        }
+                    if *valid_type == ValidType::Integer
+                        && current_types.iter().any(|t| !t.is_integer())
+                    {
+                        return plan_err!(
+                            "The function expected integer arguments but received {:?}",
+                            current_types
+                        );
                     }
 
                     let mut valid_type = current_types.first().unwrap().clone();
@@ -356,10 +356,21 @@ fn get_valid_types(
                             binary_numeric_coercion(&valid_type, t)
                         {
                             valid_type = coerced_type;
-                        } else if !t.is_null() && valid_type.is_null() {
+                        }
+                        // Handle null coercion
+                        else if !t.is_null() && valid_type.is_null() {
                             valid_type = t.clone();
                         } else if t.is_null() && !valid_type.is_null() {
                             // do nothing
+                        }
+                        // Handle numeric string coercion, actual validation is delegate to arrow::cast itself
+                        else if t == &DataType::Utf8 || t == &DataType::LargeUtf8 {
+                            // do nothing
+                        } else if (valid_type == DataType::Utf8
+                            || valid_type == DataType::LargeUtf8)
+                            && t.is_numeric()
+                        {
+                            valid_type = t.clone();
                         } else {
                             return plan_err!(
                                 "{} and {} are not coercible to a common numeric type",
