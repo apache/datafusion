@@ -19,7 +19,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-use arrow_array::Array;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
@@ -1154,11 +1153,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("HIVEVAR is not supported");
         }
 
-        if variables.len() != 1 {
-            return not_impl_err!("SET only supports single variable assignment");
-        }
-
-        let variable = object_name_to_string(variables[0]);
+        let variable = match variables {
+            OneOrManyWithParens::One(v) => object_name_to_string(v),
+            OneOrManyWithParens::Many(vs) => {
+                return not_impl_err!("SET only supports single variable assignment: {vs:?}");
+            }
+        };
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
