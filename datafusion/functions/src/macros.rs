@@ -39,7 +39,7 @@
 ///
 /// Exported functions accept:
 /// - `Vec<Expr>` argument (single argument followed by a comma)
-/// - Variable number of `Expr` arguments (zero or more arguments, without commas)
+/// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         pub mod expr_fn {

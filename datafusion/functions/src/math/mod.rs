@@ -104,8 +104,7 @@ export_functions!(
     (
         atan2,
         "returns inverse tangent of a division given in the argument",
-        y,
-        x
+        y x
     ),
     (atanh, "returns inverse hyperbolic tangent", num),
     (cbrt, "cube root of a number", num),
@@ -121,7 +120,7 @@ export_functions!(
     (exp, "exponential", num),
     (factorial, "factorial", num),
     (floor, "nearest integer less than or equal to argument", num),
-    (gcd, "greatest common divisor", x, y),
+    (gcd, "greatest common divisor", x y),
     (
         isnan,
         "returns true if a given number is +NaN or -NaN otherwise returns false",
@@ -132,23 +131,21 @@ export_functions!(
         "returns true if a given number is +0.0 or -0.0 otherwise returns false",
         num
     ),
-    (lcm, "least common multiple", x, y),
+    (lcm, "least common multiple", x y),
     (ln, "natural logarithm (base e) of a number", num),
     (
         log,
         "logarithm of a number for a particular `base`",
-        base,
-        num
+        base num
     ),
     (log2, "base 2 logarithm of a number", num),
     (log10, "base 10 logarithm of a number", num),
-    (nanvl, "returns x if x is not NaN otherwise returns y", x, y),
+    (nanvl, "returns x if x is not NaN otherwise returns y", x y),
     (pi, "Returns an approximate value of π",),
     (
         power,
         "`base` raised to the power of `exponent`",
-        base,
-        exponent
+        base exponent
     ),
     (radians, "converts degrees to radians", num),
     (random, "Returns a random value in the range 0.0 <= x < 1.0",),
