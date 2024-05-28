@@ -149,47 +149,51 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
 }
 
 /// Given an expression that's literal int encoding position, lookup the corresponding expression
-/// in the select_exprs list, if the index is within the bounds and it is indeed a position literal;
-/// Otherwise, return None
+/// in the select_exprs list, if the index is within the bounds and it is indeed a position literal,
+/// otherwise, returns planning error.
+/// If input expression is not an int literal, returns expression as-is.
 pub(crate) fn resolve_positions_to_exprs(
-    expr: &Expr,
+    expr: Expr,
     select_exprs: &[Expr],
-) -> Option<Expr> {
+) -> Result<Expr> {
     match expr {
         // sql_expr_to_logical_expr maps number to i64
         // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
         Expr::Literal(ScalarValue::Int64(Some(position)))
-            if position > &0_i64 && position <= &(select_exprs.len() as i64) =>
+            if position > 0_i64 && position <= select_exprs.len() as i64 =>
         {
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
-            Some(match select_expr {
+            Ok(match select_expr {
                 Expr::Alias(Alias { expr, .. }) => *expr.clone(),
                 _ => select_expr.clone(),
             })
         }
-        _ => None,
+        Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
+            "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
+            position, select_exprs.len()
+        ),
+        _ => Ok(expr),
     }
 }
 
 /// Rebuilds an `Expr` with columns that refer to aliases replaced by the
 /// alias' underlying `Expr`.
 pub(crate) fn resolve_aliases_to_exprs(
-    expr: &Expr,
+    expr: Expr,
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    expr.clone()
-        .transform_up(|nested_expr| match nested_expr {
-            Expr::Column(c) if c.relation.is_none() => {
-                if let Some(aliased_expr) = aliases.get(&c.name) {
-                    Ok(Transformed::yes(aliased_expr.clone()))
-                } else {
-                    Ok(Transformed::no(Expr::Column(c)))
-                }
+    expr.transform_up(|nested_expr| match nested_expr {
+        Expr::Column(c) if c.relation.is_none() => {
+            if let Some(aliased_expr) = aliases.get(&c.name) {
+                Ok(Transformed::yes(aliased_expr.clone()))
+            } else {
+                Ok(Transformed::no(Expr::Column(c)))
             }
-            _ => Ok(Transformed::no(nested_expr)),
-        })
-        .data()
+        }
+        _ => Ok(Transformed::no(nested_expr)),
+    })
+    .data()
 }
 
 /// given a slice of window expressions sharing the same sort key, find their common partition
@@ -346,9 +350,9 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
     use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
+    use datafusion_expr::{col, count, lit, unnest, EmptyRelation, LogicalPlan};
 
-    use crate::utils::recursive_transform_unnest;
+    use crate::utils::{recursive_transform_unnest, resolve_positions_to_exprs};
 
     #[test]
     fn test_recursive_transform_unnest() -> Result<()> {
@@ -434,6 +438,35 @@ mod tests {
                 col("array_col").alias("unnest(array_col)")
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_positions_to_exprs() -> Result<()> {
+        let select_exprs = vec![col("c1"), col("c2"), count(lit(1))];
+
+        // Assert 1 resolved as first column in select list
+        let resolved = resolve_positions_to_exprs(lit(1i64), &select_exprs)?;
+        assert_eq!(resolved, col("c1"));
+
+        // Assert error if index out of select clause bounds
+        let resolved = resolve_positions_to_exprs(lit(-1i64), &select_exprs);
+        assert!(resolved.is_err_and(|e| e.message().contains(
+            "Cannot find column with position -1 in SELECT clause. Valid columns: 1 to 3"
+        )));
+
+        let resolved = resolve_positions_to_exprs(lit(5i64), &select_exprs);
+        assert!(resolved.is_err_and(|e| e.message().contains(
+            "Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 3"
+        )));
+
+        // Assert expression returned as-is
+        let resolved = resolve_positions_to_exprs(lit("text"), &select_exprs)?;
+        assert_eq!(resolved, lit("text"));
+
+        let resolved = resolve_positions_to_exprs(col("fake"), &select_exprs)?;
+        assert_eq!(resolved, col("fake"));
 
         Ok(())
     }
