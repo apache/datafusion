@@ -17,7 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{CastKind, Expr as SQLExpr, JsonPathElem, TrimWhereField, Value};
+use sqlparser::ast::{CastKind, Expr as SQLExpr, JsonPathElem, Subscript, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
@@ -194,17 +194,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::ArrayIndex { obj, indexes } => {
+            SQLExpr::Subscript { expr, subscript } => {
                 fn is_unsupported(expr: &SQLExpr) -> bool {
                     matches!(expr, SQLExpr::JsonAccess { .. })
                 }
+
                 fn simplify_array_index_expr(expr: Expr, index: Expr) -> (Expr, bool) {
                     match &expr {
                         Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
                             let mut new_args = agg_func.args.clone();
                             new_args.push(index.clone());
                             (Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new(
-                                datafusion_expr::AggregateFunction::NthValue,
+                                AggregateFunction::NthValue,
                                 new_args,
                                 agg_func.distinct,
                                 agg_func.filter.clone(),
@@ -215,11 +216,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         _ => (expr, false),
                     }
                 }
+
                 let expr =
-                    self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+
+                let indexes = match *subscript {
+                    Subscript::Index { index } => vec![index],
+                    Subscript::Slice { lower_bound, upper_bound } => {
+                        let mut indexes = vec![];
+                        if let Some(lower_bound) = lower_bound {
+                            indexes.push(lower_bound);
+                        }
+                        if let Some(upper_bound) = upper_bound {
+                            indexes.push(upper_bound);
+                        }
+                        indexes
+                    }
+                };
+
                 if indexes.len() > 1 || is_unsupported(&indexes[0]) {
                     return self.plan_indexed(expr, indexes, schema, planner_context);
                 }
+
                 let (new_expr, changed) = simplify_array_index_expr(
                     expr,
                     self.sql_expr_to_logical_expr(
