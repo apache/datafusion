@@ -30,11 +30,6 @@ use arrow::datatypes::DataType;
 /// return results with this timezone.
 pub const TIMEZONE_WILDCARD: &str = "+TZ";
 
-/// Constant that is used as a placeholder for any valid fixed size list.
-/// This is used where a function can accept a fixed size list type with any
-/// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
-pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
-
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
@@ -129,6 +124,8 @@ pub enum ValidType {
     String,
     FixedSizeListWildcard,
     Array,
+    /// TO DEPRECATE: For function that has complex signature, 
+    /// they should consider using `UserDefined`
     Arbitrary(Vec<DataType>),
 }
 
@@ -283,6 +280,20 @@ impl Signature {
     pub fn uniform_numeric(num: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Uniform(num, ValidType::Numeric),
+            volatility,
+        }
+    }
+
+    pub fn uniform_string(num: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Uniform(num, ValidType::String),
+            volatility,
+        }
+    }
+
+    pub fn uniform_fixed_size_list_wildcard(num: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Uniform(num, ValidType::FixedSizeListWildcard),
             volatility,
         }
     }
