@@ -16,7 +16,9 @@
 // under the License.
 
 use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_expr::{expr::Alias, Expr, JoinConstraint, JoinType, LogicalPlan};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+};
 use sqlparser::ast::{self, SetExpr};
 
 use crate::unparser::utils::unproject_agg_exprs;
@@ -271,8 +273,39 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Distinct(_distinct) => {
-                not_impl_err!("Unsupported operator: {plan:?}")
+            LogicalPlan::Distinct(distinct) => {
+                let (select_distinct, input) = match distinct {
+                    Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
+                    Distinct::On(on) => {
+                        let exprs = on
+                            .on_expr
+                            .iter()
+                            .map(|e| self.expr_to_sql(e))
+                            .collect::<Result<Vec<_>>>()?;
+                        let items = on
+                            .select_expr
+                            .iter()
+                            .map(|e| self.select_item_to_sql(e))
+                            .collect::<Result<Vec<_>>>()?;
+                        match &on.sort_expr {
+                            Some(sort_expr) => {
+                                if let Some(query_ref) = query {
+                                    query_ref
+                                        .order_by(self.sort_to_sql(sort_expr.clone())?);
+                                } else {
+                                    return internal_err!(
+                                "Sort operator only valid in a statement context."
+                            );
+                                }
+                            }
+                            None => {}
+                        }
+                        select.projection(items);
+                        (ast::Distinct::On(exprs), on.input.as_ref())
+                    }
+                };
+                select.distinct(Some(select_distinct));
+                self.select_to_sql_recursively(input, query, select, relation)
             }
             LogicalPlan::Join(join) => {
                 match join.join_constraint {
