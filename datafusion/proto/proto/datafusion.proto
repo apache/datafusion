@@ -1110,6 +1110,11 @@ message MaybePhysicalSortExprs {
   repeated PhysicalSortExprNode sort_expr = 1;
 }
 
+message AggLimit {
+  // wrap into a message to make it optional
+  uint64 limit = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1122,6 +1127,7 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
+  AggLimit limit = 11;
 }
 
 message GlobalLimitExecNode {
