@@ -30,35 +30,28 @@ make_udf_function!(sha224::SHA224Func, SHA224, sha224);
 make_udf_function!(sha256::SHA256Func, SHA256, sha256);
 make_udf_function!(sha384::SHA384Func, SHA384, sha384);
 make_udf_function!(sha512::SHA512Func, SHA512, sha512);
-export_functions!(
-    (
-        digest,
-        "Computes the binary hash of an expression using the specified algorithm.",
-        input_arg1 input_arg2
-    ),
-    (
-        md5,
-        "Computes an MD5 128-bit checksum for a string expression.",
-        input_arg
-    ),
-    (
-        sha224,
-        "Computes the SHA-224 hash of a binary string.",
-        input_arg1
-    ),
-    (
-        sha256,
-        "Computes the SHA-256 hash of a binary string.",
-        input_arg1
-    ),
-    (
-        sha384,
-        "Computes the SHA-384 hash of a binary string.",
-        input_arg1
-    ),
-    (
-        sha512,
-        "Computes the SHA-512 hash of a binary string.",
-        input_arg1
-    )
-);
+export_functions!((
+    digest,
+    "Computes the binary hash of an expression using the specified algorithm.",
+    input_arg1 input_arg2
+),(
+    md5,
+    "Computes an MD5 128-bit checksum for a string expression.",
+    input_arg
+),(
+    sha224,
+    "Computes the SHA-224 hash of a binary string.",
+    input_arg1
+),(
+    sha256,
+    "Computes the SHA-256 hash of a binary string.",
+    input_arg1
+),(
+    sha384,
+    "Computes the SHA-384 hash of a binary string.",
+    input_arg1
+),(
+    sha512,
+    "Computes the SHA-512 hash of a binary string.",
+    input_arg1
+));

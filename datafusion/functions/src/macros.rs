@@ -36,11 +36,17 @@
 ///    ]
 /// }
 /// ```
+///
+/// Exported functions accept:
+/// - Vec<Expr> argument (single argument followed by a comma)
+/// - Variable number of Expr arguments (zero or more arguments, without commas)
+///
+/// See [`make_function!`] macro on how to define functions with custom arguments
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         pub mod expr_fn {
             $(
-                export_function!($FUNC, $DOC, $($arg)*);
+                make_function!($FUNC, $DOC, $($arg)*);
             )*
         }
 
@@ -55,7 +61,21 @@ macro_rules! export_functions {
     };
 }
 
-macro_rules! export_function {
+macro_rules! make_function {
+    // single vector argument (a single argument followed by a comma)
+    ($FUNC:ident, $DOC:expr, $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            super::$FUNC().call($arg)
+        }
+    };
+    // variadic arguments (zero or more arguments, without commas)
+    ($FUNC:ident, $DOC:expr, $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            super::$FUNC().call(vec![$($arg),*])
+        }
+    };
     // special to get_field function in datafusion/functions/src/core/mod.rs
     ($FUNC:ident, $DOC:expr, $arg:ident, $arg2:ident) => {
         #[doc = $DOC]
@@ -63,22 +83,8 @@ macro_rules! export_function {
             super::$FUNC().call(vec![$arg, $arg2.lit()])
         }
     };
-    // vector argument (a single argument followed by a comma)
-    ($FUNC:ident, $DOC:expr, $arg:ident,) => {
-        #[doc = $DOC]
-        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
-            super::$FUNC().call($arg)
-        }
-    };
-    // veriadic arguments (one arugment not followed by a comma
-    // or multiple arguments, with or without commas)
-    ($FUNC:ident, $DOC:expr, $($arg:ident)*) => {
-        #[doc = $DOC]
-        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-            super::$FUNC().call(vec![$($arg),*])
-        }
-    };
 }
+
 /// Creates a singleton `ScalarUDF` of the `$UDF` function named `$GNAME` and a
 /// function named `$NAME` which returns that function named $NAME.
 ///
