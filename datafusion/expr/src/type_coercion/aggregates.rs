@@ -18,7 +18,7 @@
 use std::ops::Deref;
 
 use super::functions::can_coerce_from;
-use crate::{AggregateFunction, Signature, TypeSignature};
+use crate::{signature::ValidType, AggregateFunction, Signature, TypeSignature};
 
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -316,6 +316,9 @@ pub fn check_arg_count(
     signature: &TypeSignature,
 ) -> Result<()> {
     match signature {
+        TypeSignature::Uniform(_, ValidType::Numeric) => {
+            // Numreic signature is validated in `get_valid_types`
+        }
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
             if input_types.len() != *agg_count {
                 return plan_err!(
@@ -352,9 +355,8 @@ pub fn check_arg_count(
                 );
             }
         }
-        TypeSignature::UserDefined | TypeSignature::Numeric(_) => {
+        TypeSignature::UserDefined => {
             // User-defined signature is validated in `coerce_types`
-            // Numreic signature is validated in `get_valid_types`
         }
         _ => {
             return internal_err!(

@@ -18,8 +18,9 @@
 use std::sync::Arc;
 
 use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, ValidType, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
+use crate::type_coercion::binary::string_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -315,40 +316,75 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::Numeric(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
-            }
-
-            let mut valid_type = current_types.first().unwrap().clone();
-            for t in current_types.iter().skip(1) {
-                if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
-                    valid_type = coerced_type;
-                } else {
+        TypeSignature::Uniform(number, valid_type) => {
+            fn check_number_of_args(
+                expected_number: usize,
+                args_number: usize,
+            ) -> Result<()> {
+                if expected_number < 1 {
                     return plan_err!(
-                        "{} and {} are not coercible to a common numeric type",
-                        valid_type,
-                        t
+                        "The signature expected at least one argument but received {}",
+                        args_number
                     );
                 }
+                if expected_number != args_number {
+                    return plan_err!(
+                        "The signature expected {} arguments but received {}",
+                        expected_number,
+                        args_number
+                    );
+                }
+                Ok(())
             }
 
-            vec![vec![valid_type; *number]]
+            match valid_type {
+                ValidType::Arbitrary(valid_types) => valid_types
+                    .iter()
+                    .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
+                    .collect(),
+                ValidType::Numeric => {
+                    check_number_of_args(*number, current_types.len())?;
+
+                    let mut valid_type = current_types.first().unwrap().clone();
+                    for t in current_types.iter().skip(1) {
+                        if let Some(coerced_type) =
+                            binary_numeric_coercion(&valid_type, t)
+                        {
+                            valid_type = coerced_type;
+                        } else {
+                            return plan_err!(
+                                "{} and {} are not coercible to a common numeric type",
+                                valid_type,
+                                t
+                            );
+                        }
+                    }
+
+                    vec![vec![valid_type; *number]]
+                }
+                ValidType::String => {
+                    check_number_of_args(*number, current_types.len())?;
+
+                    let mut valid_type = current_types.first().unwrap().clone();
+                    for t in current_types.iter().skip(1) {
+                        if let Some(coerced_type) =
+                            string_coercion(&valid_type, t)
+                        {
+                            valid_type = coerced_type;
+                        } else {
+                            return plan_err!(
+                                "{} and {} are not coercible to a common string type",
+                                valid_type,
+                                t
+                            );
+                        }
+                    }
+
+                    vec![vec![valid_type; *number]]
+                }
+                _ => todo!(),
+            }
         }
-        TypeSignature::Uniform(number, valid_types) => valid_types
-            .iter()
-            .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
-            .collect(),
         TypeSignature::UserDefined => {
             return internal_err!(
             "User-defined signature should be handled by function-specific coerce_types."
