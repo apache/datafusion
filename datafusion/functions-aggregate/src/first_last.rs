@@ -72,7 +72,7 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("first_value")],
+            aliases: vec![],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
@@ -97,7 +97,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn name(&self) -> &str {
-        "FIRST_VALUE"
+        "first_value"
     }
 
     fn signature(&self) -> &Signature {
@@ -372,7 +372,7 @@ impl Default for LastValue {
 impl LastValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("last_value")],
+            aliases: vec![],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
@@ -397,7 +397,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn name(&self) -> &str {
-        "LAST_VALUE"
+        "last_value"
     }
 
     fn signature(&self) -> &Signature {

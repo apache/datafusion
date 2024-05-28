@@ -79,7 +79,7 @@ impl Default for Median {
 impl Median {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["median".to_string()],
+            aliases: vec![],
             signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
@@ -91,7 +91,7 @@ impl AggregateUDFImpl for Median {
     }
 
     fn name(&self) -> &str {
-        "MEDIAN"
+        "median"
     }
 
     fn signature(&self) -> &Signature {
