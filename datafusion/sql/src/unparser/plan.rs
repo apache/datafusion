@@ -282,6 +282,25 @@ impl Unparser<'_> {
                             .iter()
                             .map(|e| self.expr_to_sql(e))
                             .collect::<Result<Vec<_>>>()?;
+                        let items = on
+                            .select_expr
+                            .iter()
+                            .map(|e| self.select_item_to_sql(e))
+                            .collect::<Result<Vec<_>>>()?;
+                        match &on.sort_expr {
+                            Some(sort_expr) => {
+                                if let Some(query_ref) = query {
+                                    query_ref
+                                        .order_by(self.sort_to_sql(sort_expr.clone())?);
+                                } else {
+                                    return internal_err!(
+                                "Sort operator only valid in a statement context."
+                            );
+                                }
+                            }
+                            None => {}
+                        }
+                        select.projection(items);
                         (ast::Distinct::On(exprs), on.input.as_ref())
                     }
                 };

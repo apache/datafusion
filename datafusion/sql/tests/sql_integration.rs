@@ -4632,6 +4632,7 @@ fn roundtrip_statement() -> Result<()> {
             "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
             r#"select "First Name" from person_quoted_cols"#,
             "select DISTINCT id FROM person;",
+            "select DISTINCT on (id) id, first_name from person order by id;",
             r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
             "select id, count(*), first_name from person group by first_name, id",
