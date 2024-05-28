@@ -338,8 +338,17 @@ fn get_valid_types(
                     .iter()
                     .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
                     .collect(),
-                ValidType::Numeric => {
+                ValidType::Numeric | ValidType::Integer => {
                     check_number_of_args(*number, current_types.len())?;
+
+                    if *valid_type == ValidType::Integer {
+                        if current_types.iter().any(|t| !t.is_integer()) {
+                            return plan_err!(
+                                "The function expected integer arguments but received {:?}",
+                                current_types
+                            );
+                        }
+                    }
 
                     let mut valid_type = current_types.first().unwrap().clone();
                     for t in current_types.iter().skip(1) {
@@ -401,7 +410,6 @@ fn get_valid_types(
                         vec![vec![]]
                     }
                 }
-                _ => todo!(),
             }
         }
         TypeSignature::UserDefined => {

@@ -120,6 +120,8 @@ pub enum TypeSignature {
 pub enum ValidType {
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric,
+    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_integer> to know which type is considered integer
+    Integer,
     /// UTF8 and LargetUTF8
     String,
     FixedSizeListWildcard,
@@ -189,10 +191,15 @@ impl TypeSignature {
                 ValidType::Numeric => {
                     vec![format!("Numeric, .., Numeric")]
                 }
+                ValidType::Integer => {
+                    vec![format!("Integer, .., Integer")]
+                }
                 ValidType::String => {
                     vec![format!("String, .., String")]
                 }
-                _ => todo!("Implement other ValidType"),
+                ValidType::FixedSizeListWildcard => {
+                    vec![format!("FixedSizeListWildcard, .., FixedSizeListWildcard")]
+                }
             },
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -293,6 +300,13 @@ impl Signature {
     pub fn uniform_fixed_size_list_wildcard(num: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Uniform(num, ValidType::FixedSizeListWildcard),
+            volatility,
+        }
+    }
+
+    pub fn uniform_interger(num: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Uniform(num, ValidType::Integer),
             volatility,
         }
     }

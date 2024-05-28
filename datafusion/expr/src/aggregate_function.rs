@@ -308,7 +308,7 @@ impl AggregateFunction {
             AggregateFunction::BitAnd
             | AggregateFunction::BitOr
             | AggregateFunction::BitXor => {
-                Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
+                Signature::uniform_interger(1, Volatility::Immutable)
             }
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
