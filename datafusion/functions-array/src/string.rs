@@ -119,7 +119,6 @@ impl ArrayToString {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: vec![
-                String::from("array_to_string"),
                 String::from("list_to_string"),
                 String::from("array_join"),
                 String::from("list_join"),
@@ -182,10 +181,7 @@ impl StringToArray {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![
-                String::from("string_to_array"),
-                String::from("string_to_list"),
-            ],
+            aliases: vec![String::from("string_to_list")],
         }
     }
 }
