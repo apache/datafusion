@@ -274,22 +274,18 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Distinct(distinct) => {
-                let now_distinct = match distinct {
-                    Distinct::All(_) => ast::Distinct::Distinct,
+                let (select_distinct, input) = match distinct {
+                    Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
                         let exprs = on
                             .on_expr
                             .iter()
                             .map(|e| self.expr_to_sql(e))
                             .collect::<Result<Vec<_>>>()?;
-                        ast::Distinct::On(exprs)
+                        (ast::Distinct::On(exprs), on.input.as_ref())
                     }
                 };
-                let input = match distinct {
-                    Distinct::All(input) => input,
-                    Distinct::On(on) => on.input.as_ref(),
-                };
-                select.distinct(Some(now_distinct));
+                select.distinct(Some(select_distinct));
                 self.select_to_sql_recursively(input, query, select, relation)
             }
             LogicalPlan::Join(join) => {
