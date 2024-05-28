@@ -539,14 +539,23 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Arc::new(AggregateExec::try_new(
+                let limit = hash_agg
+                    .limit
+                    .as_ref()
+                    .map(|lit_value| lit_value.limit as usize);
+
+                let agg = AggregateExec::try_new(
                     agg_mode,
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
                     input,
                     physical_schema,
-                )?))
+                )?;
+
+                let agg = agg.with_limit(limit);
+
+                Ok(Arc::new(agg))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1504,6 +1513,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .map(|expr| serialize_physical_expr(expr.0.to_owned(), extension_codec))
                 .collect::<Result<Vec<_>>>()?;
 
+            let limit = exec.limit().map(|value| protobuf::AggLimit {
+                limit: value as u64,
+            });
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
                     protobuf::AggregateExecNode {
@@ -1517,6 +1530,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         input_schema: Some(input_schema.as_ref().try_into()?),
                         null_expr,
                         groups,
+                        limit,
                     },
                 ))),
             });
