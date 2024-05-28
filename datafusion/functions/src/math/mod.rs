@@ -152,12 +152,12 @@ export_functions!(
     ),
     (radians, "converts degrees to radians", num),
     (random, "Returns a random value in the range 0.0 <= x < 1.0",),
-    (round, "round to nearest integer", args),
     (signum, "sign of the argument (-1, 0, +1)", num),
     (sin, "sine", num),
     (sinh, "hyperbolic sine", num),
     (sqrt, "square root of a number", num),
     (tan, "returns the tangent of a number", num),
     (tanh, "returns the hyperbolic tangent of a number", num),
-    (trunc, "truncate toward zero, with optional precision", args)
+    (round, "round to nearest integer", args,),
+    (trunc, "truncate toward zero, with optional precision", args,)
 );
