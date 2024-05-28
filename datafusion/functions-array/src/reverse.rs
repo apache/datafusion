@@ -47,7 +47,7 @@ impl ArrayReverse {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            aliases: vec!["array_reverse".to_string(), "list_reverse".to_string()],
+            aliases: vec!["list_reverse".to_string()],
         }
     }
 }

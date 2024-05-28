@@ -69,7 +69,7 @@ impl ArrayUnion {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("array_union"), String::from("list_union")],
+            aliases: vec![String::from("list_union")],
         }
     }
 }
@@ -114,10 +114,7 @@ impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![
-                String::from("array_intersect"),
-                String::from("list_intersect"),
-            ],
+            aliases: vec![String::from("list_intersect")],
         }
     }
 }
@@ -162,7 +159,7 @@ impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec!["array_distinct".to_string(), "list_distinct".to_string()],
+            aliases: vec!["list_distinct".to_string()],
         }
     }
 }

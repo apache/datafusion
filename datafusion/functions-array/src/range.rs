@@ -58,7 +58,7 @@ impl Range {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("range")],
+            aliases: vec![],
         }
     }
 }
@@ -129,7 +129,7 @@ impl GenSeries {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("generate_series")],
+            aliases: vec![],
         }
     }
 }
