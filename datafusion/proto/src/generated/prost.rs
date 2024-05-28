@@ -6,7 +6,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -71,6 +71,8 @@ pub mod logical_plan_node {
         DistinctOn(::prost::alloc::boxed::Box<super::DistinctOnNode>),
         #[prost(message, tag = "29")]
         CopyTo(::prost::alloc::boxed::Box<super::CopyToNode>),
+        #[prost(message, tag = "30")]
+        Unnest(::prost::alloc::boxed::Box<super::UnnestNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -430,6 +432,30 @@ pub mod copy_to_node {
         #[prost(message, tag = "12")]
         Arrow(super::super::datafusion_common::ArrowOptions),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnnestNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub exec_columns: ::prost::alloc::vec::Vec<super::datafusion_common::Column>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub list_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "4")]
+    pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub dependency_indices: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "6")]
+    pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
+    #[prost(message, optional, tag = "7")]
+    pub options: ::core::option::Option<UnnestOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnnestOptions {
+    #[prost(bool, tag = "1")]
+    pub preserve_nulls: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
