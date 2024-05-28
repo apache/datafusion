@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use arrow_array::Array;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
@@ -53,12 +54,7 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast;
-use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
-    Expr, FromTable, Ident, Insert, ObjectName, ObjectType, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
-};
+use sqlparser::ast::{Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -229,9 +225,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::SetVariable {
                 local,
                 hivevar,
-                variable,
+                variables,
                 value,
-            } => self.set_variable_to_plan(local, hivevar, &variable, value),
+            } => self.set_variable_to_plan(local, hivevar, &variables, value),
 
             Statement::CreateTable {
                 query,
@@ -1140,8 +1136,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         local: bool,
         hivevar: bool,
-        variable: &ObjectName,
-        value: Vec<sqlparser::ast::Expr>,
+        variables: &OneOrManyWithParens<ObjectName>,
+        value: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         if local {
             return not_impl_err!("LOCAL is not supported");
@@ -1151,7 +1147,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("HIVEVAR is not supported");
         }
 
-        let variable = object_name_to_string(variable);
+        if variables.len() != 1 {
+            return not_impl_err!("SET only supports single variable assignment");
+        }
+
+        let variable = object_name_to_string(variables[0]);
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
