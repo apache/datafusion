@@ -45,8 +45,8 @@ use arrow::{
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
+        Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
@@ -3179,8 +3179,12 @@ impl fmt::Display for ScalarValue {
             ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::Date32(e) => format_option!(f, e)?,
-            ScalarValue::Date64(e) => format_option!(f, e)?,
+            ScalarValue::Date32(e) => {
+                format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
+            }
+            ScalarValue::Date64(e) => {
+                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
+            }
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
             ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
             ScalarValue::Time64Microsecond(e) => format_option!(f, e)?,
