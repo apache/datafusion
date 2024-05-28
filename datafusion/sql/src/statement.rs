@@ -53,7 +53,12 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast;
-use sqlparser::ast::{Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value};
+use sqlparser::ast::{
+    Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
+    Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
+    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -1156,7 +1161,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let variable = match variables {
             OneOrManyWithParens::One(v) => object_name_to_string(v),
             OneOrManyWithParens::Many(vs) => {
-                return not_impl_err!("SET only supports single variable assignment: {vs:?}");
+                return not_impl_err!(
+                    "SET only supports single variable assignment: {vs:?}"
+                );
             }
         };
         let mut variable_lower = variable.to_lowercase();

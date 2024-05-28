@@ -17,7 +17,9 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{CastKind, Expr as SQLExpr, JsonPathElem, Subscript, TrimWhereField, Value};
+use sqlparser::ast::{
+    CastKind, Expr as SQLExpr, JsonPathElem, Subscript, TrimWhereField, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::{
@@ -222,7 +224,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let indexes = match *subscript {
                     Subscript::Index { index } => vec![index],
-                    Subscript::Slice { lower_bound, upper_bound } => {
+                    Subscript::Slice {
+                        lower_bound,
+                        upper_bound,
+                    } => {
                         let mut indexes = vec![];
                         if let Some(lower_bound) = lower_bound {
                             indexes.push(lower_bound);
