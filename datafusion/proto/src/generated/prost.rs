@@ -1735,6 +1735,13 @@ pub struct MaybePhysicalSortExprs {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AggLimit {
+    /// wrap into a message to make it optional
+    #[prost(uint64, tag = "1")]
+    pub limit: u64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1757,6 +1764,8 @@ pub struct AggregateExecNode {
     pub groups: ::prost::alloc::vec::Vec<bool>,
     #[prost(message, repeated, tag = "10")]
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
+    #[prost(message, optional, tag = "11")]
+    pub limit: ::core::option::Option<AggLimit>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
