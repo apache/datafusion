@@ -689,7 +689,7 @@ select column1, column2, column3, column4, column5 from nested_arrays;
 
 # values table
 query IIIRT
-select a, b, c, d, e from "values";
+select a, b, c, d, e from values;
 ----
 1 1 2 1.1 Lorem
 2 3 4 2.2 ipsum
@@ -1074,7 +1074,7 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 
 # make_array with 1 columns
 query ???
-select make_array(a), make_array(d), make_array(e) from "values";
+select make_array(a), make_array(d), make_array(e) from values;
 ----
 [1] [1.1] [Lorem]
 [2] [2.2] [ipsum]
@@ -1088,7 +1088,7 @@ select make_array(a), make_array(d), make_array(e) from "values";
 
 # make_array with 2 columns #1
 query ??
-select make_array(b, c), make_array(e, f) from "values";
+select make_array(b, c), make_array(e, f) from values;
 ----
 [1, 2] [Lorem, A]
 [3, 4] [ipsum, ]
@@ -1102,7 +1102,7 @@ select make_array(b, c), make_array(e, f) from "values";
 
 # make_array with 4 columns
 query ?
-select make_array(a, b, c, d) from "values";
+select make_array(a, b, c, d) from values;
 ----
 [1.0, 1.0, 2.0, 1.1]
 [2.0, 3.0, 4.0, 2.2]
@@ -6333,7 +6333,7 @@ SELECT string_to_array('abc def', ' ', 'def')
 [abc, ]
 
 query ?
-select string_to_array(e, ',') from "values";
+select string_to_array(e, ',') from values;
 ----
 [Lorem]
 [ipsum]
@@ -6346,7 +6346,7 @@ select string_to_array(e, ',') from "values";
 NULL
 
 query ?
-select string_to_list(e, 'm') from "values";
+select string_to_list(e, 'm') from values;
 ----
 [Lore, ]
 [ipsu, ]
