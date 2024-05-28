@@ -123,8 +123,7 @@ pub enum ValidType {
     /// UTF8 and LargetUTF8
     String,
     FixedSizeListWildcard,
-    Array,
-    /// TO DEPRECATE: For function that has complex signature, 
+    /// TO DEPRECATE: For function that has complex signature,
     /// they should consider using `UserDefined`
     Arbitrary(Vec<DataType>),
 }

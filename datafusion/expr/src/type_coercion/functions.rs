@@ -347,6 +347,10 @@ fn get_valid_types(
                             binary_numeric_coercion(&valid_type, t)
                         {
                             valid_type = coerced_type;
+                        } else if !t.is_null() && valid_type.is_null() {
+                            valid_type = t.clone();
+                        } else if t.is_null() && !valid_type.is_null() {
+                            // do nothing
                         } else {
                             return plan_err!(
                                 "{} and {} are not coercible to a common numeric type",
@@ -365,6 +369,10 @@ fn get_valid_types(
                     for t in current_types.iter().skip(1) {
                         if let Some(coerced_type) = string_coercion(&valid_type, t) {
                             valid_type = coerced_type;
+                        } else if !t.is_null() && valid_type.is_null() {
+                            valid_type = t.clone();
+                        } else if t.is_null() && !valid_type.is_null() {
+                            // do nothing
                         } else {
                             return plan_err!(
                                 "{} and {} are not coercible to a common string type",
@@ -644,21 +652,6 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // should be able to coerce wildcard fixed size list to non wildcard fixed size list
-        // (FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD), _) => match type_from {
-        //     FixedSizeList(f_from, size_from) => {
-        //         match coerced_from(f_into.data_type(), f_from.data_type()) {
-        //             Some(data_type) if &data_type != f_into.data_type() => {
-        //                 let new_field =
-        //                     Arc::new(f_into.as_ref().clone().with_data_type(data_type));
-        //                 Some(FixedSizeList(new_field, *size_from))
-        //             }
-        //             Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
-        //             _ => None,
-        //         }
-        //     }
-        //     _ => None,
-        // },
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
