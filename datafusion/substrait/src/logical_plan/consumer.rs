@@ -125,6 +125,7 @@ fn scalar_function_type_from_str(
     let name = match name.rsplit_once(':') {
         // Since 0.32.0, Substrait requires the function names to be in a compound format
         // https://substrait.io/extensions/#function-signature-compound-names
+        // for example, `add:i8_i8`.
         // On the consumer side, we don't really care about the signature though, just the name.
         Some((name, _)) => name,
         None => name,

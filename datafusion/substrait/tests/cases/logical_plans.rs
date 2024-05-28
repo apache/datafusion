@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests for reading substrait plans produced by other systems
+
 #[cfg(test)]
 mod tests {
     use datafusion::common::Result;
