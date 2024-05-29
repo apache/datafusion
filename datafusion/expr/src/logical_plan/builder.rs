@@ -82,16 +82,12 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// // SELECT last_name
 /// // FROM employees
 /// // WHERE salary < 1000
-/// let plan = table_scan(
-///              Some("employee"),
-///              &employee_schema(),
-///              None,
-///            )?
-///            // Keep only rows where salary < 1000
-///            .filter(col("salary").lt_eq(lit(1000)))?
-///            // only show "last_name" in the final results
-///            .project(vec![col("last_name")])?
-///            .build()?;
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  // Keep only rows where salary < 1000
+///  .filter(col("salary").lt(lit(1000)))?
+///  // only show "last_name" in the final results
+///  .project(vec![col("last_name")])?
+///  .build()?;
 ///
 /// # Ok(())
 /// # }

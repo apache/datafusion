@@ -1035,7 +1035,9 @@ impl DataFrame {
     }
 
     /// Return a reference to the unoptimized [`LogicalPlan`] that comprises
-    /// this DataFrame. See [`Self::into_unoptimized_plan`] for more details.
+    /// this DataFrame.
+    ///
+    /// See [`Self::into_unoptimized_plan`] for more details.
     pub fn logical_plan(&self) -> &LogicalPlan {
         &self.plan
     }
@@ -1052,6 +1054,9 @@ impl DataFrame {
     /// snapshot of the [`SessionState`] attached to this [`DataFrame`] and
     /// consequently subsequent operations may take place against a different
     /// state (e.g. a different value of `now()`)
+    ///
+    /// See [`Self::into_parts`] to retrieve the owned [`LogicalPlan`] and
+    /// corresponding [`SessionState`].
     pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }
