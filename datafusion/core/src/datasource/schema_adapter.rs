@@ -75,9 +75,16 @@ pub trait SchemaAdapter: Send + Sync {
 
 /// Creates a `SchemaMapping` that can be used to cast or map the columns
 /// from the file schema to the table schema.
-pub trait SchemaMapper: Send + Sync {
+pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
+
+    /// Adapts a `RecordBatch` that does not have all the columns (as defined in the schema).
+    /// This method is slower than `map_batch` and should only be used when explicitly needed.
+    fn map_partial_batch(
+        &self,
+        batch: RecordBatch,
+    ) -> datafusion_common::Result<RecordBatch>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -182,6 +189,31 @@ impl SchemaMapper for SchemaMapping {
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
         let schema = self.table_schema.clone();
+        let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
+        Ok(record_batch)
+    }
+
+    fn map_partial_batch(
+        &self,
+        batch: RecordBatch,
+    ) -> datafusion_common::Result<RecordBatch> {
+        let batch_cols = batch.columns().to_vec();
+        let schema = batch.schema();
+
+        let mut cols = vec![];
+        let mut fields = vec![];
+        for (i, f) in schema.fields().iter().enumerate() {
+            let table_field = self.table_schema.field_with_name(f.name());
+            if let Ok(tf) = table_field {
+                cols.push(cast(&batch_cols[i], tf.data_type())?);
+                fields.push(tf.clone());
+            }
+        }
+
+        // Necessary to handle empty batches
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+
+        let schema = Arc::new(Schema::new(fields));
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
         Ok(record_batch)
     }
@@ -338,6 +370,10 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
+        }
+
+        fn map_partial_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
+            self.map_batch(batch)
         }
     }
 }

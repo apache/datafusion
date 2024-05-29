@@ -621,6 +621,7 @@ impl FileOpener for ParquetOpener {
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
+                    Arc::clone(&schema_mapping),
                 );
 
                 match row_filter {

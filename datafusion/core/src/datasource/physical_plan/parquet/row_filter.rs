@@ -26,6 +26,7 @@ use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
+use crate::datasource::schema_adapter::SchemaMapper;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -79,6 +80,8 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_filtered: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
+    /// used to perform type coercion while filtering rows
+    schema_mapping: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -88,6 +91,7 @@ impl DatafusionArrowPredicate {
         metadata: &ParquetMetaData,
         rows_filtered: metrics::Count,
         time: metrics::Time,
+        schema_mapping: Arc<dyn SchemaMapper>,
     ) -> Result<Self> {
         let schema = Arc::new(schema.project(&candidate.projection)?);
         let physical_expr = reassign_predicate_columns(candidate.expr, &schema, true)?;
@@ -109,6 +113,7 @@ impl DatafusionArrowPredicate {
             ),
             rows_filtered,
             time,
+            schema_mapping,
         })
     }
 }
@@ -123,6 +128,8 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             true => batch,
             false => batch.project(&self.projection)?,
         };
+
+        let batch = self.schema_mapping.map_partial_batch(batch)?;
 
         // scoped timer updates on drop
         let mut timer = self.time.timer();
@@ -324,6 +331,7 @@ pub fn build_row_filter(
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
+    schema_mapping: Arc<dyn SchemaMapper>,
 ) -> Result<Option<RowFilter>> {
     let rows_filtered = &file_metrics.pushdown_rows_filtered;
     let time = &file_metrics.pushdown_eval_time;
@@ -361,6 +369,7 @@ pub fn build_row_filter(
                 metadata,
                 rows_filtered.clone(),
                 time.clone(),
+                Arc::clone(&schema_mapping),
             )?;
 
             filters.push(Box::new(filter));
@@ -373,6 +382,7 @@ pub fn build_row_filter(
                 metadata,
                 rows_filtered.clone(),
                 time.clone(),
+                Arc::clone(&schema_mapping),
             )?;
 
             filters.push(Box::new(filter));
@@ -388,6 +398,7 @@ pub fn build_row_filter(
                 metadata,
                 rows_filtered.clone(),
                 time.clone(),
+                Arc::clone(&schema_mapping),
             )?;
 
             filters.push(Box::new(filter));
@@ -407,6 +418,9 @@ mod test {
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;
+
+    use crate::datasource::schema_adapter::DefaultSchemaAdapterFactory;
+    use crate::datasource::schema_adapter::SchemaAdapterFactory;
 
     use datafusion_common::ToDFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
@@ -510,12 +524,19 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
+        let schema_adapter = DefaultSchemaAdapterFactory{}.create(Arc::new(table_schema));
+        let (schema_mapping, _) = schema_adapter
+            .map_schema(&file_schema)
+            .expect("creating schema mapping");
+
+
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             &file_schema,
             metadata,
             Count::new(),
             Time::new(),
+            schema_mapping,
         )
         .expect("creating filter predicate");
 
@@ -528,7 +549,7 @@ mod test {
         );
         // We need a matching schema to create a record batch
         let batch_schema = Schema::new(vec![Field::new(
-            "timestamp",
+            "timestamp_col",
             DataType::Timestamp(Nanosecond, None),
             false,
         )]);
@@ -539,11 +560,7 @@ mod test {
 
         let filtered = row_filter.evaluate(record_batch);
 
-        let message = String::from("Error evaluating filter predicate: ArrowError(InvalidArgumentError(\"Invalid comparison operation: Timestamp(Nanosecond, None) == Timestamp(Nanosecond, Some(\\\"UTC\\\"))\"), None)");
-        assert!(matches!(filtered, Err(ArrowError::ComputeError(msg)) if message == msg));
-
-        // This currently fails (and should replace the above assert once passing)
-        // assert!(matches!(filtered, Ok(_)));
+        assert!(matches!(filtered, Ok(_)));
     }
 
     #[test]
