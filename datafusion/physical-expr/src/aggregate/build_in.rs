@@ -742,8 +742,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO (yyin): Add back test
-
     #[test]
     fn test_var_pop_expr() -> Result<()> {
         let funcs = vec![AggregateFunction::VariancePop];
@@ -1011,8 +1009,6 @@ mod tests {
         let observed = AggregateFunction::Avg.return_type(&[DataType::Utf8]);
         assert!(observed.is_err());
     }
-
-    // TODO (yyin): Add back tests to sqllogictest
 
     #[test]
     fn test_stddev_return_type() -> Result<()> {

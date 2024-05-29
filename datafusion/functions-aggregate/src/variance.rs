@@ -28,7 +28,6 @@ use arrow::{
 use datafusion_common::{downcast_value, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
     Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
@@ -65,8 +64,8 @@ impl Default for VarianceSample {
 impl VarianceSample {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("var")],
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            aliases: vec![String::from("var_sample")],
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
@@ -250,5 +249,9 @@ impl Accumulator for VarianceAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
