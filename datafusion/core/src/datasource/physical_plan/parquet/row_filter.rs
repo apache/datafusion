@@ -18,13 +18,14 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use super::ParquetFileMetrics;
-use crate::physical_plan::metrics;
-
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
+use parquet::arrow::ProjectionMask;
+use parquet::file::metadata::ParquetMetaData;
+
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -34,9 +35,9 @@ use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
-use parquet::arrow::ProjectionMask;
-use parquet::file::metadata::ParquetMetaData;
+use crate::physical_plan::metrics;
+
+use super::ParquetFileMetrics;
 
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
@@ -398,15 +399,22 @@ pub fn build_row_filter(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use arrow::compute::kernels::cast_utils::Parser;
     use arrow::datatypes::Field;
+    use arrow_array::types::TimestampNanosecondType;
+    use arrow_array::TimestampNanosecondArray;
+    use arrow_schema::TimeUnit::Nanosecond;
+    use parquet::arrow::parquet_to_arrow_schema;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use rand::prelude::*;
+
     use datafusion_common::ToDFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::create_physical_expr;
-    use parquet::arrow::parquet_to_arrow_schema;
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-    use rand::prelude::*;
+    use datafusion_physical_plan::metrics::{Count, Time};
+
+    use super::*;
 
     // We should ignore predicate that read non-primitive columns
     #[test]
@@ -471,6 +479,71 @@ mod test {
             candidate.unwrap().expr.to_string(),
             expected_candidate_expr.to_string()
         );
+    }
+
+    #[test]
+    fn test_filter_type_coercion() {
+        let testdata = crate::test_util::parquet_test_data();
+        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+        let metadata = reader.metadata();
+        let file_schema =
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .expect("parsing schema");
+
+        // This is the schema we would like to coerce to,
+        // which is different from the physical schema of the file.
+        let table_schema = Schema::new(vec![Field::new(
+            "timestamp_col",
+            DataType::Timestamp(Nanosecond, Some(Arc::from("UTC"))),
+            false,
+        )]);
+
+        let expr = col("timestamp_col").eq(Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+        ));
+        let expr = logical2physical(&expr, &table_schema);
+        let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
+            .build(metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            &file_schema,
+            metadata,
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        // Create some fake data as if it was from the parquet file
+        let ts_array = TimestampNanosecondArray::new(
+            vec![TimestampNanosecondType::parse("2020-01-01T00:00:00")
+                .expect("should parse")]
+            .into(),
+            None,
+        );
+        // We need a matching schema to create a record batch
+        let batch_schema = Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(Nanosecond, None),
+            false,
+        )]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(batch_schema), vec![Arc::new(ts_array)])
+                .expect("creating record batch");
+
+        let filtered = row_filter.evaluate(record_batch);
+
+        let message = String::from("Error evaluating filter predicate: ArrowError(InvalidArgumentError(\"Invalid comparison operation: Timestamp(Nanosecond, None) == Timestamp(Nanosecond, Some(\\\"UTC\\\"))\"), None)");
+        assert!(matches!(filtered, Err(ArrowError::ComputeError(msg)) if message == msg));
+
+        // This currently fails (and should replace the above assert once passing)
+        // assert!(matches!(filtered, Ok(_)));
     }
 
     #[test]
