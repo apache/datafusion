@@ -50,7 +50,7 @@ impl ArrayRepeat {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_repeat"), String::from("list_repeat")],
+            aliases: vec![String::from("list_repeat")],
         }
     }
 }

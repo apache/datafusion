@@ -20,7 +20,7 @@ use std::sync::Arc;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
-    TableReference,
+    TableReference, UnnestOptions,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
@@ -49,6 +49,14 @@ use crate::protobuf::{
 };
 
 use super::LogicalExtensionCodec;
+
+impl From<&protobuf::UnnestOptions> for UnnestOptions {
+    fn from(opts: &protobuf::UnnestOptions) -> Self {
+        Self {
+            preserve_nulls: opts.preserve_nulls,
+        }
+    }
+}
 
 impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     fn from(units: protobuf::WindowFrameUnits) -> Self {

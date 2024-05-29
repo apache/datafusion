@@ -39,17 +39,46 @@ use datafusion_common::{
 };
 use sqlparser::ast::NullTreatment;
 
-/// `Expr` is a central struct of DataFusion's query API, and
-/// represent logical expressions such as `A + 1`, or `CAST(c1 AS
-/// int)`.
+/// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
-/// An `Expr` can compute its [DataType]
-/// and nullability, and has functions for building up complex
-/// expressions.
+/// For example the expression `A + 1` will be represented as
+///
+///```text
+///  BinaryExpr {
+///    left: Expr::Column("A"),
+///    op: Operator::Plus,
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+/// }
+/// ```
+///
+/// # Creating Expressions
+///
+/// `Expr`s can be created directly, but it is often easier and less verbose to
+/// use the fluent APIs in [`crate::expr_fn`] such as [`col`] and [`lit`], or
+/// methods such as [`Expr::alias`], [`Expr::cast_to`], and [`Expr::Like`]).
+///
+/// # Schema Access
+///
+/// See [`ExprSchemable::get_type`] to access the [`DataType`] and nullability
+/// of an `Expr`.
+///
+/// # Visiting and Rewriting `Expr`s
+///
+/// The `Expr` struct implements the [`TreeNode`] trait for walking and
+/// rewriting expressions. For example [`TreeNode::apply`] recursively visits an
+/// `Expr` and [`TreeNode::transform`] can be used to rewrite an expression. See
+/// the examples below and [`TreeNode`] for more information.
 ///
 /// # Examples
 ///
-/// ## Create an expression `c1` referring to column named "c1"
+/// ## Column references and literals
+///
+/// [`Expr::Column`] refer to the values of columns and are often created with
+/// the [`col`] function. For example to create an expression `c1` referring to
+/// column named "c1":
+///
+/// [`col`]: crate::expr_fn::col
+///
 /// ```
 /// # use datafusion_common::Column;
 /// # use datafusion_expr::{lit, col, Expr};
@@ -57,11 +86,33 @@ use sqlparser::ast::NullTreatment;
 /// assert_eq!(expr, Expr::Column(Column::from_name("c1")));
 /// ```
 ///
-/// ## Create the expression `c1 + c2` to add columns "c1" and "c2" together
+/// [`Expr::Literal`] refer to literal, or constant, values. These are created
+/// with the [`lit`] function. For example to create an expression `42`:
+///
+/// [`lit`]: crate::lit
+///
+/// ```
+/// # use datafusion_common::{Column, ScalarValue};
+/// # use datafusion_expr::{lit, col, Expr};
+/// // All literals are strongly typed in DataFusion. To make an `i64` 42:
+/// let expr = lit(42i64);
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// // To make a (typed) NULL:
+/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
+/// let expr = lit(ScalarValue::Null);
+/// ```
+///
+/// ## Binary Expressions
+///
+/// Exprs implement traits that allow easy to understand construction of more
+/// complex expresions. For example, to create `c1 + c2` to add columns "c1" and
+/// "c2" together
+///
 /// ```
 /// # use datafusion_expr::{lit, col, Operator, Expr};
+/// // Use the `+` operator to add two columns together
 /// let expr = col("c1") + col("c2");
-///
 /// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
@@ -70,12 +121,13 @@ use sqlparser::ast::NullTreatment;
 /// }
 /// ```
 ///
-/// ## Create expression `c1 = 42` to compare the value in column "c1" to the literal value `42`
+/// The expression `c1 = 42` to compares the value in column "c1" to the
+/// literal value `42`:
+///
 /// ```
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// let expr = col("c1").eq(lit(42_i32));
-///
 /// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
@@ -85,19 +137,23 @@ use sqlparser::ast::NullTreatment;
 /// }
 /// ```
 ///
-/// ## Return a list of [`Expr::Column`] from a schema's columns
+/// Here is how to implement the equivalent of `SELECT *` to select all
+/// [`Expr::Column`] from a [`DFSchema`]'s columns:
+///
 /// ```
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_common::{DFSchema, Column};
 /// # use datafusion_expr::Expr;
-///
+/// // Create a schema c1(int, c2 float)
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
 ///    Field::new("c2", DataType::Float64, false),
 /// ]);
-/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+/// // DFSchema is a an Arrow schema with optional relation name
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema)
+///   .unwrap();
 ///
-/// // Form a list of expressions for each item in the schema
+/// // Form Vec<Expr> with an expression for each column in the schema
 /// let exprs: Vec<_> = df_schema.iter()
 ///   .map(Expr::from)
 ///   .collect();
@@ -107,6 +163,56 @@ use sqlparser::ast::NullTreatment;
 ///   Expr::from(Column::from_qualified_name("t1.c2")),
 /// ]);
 /// ```
+///
+/// # Visiting and Rewriting `Expr`s
+///
+/// Here is an example that finds all literals in an `Expr` tree:
+/// ```
+/// # use std::collections::{HashSet};
+/// use datafusion_common::ScalarValue;
+/// # use datafusion_expr::{col, Expr, lit};
+/// use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+/// // Expression a = 5 AND b = 6
+/// let expr = col("a").eq(lit(5)) & col("b").eq(lit(6));
+/// // find all literals in a HashMap
+/// let mut scalars = HashSet::new();
+/// // apply recursively visits all nodes in the expression tree
+/// expr.apply(|e| {
+///    if let Expr::Literal(scalar) = e {
+///       scalars.insert(scalar);
+///    }
+///    // The return value controls whether to continue visiting the tree
+///    Ok(TreeNodeRecursion::Continue)
+/// }).unwrap();;
+/// // All subtrees have been visited and literals found
+/// assert_eq!(scalars.len(), 2);
+/// assert!(scalars.contains(&ScalarValue::Int32(Some(5))));
+/// assert!(scalars.contains(&ScalarValue::Int32(Some(6))));
+/// ```
+///
+/// Rewrite an expression, replacing references to column "a" in an
+/// to the literal `42`:
+///
+///  ```
+/// # use datafusion_common::tree_node::{Transformed, TreeNode};
+/// # use datafusion_expr::{col, Expr, lit};
+/// // expression a = 5 AND b = 6
+/// let expr = col("a").eq(lit(5)).and(col("b").eq(lit(6)));
+/// // rewrite all references to column "a" to the literal 42
+/// let rewritten = expr.transform(|e| {
+///   if let Expr::Column(c) = &e {
+///     if &c.name == "a" {
+///       // return Transformed::yes to indicate the node was changed
+///       return Ok(Transformed::yes(lit(42)))
+///     }
+///   }
+///   // return Transformed::no to indicate the node was not changed
+///   Ok(Transformed::no(e))
+/// }).unwrap();
+/// // The expression has been rewritten
+/// assert!(rewritten.transformed);
+/// // to 42 = 5 AND b = 6
+/// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
@@ -227,6 +333,7 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+/// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
@@ -434,9 +541,13 @@ pub enum GetFieldAccess {
     },
 }
 
-/// Returns the field of a [`arrow::array::ListArray`] or
-/// [`arrow::array::StructArray`] by `key`. See [`GetFieldAccess`] for
-/// details.
+/// Returns the field of a [`ListArray`] or
+/// [`StructArray`] by `key`.
+///
+/// See [`GetFieldAccess`] for details.
+///
+/// [`ListArray`]: arrow::array::ListArray
+/// [`StructArray`]: arrow::array::StructArray
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
     /// The expression to take the field from
@@ -712,7 +823,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
     }
 }
 
-// Exists expression.
+/// EXISTS expression
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Exists {
     /// subquery that will produce a single column of data
@@ -728,6 +839,9 @@ impl Exists {
     }
 }
 
+/// User Defined Aggregate Function
+///
+/// See [`udaf::AggregateUDF`] for more information.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateUDF {
     /// The function
@@ -821,6 +935,7 @@ impl Placeholder {
 }
 
 /// Grouping sets
+///
 /// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
 /// See <https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html>

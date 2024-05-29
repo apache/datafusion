@@ -49,7 +49,7 @@ impl ArrayRemove {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
-            aliases: vec!["array_remove".to_string(), "list_remove".to_string()],
+            aliases: vec!["list_remove".to_string()],
         }
     }
 }
@@ -98,7 +98,7 @@ impl ArrayRemoveN {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
-            aliases: vec!["array_remove_n".to_string(), "list_remove_n".to_string()],
+            aliases: vec!["list_remove_n".to_string()],
         }
     }
 }
@@ -147,10 +147,7 @@ impl ArrayRemoveAll {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
-            aliases: vec![
-                "array_remove_all".to_string(),
-                "list_remove_all".to_string(),
-            ],
+            aliases: vec!["list_remove_all".to_string()],
         }
     }
 }
