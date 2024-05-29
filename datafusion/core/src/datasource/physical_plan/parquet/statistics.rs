@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::statistics::{Statistics as ParquetStatistics, ValueStatistics};
+use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::sync::Arc;
 
@@ -58,16 +58,18 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
 /// Define an adapter iterator for extracting statistics from an iterator of
 /// `ParquetStatistics`
 ///
+///
 /// Handles checking if the statistics are present and valid with the correct type
 ///
 /// Parameters:
 /// * `$iterator_type` is the name of the iterator type (e.g. `BoolStatsIterator`)
+/// * `$func` is the function to call to get the value (e.g. `min` or `max`)
 /// * `$parquet_statistics_type` is the type of the statistics (e.g. `ParquetStatistics::Boolean`)
 /// * `$stat_value_type` is the type of the statistics value (e.g. `bool`)
 macro_rules! make_stats_iterator {
-    ($iterator_type:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
+    ($iterator_type:ident, $func:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
         /// Maps an iterator of `ParquetStatistics` into an iterator of
-        /// `ValueStatistics<$stat_value_type>`
+        /// `&$stat_value_type``
         ///
         /// Yielded elements:
         /// * Some(stats) if valid
@@ -93,13 +95,15 @@ macro_rules! make_stats_iterator {
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
         {
-            type Item = Option<&'a ValueStatistics<$stat_value_type>>;
+            type Item = Option<&'a $stat_value_type>;
 
             /// return the next statistics value
             fn next(&mut self) -> Option<Self::Item> {
                 let next_stat = self.inner.next()?;
                 let next_stat = next_stat.and_then(|stats| match stats {
-                    $parquet_statistics_type(s) if stats.has_min_max_set() => Some(s),
+                    $parquet_statistics_type(s) if stats.has_min_max_set() => {
+                        Some(s.$func())
+                    }
                     _ => None,
                 });
                 Some(next_stat)
@@ -112,18 +116,20 @@ macro_rules! make_stats_iterator {
     };
 }
 
-make_stats_iterator!(BoolStatsIterator, ParquetStatistics::Boolean, bool);
-make_stats_iterator!(Int32StatsIterator, ParquetStatistics::Int32, i32);
-make_stats_iterator!(Int64StatsIterator, ParquetStatistics::Int64, i64);
-make_stats_iterator!(F32StatsIterator, ParquetStatistics::Float, f32);
-make_stats_iterator!(F64StatsIterator, ParquetStatistics::Double, f64);
+make_stats_iterator!(MinBoolStatsIterator, min, ParquetStatistics::Boolean, bool);
+make_stats_iterator!(MinInt32StatsIterator, min, ParquetStatistics::Int32, i32);
+make_stats_iterator!(MinInt64StatsIterator, min, ParquetStatistics::Int64, i64);
+make_stats_iterator!(MinF32StatsIterator, min, ParquetStatistics::Float, f32);
+make_stats_iterator!(MinF64StatsIterator, min, ParquetStatistics::Double, f64);
 make_stats_iterator!(
-    ByteArrayStatsIterator,
+    MinByteArrayStatsIterator,
+    min,
     ParquetStatistics::ByteArray,
     ByteArray
 );
 make_stats_iterator!(
-    FixedLenByteArrayStatsIterator,
+    MinFixedLenByteArrayStatsIterator,
+    min,
     ParquetStatistics::FixedLenByteArray,
     FixedLenByteArray
 );
@@ -289,17 +295,11 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
 ) -> Result<ArrayRef> {
     match data_type {
         DataType::Boolean => {
-            // build a boolean array from the min statistics directly
-            let mins = BoolStatsIterator::new(iterator).map(|v| v.map(|v| *v.min()));
+            let mins = MinBoolStatsIterator::new(iterator).map(|v| v.cloned());
             Ok(Arc::new(BooleanArray::from_iter(mins)))
         }
         DataType::Int8 => {
-            let mins = Int32StatsIterator::new(iterator).map(|v| {
-                v.map(|v| {
-                    let v: i8 = (*v.min()).try_into().unwrap();
-                    v
-                })
-            });
+            let mins = MinInt32StatsIterator::new(iterator).map(|v| v.map(|v| *v as i8));
             Ok(Arc::new(Int8Array::from_iter(mins)))
         }
         _ => {
