@@ -20,6 +20,10 @@ use std::{fmt::Display, vec};
 
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
+use sqlparser::ast::{
+    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
+};
+
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -27,9 +31,6 @@ use datafusion_common::{
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
-};
-use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
 };
 
 use super::Unparser;
@@ -931,6 +932,7 @@ mod tests {
 
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
+
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, cube, exists,
