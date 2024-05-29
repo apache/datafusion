@@ -55,7 +55,6 @@ impl ArrayPosition {
                 Volatility::Immutable,
             ),
             aliases: vec![
-                String::from("array_position"),
                 String::from("list_position"),
                 String::from("array_indexof"),
                 String::from("list_indexof"),
@@ -183,10 +182,7 @@ impl ArrayPositions {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_positions"),
-                String::from("list_positions"),
-            ],
+            aliases: vec![String::from("list_positions")],
         }
     }
 }

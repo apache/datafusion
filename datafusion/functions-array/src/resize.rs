@@ -47,7 +47,7 @@ impl ArrayResize {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec!["array_resize".to_string(), "list_resize".to_string()],
+            aliases: vec!["list_resize".to_string()],
         }
     }
 }

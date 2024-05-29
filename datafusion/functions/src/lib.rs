@@ -79,7 +79,9 @@
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
+use datafusion_expr::ScalarUDF;
 use log::debug;
+use std::sync::Arc;
 
 #[macro_use]
 pub mod macros;
@@ -150,9 +152,9 @@ pub mod expr_fn {
     pub use super::unicode::expr_fn::*;
 }
 
-/// Registers all enabled packages with a [`FunctionRegistry`]
-pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let mut all_functions = core::functions()
+/// Return all default functions
+pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
+    core::functions()
         .into_iter()
         .chain(datetime::functions())
         .chain(encoding::functions())
@@ -160,9 +162,15 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .chain(regex::functions())
         .chain(crypto::functions())
         .chain(unicode::functions())
-        .chain(string::functions());
+        .chain(string::functions())
+        .collect::<Vec<_>>()
+}
 
-    all_functions.try_for_each(|udf| {
+/// Registers all enabled packages with a [`FunctionRegistry`]
+pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
+    let all_functions = all_default_functions();
+
+    all_functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {
             debug!("Overwrite existing UDF: {}", existing_udf.name());
@@ -170,4 +178,31 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::all_default_functions;
+    use datafusion_common::Result;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_no_duplicate_name() -> Result<()> {
+        let mut names = HashSet::new();
+        for func in all_default_functions() {
+            assert!(
+                names.insert(func.name().to_string()),
+                "duplicate function name: {}",
+                func.name()
+            );
+            for alias in func.aliases() {
+                assert!(
+                    names.insert(alias.to_string()),
+                    "duplicate function name: {}",
+                    alias
+                );
+            }
+        }
+        Ok(())
+    }
 }
