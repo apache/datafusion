@@ -39,10 +39,18 @@ use datafusion_common::{
 };
 use sqlparser::ast::NullTreatment;
 
-/// `Expr` represent logical expressions such as `A + 1`, or `CAST(c1 AS
-/// int)`.
-/// For example `A + 1` expression will be represented as 
-/// `BinaryExpr {left: Expr::Column("A"), op: Operator::Plus, right: Expr::Literal(ScalarValue::Int32(Some(1)))}`
+/// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
+///
+/// For example the expression `A + 1` will be represented as
+///
+///```text
+///  BinaryExpr {
+///    left: Expr::Column("A"),
+///    op: Operator::Plus,
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+/// }
+/// ```
+///
 /// # Creating Expressions
 ///
 /// `Expr`s can be created directly, but it is often easier and less verbose to
