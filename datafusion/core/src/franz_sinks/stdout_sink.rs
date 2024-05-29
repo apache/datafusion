@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
-use arrow::json::{LineDelimitedWriter};
+use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
 
 use super::sink::FranzSink;
@@ -33,12 +33,14 @@ impl StdoutSink {
 
 #[async_trait]
 impl FranzSink for StdoutSink {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
+    async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
         // Write out JSON
-        let mut writer = LineDelimitedWriter::new(std::io::stdout().lock());
-        let _ = writer.write(&batch).map_err(|e| {
-            DataFusionError::Execution(format!("Error writing batch: {}", e))
-        })?;
+        if batch.num_rows() > 0 {
+            let mut writer = LineDelimitedWriter::new(std::io::stdout().lock());
+            let _ = writer.write(&batch).map_err(|e| {
+                DataFusionError::Execution(format!("Error writing batch: {}", e))
+            })?;
+        }
 
         Ok(())
     }
@@ -54,11 +56,13 @@ impl PrettyPrinter {
 
 #[async_trait]
 impl FranzSink for PrettyPrinter {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
-        println!(
-            "{}",
-            arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-        );
+    async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
+        if batch.num_rows() > 0 {
+            println!(
+                "{}",
+                arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
+            );
+        }
 
         Ok(())
     }

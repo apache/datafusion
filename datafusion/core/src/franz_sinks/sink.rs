@@ -22,7 +22,7 @@ use crate::error::{DataFusionError, Result};
 
 #[async_trait]
 pub trait FranzSink {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError>;
+    async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError>;
 }
 
 #[cfg(test)]

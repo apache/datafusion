@@ -112,11 +112,11 @@ async fn main() {
             true,
         )),
     );
+
+    let bootstrap_servers = String::from("localhost:19092,localhost:29092,localhost:39092");
     let canonical_schema = Arc::new(Schema::new(fields));
     let _config = KafkaStreamConfig {
-        bootstrap_servers: String::from(
-            "localhost:19092,localhost:29092,localhost:39092",
-        ),
+        bootstrap_servers: bootstrap_servers.clone(),
         topic: String::from("driver-imu-data"),
         consumer_group_id: String::from("my_test_consumer"),
         original_schema: Arc::new(inferred_schema),
@@ -164,9 +164,9 @@ async fn main() {
 
     // print_stream(&windowed_df).await;
 
-    use datafusion::franz_sinks::FranzSink;
-    use datafusion::franz_sinks::FileSink;
-    use datafusion::franz_sinks::{PrettyPrinter,StdoutSink};
+    use datafusion::franz_sinks::{
+        FileSink, FranzSink, KafkaSink, PrettyPrinter, StdoutSink, KafkaSinkSettings,
+    };
 
     // let fname = "/tmp/out.jsonl";
     // println!("Writing results to file {}", fname);
@@ -174,15 +174,21 @@ async fn main() {
     // let file_writer = Box::new(writer) as Box<dyn FranzSink>;
     // let _ = windowed_df.sink(file_writer).await;
 
-
-    let writer = StdoutSink::new().unwrap();
-    let sink = Box::new(writer) as Box<dyn FranzSink>;
-    let _ = windowed_df.sink(sink).await;
+    // let writer = StdoutSink::new().unwrap();
+    // let sink = Box::new(writer) as Box<dyn FranzSink>;
+    // let _ = windowed_df.sink(sink).await;
 
     // let writer = PrettyPrinter::new().unwrap();
     // let sink = Box::new(writer) as Box<dyn FranzSink>;
     // let _ = windowed_df.sink(sink).await;
 
+    let config = KafkaSinkSettings {
+        topic: "out_topic".to_string(),
+        bootstrap_servers: bootstrap_servers.clone(),
+    };
+    let writer = KafkaSink::new(&config).unwrap();
+    let sink = Box::new(writer) as Box<dyn FranzSink>;
+    let _ = windowed_df.sink(sink).await;
 }
 
 async fn print_stream(windowed_df: &DataFrame) {
