@@ -58,7 +58,6 @@ make_udaf_expr_and_func!(
 /// result, but if cardinality is low then memory usage will also be lower.
 pub struct Median {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Debug for Median {
@@ -79,7 +78,6 @@ impl Default for Median {
 impl Median {
     pub fn new() -> Self {
         Self {
-            aliases: vec![],
             signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
@@ -152,7 +150,7 @@ impl AggregateUDFImpl for Median {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 }
 
