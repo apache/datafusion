@@ -37,11 +37,12 @@ chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
+pbjson-types = "0.6"
 prost = "0.12"
-prost-types = "0.12"
-substrait = "0.34.0"
+substrait = { version = "0.34.0", features = ["serde"] }
 
 [dev-dependencies]
+serde_json = "1.0"
 tokio = { workspace = true }
 
 [features]
