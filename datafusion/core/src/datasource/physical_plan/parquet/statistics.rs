@@ -20,11 +20,14 @@
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-use arrow_array::{new_empty_array, new_null_array, BooleanArray, UInt64Array};
+use arrow_array::{
+    new_empty_array, new_null_array, BooleanArray, Int8Array, UInt64Array,
+};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
 };
+use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::{Statistics as ParquetStatistics, ValueStatistics};
 use parquet::schema::types::SchemaDescriptor;
@@ -110,6 +113,20 @@ macro_rules! make_stats_iterator {
 }
 
 make_stats_iterator!(BoolStatsIterator, ParquetStatistics::Boolean, bool);
+make_stats_iterator!(Int32StatsIterator, ParquetStatistics::Int32, i32);
+make_stats_iterator!(Int64StatsIterator, ParquetStatistics::Int64, i64);
+make_stats_iterator!(F32StatsIterator, ParquetStatistics::Float, f32);
+make_stats_iterator!(F64StatsIterator, ParquetStatistics::Double, f64);
+make_stats_iterator!(
+    ByteArrayStatsIterator,
+    ParquetStatistics::ByteArray,
+    ByteArray
+);
+make_stats_iterator!(
+    FixedLenByteArrayStatsIterator,
+    ParquetStatistics::FixedLenByteArray,
+    FixedLenByteArray
+);
 
 /// Extract a single min/max statistics from a [`ParquetStatistics`] object
 ///
@@ -275,6 +292,15 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             // build a boolean array from the min statistics directly
             let mins = BoolStatsIterator::new(iterator).map(|v| v.map(|v| *v.min()));
             Ok(Arc::new(BooleanArray::from_iter(mins)))
+        }
+        DataType::Int8 => {
+            let mins = Int32StatsIterator::new(iterator).map(|v| {
+                v.map(|v| {
+                    let v: i8 = (*v.min()).try_into().unwrap();
+                    v
+                })
+            });
+            Ok(Arc::new(Int8Array::from_iter(mins)))
         }
         _ => {
             // fallback to scalars
