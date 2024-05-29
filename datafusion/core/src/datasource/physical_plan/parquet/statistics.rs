@@ -81,6 +81,15 @@ macro_rules! get_statistic {
                     Some(DataType::Int16) => {
                         Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
                     }
+                    Some(DataType::UInt8) => {
+                        Some(ScalarValue::UInt8(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::UInt16) => {
+                        Some(ScalarValue::UInt16(Some((*s.$func()).try_into().unwrap())))
+                    }
+                    Some(DataType::UInt32) => {
+                        Some(ScalarValue::UInt32(Some((*s.$func()) as u32)))
+                    }
                     Some(DataType::Date32) => {
                         Some(ScalarValue::Date32(Some(*s.$func())))
                     }
@@ -99,6 +108,9 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
+                    }
+                    Some(DataType::UInt64) => {
+                        Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
