@@ -78,8 +78,8 @@ logical_plan
 20)--------------Projection: Float64(0.5) * CAST(SUM(lineitem.l_quantity) AS Float64), lineitem.l_partkey, lineitem.l_suppkey
 21)----------------Aggregate: groupBy=[[lineitem.l_partkey, lineitem.l_suppkey]], aggr=[[SUM(lineitem.l_quantity)]]
 22)------------------Projection: lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity
-23)--------------------Filter: lineitem.l_shipdate >= Date32("8766") AND lineitem.l_shipdate < Date32("9131")
-24)----------------------TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("8766"), lineitem.l_shipdate < Date32("9131")]
+23)--------------------Filter: lineitem.l_shipdate >= Date32("1994-01-01") AND lineitem.l_shipdate < Date32("1995-01-01")
+24)----------------------TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1994-01-01"), lineitem.l_shipdate < Date32("1995-01-01")]
 physical_plan
 01)SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
 02)--SortExec: expr=[s_name@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -125,7 +125,7 @@ physical_plan
 42)------------------------AggregateExec: mode=Partial, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
 43)--------------------------ProjectionExec: expr=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey, l_quantity@2 as l_quantity]
 44)----------------------------CoalesceBatchesExec: target_batch_size=8192
-45)------------------------------FilterExec: l_shipdate@3 >= 8766 AND l_shipdate@3 < 9131
+45)------------------------------FilterExec: l_shipdate@3 >= 1994-01-01 AND l_shipdate@3 < 1995-01-01
 46)--------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], has_header=false
 
 

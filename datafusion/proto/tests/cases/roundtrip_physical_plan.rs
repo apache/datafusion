@@ -371,6 +371,33 @@ fn rountrip_aggregate() -> Result<()> {
 }
 
 #[test]
+fn rountrip_aggregate_with_limit() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+        cast(col("b", &schema)?, &schema, DataType::Float64)?,
+        "AVG(b)".to_string(),
+        DataType::Float64,
+    ))];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
+    let agg = agg.with_limit(Some(12));
+    roundtrip_test(Arc::new(agg))
+}
+
+#[test]
 fn roundtrip_aggregate_udaf() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);

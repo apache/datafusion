@@ -72,7 +72,7 @@ FROM test_table t
 GROUP BY 1, 2
 ----
 logical_plan
-01)Projection: Date32("19481") AS dt, Boolean(true) AS today_filter, COUNT(Int64(1))
+01)Projection: Date32("2023-05-04") AS dt, Boolean(true) AS today_filter, COUNT(Int64(1))
 02)--Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[]

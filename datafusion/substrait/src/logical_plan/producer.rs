@@ -45,7 +45,7 @@ use datafusion::logical_expr::expr::{
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
-use prost_types::Any as ProtoAny;
+use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::UserDefined;
@@ -547,7 +547,7 @@ pub fn to_substrait_rel(
                 .serialize_logical_plan(extension_plan.node.as_ref())?;
             let detail = ProtoAny {
                 type_url: extension_plan.node.name().to_string(),
-                value: extension_bytes,
+                value: extension_bytes.into(),
             };
             let mut inputs_rel = extension_plan
                 .node
@@ -1919,7 +1919,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
                     }],
                     val: Some(Val::Value(ProtoAny {
                         type_url: INTERVAL_YEAR_MONTH_TYPE_URL.to_string(),
-                        value: bytes.to_vec(),
+                        value: bytes.to_vec().into(),
                     })),
                 }),
                 INTERVAL_YEAR_MONTH_TYPE_REF,
@@ -1942,7 +1942,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
                     type_parameters: vec![i64_param.clone(), i64_param],
                     val: Some(Val::Value(ProtoAny {
                         type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
-                        value: bytes.to_vec(),
+                        value: bytes.to_vec().into(),
                     })),
                 }),
                 INTERVAL_MONTH_DAY_NANO_TYPE_REF,
@@ -1965,7 +1965,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
                     }],
                     val: Some(Val::Value(ProtoAny {
                         type_url: INTERVAL_DAY_TIME_TYPE_URL.to_string(),
-                        value: bytes.to_vec(),
+                        value: bytes.to_vec().into(),
                     })),
                 }),
                 INTERVAL_DAY_TIME_TYPE_REF,

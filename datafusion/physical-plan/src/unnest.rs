@@ -515,16 +515,10 @@ fn unnest_list_arrays(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // If there is only one list column to unnest and it doesn't contain any NULL lists,
-    // we can return the values array directly without any copying.
-    if typed_arrays.len() == 1 && typed_arrays[0].null_count() == 0 {
-        Ok(vec![typed_arrays[0].values().clone()])
-    } else {
-        typed_arrays
-            .iter()
-            .map(|list_array| unnest_list_array(*list_array, length_array, capacity))
-            .collect::<Result<_>>()
-    }
+    typed_arrays
+        .iter()
+        .map(|list_array| unnest_list_array(*list_array, length_array, capacity))
+        .collect::<Result<_>>()
 }
 
 /// Unnest a list array according the target length array.

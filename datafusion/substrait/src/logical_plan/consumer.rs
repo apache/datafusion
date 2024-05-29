@@ -124,6 +124,15 @@ fn scalar_function_type_from_str(
     name: &str,
 ) -> Result<ScalarFunctionType> {
     let s = ctx.state();
+    let name = match name.rsplit_once(':') {
+        // Since 0.32.0, Substrait requires the function names to be in a compound format
+        // https://substrait.io/extensions/#function-signature-compound-names
+        // for example, `add:i8_i8`.
+        // On the consumer side, we don't really care about the signature though, just the name.
+        Some((name, _)) => name,
+        None => name,
+    };
+
     if let Some(func) = s.scalar_functions().get(name) {
         return Ok(ScalarFunctionType::Udf(func.to_owned()));
     }
@@ -1525,7 +1534,7 @@ fn from_substrait_literal(
                         return substrait_err!("Interval year month value is empty");
                     };
                     let value_slice: [u8; 4] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval year month value"
                             )
@@ -1537,7 +1546,7 @@ fn from_substrait_literal(
                         return substrait_err!("Interval day time value is empty");
                     };
                     let value_slice: [u8; 8] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval day time value"
                             )
@@ -1549,7 +1558,7 @@ fn from_substrait_literal(
                         return substrait_err!("Interval month day nano value is empty");
                     };
                     let value_slice: [u8; 16] =
-                        raw_val.value.clone().try_into().map_err(|_| {
+                        (*raw_val.value).try_into().map_err(|_| {
                             substrait_datafusion_err!(
                                 "Failed to parse interval month day nano value"
                             )
