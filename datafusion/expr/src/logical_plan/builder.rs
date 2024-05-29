@@ -1373,10 +1373,10 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }
 
     // create union schema
-    let union_qualified_fields =
+    let union_fields =
         zip(left_plan.schema().iter(), right_plan.schema().iter())
             .map(
-                |((left_qualifier, left_field), (_right_qualifier, right_field))| {
+                |((_, left_field), (_, right_field))| {
                     let nullable = left_field.is_nullable() || right_field.is_nullable();
                     let data_type = comparison_coercion(
                         left_field.data_type(),
@@ -1384,22 +1384,21 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     )
                     .ok_or_else(|| {
                         plan_datafusion_err!(
-                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                right_field.name(),
-                right_field.data_type(),
-                left_field.name(),
-                left_field.data_type()
-                )
+                            "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                            right_field.name(),
+                            right_field.data_type(),
+                            left_field.name(),
+                            left_field.data_type()
+                        )
                     })?;
                     Ok((
-                        left_qualifier.cloned(),
+                        None,
                         Arc::new(Field::new(left_field.name(), data_type, nullable)),
                     ))
                 },
             )
             .collect::<Result<Vec<_>>>()?;
-    let union_schema =
-        DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())?;
+    let union_schema = DFSchema::new_with_metadata(union_fields, HashMap::new())?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
