@@ -342,11 +342,22 @@ macro_rules! get_statistics_iter {
                     })
                 }).collect::<Vec<_>>(),
             )) as ArrayRef),
-            Some(DataType::Timestamp(_, _)) => {
-                log::info!(
-                    "Timestamp statistics are not supported, returning none"
-                );
-                None
+            Some(DataType::Timestamp(_unit, _literal)) => {
+                Some(Arc::new(Int64Array::from_iter(
+                    $column_statistics_iter.map(|statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int64(s) => {
+                                    Some(*s.$func())
+                                }
+                                _ => None,
+                            }
+                        })
+                    }),
+                )) as ArrayRef)
             },
             _ => None,
         }
@@ -718,8 +729,8 @@ mod test {
                 None,
                 None,
             ]),
-            expected_min: timestamp_array([]),
-            expected_max: timestamp_array([]),
+            expected_min: i64_array([Some(1), Some(5), None]),
+            expected_max: i64_array([Some(3), Some(9), None]),
         }
         .run()
     }
@@ -1076,8 +1087,8 @@ mod test {
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: timestamp_array([]),
-                expected_max: timestamp_array([]),
+                expected_min: i64_array([None]),
+                expected_max: i64_array([None]),
             })
             .with_column(ExpectedColumn {
                 name: "year",
