@@ -33,7 +33,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
-use datafusion::physical_plan::{AggregateExpr, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{AggregateExpr, Partitioning, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
         file_format::{csv::CsvSink, json::JsonSink},
@@ -550,6 +550,36 @@ pub fn serialize_physical_expr(
     } else {
         internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
     }
+}
+
+pub fn serialize_partitioning(
+    partitioning: &Partitioning,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::Partitioning> {
+    let serialized_partitioning = match partitioning {
+        Partitioning::RoundRobinBatch(partition_count) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::RoundRobin(
+                *partition_count as u64,
+            )),
+        },
+        Partitioning::Hash(exprs, partition_count) => {
+            let serialized_exprs = serialize_physical_exprs(exprs.clone(), codec)?;
+            protobuf::Partitioning {
+                partition_method: Some(protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr: serialized_exprs,
+                        partition_count: *partition_count as u64,
+                    },
+                )),
+            }
+        }
+        Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
+                *partition_count as u64,
+            )),
+        },
+    };
+    Ok(serialized_partitioning)
 }
 
 fn serialize_when_then_expr(
