@@ -67,8 +67,10 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+    pub use super::first_last::last_value;
     pub use super::median::median;
 }
 
