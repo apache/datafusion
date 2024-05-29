@@ -113,7 +113,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///  .project(vec![col("name")])?
 ///  .build()?;
 ///
-/// // use apply to walk the plan and collect all column references
+/// // use apply to walk the plan and collect all expressions
 /// let mut expressions = HashSet::new();
 /// plan.apply(|node| {
 ///   // collect all expressions in the plan
@@ -166,7 +166,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// let transformed_result = plan.transform(|node| {
 ///   // when we see the filter node
 ///   if let LogicalPlan::Filter(mut filter) = node {
-///     // replace predicate with salary > 2000
+///     // replace predicate with salary < 2000
 ///     filter.predicate = Expr::Column(Column::new(Some("employee"), "salary")).lt(lit(2000));
 ///     let new_plan = LogicalPlan::Filter(filter);
 ///     return Ok(Transformed::yes(new_plan)); // communicate the node was changed
