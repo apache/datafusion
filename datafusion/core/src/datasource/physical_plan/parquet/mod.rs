@@ -308,6 +308,7 @@ impl ParquetExecBuilder {
     }
 
     /// Build a [`ParquetExec`]
+    #[must_use]
     pub fn build(self) -> ParquetExec {
         let Self {
             file_scan_config,
