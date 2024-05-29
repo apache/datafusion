@@ -64,7 +64,7 @@ impl Default for VarianceSample {
 impl VarianceSample {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("var_sample")],
+            aliases: vec![String::from("var_sample"), String::from("var_samp")],
             signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
