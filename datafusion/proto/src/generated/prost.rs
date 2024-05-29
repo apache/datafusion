@@ -1850,19 +1850,30 @@ pub struct PhysicalHashRepartition {
 pub struct RepartitionExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    #[prost(oneof = "repartition_exec_node::PartitionMethod", tags = "2, 3, 4")]
-    pub partition_method: ::core::option::Option<repartition_exec_node::PartitionMethod>,
+    /// oneof partition_method {
+    ///    uint64 round_robin = 2;
+    ///    PhysicalHashRepartition hash = 3;
+    ///    uint64 unknown = 4;
+    /// }
+    #[prost(message, optional, tag = "5")]
+    pub partitioning: ::core::option::Option<Partitioning>,
 }
-/// Nested message and enum types in `RepartitionExecNode`.
-pub mod repartition_exec_node {
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Partitioning {
+    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3")]
+    pub partition_method: ::core::option::Option<partitioning::PartitionMethod>,
+}
+/// Nested message and enum types in `Partitioning`.
+pub mod partitioning {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PartitionMethod {
-        #[prost(uint64, tag = "2")]
+        #[prost(uint64, tag = "1")]
         RoundRobin(u64),
-        #[prost(message, tag = "3")]
+        #[prost(message, tag = "2")]
         Hash(super::PhysicalHashRepartition),
-        #[prost(uint64, tag = "4")]
+        #[prost(uint64, tag = "3")]
         Unknown(u64),
     }
 }

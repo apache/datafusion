@@ -438,6 +438,38 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
+pub fn parse_protobuf_partitioning(
+    partitioning: Option<&protobuf::Partitioning>,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Option<Partitioning>> {
+    match partitioning {
+        Some(protobuf::Partitioning { partition_method }) => match partition_method {
+            Some(protobuf::partitioning::PartitionMethod::RoundRobin(
+                partition_count,
+            )) => Ok(Some(Partitioning::RoundRobinBatch(
+                *partition_count as usize,
+            ))),
+            Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
+                parse_protobuf_hash_partitioning(
+                    Some(hash_repartition),
+                    registry,
+                    input_schema,
+                    codec,
+                )
+            }
+            Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
+                Ok(Some(Partitioning::UnknownPartitioning(
+                    *partition_count as usize,
+                )))
+            }
+            None => Ok(None),
+        },
+        None => Ok(None),
+    }
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
