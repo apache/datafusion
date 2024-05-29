@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Schema Adapter provides a method of translating the RecordBatches that come out of the
+//! [`SchemaAdapter`] and [`SchemaAdapterFactory`] to adapt file-level record batches to a table schema.
+//!
+//! Adapter provides a method of translating the RecordBatches that come out of the
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
@@ -26,27 +28,29 @@ use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// Factory of schema adapters.
+/// Factory for creating [`SchemaAdapter`]
 ///
-/// Provides means to implement custom schema adaptation.
+/// This interface provides a way to implement custom schema adaptation logic
+/// for ParquetExec (for example, to fill missing columns with default value
+/// other than null)
 pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     /// Provides `SchemaAdapter`.
     fn create(&self, schema: SchemaRef) -> Box<dyn SchemaAdapter>;
 }
 
-/// A utility which can adapt file-level record batches to a table schema which may have a schema
+/// Adapt file-level [`RecordBatch`]es to a table schema, which may have a schema
 /// obtained from merging multiple file-level schemas.
 ///
 /// This is useful for enabling schema evolution in partitioned datasets.
 ///
 /// This has to be done in two stages.
 ///
-/// 1. Before reading the file, we have to map projected column indexes from the table schema to
-///    the file schema.
+/// 1. Before reading the file, we have to map projected column indexes from the
+///    table schema to the file schema.
 ///
-/// 2. After reading a record batch we need to map the read columns back to the expected columns
-///    indexes and insert null-valued columns wherever the file schema was missing a colum present
-///    in the table schema.
+/// 2. After reading a record batch map the read columns back to the expected
+///    columns indexes and insert null-valued columns wherever the file schema was
+///    missing a column present in the table schema.
 pub trait SchemaAdapter: Send + Sync {
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
@@ -54,7 +58,8 @@ pub trait SchemaAdapter: Send + Sync {
     /// Panics if index is not in range for the table schema
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize>;
 
-    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema to the table schema.
+    /// Creates a `SchemaMapping` that can be used to cast or map the columns
+    /// from the file schema to the table schema.
     ///
     /// If the provided `file_schema` contains columns of a different type to the expected
     /// `table_schema`, the method will attempt to cast the array data from the file schema
@@ -68,7 +73,8 @@ pub trait SchemaAdapter: Send + Sync {
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)>;
 }
 
-/// Transforms a RecordBatch from the physical layer to a RecordBatch that meets the table schema.
+/// Creates a `SchemaMapping` that can be used to cast or map the columns
+/// from the file schema to the table schema.
 pub trait SchemaMapper: Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;

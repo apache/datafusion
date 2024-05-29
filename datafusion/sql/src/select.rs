@@ -131,7 +131,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
+                let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
                 normalize_col(having_expr, &projected_plan)
             })
             .transpose()?;
@@ -163,10 +163,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         alias_map.remove(f.name());
                     }
                     let group_by_expr =
-                        resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
+                        resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
-                        resolve_positions_to_exprs(&group_by_expr, &select_exprs)
-                            .unwrap_or(group_by_expr);
+                        resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),

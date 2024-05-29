@@ -34,6 +34,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common::Result;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -56,13 +57,14 @@ impl TableProviderFactory for ListingTableFactory {
         &self,
         state: &SessionState,
         cmd: &CreateExternalTable,
-    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let mut table_options = state.default_table_options();
+    ) -> Result<Arc<dyn TableProvider>> {
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
+        let mut table_options = state.default_table_options();
         table_options.set_file_format(file_type.clone());
         table_options.alter_with_string_hash_map(&cmd.options)?;
+
         let file_extension = get_extension(cmd.location.as_str());
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {

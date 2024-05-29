@@ -59,7 +59,6 @@ impl ArrayAppend {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
-                String::from("array_append"),
                 String::from("list_append"),
                 String::from("array_push_back"),
                 String::from("list_push_back"),
@@ -119,7 +118,6 @@ impl ArrayPrepend {
         Self {
             signature: Signature::element_and_array(Volatility::Immutable),
             aliases: vec![
-                String::from("array_prepend"),
                 String::from("list_prepend"),
                 String::from("array_push_front"),
                 String::from("list_push_front"),
@@ -178,7 +176,6 @@ impl ArrayConcat {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: vec![
-                String::from("array_concat"),
                 String::from("array_cat"),
                 String::from("list_concat"),
                 String::from("list_cat"),

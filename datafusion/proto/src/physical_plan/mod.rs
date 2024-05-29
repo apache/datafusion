@@ -64,7 +64,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ScalarUDF;
 
-use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
@@ -78,7 +78,7 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{self, window_agg_exec_node};
+use crate::protobuf::{self, proto_error, window_agg_exec_node};
 
 use self::to_proto::serialize_physical_expr;
 
@@ -539,14 +539,23 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Arc::new(AggregateExec::try_new(
+                let limit = hash_agg
+                    .limit
+                    .as_ref()
+                    .map(|lit_value| lit_value.limit as usize);
+
+                let agg = AggregateExec::try_new(
                     agg_mode,
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
                     input,
                     physical_schema,
-                )?))
+                )?;
+
+                let agg = agg.with_limit(limit);
+
+                Ok(Arc::new(agg))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1504,6 +1513,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .map(|expr| serialize_physical_expr(expr.0.to_owned(), extension_codec))
                 .collect::<Result<Vec<_>>>()?;
 
+            let limit = exec.limit().map(|value| protobuf::AggLimit {
+                limit: value as u64,
+            });
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
                     protobuf::AggregateExecNode {
@@ -1517,6 +1530,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         input_schema: Some(input_schema.as_ref().try_into()?),
                         null_expr,
                         groups,
+                        limit,
                     },
                 ))),
             });
