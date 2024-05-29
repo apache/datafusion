@@ -69,7 +69,7 @@ all(default): Data/Run/Compare for all benchmarks
 tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table
-tpch10_mem:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
+tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
 clickbench_1:           ClickBench queries against a single parquet file
@@ -243,9 +243,7 @@ main() {
             echo "Done"
             ;;
         compare)
-            BRANCH1=$1
-            BRANCH2=$2
-            compare_benchmarks
+            compare_benchmarks "$ARG2" "$ARG3"
             ;;
         "")
             usage
@@ -446,8 +444,8 @@ run_clickbench_extended() {
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
-    BRANCH1="${ARG2}"
-    BRANCH2="${ARG3}"
+    BRANCH1="$1"
+    BRANCH2="$2"
     if [ -z "$BRANCH1" ] ; then
         echo "<branch1> not specified. Available branches:"
         ls -1 "${BASE_RESULTS_DIR}"
