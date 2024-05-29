@@ -117,7 +117,15 @@ pub mod generated;
 pub mod logical_plan;
 pub mod physical_plan;
 
-pub use generated::datafusion as protobuf;
+pub mod protobuf {
+    pub use crate::generated::datafusion::*;
+    pub use datafusion_proto_common::common::proto_error;
+    pub use datafusion_proto_common::protobuf_common::{
+        ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat, DfSchema,
+        EmptyMessage, Field, JoinSide, ParquetFormat, ScalarValue, Schema,
+    };
+    pub use datafusion_proto_common::{FromProtoError, ToProtoError};
+}
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

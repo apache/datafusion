@@ -48,7 +48,7 @@ impl ArrayLength {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_length"), String::from("list_length")],
+            aliases: vec![String::from("list_length")],
         }
     }
 }

@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
-
 pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 
 mod hyperloglog;
@@ -58,12 +54,4 @@ pub mod utils {
         adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
         get_sort_options, ordering_fields, DecimalAverager, Hashable,
     };
-}
-
-/// Checks whether the given aggregate expression is order-sensitive.
-/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
-/// However, an `ARRAY_AGG` with `ORDER BY` depends on the input ordering.
-pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
-        || aggr_expr.as_any().is::<NthValueAgg>()
 }

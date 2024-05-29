@@ -32,8 +32,6 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
-use datafusion::functions_aggregate::expr_fn::first_value;
-use datafusion::functions_aggregate::median::median;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -518,6 +516,31 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_unnest() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            true,
+        ),
+    ]);
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+    let query = "SELECT unnest(b) FROM t1";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
@@ -1396,13 +1419,11 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: datafusion_proto::generated::datafusion::Schema =
-        schema.try_into().unwrap();
+    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto =
-        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
     // assert

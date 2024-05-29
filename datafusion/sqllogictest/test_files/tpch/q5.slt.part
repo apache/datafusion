@@ -58,8 +58,8 @@ logical_plan
 13)------------------------Inner Join: customer.c_custkey = orders.o_custkey
 14)--------------------------TableScan: customer projection=[c_custkey, c_nationkey]
 15)--------------------------Projection: orders.o_orderkey, orders.o_custkey
-16)----------------------------Filter: orders.o_orderdate >= Date32("8766") AND orders.o_orderdate < Date32("9131")
-17)------------------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("8766"), orders.o_orderdate < Date32("9131")]
+16)----------------------------Filter: orders.o_orderdate >= Date32("1994-01-01") AND orders.o_orderdate < Date32("1995-01-01")
+17)------------------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1994-01-01"), orders.o_orderdate < Date32("1995-01-01")]
 18)----------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount]
 19)------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
 20)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
@@ -100,7 +100,7 @@ physical_plan
 31)----------------------------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
 32)------------------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_custkey@1 as o_custkey]
 33)--------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-34)----------------------------------------------------------FilterExec: o_orderdate@2 >= 8766 AND o_orderdate@2 < 9131
+34)----------------------------------------------------------FilterExec: o_orderdate@2 >= 1994-01-01 AND o_orderdate@2 < 1995-01-01
 35)------------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_orderdate], has_header=false
 36)------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 37)--------------------------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
