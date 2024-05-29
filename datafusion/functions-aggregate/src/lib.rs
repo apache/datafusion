@@ -58,6 +58,7 @@ pub mod macros;
 pub mod covariance;
 pub mod first_last;
 pub mod median;
+pub mod variance;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -80,6 +81,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
         median::median_udaf(),
+        variance::var_samp_udaf(),
     ];
 
     functions.into_iter().try_for_each(|udf| {
