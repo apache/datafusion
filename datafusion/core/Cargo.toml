@@ -134,6 +134,7 @@ url = { workspace = true }
 uuid = { version = "1.7", features = ["v4"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
+rdkafka = "0.36.2"
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }

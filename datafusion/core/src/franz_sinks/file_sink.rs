@@ -33,7 +33,6 @@ pub struct FileSink {
 impl FileSink {
     // todo
     pub fn new(fname: &str) -> Result<Self> {
-        // todo
         let file = File::create(fname)?;
         let writer = LineDelimitedWriter::new(file);
         Ok(Self {
@@ -44,7 +43,7 @@ impl FileSink {
 
 #[async_trait]
 impl FranzSink for FileSink {
-    async fn write_record(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
+    async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
         let mut file = self.file.lock().await;
 
         file.write(&batch).map_err(DataFusionError::from)?;

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod sink;
 pub mod file_sink;
 pub mod kafka_sink;
+pub mod sink;
 pub mod stdout_sink;
 
-pub use sink::FranzSink;
 pub use file_sink::FileSink;
-pub use kafka_sink::KafkaSink;
-pub use stdout_sink::{StdoutSink, PrettyPrinter};
+pub use kafka_sink::{KafkaSink, KafkaSinkSettings};
+pub use sink::FranzSink;
+pub use stdout_sink::{PrettyPrinter, StdoutSink};
