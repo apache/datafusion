@@ -224,12 +224,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         )
                     })
                     .transpose()?;
-                Ok(Arc::new(ParquetExec::new(
-                    base_config,
-                    predicate,
-                    None,
-                    Default::default(),
-                )))
+                let mut builder = ParquetExec::builder(base_config);
+                if let Some(predicate) = predicate {
+                    builder = builder.with_predicate(predicate)
+                }
+                Ok(builder.build_arc())
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(

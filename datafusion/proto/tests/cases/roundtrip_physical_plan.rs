@@ -582,12 +582,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
-    roundtrip_test(Arc::new(ParquetExec::new(
-        scan_config,
-        Some(predicate),
-        None,
-        Default::default(),
-    )))
+    roundtrip_test(
+        ParquetExec::builder(scan_config)
+            .with_predicate(predicate)
+            .build_arc(),
+    )
 }
 
 #[tokio::test]
@@ -613,12 +612,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
     };
 
-    roundtrip_test(Arc::new(ParquetExec::new(
-        scan_config,
-        None,
-        None,
-        Default::default(),
-    )))
+    roundtrip_test(ParquetExec::builder(scan_config).build_arc())
 }
 
 #[test]
