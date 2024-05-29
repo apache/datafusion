@@ -20,11 +20,14 @@
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-use arrow_array::{new_empty_array, new_null_array, UInt64Array};
-use arrow_schema::{Field, FieldRef, Schema};
-use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
+use arrow_array::{
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
+use arrow_schema::{Field, FieldRef, Schema};
+use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
@@ -52,131 +55,300 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     result
 }
 
-/// Extract a single min/max statistics from a [`ParquetStatistics`] object
-///
-/// * `$column_statistics` is the `ParquetStatistics` object
-/// * `$func is the function` (`min`/`max`) to call to get the value
-/// * `$bytes_func` is the function (`min_bytes`/`max_bytes`) to call to get the value as bytes
-/// * `$target_arrow_type` is the [`DataType`] of the target statistics
-macro_rules! get_statistic {
-    ($column_statistics:expr, $func:ident, $bytes_func:ident, $target_arrow_type:expr) => {{
-        if !$column_statistics.has_min_max_set() {
-            return None;
-        }
-        match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => {
-                match $target_arrow_type {
-                    // int32 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::Int8) => {
-                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::Int16) => {
-                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt8) => {
-                        Some(ScalarValue::UInt8(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt16) => {
-                        Some(ScalarValue::UInt16(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt32) => {
-                        Some(ScalarValue::UInt32(Some((*s.$func()) as u32)))
-                    }
-                    Some(DataType::Date32) => {
-                        Some(ScalarValue::Date32(Some(*s.$func())))
-                    }
-                    Some(DataType::Date64) => {
-                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
-                    }
-                    _ => Some(ScalarValue::Int32(Some(*s.$func()))),
-                }
-            }
-            ParquetStatistics::Int64(s) => {
-                match $target_arrow_type {
-                    // int64 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::UInt64) => {
-                        Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
-                    }
-                    _ => Some(ScalarValue::Int64(Some(*s.$func()))),
-                }
-            }
-            // 96 bit ints not supported
-            ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                match $target_arrow_type {
-                    // decimal data type
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::Binary) => {
-                        Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
-                    }
-                    _ => {
-                        let s = std::str::from_utf8(s.$bytes_func())
-                            .map(|s| s.to_string())
-                            .ok();
-                        if s.is_none() {
-                            log::debug!(
-                                "Utf8 statistics is a non-UTF8 value, ignoring it."
-                            );
+macro_rules! get_statistics_iter {
+    ($column_statistics_iter:expr, $func:ident, $bytes_func:ident, $target_arrow_type:expr) => {{
+        match $target_arrow_type {
+            Some(DataType::Boolean) => Some(Arc::new(BooleanArray::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
                         }
-                        Some(ScalarValue::Utf8(s))
-                    }
-                }
+                        match x {
+                            ParquetStatistics::Boolean(s) => Some(*s.$func()),
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Int8) => Some(Arc::new(Int8Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int32(s) => {
+                                Some((*s.$func()).try_into().unwrap())
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Int16) => Some(Arc::new(Int16Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int32(s) => {
+                                Some((*s.$func()).try_into().unwrap())
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Int32) => Some(Arc::new(Int32Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int32(s) => Some(*s.$func()),
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Int64) => Some(Arc::new(Int64Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int64(s) => {
+                                Some((*s.$func()).try_into().unwrap())
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::UInt8) => {
+                Some(Arc::new(UInt8Array::from_iter(
+                    $column_statistics_iter.map(|statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int32(s) => {
+                                    Some((*s.$func()).try_into().unwrap())
+                                }
+                                _ => None,
+                            }
+                        })
+                    }),
+                )) as ArrayRef)
             }
-            // type not fully supported yet
-            ParquetStatistics::FixedLenByteArray(s) => {
-                match $target_arrow_type {
-                    // just support specific logical data types, there are others each
-                    // with their own ordering
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::FixedSizeBinary(size)) => {
-                        let value = s.$bytes_func().to_vec();
-                        let value = if value.len().try_into() == Ok(*size) {
-                            Some(value)
-                        } else {
-                            log::debug!(
-                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
-                                size,
-                                value.len(),
-                            );
-                            None
-                        };
-                        Some(ScalarValue::FixedSizeBinary(
-                            *size,
-                            value,
-                        ))
-                    }
-                    _ => None,
-                }
+            Some(DataType::UInt16) => {
+                Some(Arc::new(UInt16Array::from_iter(
+                    $column_statistics_iter.map(|statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int32(s) => {
+                                    Some((*s.$func()).try_into().unwrap())
+                                }
+                                _ => None,
+                            }
+                        })
+                    }),
+                )) as ArrayRef)
             }
+            Some(DataType::UInt32) => {
+                Some(Arc::new(UInt32Array::from_iter(
+                    $column_statistics_iter.map(|statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int32(s) => {
+                                    Some(*s.$func() as u32)
+                                }
+                                _ => None,
+                            }
+                        })
+                    }),
+                )) as ArrayRef)
+            }
+            Some(DataType::UInt64) => {
+                Some(Arc::new(UInt64Array::from_iter(
+                    $column_statistics_iter.map(|statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int64(s) => {
+                                    Some(*s.$func() as u64)
+                                }
+                                _ => None,
+                            }
+                        })
+                    }),
+                )) as ArrayRef)
+            }
+            Some(DataType::Date32) => Some(Arc::new(Date32Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int32(s) => Some(*s.$func()),
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Date64) => Some(Arc::new(Date64Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Int32(s) => {
+                                Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Float32) => Some(Arc::new(Float32Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Float(s) => Some(*s.$func()),
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Float64) => Some(Arc::new(Float64Array::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::Double(s) => Some(*s.$func()),
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Decimal128(precision, scale)) => {
+                let mut array = Decimal128Array::from_iter($column_statistics_iter.map(
+                    |statistic| {
+                        statistic.and_then(|x| {
+                            if !x.has_min_max_set() {
+                                return None;
+                            }
+                            match x {
+                                ParquetStatistics::Int32(s) => Some(*s.$func() as i128),
+                                ParquetStatistics::Int64(s) => Some(*s.$func() as i128),
+                                ParquetStatistics::ByteArray(s) => {
+                                    Some(from_bytes_to_i128(s.$bytes_func()))
+                                }
+                                ParquetStatistics::FixedLenByteArray(s) => {
+                                    Some(from_bytes_to_i128(s.$bytes_func()))
+                                }
+                                _ => None,
+                            }
+                        })
+                    },
+                ));
+
+                array = array.with_precision_and_scale(*precision, *scale)?;
+                Some(Arc::new(array) as ArrayRef)
+            }
+            Some(DataType::Binary) => Some(Arc::new(BinaryArray::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::ByteArray(s) => {
+                                Some(s.$bytes_func().to_vec())
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::Utf8) => Some(Arc::new(StringArray::from_iter(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::ByteArray(s) => {
+                                let res = std::str::from_utf8(s.$bytes_func())
+                                    .map(|s| s.to_string())
+                                    .ok();
+
+                                if res.is_none() {
+                                    log::debug!(
+                                        "Utf8 statistics is a non-UTF8 value, ignoring it."
+                                    );
+                                }
+
+                                Some(res.unwrap_or_else(|| "".to_string()))
+                            }
+                            _ => None,
+                        }
+                    })
+                }),
+            )) as ArrayRef),
+            Some(DataType::FixedSizeBinary(size)) => Some(Arc::new(FixedSizeBinaryArray::from(
+                $column_statistics_iter.map(|statistic| {
+                    statistic.and_then(|x| {
+                        if !x.has_min_max_set() {
+                            return None;
+                        }
+                        match x {
+                            ParquetStatistics::FixedLenByteArray(s) => {
+                                let value = s.$bytes_func();
+                                let value = if value.len().try_into() == Ok(*size) {
+                                    Some(value)
+                                } else {
+                                    log::debug!(
+                                        "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                        size,
+                                        value.len(),
+                                    );
+                                    None
+                                };
+                                value
+                            }
+                            _ => None,
+                        }
+                    })
+                }).collect::<Vec<_>>(),
+            )) as ArrayRef),
+            Some(DataType::Timestamp(_, _)) => {
+                log::info!(
+                    "Timestamp statistics are not supported, returning none"
+                );
+                None
+            },
+            _ => None,
         }
     }};
 }
@@ -211,9 +383,13 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
-    let scalars = iterator
-        .map(|x| x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type))));
-    collect_scalars(data_type, scalars)
+    match get_statistics_iter!(iterator, min, min_bytes, Some(data_type)) {
+        Some(array) => Ok(array),
+        None => {
+            log::debug!("Unsupported data type for statistics");
+            Ok(new_empty_array(data_type))
+        }
+    }
 }
 
 /// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
@@ -221,22 +397,11 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
-    let scalars = iterator
-        .map(|x| x.and_then(|s| get_statistic!(s, max, max_bytes, Some(data_type))));
-    collect_scalars(data_type, scalars)
-}
-
-/// Builds an array from an iterator of ScalarValue
-fn collect_scalars<I: Iterator<Item = Option<ScalarValue>>>(
-    data_type: &DataType,
-    iterator: I,
-) -> Result<ArrayRef> {
-    let mut scalars = iterator.peekable();
-    match scalars.peek().is_none() {
-        true => Ok(new_empty_array(data_type)),
-        false => {
-            let null = ScalarValue::try_from(data_type)?;
-            ScalarValue::iter_to_array(scalars.map(|x| x.unwrap_or_else(|| null.clone())))
+    match get_statistics_iter!(iterator, max, max_bytes, Some(data_type)) {
+        Some(array) => Ok(array),
+        None => {
+            log::debug!("Unsupported data type for statistics");
+            Ok(new_empty_array(data_type))
         }
     }
 }
@@ -536,9 +701,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
-    )]
     // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
@@ -556,8 +718,8 @@ mod test {
                 None,
                 None,
             ]),
-            expected_min: timestamp_array([Some(1), Some(5), None]),
-            expected_max: timestamp_array([Some(3), Some(9), None]),
+            expected_min: timestamp_array([]),
+            expected_max: timestamp_array([]),
         }
         .run()
     }
@@ -914,8 +1076,8 @@ mod test {
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: timestamp_array([None]),
-                expected_max: timestamp_array([None]),
+                expected_min: timestamp_array([]),
+                expected_max: timestamp_array([]),
             })
             .with_column(ExpectedColumn {
                 name: "year",
