@@ -21,10 +21,9 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
@@ -205,22 +204,21 @@ macro_rules! make_decimal_stats_iterator {
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 next.map(|x| {
-                    x.and_then(|stats| match stats {
-                        ParquetStatistics::Int32(s) if stats.has_min_max_set() => {
-                            Some(*s.$func() as i128)
+                    x.and_then(|stats| {
+                        if !stats.has_min_max_set() {
+                            return None;
                         }
-                        ParquetStatistics::Int64(s) if stats.has_min_max_set() => {
-                            Some(*s.$func() as i128)
+                        match stats {
+                            ParquetStatistics::Int32(s) => Some(*s.$func() as i128),
+                            ParquetStatistics::Int64(s) => Some(*s.$func() as i128),
+                            ParquetStatistics::ByteArray(s) => {
+                                Some(from_bytes_to_i128(s.$bytes_func()))
+                            }
+                            ParquetStatistics::FixedLenByteArray(s) => {
+                                Some(from_bytes_to_i128(s.$bytes_func()))
+                            }
+                            _ => None,
                         }
-                        ParquetStatistics::ByteArray(s) if stats.has_min_max_set() => {
-                            Some(from_bytes_to_i128(s.$bytes_func()))
-                        }
-                        ParquetStatistics::FixedLenByteArray(s)
-                            if stats.has_min_max_set() =>
-                        {
-                            Some(from_bytes_to_i128(s.$bytes_func()))
-                        }
-                        _ => None,
                     })
                 })
             }
@@ -661,7 +659,12 @@ mod test {
     use super::*;
     use arrow::compute::kernels::cast_utils::Parser;
     use arrow::datatypes::{Date32Type, Date64Type};
-    use arrow_array::{new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray, new_empty_array};
+    use arrow_array::{
+        new_empty_array, new_null_array, Array, BinaryArray, BooleanArray, Date32Array,
+        Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int8Array, RecordBatch, StringArray, StructArray,
+        TimestampNanosecondArray,
+    };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
     use datafusion_common::test_util::parquet_test_data;
