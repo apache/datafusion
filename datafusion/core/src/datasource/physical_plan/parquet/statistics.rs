@@ -22,13 +22,12 @@
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema};
-use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
-};
+use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
@@ -56,7 +55,7 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     result
 }
 
-////// Define an adapter iterator for extracting statistics from an iterator of
+/// Define an adapter iterator for extracting statistics from an iterator of
 /// `ParquetStatistics`
 ///
 ///
@@ -164,134 +163,77 @@ make_stats_iterator!(
     [u8]
 );
 
-/// Extract a single min/max statistics from a [`ParquetStatistics`] object
+/// Special iterator adapter for extracting i128 values from from an iterator of
+/// `ParquetStatistics`
 ///
-/// * `$column_statistics` is the `ParquetStatistics` object
-/// * `$func is the function` (`min`/`max`) to call to get the value
-/// * `$bytes_func` is the function (`min_bytes`/`max_bytes`) to call to get the value as bytes
-/// * `$target_arrow_type` is the [`DataType`] of the target statistics
-macro_rules! get_statistic {
-    ($column_statistics:expr, $func:ident, $bytes_func:ident, $target_arrow_type:expr) => {{
-        if !$column_statistics.has_min_max_set() {
-            return None;
+/// Handles checking if the statistics are present and valid with the correct type.
+///
+/// Depending on the parquet file, the statistics for `Decimal128` can be stored as
+/// `Int32`, `Int64` or `ByteArray` or `FixedSizeByteArray` :mindblown:
+///
+/// This iterator handles all cases, extracting the values
+/// and converting it to `i128`.
+///
+/// Parameters:
+/// * `$iterator_type` is the name of the iterator type (e.g. `MinBooleanStatsIterator`)
+/// * `$func` is the function to call to get the value (e.g. `min` or `max`)
+/// * `$bytes_func` is the function to call to get the value as bytes (e.g. `min_bytes` or `max_bytes`)
+macro_rules! make_decimal_stats_iterator {
+    ($iterator_type:ident, $func:ident, $bytes_func:ident) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            iter: I,
         }
-        match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => {
-                match $target_arrow_type {
-                    // int32 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::Int8) => {
-                        Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::Int16) => {
-                        Some(ScalarValue::Int16(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt8) => {
-                        Some(ScalarValue::UInt8(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt16) => {
-                        Some(ScalarValue::UInt16(Some((*s.$func()).try_into().unwrap())))
-                    }
-                    Some(DataType::UInt32) => {
-                        Some(ScalarValue::UInt32(Some((*s.$func()) as u32)))
-                    }
-                    Some(DataType::Date32) => {
-                        Some(ScalarValue::Date32(Some(*s.$func())))
-                    }
-                    Some(DataType::Date64) => {
-                        Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
-                    }
-                    _ => Some(ScalarValue::Int32(Some(*s.$func()))),
-                }
+
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            fn new(iter: I) -> Self {
+                Self { iter }
             }
-            ParquetStatistics::Int64(s) => {
-                match $target_arrow_type {
-                    // int64 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::UInt64) => {
-                        Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
-                    }
-                    _ => Some(ScalarValue::Int64(Some(*s.$func()))),
-                }
-            }
-            // 96 bit ints not supported
-            ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                match $target_arrow_type {
-                    // decimal data type
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::Binary) => {
-                        Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
-                    }
-                    _ => {
-                        let s = std::str::from_utf8(s.$bytes_func())
-                            .map(|s| s.to_string())
-                            .ok();
-                        if s.is_none() {
-                            log::debug!(
-                                "Utf8 statistics is a non-UTF8 value, ignoring it."
-                            );
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            type Item = Option<i128>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.iter.next();
+                next.map(|x| {
+                    x.and_then(|stats| match stats {
+                        ParquetStatistics::Int32(s) if stats.has_min_max_set() => {
+                            Some(*s.$func() as i128)
                         }
-                        Some(ScalarValue::Utf8(s))
-                    }
-                }
+                        ParquetStatistics::Int64(s) if stats.has_min_max_set() => {
+                            Some(*s.$func() as i128)
+                        }
+                        ParquetStatistics::ByteArray(s) if stats.has_min_max_set() => {
+                            Some(from_bytes_to_i128(s.$bytes_func()))
+                        }
+                        ParquetStatistics::FixedLenByteArray(s)
+                            if stats.has_min_max_set() =>
+                        {
+                            Some(from_bytes_to_i128(s.$bytes_func()))
+                        }
+                        _ => None,
+                    })
+                })
             }
-            // type not fully supported yet
-            ParquetStatistics::FixedLenByteArray(s) => {
-                match $target_arrow_type {
-                    // just support specific logical data types, there are others each
-                    // with their own ordering
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            *precision,
-                            *scale,
-                        ))
-                    }
-                    Some(DataType::FixedSizeBinary(size)) => {
-                        let value = s.$bytes_func().to_vec();
-                        let value = if value.len().try_into() == Ok(*size) {
-                            Some(value)
-                        } else {
-                            log::debug!(
-                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
-                                size,
-                                value.len(),
-                            );
-                            None
-                        };
-                        Some(ScalarValue::FixedSizeBinary(
-                            *size,
-                            value,
-                        ))
-                    }
-                    _ => None,
-                }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
             }
         }
-    }};
+    };
 }
+
+make_decimal_stats_iterator!(MinDecimal128StatsIterator, min, min_bytes);
+make_decimal_stats_iterator!(MaxDecimal128StatsIterator, max, max_bytes);
 
 /// Lookups up the parquet column by name
 ///
@@ -429,11 +371,16 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 })
             }).collect::<Vec<_>>(),
         ))),
+        DataType::Decimal128(precision, scale) => {
+            let arr = Decimal128Array::from_iter(
+                MinDecimal128StatsIterator::new(iterator)
+            ).with_precision_and_scale(*precision, *scale)?;
+            Ok(Arc::new(arr) as ArrayRef)
+        },
         _ => {
-            let scalars = iterator.map(|x| {
-                x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type)))
-            });
-            collect_scalars(data_type, scalars)
+            let len = iterator.count();
+            // don't know how to extract statistics, so return a null array
+            Ok(new_null_array(data_type, len))
         }
     }
 }
@@ -549,26 +496,16 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 })
             }).collect::<Vec<_>>(),
         ))),
-        _ => {
-            let scalars = iterator.map(|x| {
-                x.and_then(|s| get_statistic!(s, max, max_bytes, Some(data_type)))
-            });
-            collect_scalars(data_type, scalars)
+        DataType::Decimal128(precision, scale) => {
+                let arr = Decimal128Array::from_iter(
+                    MaxDecimal128StatsIterator::new(iterator)
+                ).with_precision_and_scale(*precision, *scale)?;
+                Ok(Arc::new(arr) as ArrayRef)
         }
-    }
-}
-
-/// Builds an array from an iterator of ScalarValue
-fn collect_scalars<I: Iterator<Item = Option<ScalarValue>>>(
-    data_type: &DataType,
-    iterator: I,
-) -> Result<ArrayRef> {
-    let mut scalars = iterator.peekable();
-    match scalars.peek().is_none() {
-        true => Ok(new_empty_array(data_type)),
-        false => {
-            let null = ScalarValue::try_from(data_type)?;
-            ScalarValue::iter_to_array(scalars.map(|x| x.unwrap_or_else(|| null.clone())))
+        _ => {
+            let len = iterator.count();
+            // don't know how to extract statistics, so return a null array
+            Ok(new_null_array(data_type, len))
         }
     }
 }
