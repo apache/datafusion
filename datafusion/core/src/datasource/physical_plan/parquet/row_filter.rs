@@ -524,11 +524,11 @@ mod test {
             .expect("building candidate")
             .expect("candidate expected");
 
-        let schema_adapter = DefaultSchemaAdapterFactory{}.create(Arc::new(table_schema));
+        let schema_adapter =
+            DefaultSchemaAdapterFactory {}.create(Arc::new(table_schema));
         let (schema_mapping, _) = schema_adapter
             .map_schema(&file_schema)
             .expect("creating schema mapping");
-
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -560,7 +560,7 @@ mod test {
 
         let filtered = row_filter.evaluate(record_batch);
 
-        assert!(matches!(filtered, Ok(_)));
+        assert!(filtered.is_ok());
     }
 
     #[test]
