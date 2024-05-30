@@ -1196,10 +1196,19 @@ message PhysicalHashRepartition {
 
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
+  // oneof partition_method {
+  //   uint64 round_robin = 2;
+  //   PhysicalHashRepartition hash = 3;
+  //   uint64 unknown = 4;
+  // }
+  Partitioning partitioning = 5;
+}
+
+message Partitioning {
   oneof partition_method {
-    uint64 round_robin = 2;
-    PhysicalHashRepartition hash = 3;
-    uint64 unknown = 4;
+    uint64 round_robin = 1;
+    PhysicalHashRepartition hash = 2;
+    uint64 unknown = 3;
   }
 }
 

@@ -12717,6 +12717,129 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
         deserializer.deserialize_struct("datafusion.PartitionedFile", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Partitioning {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.partition_method.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Partitioning", len)?;
+        if let Some(v) = self.partition_method.as_ref() {
+            match v {
+                partitioning::PartitionMethod::RoundRobin(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
+                }
+                partitioning::PartitionMethod::Hash(v) => {
+                    struct_ser.serialize_field("hash", v)?;
+                }
+                partitioning::PartitionMethod::Unknown(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Partitioning {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "round_robin",
+            "roundRobin",
+            "hash",
+            "unknown",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            RoundRobin,
+            Hash,
+            Unknown,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
+                            "hash" => Ok(GeneratedField::Hash),
+                            "unknown" => Ok(GeneratedField::Unknown),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Partitioning;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Partitioning")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Partitioning, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut partition_method__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::RoundRobin => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("roundRobin"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::RoundRobin(x.0));
+                        }
+                        GeneratedField::Hash => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hash"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(partitioning::PartitionMethod::Hash)
+;
+                        }
+                        GeneratedField::Unknown => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unknown"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| partitioning::PartitionMethod::Unknown(x.0));
+                        }
+                    }
+                }
+                Ok(Partitioning {
+                    partition_method: partition_method__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Partitioning", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PhysicalAggregateExprNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16885,27 +17008,15 @@ impl serde::Serialize for RepartitionExecNode {
         if self.input.is_some() {
             len += 1;
         }
-        if self.partition_method.is_some() {
+        if self.partitioning.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.RepartitionExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
-        if let Some(v) = self.partition_method.as_ref() {
-            match v {
-                repartition_exec_node::PartitionMethod::RoundRobin(v) => {
-                    #[allow(clippy::needless_borrow)]
-                    struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
-                }
-                repartition_exec_node::PartitionMethod::Hash(v) => {
-                    struct_ser.serialize_field("hash", v)?;
-                }
-                repartition_exec_node::PartitionMethod::Unknown(v) => {
-                    #[allow(clippy::needless_borrow)]
-                    struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
-                }
-            }
+        if let Some(v) = self.partitioning.as_ref() {
+            struct_ser.serialize_field("partitioning", v)?;
         }
         struct_ser.end()
     }
@@ -16918,18 +17029,13 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
     {
         const FIELDS: &[&str] = &[
             "input",
-            "round_robin",
-            "roundRobin",
-            "hash",
-            "unknown",
+            "partitioning",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
-            RoundRobin,
-            Hash,
-            Unknown,
+            Partitioning,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16952,9 +17058,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
-                            "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
-                            "hash" => Ok(GeneratedField::Hash),
-                            "unknown" => Ok(GeneratedField::Unknown),
+                            "partitioning" => Ok(GeneratedField::Partitioning),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16975,7 +17079,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut input__ = None;
-                let mut partition_method__ = None;
+                let mut partitioning__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -16984,30 +17088,17 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             }
                             input__ = map_.next_value()?;
                         }
-                        GeneratedField::RoundRobin => {
-                            if partition_method__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("roundRobin"));
+                        GeneratedField::Partitioning => {
+                            if partitioning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitioning"));
                             }
-                            partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| repartition_exec_node::PartitionMethod::RoundRobin(x.0));
-                        }
-                        GeneratedField::Hash => {
-                            if partition_method__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("hash"));
-                            }
-                            partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(repartition_exec_node::PartitionMethod::Hash)
-;
-                        }
-                        GeneratedField::Unknown => {
-                            if partition_method__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("unknown"));
-                            }
-                            partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| repartition_exec_node::PartitionMethod::Unknown(x.0));
+                            partitioning__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(RepartitionExecNode {
                     input: input__,
-                    partition_method: partition_method__,
+                    partitioning: partitioning__,
                 })
             }
         }

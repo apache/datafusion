@@ -67,8 +67,10 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+    pub use super::first_last::last_value;
     pub use super::median::median;
 }
 
@@ -109,13 +111,13 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             assert!(
-                names.insert(func.name().to_string()),
+                names.insert(func.name().to_string().to_lowercase()),
                 "duplicate function name: {}",
                 func.name()
             );
             for alias in func.aliases() {
                 assert!(
-                    names.insert(alias.to_string()),
+                    names.insert(alias.to_string().to_lowercase()),
                     "duplicate function name: {}",
                     alias
                 );

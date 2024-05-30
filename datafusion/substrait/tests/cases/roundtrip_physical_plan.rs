@@ -45,12 +45,8 @@ async fn parquet_exec() -> Result<()> {
             123,
         )],
     ]);
-    let parquet_exec: Arc<dyn ExecutionPlan> = Arc::new(ParquetExec::new(
-        scan_config,
-        None,
-        None,
-        Default::default(),
-    ));
+    let parquet_exec: Arc<dyn ExecutionPlan> =
+        ParquetExec::builder(scan_config).build_arc();
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

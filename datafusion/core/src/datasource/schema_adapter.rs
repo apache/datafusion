@@ -258,13 +258,11 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
 
         // prepare the scan
-        let parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::builder(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
                 .with_file(partitioned_file),
-            None,
-            None,
-            Default::default(),
         )
+        .build()
         .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
 
         let session_ctx = SessionContext::new();

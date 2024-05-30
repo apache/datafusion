@@ -104,6 +104,27 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 ///   `───────────────────'
 ///
 /// ```
+///
+/// # Example: Create a `ParquetExec`
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::Schema;
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+/// # use datafusion::datasource::listing::PartitionedFile;
+/// # let file_schema = Arc::new(Schema::empty());
+/// # let object_store_url = ObjectStoreUrl::local_filesystem();
+/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_physical_expr::expressions::lit;
+/// # let predicate = lit(true);
+/// // Create a ParquetExec for reading `file1.parquet` with a file size of 100MB
+/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema)
+///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
+/// let exec = ParquetExec::builder(file_scan_config)
+///   // Provide a predicate for filtering row groups/pages
+///   .with_predicate(predicate)
+///   .build();
+/// ```
+///
 /// # Features
 ///
 /// Supports the following optimizations:
@@ -131,7 +152,7 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 /// * metadata_size_hint: controls the number of bytes read from the end of the
 /// file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
 /// custom reader is used, it supplies the metadata directly and this parameter
-/// is ignored. See [`Self::with_parquet_file_reader_factory`] for more details.
+/// is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
 ///
 /// # Execution Overview
 ///
@@ -141,9 +162,9 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 /// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
 /// the file.
 ///
-/// * Step 3: The `ParquetOpener` gets the file metadata via
-/// [`ParquetFileReaderFactory`] and applies any predicates
-/// and projections to determine what pages must be read.
+/// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)
+/// via [`ParquetFileReaderFactory`] and applies any predicates and projections
+/// to determine what pages must be read.
 ///
 /// * Step 4: The stream begins reading data, fetching the required pages
 /// and incrementally decoding them.
@@ -154,6 +175,7 @@ pub use statistics::{RequestedStatistics, StatisticsConverter};
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
+/// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
     /// Base configuration for this scan
@@ -179,14 +201,125 @@ pub struct ParquetExec {
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
-impl ParquetExec {
-    /// Create a new Parquet reader execution plan provided file list and schema.
-    pub fn new(
-        base_config: FileScanConfig,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        metadata_size_hint: Option<usize>,
+/// [`ParquetExecBuilder`]`, builder for [`ParquetExec`].
+///
+/// See example on [`ParquetExec`].
+pub struct ParquetExecBuilder {
+    file_scan_config: FileScanConfig,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    metadata_size_hint: Option<usize>,
+    table_parquet_options: TableParquetOptions,
+    parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl ParquetExecBuilder {
+    /// Create a new builder to read the provided file scan configuration
+    pub fn new(file_scan_config: FileScanConfig) -> Self {
+        Self::new_with_options(file_scan_config, TableParquetOptions::default())
+    }
+
+    /// Create a new builder to read the data specified in the file scan
+    /// configuration with the provided `TableParquetOptions`.
+    pub fn new_with_options(
+        file_scan_config: FileScanConfig,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
+        Self {
+            file_scan_config,
+            predicate: None,
+            metadata_size_hint: None,
+            table_parquet_options,
+            parquet_file_reader_factory: None,
+            schema_adapter_factory: None,
+        }
+    }
+
+    /// Set the predicate for the scan.
+    ///
+    /// The ParquetExec uses this predicate to filter row groups and data pages
+    /// using the Parquet statistics and bloom filters.
+    ///
+    /// If the predicate can not be used to prune the scan, it is ignored (no
+    /// error is raised).
+    pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        self.predicate = Some(predicate);
+        self
+    }
+
+    /// Set the metadata size hint
+    ///
+    /// This value determines how many bytes at the end of the file the default
+    /// [`ParquetFileReaderFactory`] will request in the initial IO. If this is
+    /// too small, the ParquetExec will need to make additional IO requests to
+    /// read the footer.
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+        self.metadata_size_hint = Some(metadata_size_hint);
+        self
+    }
+
+    /// Set the table parquet options that control how the ParquetExec reads.
+    ///
+    /// See also [`Self::new_with_options`]
+    pub fn with_table_parquet_options(
+        mut self,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
+        self.table_parquet_options = table_parquet_options;
+        self
+    }
+
+    /// Set optional user defined parquet file reader factory.
+    ///
+    /// You can use [`ParquetFileReaderFactory`] to more precisely control how
+    /// data is read from parquet files (e.g. skip re-reading metadata, coalesce
+    /// I/O operations, etc).
+    ///
+    /// The default reader factory reads directly from an [`ObjectStore`]
+    /// instance using individual I/O operations for the footer and each page.
+    ///
+    /// If a custom `ParquetFileReaderFactory` is provided, then data access
+    /// operations will be routed to this factory instead of `ObjectStore`.
+    pub fn with_parquet_file_reader_factory(
+        mut self,
+        parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    ) -> Self {
+        self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// parquet file get mapped to that of the table schema.  The default schema
+    /// adapter uses arrow's cast library to map the parquet fields to the table
+    /// schema.
+    pub fn with_schema_adapter_factory(
+        mut self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        self.schema_adapter_factory = Some(schema_adapter_factory);
+        self
+    }
+
+    /// Convenience: build an `Arc`d `ParquetExec` from this builder
+    pub fn build_arc(self) -> Arc<ParquetExec> {
+        Arc::new(self.build())
+    }
+
+    /// Build a [`ParquetExec`]
+    #[must_use]
+    pub fn build(self) -> ParquetExec {
+        let Self {
+            file_scan_config,
+            predicate,
+            metadata_size_hint,
+            table_parquet_options,
+            parquet_file_reader_factory,
+            schema_adapter_factory,
+        } = self;
+
+        let base_config = file_scan_config;
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -225,12 +358,12 @@ impl ParquetExec {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = Self::compute_properties(
+        let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
             &base_config,
         );
-        Self {
+        ParquetExec {
             base_config,
             projected_statistics,
             metrics,
@@ -238,11 +371,43 @@ impl ParquetExec {
             pruning_predicate,
             page_pruning_predicate,
             metadata_size_hint,
-            parquet_file_reader_factory: None,
+            parquet_file_reader_factory,
             cache,
             table_parquet_options,
-            schema_adapter_factory: None,
+            schema_adapter_factory,
         }
+    }
+}
+
+impl ParquetExec {
+    /// Create a new Parquet reader execution plan provided file list and schema.
+    #[deprecated(
+        since = "39.0.0",
+        note = "use `ParquetExec::builder` or `ParquetExecBuilder`"
+    )]
+    pub fn new(
+        base_config: FileScanConfig,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        metadata_size_hint: Option<usize>,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
+        let mut builder =
+            ParquetExecBuilder::new_with_options(base_config, table_parquet_options);
+        if let Some(predicate) = predicate {
+            builder = builder.with_predicate(predicate);
+        }
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        }
+        builder.build()
+    }
+
+    /// Return a [`ParquetExecBuilder`].
+    ///
+    /// See example on [`ParquetExec`] and [`ParquetExecBuilder`] for specifying
+    /// parquet table options.
+    pub fn builder(file_scan_config: FileScanConfig) -> ParquetExecBuilder {
+        ParquetExecBuilder::new(file_scan_config)
     }
 
     /// [`FileScanConfig`] that controls this scan (such as which files to read)
@@ -267,13 +432,7 @@ impl ParquetExec {
 
     /// Optional user defined parquet file reader factory.
     ///
-    /// You can use [`ParquetFileReaderFactory`] to more precisely control how
-    /// data is read from parquet files (e.g. skip re-reading metadata, coalesce
-    /// I/O operations, etc).
-    ///
-    /// The default reader factory reads directly from an [`ObjectStore`]
-    /// instance using individual I/O operations for the footer and then  for
-    /// each page.
+    /// See documentation on [`ParquetExecBuilder::with_parquet_file_reader_factory`]
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
@@ -284,9 +443,7 @@ impl ParquetExec {
 
     /// Optional schema adapter factory.
     ///
-    /// `SchemaAdapterFactory` allows user to specify how fields from the parquet file get mapped to
-    ///  that of the table schema.  The default schema adapter uses arrow's cast library to map
-    ///  the parquet fields to the table schema.
+    /// See documentation on [`ParquetExecBuilder::with_schema_adapter_factory`]
     pub fn with_schema_adapter_factory(
         mut self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
@@ -1033,14 +1190,16 @@ mod tests {
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
-            let mut parquet_exec = ParquetExec::new(
+            let mut builder = ParquetExec::builder(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_group(file_group)
                     .with_projection(projection),
-                predicate,
-                None,
-                Default::default(),
             );
+
+            if let Some(predicate) = predicate {
+                builder = builder.with_predicate(predicate);
+            }
+            let mut parquet_exec = builder.build();
 
             if pushdown_predicate {
                 parquet_exec = parquet_exec
@@ -1684,13 +1843,11 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = ParquetExec::new(
+            let parquet_exec = ParquetExec::builder(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_groups(file_groups),
-                None,
-                None,
-                Default::default(),
-            );
+            )
+            .build();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1786,7 +1943,7 @@ mod tests {
             ),
         ]);
 
-        let parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::builder(
             FileScanConfig::new(object_store_url, schema.clone())
                 .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
@@ -1803,10 +1960,8 @@ mod tests {
                         false,
                     ),
                 ]),
-            None,
-            None,
-            Default::default(),
-        );
+        )
+        .build();
         assert_eq!(
             parquet_exec.cache.output_partitioning().partition_count(),
             1
@@ -1861,13 +2016,11 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = ParquetExec::new(
+        let parquet_exec = ParquetExec::builder(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file(partitioned_file),
-            None,
-            None,
-            Default::default(),
-        );
+        )
+        .build();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();

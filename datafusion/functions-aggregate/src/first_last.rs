@@ -49,7 +49,6 @@ make_udaf_expr_and_func!(
 
 pub struct FirstValue {
     signature: Signature,
-    aliases: Vec<String>,
     requirement_satisfied: bool,
 }
 
@@ -72,7 +71,6 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("first_value")],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
@@ -97,7 +95,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn name(&self) -> &str {
-        "FIRST_VALUE"
+        "first_value"
     }
 
     fn signature(&self) -> &Signature {
@@ -144,7 +142,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn with_beneficial_ordering(
@@ -349,7 +347,6 @@ make_udaf_expr_and_func!(
 
 pub struct LastValue {
     signature: Signature,
-    aliases: Vec<String>,
     requirement_satisfied: bool,
 }
 
@@ -372,7 +369,6 @@ impl Default for LastValue {
 impl LastValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("last_value")],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
@@ -397,7 +393,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn name(&self) -> &str {
-        "LAST_VALUE"
+        "last_value"
     }
 
     fn signature(&self) -> &Signature {
@@ -449,7 +445,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn with_beneficial_ordering(
