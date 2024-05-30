@@ -68,18 +68,6 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     /// this function will simplify `SimplifySmoothItUdf` to `SmoothItUdf`.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
-        // Ok(ExprSimplifyResult::Simplified(Expr::WindowFunction(
-        //     WindowFunction {
-        //         fun: datafusion_expr::WindowFunctionDefinition::AggregateFunction(
-        //             AggregateFunction::Avg,
-        //         ),
-        //         args,
-        //         partition_by: partition_by.to_vec(),
-        //         order_by: order_by.to_vec(),
-        //         window_frame: window_frame.clone(),
-        //         null_treatment: *null_treatment,
-        //     },
-        // )))
         let simplify = |window_function: datafusion_expr::expr::WindowFunction,
                         _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
