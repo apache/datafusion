@@ -375,6 +375,9 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             ).with_precision_and_scale(*precision, *scale)?;
             Ok(Arc::new(arr) as ArrayRef)
         },
+        DataType::Dictionary(_, value_type) => {
+            min_statistics(value_type, iterator)
+        }
         _ => {
             let len = iterator.count();
             // don't know how to extract statistics, so return a null array
@@ -499,6 +502,9 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                     MaxDecimal128StatsIterator::new(iterator)
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr) as ArrayRef)
+        }
+        DataType::Dictionary(_, value_type) => {
+            max_statistics(value_type, iterator)
         }
         _ => {
             let len = iterator.count();
