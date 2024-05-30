@@ -21,7 +21,7 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
     Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array,
@@ -661,11 +661,7 @@ mod test {
     use super::*;
     use arrow::compute::kernels::cast_utils::Parser;
     use arrow::datatypes::{Date32Type, Date64Type};
-    use arrow_array::{
-        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
-    };
+    use arrow_array::{new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray, new_empty_array};
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
     use datafusion_common::test_util::parquet_test_data;
