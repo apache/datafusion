@@ -20,7 +20,11 @@
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-use arrow_array::{new_empty_array, new_null_array, UInt64Array};
+use arrow_array::{
+    new_empty_array, new_null_array, BooleanArray, Date32Array, Date64Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
@@ -51,6 +55,94 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     }
     result
 }
+
+macro_rules! make_stats_iterator {
+    ($iterator_type:ident, $func:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            iter: I,
+        }
+
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            fn new(iter: I) -> Self {
+                Self { iter }
+            }
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            type Item = Option<&'a $stat_value_type>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.iter.next();
+                next.map(|x| {
+                    x.and_then(|stats| match stats {
+                        $parquet_statistics_type(s) if stats.has_min_max_set() => {
+                            Some(s.$func())
+                        }
+                        _ => None,
+                    })
+                })
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
+            }
+        }
+    };
+}
+
+make_stats_iterator!(
+    MinBooleanStatsIterator,
+    min,
+    ParquetStatistics::Boolean,
+    bool
+);
+make_stats_iterator!(
+    MaxBooleanStatsIterator,
+    max,
+    ParquetStatistics::Boolean,
+    bool
+);
+make_stats_iterator!(MinInt32StatsIterator, min, ParquetStatistics::Int32, i32);
+make_stats_iterator!(MaxInt32StatsIterator, max, ParquetStatistics::Int32, i32);
+make_stats_iterator!(MinInt64StatsIterator, min, ParquetStatistics::Int64, i64);
+make_stats_iterator!(MaxInt64StatsIterator, max, ParquetStatistics::Int64, i64);
+make_stats_iterator!(MinFloatStatsIterator, min, ParquetStatistics::Float, f32);
+make_stats_iterator!(MaxFloatStatsIterator, max, ParquetStatistics::Float, f32);
+make_stats_iterator!(MinDoubleStatsIterator, min, ParquetStatistics::Double, f64);
+make_stats_iterator!(MaxDoubleStatsIterator, max, ParquetStatistics::Double, f64);
+make_stats_iterator!(
+    MinByteArrayStatsIterator,
+    min_bytes,
+    ParquetStatistics::ByteArray,
+    [u8]
+);
+make_stats_iterator!(
+    MaxByteArrayStatsIterator,
+    max_bytes,
+    ParquetStatistics::ByteArray,
+    [u8]
+);
+make_stats_iterator!(
+    MinFixedLenByteArrayStatsIterator,
+    min_bytes,
+    ParquetStatistics::FixedLenByteArray,
+    [u8]
+);
+make_stats_iterator!(
+    MaxFixedLenByteArrayStatsIterator,
+    max_bytes,
+    ParquetStatistics::FixedLenByteArray,
+    [u8]
+);
 
 /// Extract a single min/max statistics from a [`ParquetStatistics`] object
 ///
@@ -211,9 +303,89 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
-    let scalars = iterator
-        .map(|x| x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type))));
-    collect_scalars(data_type, scalars)
+    match data_type {
+        DataType::Boolean => Ok(Arc::new(BooleanArray::from_iter(
+            MinBooleanStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Int8 => Ok(Arc::new(Int8Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = i8::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::Int16 => Ok(Arc::new(Int16Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = i16::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::Int32 => Ok(Arc::new(Int32Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Int64 => Ok(Arc::new(Int64Array::from_iter(
+            MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::UInt8 => Ok(Arc::new(UInt8Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = u8::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::UInt16 => Ok(Arc::new(UInt16Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = u16::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::UInt32 => Ok(Arc::new(UInt32Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| x.map(|x| *x as u32)),
+        ))),
+        DataType::UInt64 => Ok(Arc::new(UInt64Array::from_iter(
+            MinInt64StatsIterator::new(iterator).map(|x| x.map(|x| *x as u64)),
+        ))),
+        DataType::Float32 => Ok(Arc::new(Float32Array::from_iter(
+            MinFloatStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Float64 => Ok(Arc::new(Float64Array::from_iter(
+            MinDoubleStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Date32 => Ok(Arc::new(Date32Array::from_iter(
+            MinInt32StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Date64 => Ok(Arc::new(Date64Array::from_iter(
+            MinInt32StatsIterator::new(iterator)
+                .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000)),
+        ))),
+        DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
+            MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        _ => {
+            let scalars = iterator.map(|x| {
+                x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type)))
+            });
+            collect_scalars(data_type, scalars)
+        }
+    }
 }
 
 /// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
@@ -221,9 +393,89 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
-    let scalars = iterator
-        .map(|x| x.and_then(|s| get_statistic!(s, max, max_bytes, Some(data_type))));
-    collect_scalars(data_type, scalars)
+    match data_type {
+        DataType::Boolean => Ok(Arc::new(BooleanArray::from_iter(
+            MaxBooleanStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Int8 => Ok(Arc::new(Int8Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = i8::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::Int16 => Ok(Arc::new(Int16Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = i16::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::Int32 => Ok(Arc::new(Int32Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Int64 => Ok(Arc::new(Int64Array::from_iter(
+            MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::UInt8 => Ok(Arc::new(UInt8Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = u8::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::UInt16 => Ok(Arc::new(UInt16Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if let Ok(v) = u16::try_from(*x) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+            }),
+        ))),
+        DataType::UInt32 => Ok(Arc::new(UInt32Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| x.map(|x| *x as u32)),
+        ))),
+        DataType::UInt64 => Ok(Arc::new(UInt64Array::from_iter(
+            MaxInt64StatsIterator::new(iterator).map(|x| x.map(|x| *x as u64)),
+        ))),
+        DataType::Float32 => Ok(Arc::new(Float32Array::from_iter(
+            MaxFloatStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Float64 => Ok(Arc::new(Float64Array::from_iter(
+            MaxDoubleStatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Date32 => Ok(Arc::new(Date32Array::from_iter(
+            MaxInt32StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Date64 => Ok(Arc::new(Date64Array::from_iter(
+            MaxInt32StatsIterator::new(iterator)
+                .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000)),
+        ))),
+        DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
+            MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        _ => {
+            let scalars = iterator.map(|x| {
+                x.and_then(|s| get_statistic!(s, max, max_bytes, Some(data_type)))
+            });
+            collect_scalars(data_type, scalars)
+        }
+    }
 }
 
 /// Builds an array from an iterator of ScalarValue
@@ -536,9 +788,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
-    )]
     // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
@@ -556,8 +805,8 @@ mod test {
                 None,
                 None,
             ]),
-            expected_min: timestamp_array([Some(1), Some(5), None]),
-            expected_max: timestamp_array([Some(3), Some(9), None]),
+            expected_min: i64_array([Some(1), Some(5), None]),
+            expected_max: i64_array([Some(3), Some(9), None]),
         }
         .run()
     }
@@ -914,8 +1163,8 @@ mod test {
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: timestamp_array([None]),
-                expected_max: timestamp_array([None]),
+                expected_min: i64_array([None]),
+                expected_max: i64_array([None]),
             })
             .with_column(ExpectedColumn {
                 name: "year",
