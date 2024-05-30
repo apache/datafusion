@@ -36,7 +36,6 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -257,20 +256,11 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
+        let exec = ParquetExec::builder(file_scan_config)
+            .with_predicate(predicate)
+            .build_arc();
 
-        let metadata_size_hint = None;
-
-        let table_parquet_options = TableParquetOptions::default();
-
-        // TODO make a builder for parquet exec
-        let exec = ParquetExec::new(
-            file_scan_config,
-            Some(predicate),
-            metadata_size_hint,
-            table_parquet_options,
-        );
-
-        Ok(Arc::new(exec))
+        Ok(exec)
     }
 
     /// Tell DataFusion to push filters down to the scan method
