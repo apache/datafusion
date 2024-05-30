@@ -115,7 +115,7 @@ mod tests {
         for func in all_default_aggregate_functions() {
             // TODO: remove this
             // sum is in intermidiate migration state, skip this
-            if func.name() == "sum" {
+            if func.name().to_lowercase() == "sum" {
                 continue;
             }
             assert!(

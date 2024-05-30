@@ -301,7 +301,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let udaf = self.context_provider.get_aggregate_meta(name);
         // Skip first value and last value, since we expect window builtin first/last value not udaf version
         if udaf.as_ref().is_some_and(|udaf| {
-            udaf.name() != "FIRST_VALUE" && udaf.name() != "LAST_VALUE"
+            udaf.name() != "first_value" && udaf.name() != "last_value"
         }) {
             Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
         } else {
