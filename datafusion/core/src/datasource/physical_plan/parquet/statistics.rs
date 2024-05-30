@@ -254,12 +254,8 @@ pub(crate) fn struct_min_statistics(
         )));
     }
     // Create a StructArray from collected fields and data
-    let struct_array = StructArray::from(
-        fields
-            .into_iter()
-            .zip(child_data.into_iter())
-            .collect::<Vec<_>>(),
-    );
+    let struct_array =
+        StructArray::from(fields.into_iter().zip(child_data).collect::<Vec<_>>());
     println!("the struct array is {:?}", struct_array);
     Ok(Arc::new(struct_array) as ArrayRef)
 }
@@ -293,12 +289,8 @@ pub(crate) fn struct_max_statistics(
         )));
     }
     // Create a StructArray from collected fields and data
-    let struct_array = StructArray::from(
-        fields
-            .into_iter()
-            .zip(child_data.into_iter())
-            .collect::<Vec<_>>(),
-    );
+    let struct_array =
+        StructArray::from(fields.into_iter().zip(child_data).collect::<Vec<_>>());
     Ok(Arc::new(struct_array) as ArrayRef)
 }
 
@@ -1108,7 +1100,12 @@ mod test {
             for field in schema.fields() {
                 if field.data_type().is_nested() {
                     let lookup = parquet_column(parquet_schema, &schema, field.name());
-                    assert_eq!(lookup, None);
+                    match field.data_type() {
+                        DataType::Struct(_) => {}
+                        _ => {
+                            assert_eq!(lookup, None);
+                        }
+                    }
                     continue;
                 }
 
