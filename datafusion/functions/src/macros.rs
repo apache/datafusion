@@ -43,21 +43,21 @@
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         $(
-            make_function!($FUNC, $DOC, $($arg)*);
+            // switch to single-function cases below
+            export_functions!(single $FUNC, $DOC, $($arg)*);
         )*
     };
-}
 
-macro_rules! make_function {
     // single vector argument (a single argument followed by a comma)
-    ($FUNC:ident, $DOC:expr, $arg:ident,) => {
+    (single $FUNC:ident, $DOC:expr, $arg:ident,) => {
         #[doc = $DOC]
         pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
             super::$FUNC().call($arg)
         }
     };
+
     // variadic arguments (zero or more arguments, without commas)
-    ($FUNC:ident, $DOC:expr, $($arg:ident)*) => {
+    (single $FUNC:ident, $DOC:expr, $($arg:ident)*) => {
         #[doc = $DOC]
         pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
             super::$FUNC().call(vec![$($arg),*])
