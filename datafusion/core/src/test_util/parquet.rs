@@ -37,6 +37,7 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
+use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -163,22 +164,19 @@ impl TestParquetFile {
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
-            let parquet_exec = Arc::new(ParquetExec::new(
-                scan_config,
-                Some(physical_filter_expr.clone()),
-                None,
-                parquet_options,
-            ));
+
+            let parquet_exec =
+                ParquetExecBuilder::new_with_options(scan_config, parquet_options)
+                    .with_predicate(physical_filter_expr.clone())
+                    .build_arc();
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(Arc::new(ParquetExec::new(
-                scan_config,
-                None,
-                None,
-                parquet_options,
-            )))
+            Ok(
+                ParquetExecBuilder::new_with_options(scan_config, parquet_options)
+                    .build_arc(),
+            )
         }
     }
 

@@ -245,16 +245,14 @@ mod tests {
     }
 
     fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
+        ParquetExec::builder(
             FileScanConfig::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 schema.clone(),
             )
             .with_file(PartitionedFile::new("x".to_string(), 100)),
-            None,
-            None,
-            Default::default(),
-        ))
+        )
+        .build_arc()
     }
 
     fn partial_aggregate_exec(

@@ -59,13 +59,11 @@ async fn multi_parquet_coercion() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = ParquetExec::new(
+    let parquet_exec = ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
             .with_file_group(file_group),
-        None,
-        None,
-        Default::default(),
-    );
+    )
+    .build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -115,14 +113,12 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = ParquetExec::new(
+    let parquet_exec = ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
             .with_file_group(file_group)
             .with_projection(Some(vec![1, 0, 2])),
-        None,
-        None,
-        Default::default(),
-    );
+    )
+    .build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

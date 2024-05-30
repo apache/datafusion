@@ -70,13 +70,12 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    let parquet_exec = ParquetExec::new(
+    ParquetExec::builder(
         FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),
-        Some(predicate),
-        None,
-        Default::default(),
-    );
-    parquet_exec.with_enable_page_index(true)
+    )
+    .with_predicate(predicate)
+    .build()
+    .with_enable_page_index(true)
 }
 
 #[tokio::test]
