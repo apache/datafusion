@@ -29,6 +29,23 @@ use std::sync::{Arc, OnceLock};
 mod simplification;
 
 #[test]
+fn test_octet_length() {
+    #[rustfmt::skip]
+    evaluate_expr_test(
+        octet_length(col("list")),
+        vec![
+            "+------+",
+            "| expr |",
+            "+------+",
+            "| 5    |",
+            "| 18   |",
+            "| 6    |",
+            "+------+",
+        ],
+    );
+}
+
+#[test]
 fn test_eq() {
     // id = '2'
     evaluate_expr_test(
