@@ -1155,7 +1155,6 @@ async fn test_boolean() {
 // BUG
 // https://github.com/apache/datafusion/issues/10609
 // Note that: since I have not worked on struct array before, there may be a bug in the test code rather than the real bug in the code
-#[ignore]
 #[tokio::test]
 async fn test_struct() {
     // This creates a parquet files of 1 column named "struct"
