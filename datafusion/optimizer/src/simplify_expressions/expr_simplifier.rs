@@ -32,10 +32,13 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionDefinition, InList, InSubquery};
+use datafusion_expr::expr::{
+    AggregateFunctionDefinition, InList, InSubquery, WindowFunction,
+};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
+    WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -1391,6 +1394,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 (_, expr) => Transformed::no(expr),
             },
 
+            Expr::WindowFunction(WindowFunction {
+                fun: WindowFunctionDefinition::WindowUDF(ref udwf),
+                ..
+            }) => match (udwf.simplify(), expr) {
+                (Some(simplify_function), Expr::WindowFunction(wf)) => {
+                    Transformed::yes(simplify_function(wf, info)?)
+                }
+                (_, expr) => Transformed::no(expr),
+            },
+
             //
             // Rules for Between
             //
@@ -1758,7 +1771,10 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
-        function::{AccumulatorArgs, AggregateFunctionSimplification},
+        function::{
+            AccumulatorArgs, AggregateFunctionSimplification,
+            WindowFunctionSimplification,
+        },
         interval_arithmetic::Interval,
         *,
     };
@@ -3798,6 +3814,89 @@ mod tests {
             } else {
                 None
             }
+        }
+    }
+
+    #[test]
+    fn test_simplify_udwf() {
+        let udwf = WindowFunctionDefinition::WindowUDF(
+            WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
+        );
+        let window_function_expr =
+            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
+                udwf,
+                vec![],
+                vec![],
+                vec![],
+                WindowFrame::new(None),
+                None,
+            ));
+
+        let expected = col("result_column");
+        assert_eq!(simplify(window_function_expr), expected);
+
+        let udwf = WindowFunctionDefinition::WindowUDF(
+            WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
+        );
+        let window_function_expr =
+            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
+                udwf,
+                vec![],
+                vec![],
+                vec![],
+                WindowFrame::new(None),
+                None,
+            ));
+
+        let expected = window_function_expr.clone();
+        assert_eq!(simplify(window_function_expr), expected);
+    }
+
+    /// A Mock UDWF which defines `simplify` to be used in tests
+    /// related to UDWF simplification
+    #[derive(Debug, Clone)]
+    struct SimplifyMockUdwf {
+        simplify: bool,
+    }
+
+    impl SimplifyMockUdwf {
+        /// make simplify method return new expression
+        fn new_with_simplify() -> Self {
+            Self { simplify: true }
+        }
+        /// make simplify method return no change
+        fn new_without_simplify() -> Self {
+            Self { simplify: false }
+        }
+    }
+
+    impl WindowUDFImpl for SimplifyMockUdwf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "mock_simplify"
+        }
+
+        fn signature(&self) -> &Signature {
+            unimplemented!()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn simplify(&self) -> Option<WindowFunctionSimplification> {
+            if self.simplify {
+                Some(Box::new(|_, _| Ok(col("result_column"))))
+            } else {
+                None
+            }
+        }
+
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!("not needed for tests")
         }
     }
 }
