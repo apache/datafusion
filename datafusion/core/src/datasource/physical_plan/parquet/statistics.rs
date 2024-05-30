@@ -308,7 +308,7 @@ pub(crate) fn struct_null_count_statistics(
         null_count += row_groups
             .iter()
             .filter_map(|rg| rg.column(idx).statistics())
-            .filter_map(|stats| Some(stats.null_count()))
+            .map(|stats| stats.null_count())
             .sum::<u64>();
     }
     let array = Arc::new(UInt64Array::from(vec![null_count])) as ArrayRef;
@@ -473,9 +473,7 @@ impl<'a> StatisticsConverter<'a> {
                 }
             },
             // currently set to return null
-            v if v.is_nested() => {
-                return Ok(new_null_array(data_type, num_row_groups));
-            }
+            v if v.is_nested() => Ok(new_null_array(data_type, num_row_groups)),
             _ => {
                 // sanity check that matching field matches the arrow field
                 if matched_field.as_ref() != self.arrow_field {
