@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParuqetExec`] Execution plan for reading Parquet files
+//! [`ParquetExec`] Execution plan for reading Parquet files
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -190,7 +190,7 @@ pub struct ParquetExec {
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
-/// [`ParquetExecBuilder`]`, builder for [`ParquetExec`].
+/// [`ParquetExecBuilder`], builder for [`ParquetExec`].
 ///
 /// See example on [`ParquetExec`].
 pub struct ParquetExecBuilder {
