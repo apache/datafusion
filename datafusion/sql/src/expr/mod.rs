@@ -581,7 +581,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Simplifies an expresssion like ARRAY_AGG(expr)[index] to NTH_VALUE(expr, index)
+    /// Simplifies an expresssion like `ARRAY_AGG(expr)[index]` to `NTH_VALUE(expr, index)`
     ///
     /// returns Some(Expr) if the expression was simplified, otherwise None
     /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
