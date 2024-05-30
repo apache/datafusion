@@ -25,21 +25,23 @@
 //! - Default type reference is 0. It is used when the actual type is the same with the original type.
 //! - Extended variant type references start from 1, and ususlly increase by 1.
 
-// For type variations
-pub const DEFAULT_TYPE_REF: u32 = 0;
-pub const UNSIGNED_INTEGER_TYPE_REF: u32 = 1;
-pub const TIMESTAMP_SECOND_TYPE_REF: u32 = 0;
-pub const TIMESTAMP_MILLI_TYPE_REF: u32 = 1;
-pub const TIMESTAMP_MICRO_TYPE_REF: u32 = 2;
-pub const TIMESTAMP_NANO_TYPE_REF: u32 = 3;
-pub const DATE_32_TYPE_REF: u32 = 0;
-pub const DATE_64_TYPE_REF: u32 = 1;
-pub const DEFAULT_CONTAINER_TYPE_REF: u32 = 0;
-pub const LARGE_CONTAINER_TYPE_REF: u32 = 1;
-pub const DECIMAL_128_TYPE_REF: u32 = 0;
-pub const DECIMAL_256_TYPE_REF: u32 = 1;
+// For [type variations](https://substrait.io/types/type_variations/#type-variations) in substrait.
+// Type variations are used to represent different types based on one type class.
+/// The "system-preferred" variation (i.e., no variation).
+pub const DEFAULT_TYPE_VAR_REF: u32 = 0;
+pub const UNSIGNED_INTEGER_TYPE_VAR_REF: u32 = 1;
+pub const TIMESTAMP_SECOND_TYPE_VAR_REF: u32 = 0;
+pub const TIMESTAMP_MILLI_TYPE_VAR_REF: u32 = 1;
+pub const TIMESTAMP_MICRO_TYPE_VAR_REF: u32 = 2;
+pub const TIMESTAMP_NANO_TYPE_VAR_REF: u32 = 3;
+pub const DATE_32_TYPE_VAR_REF: u32 = 0;
+pub const DATE_64_TYPE_VAR_REF: u32 = 1;
+pub const DEFAULT_CONTAINER_TYPE_VAR_REF: u32 = 0;
+pub const LARGE_CONTAINER_TYPE_VAR_REF: u32 = 1;
+pub const DECIMAL_128_TYPE_VAR_REF: u32 = 0;
+pub const DECIMAL_256_TYPE_VAR_REF: u32 = 1;
 
-// For custom types
+// For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
 /// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].
 ///
 /// An `i32` for elapsed whole months. See also [`ScalarValue::IntervalYearMonth`]
