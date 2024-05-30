@@ -17,10 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use sqlparser::ast::{
-    CastKind, Expr as SQLExpr, JsonPathElem, Subscript, TrimWhereField, Value,
-};
-use sqlparser::parser::ParserError::ParserError;
+use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -29,7 +26,7 @@ use datafusion_common::{
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    col, lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
+    lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
     GetFieldAccess, Like, Literal, Operator, TryCast,
 };
 
@@ -180,83 +177,85 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_identifier_to_expr(id, schema, planner_context)
             }
 
-            SQLExpr::MapAccess { column, keys } => {
-                if let SQLExpr::Identifier(id) = *column {
-                    let keys = keys.into_iter().map(|mak| mak.key).collect();
-                    self.plan_indexed(
-                        col(self.normalizer.normalize(id)),
-                        keys,
-                        schema,
-                        planner_context,
-                    )
-                } else {
-                    not_impl_err!(
-                        "map access requires an identifier, found column {column} instead"
-                    )
-                }
+            SQLExpr::MapAccess { .. } => {
+                not_impl_err!("Map Access")
             }
 
+            // <expr>["foo"], <expr>[4] or <expr>[4:5]
             SQLExpr::Subscript { expr, subscript } => {
-                fn is_unsupported(expr: &SQLExpr) -> bool {
-                    matches!(expr, SQLExpr::JsonAccess { .. })
-                }
-
-                fn simplify_array_index_expr(expr: Expr, index: Expr) -> (Expr, bool) {
-                    match &expr {
-                        Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
-                            let mut new_args = agg_func.args.clone();
-                            new_args.push(index.clone());
-                            (Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new(
-                                AggregateFunction::NthValue,
-                                new_args,
-                                agg_func.distinct,
-                                agg_func.filter.clone(),
-                                agg_func.order_by.clone(),
-                                agg_func.null_treatment,
-                            )), true)
-                        }
-                        _ => (expr, false),
-                    }
-                }
-
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                let indexes = match *subscript {
-                    Subscript::Index { index } => vec![index],
+                let get_field_access = match *subscript {
+                    Subscript::Index { index } => {
+                        // index can be a name, in which case it is a named field access
+                        match index {
+                            SQLExpr::Value(
+                                Value::SingleQuotedString(s)
+                                | Value::DoubleQuotedString(s),
+                            ) => GetFieldAccess::NamedStructField {
+                                name: ScalarValue::from(s),
+                            },
+                            SQLExpr::JsonAccess { .. } => {
+                                return not_impl_err!("JsonAccess");
+                            }
+                            // otherwise treat like a list index
+                            _ => GetFieldAccess::ListIndex {
+                                key: Box::new(self.sql_expr_to_logical_expr(
+                                    index,
+                                    schema,
+                                    planner_context,
+                                )?),
+                            },
+                        }
+                    }
                     Subscript::Slice {
                         lower_bound,
                         upper_bound,
+                        stride,
                     } => {
-                        let mut indexes = vec![];
-                        if let Some(lower_bound) = lower_bound {
-                            indexes.push(lower_bound);
+                        // Means access like [:2]
+                        let lower_bound = if let Some(lower_bound) = lower_bound {
+                            self.sql_expr_to_logical_expr(
+                                lower_bound,
+                                schema,
+                                planner_context,
+                            )
+                        } else {
+                            not_impl_err!("Slice subscript requires a lower bound")
+                        }?;
+
+                        // means access like [2:]
+                        let upper_bound = if let Some(upper_bound) = upper_bound {
+                            self.sql_expr_to_logical_expr(
+                                upper_bound,
+                                schema,
+                                planner_context,
+                            )
+                        } else {
+                            not_impl_err!("Slice subscript requires an upper bound")
+                        }?;
+
+                        // stride, default to 1
+                        let stride = if let Some(stride) = stride {
+                            self.sql_expr_to_logical_expr(
+                                stride,
+                                schema,
+                                planner_context,
+                            )?
+                        } else {
+                            lit(1i64)
+                        };
+
+                        GetFieldAccess::ListRange {
+                            start: Box::new(lower_bound),
+                            stop: Box::new(upper_bound),
+                            stride: Box::new(stride),
                         }
-                        if let Some(upper_bound) = upper_bound {
-                            indexes.push(upper_bound);
-                        }
-                        indexes
                     }
                 };
 
-                if indexes.len() > 1 || is_unsupported(&indexes[0]) {
-                    return self.plan_indexed(expr, indexes, schema, planner_context);
-                }
-
-                let (new_expr, changed) = simplify_array_index_expr(
-                    expr,
-                    self.sql_expr_to_logical_expr(
-                        indexes[0].clone(),
-                        schema,
-                        planner_context,
-                    )?,
-                );
-
-                if changed {
-                    Ok(new_expr)
-                } else {
-                    self.plan_indexed(new_expr, indexes, schema, planner_context)
-                }
+                self.plan_field_access(expr, get_field_access)
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -582,6 +581,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Simplifies an expresssion like ARRAY_AGG(expr)[index] to NTH_VALUE(expr, index)
+    ///
+    /// returns Some(Expr) if the expression was simplified, otherwise None
+    /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
+    fn simplify_array_index_expr(expr: &Expr, index: &Expr) -> Option<Expr> {
+        fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
+            agg_func.func_def
+                == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
+                    AggregateFunction::ArrayAgg,
+                )
+        }
+        match expr {
+            Expr::AggregateFunction(agg_func) if is_array_agg(agg_func) => {
+                let mut new_args = agg_func.args.clone();
+                new_args.push(index.clone());
+                Some(Expr::AggregateFunction(
+                    datafusion_expr::expr::AggregateFunction::new(
+                        AggregateFunction::NthValue,
+                        new_args,
+                        agg_func.distinct,
+                        agg_func.filter.clone(),
+                        agg_func.order_by.clone(),
+                        agg_func.null_treatment,
+                    ),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// Parses a struct(..) expression
     fn parse_struct(
         &self,
@@ -868,95 +897,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
-    fn plan_indices(
-        &self,
-        expr: SQLExpr,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<GetFieldAccess> {
-        match expr.clone() {
-            SQLExpr::Value(
-                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => Ok(GetFieldAccess::NamedStructField {
-                name: ScalarValue::from(s),
-            }),
-            SQLExpr::JsonAccess { value, path } => {
-                let start = Box::new(self.sql_expr_to_logical_expr(
-                    *value,
-                    schema,
-                    planner_context,
-                )?);
-
-                fn json_path_elem_to_expr(expr: JsonPathElem) -> SQLExpr {
-                    match expr {
-                        JsonPathElem::Dot { key, .. } => {
-                            SQLExpr::Value(Value::SingleQuotedString(key))
-                        }
-                        JsonPathElem::Bracket { key } => key,
-                    }
-                }
-
-                let mut path_iter = path.path.into_iter();
-                let stop = match path_iter.next() {
-                    None => {
-                        return Ok(GetFieldAccess::ListIndex {
-                            key: Box::new(self.sql_expr_to_logical_expr(
-                                expr,
-                                schema,
-                                planner_context,
-                            )?),
-                        })
-                    }
-                    Some(expr) => Box::new(self.sql_expr_to_logical_expr(
-                        json_path_elem_to_expr(expr),
-                        schema,
-                        planner_context,
-                    )?),
-                };
-                let stride = match path_iter.next() {
-                    None => Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
-                    Some(expr) => Box::new(self.sql_expr_to_logical_expr(
-                        json_path_elem_to_expr(expr),
-                        schema,
-                        planner_context,
-                    )?),
-                };
-
-                Ok(GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                })
-            }
-            _ => Ok(GetFieldAccess::ListIndex {
-                key: Box::new(self.sql_expr_to_logical_expr(
-                    expr,
-                    schema,
-                    planner_context,
-                )?),
-            }),
-        }
-    }
-
-    fn plan_indexed(
+    /// Given an expression and the field to access, creates a new expression for accessing that field
+    fn plan_field_access(
         &self,
         expr: Expr,
-        mut keys: Vec<SQLExpr>,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
+        get_field_access: GetFieldAccess,
     ) -> Result<Expr> {
-        let indices = keys.pop().ok_or_else(|| {
-            ParserError("Internal error: Missing index key expression".to_string())
-        })?;
-
-        let expr = if !keys.is_empty() {
-            self.plan_indexed(expr, keys, schema, planner_context)?
-        } else {
-            expr
-        };
-
-        let field = self.plan_indices(indices, schema, planner_context)?;
-        match field {
+        match get_field_access {
             GetFieldAccess::NamedStructField { name } => {
                 if let Some(udf) = self.context_provider.get_function_meta("get_field") {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
@@ -969,7 +916,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key } => {
-                if let Some(udf) =
+                // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
+                if let Some(simplified) = Self::simplify_array_index_expr(&expr, &key) {
+                    Ok(simplified)
+                } else if let Some(udf) =
                     self.context_provider.get_function_meta("array_element")
                 {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(

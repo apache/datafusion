@@ -786,7 +786,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(lit("foo")).and((col("b").eq(lit("bar"))))],
+                &[col("a").eq(lit("foo")).and(col("b").eq(lit("bar")))],
             ),
             Some(Path::from("a=foo/b=bar")),
         );
