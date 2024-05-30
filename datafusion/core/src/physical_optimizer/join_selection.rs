@@ -157,7 +157,9 @@ fn swap_join_projection(
 }
 
 /// This function swaps the inputs of the given join operator.
-fn swap_hash_join(
+/// This function is public so other downstream projects can use it
+/// to construct `HashJoinExec` with right side as the build side.
+pub fn swap_hash_join(
     hash_join: &HashJoinExec,
     partition_mode: PartitionMode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
