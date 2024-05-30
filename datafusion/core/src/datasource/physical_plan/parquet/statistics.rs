@@ -21,9 +21,9 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_empty_array, new_null_array, BooleanArray, Date32Array, Date64Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
@@ -56,8 +56,25 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     result
 }
 
+////// Define an adapter iterator for extracting statistics from an iterator of
+/// `ParquetStatistics`
+///
+///
+/// Handles checking if the statistics are present and valid with the correct type.
+///
+/// Parameters:
+/// * `$iterator_type` is the name of the iterator type (e.g. `MinBooleanStatsIterator`)
+/// * `$func` is the function to call to get the value (e.g. `min` or `max`)
+/// * `$parquet_statistics_type` is the type of the statistics (e.g. `ParquetStatistics::Boolean`)
+/// * `$stat_value_type` is the type of the statistics value (e.g. `bool`)
 macro_rules! make_stats_iterator {
     ($iterator_type:ident, $func:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
+        /// Maps an iterator of `ParquetStatistics` into an iterator of
+        /// `&$stat_value_type``
+        ///
+        /// Yielded elements:
+        /// * Some(stats) if valid
+        /// * None if the statistics are not present, not valid, or not $stat_value_type
         struct $iterator_type<'a, I>
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
@@ -69,17 +86,20 @@ macro_rules! make_stats_iterator {
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
         {
+            /// Create a new iterator to extract the statistics
             fn new(iter: I) -> Self {
                 Self { iter }
             }
         }
 
+        /// Implement the Iterator trait for the iterator
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
         {
             type Item = Option<&'a $stat_value_type>;
 
+            /// return the next statistics value
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 next.map(|x| {
@@ -379,6 +399,36 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
             MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
         ))),
+        DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
+            MinByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
+        ))),
+        DataType::Utf8 => Ok(Arc::new(StringArray::from_iter(
+            MinByteArrayStatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
+                    if res.is_none() {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                    }
+                    res
+                })
+            }),
+        ))),
+        DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
+            MinFixedLenByteArrayStatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if x.len().try_into() == Ok(*size) {
+                        Some(x)
+                    } else {
+                        log::debug!(
+                            "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                            size,
+                            x.len(),
+                        );
+                        None
+                    }
+                })
+            }).collect::<Vec<_>>(),
+        ))),
         _ => {
             let scalars = iterator.map(|x| {
                 x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type)))
@@ -468,6 +518,36 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         ))),
         DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
             MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
+        ))),
+        DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
+            MaxByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
+        ))),
+        DataType::Utf8 => Ok(Arc::new(StringArray::from_iter(
+            MaxByteArrayStatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
+                    if res.is_none() {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                    }
+                    res
+                })
+            }),
+        ))),
+        DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
+            MaxFixedLenByteArrayStatsIterator::new(iterator).map(|x| {
+                x.and_then(|x| {
+                    if x.len().try_into() == Ok(*size) {
+                        Some(x)
+                    } else {
+                        log::debug!(
+                            "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                            size,
+                            x.len(),
+                        );
+                        None
+                    }
+                })
+            }).collect::<Vec<_>>(),
         ))),
         _ => {
             let scalars = iterator.map(|x| {
