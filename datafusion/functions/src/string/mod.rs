@@ -128,8 +128,8 @@ pub mod expr_fn {
     }
 
     #[doc = "returns the number of bytes of a string"]
-    pub fn octet_length(args: Vec<Expr>) -> Expr {
-        super::octet_length().call(args)
+    pub fn octet_length(args: Expr) -> Expr {
+        super::octet_length().call(vec![args])
     }
 
     #[doc = "replace the substring of string that starts at the start'th character and extends for count characters with new substring"]
