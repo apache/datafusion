@@ -18,6 +18,8 @@
 //! "math" DataFusion functions
 
 use crate::math::monotonicity::*;
+use datafusion_expr::ScalarUDF;
+use std::sync::Arc;
 
 pub mod abs;
 pub mod cot;
@@ -86,75 +88,89 @@ make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, super::sqrt_order);
 make_math_unary_udf!(TanFunc, TAN, tan, tan, super::tan_order);
 make_math_unary_udf!(TanhFunc, TANH, tanh, tanh, super::tanh_order);
 make_udf_function!(trunc::TruncFunc, TRUNC, trunc);
-export_functions!(
-    (abs, "returns the absolute value of a given number", num),
-    (
-        acos,
-        "returns the arc cosine or inverse cosine of a number",
-        num
-    ),
-    (acosh, "returns inverse hyperbolic cosine", num),
-    (
-        asin,
-        "returns the arc sine or inverse sine of a number",
-        num
-    ),
-    (asinh, "returns inverse hyperbolic sine", num),
-    (atan, "returns inverse tangent", num),
-    (
-        atan2,
-        "returns inverse tangent of a division given in the argument",
-        y x
-    ),
-    (atanh, "returns inverse hyperbolic tangent", num),
-    (cbrt, "cube root of a number", num),
-    (
-        ceil,
-        "nearest integer greater than or equal to argument",
-        num
-    ),
-    (cos, "cosine", num),
-    (cosh, "hyperbolic cosine", num),
-    (cot, "cotangent of a number", num),
-    (degrees, "converts radians to degrees", num),
-    (exp, "exponential", num),
-    (factorial, "factorial", num),
-    (floor, "nearest integer less than or equal to argument", num),
-    (gcd, "greatest common divisor", x y),
-    (
-        isnan,
-        "returns true if a given number is +NaN or -NaN otherwise returns false",
-        num
-    ),
-    (
-        iszero,
-        "returns true if a given number is +0.0 or -0.0 otherwise returns false",
-        num
-    ),
-    (lcm, "least common multiple", x y),
-    (ln, "natural logarithm (base e) of a number", num),
-    (
-        log,
-        "logarithm of a number for a particular `base`",
-        base num
-    ),
-    (log2, "base 2 logarithm of a number", num),
-    (log10, "base 10 logarithm of a number", num),
-    (nanvl, "returns x if x is not NaN otherwise returns y", x y),
-    (pi, "Returns an approximate value of π",),
-    (
-        power,
-        "`base` raised to the power of `exponent`",
-        base exponent
-    ),
-    (radians, "converts degrees to radians", num),
-    (random, "Returns a random value in the range 0.0 <= x < 1.0",),
-    (signum, "sign of the argument (-1, 0, +1)", num),
-    (sin, "sine", num),
-    (sinh, "hyperbolic sine", num),
-    (sqrt, "square root of a number", num),
-    (tan, "returns the tangent of a number", num),
-    (tanh, "returns the hyperbolic tangent of a number", num),
-    (round, "round to nearest integer", args,),
-    (trunc, "truncate toward zero, with optional precision", args,)
-);
+
+pub mod expr_fn {
+    export_functions!(
+        (abs, "returns the absolute value of a given number", num),
+        (acos, "returns the arc cosine or inverse cosine of a number", num),
+        (acosh, "returns inverse hyperbolic cosine", num),
+        (asin, "returns the arc sine or inverse sine of a number", num),
+        (asinh, "returns inverse hyperbolic sine", num),
+        (atan, "returns inverse tangent", num),
+        (atan2, "returns inverse tangent of a division given in the argument", y x),
+        (atanh, "returns inverse hyperbolic tangent", num),
+        (cbrt, "cube root of a number", num),
+        (ceil, "nearest integer greater than or equal to argument", num),
+        (cos, "cosine", num),
+        (cosh, "hyperbolic cosine", num),
+        (cot, "cotangent of a number", num),
+        (degrees, "converts radians to degrees", num),
+        (exp, "exponential", num),
+        (factorial, "factorial", num),
+        (floor, "nearest integer less than or equal to argument", num),
+        (gcd, "greatest common divisor", x y),
+        (isnan, "returns true if a given number is +NaN or -NaN otherwise returns false", num),
+        (iszero, "returns true if a given number is +0.0 or -0.0 otherwise returns false", num),
+        (lcm, "least common multiple", x y),
+        (ln, "natural logarithm (base e) of a number", num),
+        (log, "logarithm of a number for a particular `base`", base num),
+        (log2, "base 2 logarithm of a number", num),
+        (log10, "base 10 logarithm of a number", num),
+        (nanvl, "returns x if x is not NaN otherwise returns y", x y),
+        (pi, "Returns an approximate value of π",),
+        (power, "`base` raised to the power of `exponent`", base exponent),
+        (radians, "converts degrees to radians", num),
+        (random, "Returns a random value in the range 0.0 <= x < 1.0",),
+        (signum, "sign of the argument (-1, 0, +1)", num),
+        (sin, "sine", num),
+        (sinh, "hyperbolic sine", num),
+        (sqrt, "square root of a number", num),
+        (tan, "returns the tangent of a number", num),
+        (tanh, "returns the hyperbolic tangent of a number", num),
+        (round, "round to nearest integer", args,),
+        (trunc, "truncate toward zero, with optional precision", args,)
+    );
+}
+
+pub fn functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
+        abs(),
+        acos(),
+        acosh(),
+        asin(),
+        asinh(),
+        atan(),
+        atan2(),
+        atanh(),
+        cbrt(),
+        ceil(),
+        cos(),
+        cosh(),
+        cot(),
+        degrees(),
+        exp(),
+        factorial(),
+        floor(),
+        gcd(),
+        isnan(),
+        iszero(),
+        lcm(),
+        ln(),
+        log(),
+        log2(),
+        log10(),
+        nanvl(),
+        pi(),
+        power(),
+        radians(),
+        random(),
+        signum(),
+        sin(),
+        sinh(),
+        sqrt(),
+        tan(),
+        tanh(),
+        round(),
+        trunc(),
+    ]
+}

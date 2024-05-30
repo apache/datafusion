@@ -42,20 +42,9 @@
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
-        pub mod expr_fn {
-            $(
-                make_function!($FUNC, $DOC, $($arg)*);
-            )*
-        }
-
-        /// Return a list of all functions in this package
-        pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
-            vec![
-                $(
-                    $FUNC(),
-                )*
-            ]
-        }
+        $(
+            make_function!($FUNC, $DOC, $($arg)*);
+        )*
     };
 }
 
@@ -72,13 +61,6 @@ macro_rules! make_function {
         #[doc = $DOC]
         pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
             super::$FUNC().call(vec![$($arg),*])
-        }
-    };
-    // special to get_field function in datafusion/functions/src/core/mod.rs
-    ($FUNC:ident, $DOC:expr, $arg:ident, $arg2:ident) => {
-        #[doc = $DOC]
-        pub fn $FUNC($arg: datafusion_expr::Expr, $arg2: impl datafusion_expr::Literal) -> datafusion_expr::Expr {
-            super::$FUNC().call(vec![$arg, $arg2.lit()])
         }
     };
 }
