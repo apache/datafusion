@@ -28,17 +28,17 @@
 use std::any::Any;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
 use std::{usize, vec};
 
 use crate::common::SharedMemoryReservation;
+use crate::handle_state;
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, prepare_sorted_exprs, record_visited_indices,
-    EagerJoinStream, EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr,
-    StreamJoinMetrics,
+    PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
@@ -72,7 +72,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
-use futures::Stream;
+use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
 
@@ -522,7 +522,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             left_sorted_filter_expr,
             right_sorted_filter_expr,
             null_equals_null: self.null_equals_null,
-            state: EagerJoinStreamState::PullRight,
+            state: SHJStreamState::PullRight,
             reservation,
         }))
     }
@@ -560,7 +560,7 @@ struct SymmetricHashJoinStream {
     /// Memory reservation
     reservation: SharedMemoryReservation,
     /// State machine for input execution
-    state: EagerJoinStreamState,
+    state: SHJStreamState,
 }
 
 impl RecordBatchStream for SymmetricHashJoinStream {
@@ -1103,7 +1103,227 @@ impl OneSideHashJoiner {
     }
 }
 
-impl EagerJoinStream for SymmetricHashJoinStream {
+/// `SymmetricHashJoinStream` manages incremental join operations between two
+/// streams. Unlike traditional join approaches that need to scan one side of
+/// the join fully before proceeding, `SymmetricHashJoinStream` facilitates
+/// more dynamic join operations by working with streams as they emit data. This
+/// approach allows for more efficient processing, particularly in scenarios
+/// where waiting for complete data materialization is not feasible or optimal.
+/// The trait provides a framework for handling various states of such a join
+/// process, ensuring that join logic is efficiently executed as data becomes
+/// available from either stream.
+///
+/// This implementation performs eager joins of data from two different asynchronous
+/// streams, typically referred to as left and right streams. The implementation
+/// provides a comprehensive set of methods to control and execute the join
+/// process, leveraging the states defined in `SHJStreamState`. Methods are
+/// primarily focused on asynchronously fetching data batches from each stream,
+/// processing them, and managing transitions between various states of the join.
+///
+/// This implementations use a state machine approach to navigate different
+/// stages of the join operation, handling data from both streams and determining
+/// when the join completes.
+///
+/// State Transitions:
+/// - From `PullLeft` to `PullRight` or `LeftExhausted`:
+///   - In `fetch_next_from_left_stream`, when fetching a batch from the left stream:
+///     - On success (`Some(Ok(batch))`), state transitions to `PullRight` for
+///       processing the batch.
+///     - On error (`Some(Err(e))`), the error is returned, and the state remains
+///       unchanged.
+///     - On no data (`None`), state changes to `LeftExhausted`, returning `Continue`
+///       to proceed with the join process.
+/// - From `PullRight` to `PullLeft` or `RightExhausted`:
+///   - In `fetch_next_from_right_stream`, when fetching from the right stream:
+///     - If a batch is available, state changes to `PullLeft` for processing.
+///     - On error, the error is returned without changing the state.
+///     - If right stream is exhausted (`None`), state transitions to `RightExhausted`,
+///       with a `Continue` result.
+/// - Handling `RightExhausted` and `LeftExhausted`:
+///   - Methods `handle_right_stream_end` and `handle_left_stream_end` manage scenarios
+///     when streams are exhausted:
+///     - They attempt to continue processing with the other stream.
+///     - If both streams are exhausted, state changes to `BothExhausted { final_result: false }`.
+/// - Transition to `BothExhausted { final_result: true }`:
+///   - Occurs in `prepare_for_final_results_after_exhaustion` when both streams are
+///     exhausted, indicating completion of processing and availability of final results.
+impl SymmetricHashJoinStream {
+    /// Implements the main polling logic for the join stream.
+    ///
+    /// This method continuously checks the state of the join stream and
+    /// acts accordingly by delegating the handling to appropriate sub-methods
+    /// depending on the current state.
+    ///
+    /// # Arguments
+    ///
+    /// * `cx` - A context that facilitates cooperative non-blocking execution within a task.
+    ///
+    /// # Returns
+    ///
+    /// * `Poll<Option<Result<RecordBatch>>>` - A polled result, either a `RecordBatch` or None.
+    fn poll_next_impl(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            return match self.state() {
+                SHJStreamState::PullRight => {
+                    handle_state!(ready!(self.fetch_next_from_right_stream(cx)))
+                }
+                SHJStreamState::PullLeft => {
+                    handle_state!(ready!(self.fetch_next_from_left_stream(cx)))
+                }
+                SHJStreamState::RightExhausted => {
+                    handle_state!(ready!(self.handle_right_stream_end(cx)))
+                }
+                SHJStreamState::LeftExhausted => {
+                    handle_state!(ready!(self.handle_left_stream_end(cx)))
+                }
+                SHJStreamState::BothExhausted {
+                    final_result: false,
+                } => {
+                    handle_state!(self.prepare_for_final_results_after_exhaustion())
+                }
+                SHJStreamState::BothExhausted { final_result: true } => Poll::Ready(None),
+            };
+        }
+    }
+    /// Asynchronously pulls the next batch from the right stream.
+    ///
+    /// This default implementation checks for the next value in the right stream.
+    /// If a batch is found, the state is switched to `PullLeft`, and the batch handling
+    /// is delegated to `process_batch_from_right`. If the stream ends, the state is set to `RightExhausted`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StatefulStreamResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    fn fetch_next_from_right_stream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.right_stream().poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+                self.set_state(SHJStreamState::PullLeft);
+                Poll::Ready(self.process_batch_from_right(batch))
+            }
+            Some(Err(e)) => Poll::Ready(Err(e)),
+            None => {
+                self.set_state(SHJStreamState::RightExhausted);
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+        }
+    }
+
+    /// Asynchronously pulls the next batch from the left stream.
+    ///
+    /// This default implementation checks for the next value in the left stream.
+    /// If a batch is found, the state is switched to `PullRight`, and the batch handling
+    /// is delegated to `process_batch_from_left`. If the stream ends, the state is set to `LeftExhausted`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StatefulStreamResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    fn fetch_next_from_left_stream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.left_stream().poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+                self.set_state(SHJStreamState::PullRight);
+                Poll::Ready(self.process_batch_from_left(batch))
+            }
+            Some(Err(e)) => Poll::Ready(Err(e)),
+            None => {
+                self.set_state(SHJStreamState::LeftExhausted);
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+        }
+    }
+
+    /// Asynchronously handles the scenario when the right stream is exhausted.
+    ///
+    /// In this default implementation, when the right stream is exhausted, it attempts
+    /// to pull from the left stream. If a batch is found in the left stream, it delegates
+    /// the handling to `process_batch_from_left`. If both streams are exhausted, the state is set
+    /// to indicate both streams are exhausted without final results yet.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StatefulStreamResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    fn handle_right_stream_end(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.left_stream().poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+                Poll::Ready(self.process_batch_after_right_end(batch))
+            }
+            Some(Err(e)) => Poll::Ready(Err(e)),
+            None => {
+                self.set_state(SHJStreamState::BothExhausted {
+                    final_result: false,
+                });
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+        }
+    }
+
+    /// Asynchronously handles the scenario when the left stream is exhausted.
+    ///
+    /// When the left stream is exhausted, this default
+    /// implementation tries to pull from the right stream and delegates the batch
+    /// handling to `process_batch_after_left_end`. If both streams are exhausted, the state
+    /// is updated to indicate so.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StatefulStreamResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    fn handle_left_stream_end(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.right_stream().poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+                Poll::Ready(self.process_batch_after_left_end(batch))
+            }
+            Some(Err(e)) => Poll::Ready(Err(e)),
+            None => {
+                self.set_state(SHJStreamState::BothExhausted {
+                    final_result: false,
+                });
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+        }
+    }
+
+    /// Handles the state when both streams are exhausted and final results are yet to be produced.
+    ///
+    /// This default implementation switches the state to indicate both streams are
+    /// exhausted with final results and then invokes the handling for this specific
+    /// scenario via `process_batches_before_finalization`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StatefulStreamResult<Option<RecordBatch>>>` - The state result after both streams are exhausted.
+    fn prepare_for_final_results_after_exhaustion(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        self.set_state(SHJStreamState::BothExhausted { final_result: true });
+        self.process_batches_before_finalization()
+    }
+
     fn process_batch_from_right(
         &mut self,
         batch: RecordBatch,
@@ -1189,16 +1409,14 @@ impl EagerJoinStream for SymmetricHashJoinStream {
         &mut self.left_stream
     }
 
-    fn set_state(&mut self, state: EagerJoinStreamState) {
+    fn set_state(&mut self, state: SHJStreamState) {
         self.state = state;
     }
 
-    fn state(&mut self) -> EagerJoinStreamState {
+    fn state(&mut self) -> SHJStreamState {
         self.state.clone()
     }
-}
 
-impl SymmetricHashJoinStream {
     fn size(&self) -> usize {
         let mut size = 0;
         size += std::mem::size_of_val(&self.schema);
@@ -1319,6 +1537,34 @@ impl SymmetricHashJoinStream {
         }
         Ok(result)
     }
+}
+
+/// Represents the various states of an symmetric hash join stream operation.
+///
+/// This enum is used to track the current state of streaming during a join
+/// operation. It provides indicators as to which side of the join needs to be
+/// pulled next or if one (or both) sides have been exhausted. This allows
+/// for efficient management of resources and optimal performance during the
+/// join process.
+#[derive(Clone, Debug)]
+pub enum SHJStreamState {
+    /// Indicates that the next step should pull from the right side of the join.
+    PullRight,
+
+    /// Indicates that the next step should pull from the left side of the join.
+    PullLeft,
+
+    /// State representing that the right side of the join has been fully processed.
+    RightExhausted,
+
+    /// State representing that the left side of the join has been fully processed.
+    LeftExhausted,
+
+    /// Represents a state where both sides of the join are exhausted.
+    ///
+    /// The `final_result` field indicates whether the join operation has
+    /// produced a final result or not.
+    BothExhausted { final_result: bool },
 }
 
 #[cfg(test)]
