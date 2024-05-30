@@ -98,16 +98,15 @@ pub mod expr_fn {
         left,
         "returns the first `n` characters in the `string`",
         string n
+    ),(
+        find_in_set,
+        "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings",
+        string strlist
     ));
 
     #[doc = "the number of characters in the `string`"]
     pub fn char_length(string: Expr) -> Expr {
         character_length(string)
-    }
-
-    #[doc = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings"]
-    pub fn find_in_set(string: Expr, strlist: Expr) -> Expr {
-        super::find_in_set().call(vec![string, strlist])
     }
 
     #[doc = "finds the position from where the `substring` matches the `string`"]
