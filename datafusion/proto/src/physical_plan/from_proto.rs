@@ -17,7 +17,6 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -41,22 +40,13 @@ use datafusion::physical_plan::expressions::{
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{
-    ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
-};
-use datafusion_common::config::{
-    ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
-    TableParquetOptions,
-};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_common::config::FormatOptions;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_proto_common::common::proto_error;
 
-use crate::common::proto_error;
 use crate::convert_required;
-use crate::logical_plan::{self, csv_writer_options_from_proto};
+use crate::logical_plan::{self};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::{self, copy_to_node};
 
@@ -446,6 +436,38 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
+pub fn parse_protobuf_partitioning(
+    partitioning: Option<&protobuf::Partitioning>,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Option<Partitioning>> {
+    match partitioning {
+        Some(protobuf::Partitioning { partition_method }) => match partition_method {
+            Some(protobuf::partitioning::PartitionMethod::RoundRobin(
+                partition_count,
+            )) => Ok(Some(Partitioning::RoundRobinBatch(
+                *partition_count as usize,
+            ))),
+            Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
+                parse_protobuf_hash_partitioning(
+                    Some(hash_repartition),
+                    registry,
+                    input_schema,
+                    codec,
+                )
+            }
+            Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
+                Ok(Some(Partitioning::UnknownPartitioning(
+                    *partition_count as usize,
+                )))
+            }
+            None => Ok(None),
+        },
+        None => Ok(None),
+    }
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
@@ -563,134 +585,6 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
     }
 }
 
-impl From<&protobuf::ColumnStats> for ColumnStatistics {
-    fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
-        ColumnStatistics {
-            null_count: if let Some(nc) = &cs.null_count {
-                nc.clone().into()
-            } else {
-                Precision::Absent
-            },
-            max_value: if let Some(max) = &cs.max_value {
-                max.clone().into()
-            } else {
-                Precision::Absent
-            },
-            min_value: if let Some(min) = &cs.min_value {
-                min.clone().into()
-            } else {
-                Precision::Absent
-            },
-            distinct_count: if let Some(dc) = &cs.distinct_count {
-                dc.clone().into()
-            } else {
-                Precision::Absent
-            },
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<usize> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Exact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
-                        Precision::Inexact(val as usize)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::Precision> for Precision<ScalarValue> {
-    fn from(s: protobuf::Precision) -> Self {
-        let Ok(precision_type) = s.precision_info.try_into() else {
-            return Precision::Absent;
-        };
-        match precision_type {
-            protobuf::PrecisionInfo::Exact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Exact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Inexact => {
-                if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Inexact(val)
-                    } else {
-                        Precision::Absent
-                    }
-                } else {
-                    Precision::Absent
-                }
-            }
-            protobuf::PrecisionInfo::Absent => Precision::Absent,
-        }
-    }
-}
-
-impl From<protobuf::JoinSide> for JoinSide {
-    fn from(t: protobuf::JoinSide) -> Self {
-        match t {
-            protobuf::JoinSide::LeftSide => JoinSide::Left,
-            protobuf::JoinSide::RightSide => JoinSide::Right,
-        }
-    }
-}
-
-impl TryFrom<&protobuf::Statistics> for Statistics {
-    type Error = DataFusionError;
-
-    fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
-        // Keep it sync with Statistics::to_proto
-        Ok(Statistics {
-            num_rows: if let Some(nr) = &s.num_rows {
-                nr.clone().into()
-            } else {
-                Precision::Absent
-            },
-            total_byte_size: if let Some(tbs) = &s.total_byte_size {
-                tbs.clone().into()
-            } else {
-                Precision::Absent
-            },
-            // No column statistic (None) is encoded with empty array
-            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
-        })
-    }
-}
-
 impl TryFrom<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
@@ -754,234 +648,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             overwrite: conf.overwrite,
-        })
-    }
-}
-
-impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
-    fn from(value: protobuf::CompressionTypeVariant) -> Self {
-        match value {
-            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
-            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
-            protobuf::CompressionTypeVariant::Xz => Self::XZ,
-            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
-            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
-        }
-    }
-}
-
-impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
-    fn from(value: CompressionTypeVariant) -> Self {
-        match value {
-            CompressionTypeVariant::GZIP => Self::Gzip,
-            CompressionTypeVariant::BZIP2 => Self::Bzip2,
-            CompressionTypeVariant::XZ => Self::Xz,
-            CompressionTypeVariant::ZSTD => Self::Zstd,
-            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
-        }
-    }
-}
-
-impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(opts: &protobuf::CsvWriterOptions) -> Result<Self, Self::Error> {
-        let write_options = csv_writer_options_from_proto(opts)?;
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(CsvWriterOptions::new(write_options, compression))
-    }
-}
-
-impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(opts: &protobuf::JsonWriterOptions) -> Result<Self, Self::Error> {
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(JsonWriterOptions::new(compression))
-    }
-}
-
-impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
-    type Error = DataFusionError;
-
-    fn try_from(proto_opts: &protobuf::CsvOptions) -> Result<Self, Self::Error> {
-        Ok(CsvOptions {
-            has_header: proto_opts.has_header.first().map(|h| *h != 0),
-            delimiter: proto_opts.delimiter[0],
-            quote: proto_opts.quote[0],
-            escape: proto_opts.escape.first().copied(),
-            compression: proto_opts.compression().into(),
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
-            date_format: (!proto_opts.date_format.is_empty())
-                .then(|| proto_opts.date_format.clone()),
-            datetime_format: (!proto_opts.datetime_format.is_empty())
-                .then(|| proto_opts.datetime_format.clone()),
-            timestamp_format: (!proto_opts.timestamp_format.is_empty())
-                .then(|| proto_opts.timestamp_format.clone()),
-            timestamp_tz_format: (!proto_opts.timestamp_tz_format.is_empty())
-                .then(|| proto_opts.timestamp_tz_format.clone()),
-            time_format: (!proto_opts.time_format.is_empty())
-                .then(|| proto_opts.time_format.clone()),
-            null_value: (!proto_opts.null_value.is_empty())
-                .then(|| proto_opts.null_value.clone()),
-        })
-    }
-}
-
-impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
-    type Error = DataFusionError;
-
-    fn try_from(value: &protobuf::ParquetOptions) -> Result<Self, Self::Error> {
-        Ok(ParquetOptions {
-            enable_page_index: value.enable_page_index,
-            pruning: value.pruning,
-            skip_metadata: value.skip_metadata,
-            metadata_size_hint: value
-                .metadata_size_hint_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
-                })
-                .unwrap_or(None),
-            pushdown_filters: value.pushdown_filters,
-            reorder_filters: value.reorder_filters,
-            data_pagesize_limit: value.data_pagesize_limit as usize,
-            write_batch_size: value.write_batch_size as usize,
-            writer_version: value.writer_version.clone(),
-            compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
-            }).unwrap_or(None),
-            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
-            // Continuing from where we left off in the TryFrom implementation
-            dictionary_page_size_limit: value.dictionary_page_size_limit as usize,
-            statistics_enabled: value
-                .statistics_enabled_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
-                })
-                .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt.as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(*v as usize),
-                })
-                .unwrap_or(None),
-            max_row_group_size: value.max_row_group_size as usize,
-            created_by: value.created_by.clone(),
-            column_index_truncate_length: value
-                .column_index_truncate_length_opt.as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(*v as usize),
-                })
-                .unwrap_or(None),
-            data_page_row_count_limit: value.data_page_row_count_limit as usize,
-            encoding: value
-                .encoding_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
-                })
-                .unwrap_or(None),
-            bloom_filter_on_read: value.bloom_filter_on_read,
-            bloom_filter_on_write: value.bloom_filter_on_write,
-            bloom_filter_fpp: value.clone()
-                .bloom_filter_fpp_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
-                })
-                .unwrap_or(None),
-            bloom_filter_ndv: value.clone()
-                .bloom_filter_ndv_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
-                })
-                .unwrap_or(None),
-            allow_single_file_parallelism: value.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
-            maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
-
-        })
-    }
-}
-
-impl TryFrom<&protobuf::ColumnOptions> for ColumnOptions {
-    type Error = DataFusionError;
-    fn try_from(value: &protobuf::ColumnOptions) -> Result<Self, Self::Error> {
-        Ok(ColumnOptions {
-            compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
-            }).unwrap_or(None),
-            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
-            statistics_enabled: value
-                .statistics_enabled_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
-                })
-                .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
-                })
-                .unwrap_or(None),
-            encoding: value
-                .encoding_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::column_options::EncodingOpt::Encoding(v) => Some(v),
-                })
-                .unwrap_or(None),
-            bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
-                protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
-            })
-                .unwrap_or(None),
-            bloom_filter_fpp: value
-                .bloom_filter_fpp_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
-                })
-                .unwrap_or(None),
-            bloom_filter_ndv: value
-                .bloom_filter_ndv_opt.clone()
-                .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
-                })
-                .unwrap_or(None),
-        })
-    }
-}
-
-impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
-    type Error = DataFusionError;
-    fn try_from(value: &protobuf::TableParquetOptions) -> Result<Self, Self::Error> {
-        let mut column_specific_options: HashMap<String, ColumnOptions> = HashMap::new();
-        for protobuf::ColumnSpecificOptions {
-            column_name,
-            options: maybe_options,
-        } in &value.column_specific_options
-        {
-            if let Some(options) = maybe_options {
-                column_specific_options.insert(column_name.clone(), options.try_into()?);
-            }
-        }
-        Ok(TableParquetOptions {
-            global: value
-                .global
-                .as_ref()
-                .map(|v| v.try_into())
-                .unwrap()
-                .unwrap(),
-            column_specific_options,
-            key_value_metadata: Default::default(),
-        })
-    }
-}
-
-impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
-    type Error = DataFusionError;
-
-    fn try_from(proto_opts: &protobuf::JsonOptions) -> Result<Self, Self::Error> {
-        let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
-        Ok(JsonOptions {
-            compression: compression.into(),
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
         })
     }
 }

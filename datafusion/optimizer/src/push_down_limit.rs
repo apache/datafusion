@@ -65,7 +65,6 @@ impl OptimizerRule for PushDownLimit {
         };
 
         let Limit { skip, fetch, input } = limit;
-        let input = input;
 
         // Merge the Parent Limit and the Child Limit.
         if let LogicalPlan::Limit(child) = input.as_ref() {

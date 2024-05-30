@@ -1484,16 +1484,16 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(0), MIN(person.age)",
-            err.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
+        err.strip_backtrace()
+    );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(5), MIN(person.age)",
-            err2.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
+        err2.strip_backtrace()
+    );
 }
 
 #[test]
@@ -4631,6 +4631,9 @@ fn roundtrip_statement() -> Result<()> {
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
             "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
             r#"select "First Name" from person_quoted_cols"#,
+            "select DISTINCT id FROM person",
+            "select DISTINCT on (id) id, first_name from person",
+            "select DISTINCT on (id) id, first_name from person order by id",
             r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
             "select id, count(*), first_name from person group by first_name, id",

@@ -380,6 +380,33 @@ fn rountrip_aggregate() -> Result<()> {
 }
 
 #[test]
+fn rountrip_aggregate_with_limit() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+        cast(col("b", &schema)?, &schema, DataType::Float64)?,
+        "AVG(b)".to_string(),
+        DataType::Float64,
+    ))];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
+    let agg = agg.with_limit(Some(12));
+    roundtrip_test(Arc::new(agg))
+}
+
+#[test]
 fn roundtrip_aggregate_udaf() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
@@ -564,12 +591,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
-    roundtrip_test(Arc::new(ParquetExec::new(
-        scan_config,
-        Some(predicate),
-        None,
-        Default::default(),
-    )))
+    roundtrip_test(
+        ParquetExec::builder(scan_config)
+            .with_predicate(predicate)
+            .build_arc(),
+    )
 }
 
 #[tokio::test]
@@ -595,12 +621,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
     };
 
-    roundtrip_test(Arc::new(ParquetExec::new(
-        scan_config,
-        None,
-        None,
-        Default::default(),
-    )))
+    roundtrip_test(ParquetExec::builder(scan_config).build_arc())
 }
 
 #[test]

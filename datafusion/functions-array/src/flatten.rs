@@ -47,7 +47,7 @@ impl Flatten {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![String::from("flatten")],
+            aliases: vec![],
         }
     }
 }

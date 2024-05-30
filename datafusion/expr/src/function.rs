@@ -134,3 +134,16 @@ pub type AggregateFunctionSimplification = Box<
         &dyn crate::simplify::SimplifyInfo,
     ) -> Result<Expr>,
 >;
+
+/// [crate::udwf::WindowUDFImpl::simplify] simplifier closure
+/// A closure with two arguments:
+/// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+/// * 'info': [crate::simplify::SimplifyInfo]
+///
+/// closure returns simplified [Expr] or an error.
+pub type WindowFunctionSimplification = Box<
+    dyn Fn(
+        crate::expr::WindowFunction,
+        &dyn crate::simplify::SimplifyInfo,
+    ) -> Result<Expr>,
+>;
