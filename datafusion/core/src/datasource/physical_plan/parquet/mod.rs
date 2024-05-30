@@ -269,6 +269,8 @@ impl ParquetExecBuilder {
     ///
     /// If a custom `ParquetFileReaderFactory` is provided, then data access
     /// operations will be routed to this factory instead of `ObjectStore`.
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
