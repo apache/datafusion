@@ -36,12 +36,12 @@ use datafusion::parquet::arrow::{
 };
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::*;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{utils::conjunction, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::PhysicalExpr;
-use gdatafusion::prelude::*;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
