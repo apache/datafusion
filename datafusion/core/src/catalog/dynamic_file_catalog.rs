@@ -149,10 +149,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.inner.register_table(name, table)
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let inner_table = self.inner.table(name).await?;
         if inner_table.is_some() {
             return Ok(inner_table);
@@ -211,10 +208,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         Ok(Some(Arc::new(ListingTable::try_new(config)?)))
     }
 
-    fn deregister_table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
+    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         self.inner.deregister_table(name)
     }
 
