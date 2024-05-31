@@ -26,7 +26,7 @@
 //! - Extended variant type references start from 1, and ususlly increase by 1.
 //!
 //! Definitions here are not the final form. All the non-system-preferred variations will be defined
-//! using [simple extensions] as per the spec: https://substrait.io/types/type_variations/
+//! using [simple extensions] as per the [spec of type_variations](https://substrait.io/types/type_variations/)
 //!
 //! [simple extensions]: (https://substrait.io/extensions/#simple-extensions)
 
