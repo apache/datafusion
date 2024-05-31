@@ -30,6 +30,7 @@ use crate::execution::context::SessionState;
 use crate::prelude::SessionContext;
 
 use async_trait::async_trait;
+use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
@@ -64,7 +65,7 @@ pub(crate) async fn get_s3_object_store_builder(
             builder = builder.with_token(session_token);
         }
     } else {
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         if let Some(region) = config.region() {
             builder = builder.with_region(region.to_string());
         }
