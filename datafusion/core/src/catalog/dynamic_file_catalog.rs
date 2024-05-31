@@ -76,6 +76,21 @@ impl CatalogProviderList for DynamicFileCatalog {
     }
 }
 
+/// Wraps another schema provider
+struct DynamicFileSchemaProvider {
+    inner: Arc<dyn SchemaProvider>,
+    state: Weak<RwLock<SessionState>>,
+}
+
+impl DynamicFileSchemaProvider {
+    pub fn new(
+        inner: Arc<dyn SchemaProvider>,
+        state: Weak<RwLock<SessionState>>,
+    ) -> Self {
+        Self { inner, state }
+    }
+}
+
 impl CatalogProvider for DynamicFileCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -110,21 +125,6 @@ struct DynamicFileCatalogProvider {
 impl DynamicFileCatalogProvider {
     pub fn new(
         inner: Arc<dyn CatalogProvider>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
-        Self { inner, state }
-    }
-}
-
-/// Wraps another schema provider
-struct DynamicFileSchemaProvider {
-    inner: Arc<dyn SchemaProvider>,
-    state: Weak<RwLock<SessionState>>,
-}
-
-impl DynamicFileSchemaProvider {
-    pub fn new(
-        inner: Arc<dyn SchemaProvider>,
         state: Weak<RwLock<SessionState>>,
     ) -> Self {
         Self { inner, state }
