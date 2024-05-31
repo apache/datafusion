@@ -20,37 +20,37 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::error::{DataFusionError, Result};
 use arrow::record_batch::RecordBatch;
 
-use super::sink::FranzSink;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::franz_sinks::FranzSink;
 
 #[derive(Debug, Clone)]
-pub struct StreamMonitorSettings {
+pub struct StreamMonitorConfig {
 }
 
-impl Default for StreamMonitorSettings {
+impl Default for StreamMonitorConfig {
     fn default() -> Self {
-        StreamMonitorSettings {
+        StreamMonitorConfig {
         }
     }
 }
 
-impl StreamMonitorSettings {
+impl StreamMonitorConfig {
     pub fn new() -> Self {
-        StreamMonitorSettings {
+        StreamMonitorConfig {
             ..Default::default()
         }
     }
 }
 
 pub struct StreamMonitor {
-    config: StreamMonitorSettings,
+    config: StreamMonitorConfig,
     sink: Arc<Mutex<dyn FranzSink + Send + Sync>>,
 }
 
 impl StreamMonitor {
-    pub fn new(config: &StreamMonitorSettings, sink: Arc<Mutex<dyn FranzSink + Send + Sync>>) -> Result<Self> {
+    pub fn new(config: &StreamMonitorConfig, sink: Arc<Mutex<dyn FranzSink + Send + Sync>>) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             sink,

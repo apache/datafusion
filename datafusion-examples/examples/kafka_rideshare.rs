@@ -169,8 +169,9 @@ async fn main() {
 
     use datafusion::franz_sinks::{
         FileSink, FranzSink, KafkaSink, KafkaSinkSettings, PrettyPrinter, StdoutSink,
-        StreamMonitor, StreamMonitorSettings,
     };
+
+    use datafusion_franz::{StreamMonitor, StreamMonitorConfig};
 
     // let fname = "/tmp/out.jsonl";
     // println!("Writing results to file {}", fname);
@@ -200,7 +201,7 @@ async fn main() {
     };
     let kafka_writer = KafkaSink::new(&kafka_sink_config).unwrap();
 
-    let stream_monitor_config = StreamMonitorSettings::new();
+    let stream_monitor_config = StreamMonitorConfig::new();
     let stream_monitor = StreamMonitor::new(
         &stream_monitor_config,
         Arc::new(tokio::sync::Mutex::new(kafka_writer)),
