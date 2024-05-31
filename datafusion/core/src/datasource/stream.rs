@@ -110,9 +110,7 @@ impl FromStr for StreamEncoding {
 /// responsible for providing a `RecordBatchReader` and optionally a `RecordBatchWriter`.
 pub trait StreamProvider: std::fmt::Debug + Send + Sync {
     /// Get a reference to the schema for this stream
-    fn schema(&self) -> SchemaRef;
-    /// Needed for `PartitionStream` - maybe there is a better way to do this.
-    fn schema_ref(&self) -> &SchemaRef;
+    fn schema(&self) -> &SchemaRef;
     /// Provide `RecordBatchReader`
     fn reader(&self) -> Result<Box<dyn RecordBatchReader>>;
     /// Provide `RecordBatchWriter`
@@ -182,12 +180,7 @@ impl FileStreamProvider {
 }
 
 impl StreamProvider for FileStreamProvider {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    // Needed for `PartitionStream`
-    fn schema_ref(&self) -> &SchemaRef {
+    fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
@@ -339,11 +332,11 @@ impl TableProvider for StreamTable {
                 let projected = self.0.source.schema().project(p)?;
                 create_ordering(&projected, &self.0.order)?
             }
-            None => create_ordering(self.0.source.schema_ref(), &self.0.order)?,
+            None => create_ordering(self.0.source.schema(), &self.0.order)?,
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
-            self.0.source.schema(),
+            self.0.source.schema().clone(),
             vec![Arc::new(StreamRead(self.0.clone())) as _],
             projection,
             projected_schema,
@@ -360,7 +353,7 @@ impl TableProvider for StreamTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let ordering = match self.0.order.first() {
             Some(x) => {
-                let schema = self.0.source.schema_ref();
+                let schema = self.0.source.schema();
                 let orders = create_ordering(schema, std::slice::from_ref(x))?;
                 let ordering = orders.into_iter().next().unwrap();
                 Some(ordering.into_iter().map(Into::into).collect())
@@ -371,7 +364,7 @@ impl TableProvider for StreamTable {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(self.0.clone())),
-            self.0.source.schema(),
+            self.0.source.schema().clone(),
             ordering,
         )))
     }
@@ -381,7 +374,7 @@ struct StreamRead(Arc<StreamConfig>);
 
 impl PartitionStream for StreamRead {
     fn schema(&self) -> &SchemaRef {
-        self.0.source.schema_ref()
+        self.0.source.schema()
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {

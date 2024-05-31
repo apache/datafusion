@@ -31,7 +31,7 @@ use futures::StreamExt;
 use nix::sys::stat;
 use nix::unistd;
 use tempfile::TempDir;
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::JoinSet;
 
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::datasource::TableProvider;
@@ -94,13 +94,14 @@ fn create_writing_thread(
     lines: Vec<String>,
     waiting_lock: Arc<AtomicBool>,
     wait_until: usize,
-) -> JoinHandle<()> {
+    tasks: &mut JoinSet<()>,
+) {
     // Timeout for a long period of BrokenPipe error
     let broken_pipe_timeout = Duration::from_secs(10);
     let sa = file_path.clone();
     // Spawn a new thread to write to the FIFO file
     #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
-    spawn_blocking(move || {
+    tasks.spawn_blocking(move || {
         let file = OpenOptions::new().write(true).open(sa).unwrap();
         // Reference time to use when deciding to fail the test
         let execution_start = Instant::now();
@@ -114,7 +115,7 @@ fn create_writing_thread(
             write_to_fifo(&file, line, execution_start, broken_pipe_timeout).unwrap();
         }
         drop(file);
-    })
+    });
 }
 
 /// This example demonstrates a scanning against an Arrow data source (JSON) and
@@ -130,21 +131,22 @@ async fn main() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let fifo_path = create_fifo_file(&tmp_dir, "fifo_unbounded.csv")?;
 
-    let mut tasks: Vec<JoinHandle<()>> = vec![];
+    let mut tasks: JoinSet<()> = JoinSet::new();
     let waiting = Arc::new(AtomicBool::new(true));
 
     let data_iter = 0..TEST_DATA_SIZE;
     let lines = data_iter
         .map(|i| format!("{},{}\n", i, i + 1))
         .collect::<Vec<_>>();
-    // Create writing threads for the left and right FIFO files
-    tasks.push(create_writing_thread(
+
+    create_writing_thread(
         fifo_path.clone(),
         Some("a1,a2\n".to_owned()),
         lines.clone(),
         waiting.clone(),
         TEST_DATA_SIZE,
-    ));
+        &mut tasks,
+    );
 
     // Create schema
     let schema = Arc::new(Schema::new(vec![
@@ -161,7 +163,6 @@ async fn main() -> Result<()> {
     let df = ctx.sql("SELECT * FROM fifo").await.unwrap();
     let mut stream = df.execute_stream().await.unwrap();
 
-    futures::future::join_all(tasks).await;
     let mut batches = Vec::new();
     if let Some(Ok(batch)) = stream.next().await {
         batches.push(batch)
