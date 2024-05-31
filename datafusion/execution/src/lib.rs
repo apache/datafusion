@@ -27,7 +27,9 @@ mod stream;
 mod task;
 
 pub mod registry {
-    pub use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry, MemoryFunctionRegistry};
+    pub use datafusion_expr::registry::{
+        FunctionRegistry, MemoryFunctionRegistry, SerializerRegistry,
+    };
 }
 
 pub use disk_manager::DiskManager;

@@ -17,9 +17,9 @@
 
 //! FunctionRegistry trait
 
-use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use crate::expr_rewriter::FunctionRewrite;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
+use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
 
