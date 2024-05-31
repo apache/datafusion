@@ -378,24 +378,6 @@ select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b !=
 11 12
 11 13
 
-#LEFTANTI tests
-# returns no rows instead of correct result
-#query III
-#select * from (
-#with
-#t1 as (
-#    select 11 a, 12 b, 1 c union all
-#    select 11 a, 13 b, 2 c),
-#t2 as (
-#    select 11 a, 12 b, 3 c union all
-#    select 11 a, 14 b, 4 c
-#    )
-#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
-#) order by 1, 2;
-#----
-#11 12 1
-#11 13 2
-
 # Set batch size to 1 for sort merge join to test scenario when data spread across multiple batches
 statement ok
 set datafusion.execution.batch_size = 1;
@@ -431,5 +413,108 @@ select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b !=
 11 12
 11 13
 
+#LEFTANTI tests
+statement ok
+set datafusion.execution.batch_size = 10;
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b),
+t2 as (
+    select 11 a, 13 c union all
+    select 11 a, 14 c
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+) order by 1, 2
+----
+11 12
+
+query III
+select * from (
+with
+t1 as (
+    select 11 a, 12 b, 1 c union all
+    select 11 a, 13 b, 2 c),
+t2 as (
+    select 11 a, 12 b, 3 c union all
+    select 11 a, 14 b, 4 c
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+) order by 1, 2;
+----
+11 12 1
+11 13 2
+
+query III
+select * from (
+with
+t1 as (
+    select 11 a, 12 b, 1 c union all
+    select 11 a, 13 b, 2 c),
+t2 as (
+    select 11 a, 12 b, 3 c where false
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+) order by 1, 2;
+----
+11 12 1
+11 13 2
+
+# Test LEFT ANTI with cross batch data distribution
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b),
+t2 as (
+    select 11 a, 13 c union all
+    select 11 a, 14 c
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+) order by 1, 2
+----
+11 12
+
+query III
+select * from (
+with
+t1 as (
+    select 11 a, 12 b, 1 c union all
+    select 11 a, 13 b, 2 c),
+t2 as (
+    select 11 a, 12 b, 3 c union all
+    select 11 a, 14 b, 4 c
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+) order by 1, 2;
+----
+11 12 1
+11 13 2
+
+query III
+select * from (
+with
+t1 as (
+    select 11 a, 12 b, 1 c union all
+    select 11 a, 13 b, 2 c),
+t2 as (
+    select 11 a, 12 b, 3 c where false
+    )
+select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+) order by 1, 2;
+----
+11 12 1
+11 13 2
+
+# return sql params back to default values
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
