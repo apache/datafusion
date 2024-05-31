@@ -135,13 +135,17 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// Third entry in the tuple corresponds to order by expressions.
     fn all_expressions(&self) -> WindowPhysicalExpressions {
         let args = self.expressions();
-        let partition_bys = self.partition_by().to_vec();
+        let partition_by_exprs = self.partition_by().to_vec();
         let order_by_exprs = self
             .order_by()
             .iter()
             .map(|sort_expr| sort_expr.expr.clone())
             .collect::<Vec<_>>();
-        (args, partition_bys, order_by_exprs)
+        WindowPhysicalExpressions {
+            args,
+            partition_by_exprs,
+            order_by_exprs,
+        }
     }
 
     /// Rewrites [`WindowExpr`], with new expressions given. The argument should be consistent
@@ -157,13 +161,15 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 }
 
-/// Triple contains the all physical expressions used in the window expression
-/// each entry corresponds to function arguments, partition by expressions, order by expressions respectively
-type WindowPhysicalExpressions = (
-    Vec<Arc<dyn PhysicalExpr>>,
-    Vec<Arc<dyn PhysicalExpr>>,
-    Vec<Arc<dyn PhysicalExpr>>,
-);
+/// Stores the physical expressions used inside the `WindowExpr`.
+pub struct WindowPhysicalExpressions {
+    /// Window function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// PARTITION BY expressions
+    pub partition_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// ORDER BY expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
 
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {

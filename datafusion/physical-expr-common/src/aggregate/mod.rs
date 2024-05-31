@@ -196,7 +196,10 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
             .iter()
             .map(|sort_expr| sort_expr.expr.clone())
             .collect::<Vec<_>>();
-        (args, order_by_exprs)
+        AggregatePhysicalExpressions {
+            args,
+            order_by_exprs,
+        }
     }
 
     /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
@@ -211,10 +214,13 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     }
 }
 
-/// Tuple contains the all physical expressions used in the aggregate expression
-/// each entry corresponds to function arguments, order by expressions respectively
-type AggregatePhysicalExpressions =
-    (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>);
+/// Stores the physical expressions used inside the `AggregateExpr`.
+pub struct AggregatePhysicalExpressions {
+    /// Aggregate function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Order by expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
 
 /// Physical aggregate expression of a UDAF.
 #[derive(Debug)]

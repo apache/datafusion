@@ -42,8 +42,9 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
-    physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
-    LexRequirement, PhysicalExpr, PhysicalSortRequirement,
+    physical_exprs_contains, AggregateExpr, AggregatePhysicalExpressions,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -995,7 +996,10 @@ fn aggregate_expressions(
             .iter()
             .map(|agg| {
                 let mut result = vec![];
-                let (args, order_by_exprs) = agg.all_expressions();
+                let AggregatePhysicalExpressions {
+                    args,
+                    order_by_exprs,
+                } = agg.all_expressions();
                 result.extend(args);
                 // Append order by expressions to the result. This
                 // way order sensitive aggregators can satisfy requirement
