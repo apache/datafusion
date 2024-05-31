@@ -2338,6 +2338,128 @@ select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
 statement ok
 drop table t;
 
+# aggregate stddev f64_1
+statement ok
+create table t (c1 double) as values (1), (2);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_2
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0.776029781788 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_3
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_4
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select stddev(c1), arrow_typeof(stddev(c1)) from t;
+----
+0.950438495292 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev single_input
+statement ok
+create table t (c1 double) as values (1);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev with_nulls
+statement ok
+create table t (c1 int) as values (1), (null), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.479019945775 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev all_nulls
+statement ok
+create table t (c1 int) as values (null), (null);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+
+
 # simple_mean
 query R
 select mean(c1) from test
