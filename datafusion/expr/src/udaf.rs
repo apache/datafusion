@@ -410,6 +410,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &[]
     }
 
+    /// Sliding accumulator is an alternative accumulator that can be used for
+    /// window functions. It has retract method to revert the previous update.
+    ///
+    /// See [retract_batch] for more details.
+    ///
+    /// [retract_batch]: crate::accumulator::Accumulator::retract_batch
     fn create_sliding_accumulator(
         &self,
         args: AccumulatorArgs,
