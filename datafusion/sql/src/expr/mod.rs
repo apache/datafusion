@@ -17,6 +17,8 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use sqlparser::ast;
+use sqlparser::ast::CharacterLength::IntegerLength;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -273,6 +275,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
+                if let ast::DataType::Varchar(Some(IntegerLength { length, .. })) =
+                    data_type
+                {
+                    match &*expr {
+                        SQLExpr::Value(Value::SingleQuotedString(s))
+                            if s.len() > (length).try_into().unwrap() =>
+                        {
+                            return plan_err!(
+                                "Unable to complete conversion, wrong length"
+                            );
+                        }
+                        _ => {}
+                    }
                 }
 
                 let dt = self.convert_data_type(&data_type)?;
