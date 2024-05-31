@@ -52,7 +52,9 @@ impl DataFrame {
         loop {
             let rb = stream.next().await.transpose();
             if let Ok(Some(batch)) = rb {
-                let _ = sink.write_records(batch).await;
+                if batch.num_rows() > 0 {
+                    let _ = sink.write_records(batch).await;
+                }
             }
         }
     }
