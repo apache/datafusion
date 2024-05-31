@@ -130,9 +130,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 
     /// Returns all expressions used in the [`WindowExpr`].
-    /// First entry in the tuple corresponds to function arguments
-    /// Second entry in the tuple corresponds to partition by expressions.
-    /// Third entry in the tuple corresponds to order by expressions.
+    /// These expressions are (1) function arguments, (2) partition by expressions, (3) order by expressions.
     fn all_expressions(&self) -> WindowPhysicalExpressions {
         let args = self.expressions();
         let partition_by_exprs = self.partition_by().to_vec();

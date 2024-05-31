@@ -187,8 +187,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     }
 
     /// Returns all expressions used in the [`AggregateExpr`].
-    /// First entry in the tuple corresponds to function arguments
-    /// Second entry in the tuple corresponds to order by expressions.
+    /// These expressions are  (1)function arguments, (2) order by expressions.
     fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
         let order_bys = self.order_bys().unwrap_or(&[]);
