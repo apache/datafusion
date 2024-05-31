@@ -94,19 +94,24 @@ impl PartitionStream for KafkaStreamRead {
             assigned_partitions.add_partition(self.config.topic.as_str(), partition);
         }
         info!("Reading partition {:?}", assigned_partitions);
-        // Create Kafka consumer with rebalance callback
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("group.id", self.config.consumer_group_id.to_string()) // Replace with your group ID
+
+        let mut client_config = ClientConfig::new();
+
+        client_config
             .set(
                 "bootstrap.servers",
                 self.config.bootstrap_servers.to_string(),
             )
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
-            .set("auto.offset.reset", self.config.offset_reset.to_string())
-            .create()
-            .expect("Consumer creation failed");
+            .set("auto.offset.reset", self.config.offset_reset.to_string());
 
-        // Subscribe to the topic
+        if !self.config.consumer_group_id.is_empty() {
+            client_config.set("group.id", self.config.consumer_group_id.to_string());
+        }
+
+        let consumer: StreamConsumer =
+            client_config.create().expect("Consumer creation failed");
+
         consumer
             .assign(&assigned_partitions)
             .expect("Partition assignment failed.");

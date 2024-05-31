@@ -15,52 +15,54 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::time::Duration;
+use std::sync::Arc;
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 
 use crate::error::{DataFusionError, Result};
-use arrow::json::LineDelimitedWriter;
 use arrow::record_batch::RecordBatch;
 
 use super::sink::FranzSink;
 
-pub struct StdoutSink {}
+#[derive(Debug, Clone)]
+pub struct StreamMonitorSettings {
+}
 
-impl StdoutSink {
-    pub fn new() -> Result<Self> {
-        Ok(Self {})
+impl Default for StreamMonitorSettings {
+    fn default() -> Self {
+        StreamMonitorSettings {
+        }
+    }
+}
+
+impl StreamMonitorSettings {
+    pub fn new() -> Self {
+        StreamMonitorSettings {
+            ..Default::default()
+        }
+    }
+}
+
+pub struct StreamMonitor {
+    config: StreamMonitorSettings,
+    sink: Arc<Mutex<dyn FranzSink + Send + Sync>>,
+}
+
+impl StreamMonitor {
+    pub fn new(config: &StreamMonitorSettings, sink: Arc<Mutex<dyn FranzSink + Send + Sync>>) -> Result<Self> {
+        Ok(Self {
+            config: config.clone(),
+            sink,
+        })
     }
 }
 
 #[async_trait]
-impl FranzSink for StdoutSink {
+impl FranzSink for StreamMonitor {
     async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
-        // Write out JSON
-        let mut writer = LineDelimitedWriter::new(std::io::stdout().lock());
-        let _ = writer.write(&batch).map_err(|e| {
-            DataFusionError::Execution(format!("Error writing batch: {}", e))
-        })?;
-
-        Ok(())
-    }
-}
-
-pub struct PrettyPrinter {}
-
-impl PrettyPrinter {
-    pub fn new() -> Result<Self> {
-        Ok(Self {})
-    }
-}
-
-#[async_trait]
-impl FranzSink for PrettyPrinter {
-    async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
-        println!(
-            "{}",
-            arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-        );
-
-        Ok(())
+        let mut sink = self.sink.lock().await;
+        sink.write_records(batch).await
     }
 }
 

@@ -47,8 +47,8 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };
 use datafusion_expr::{
-    col, create_udwf, ident, max, min, Expr, LogicalPlanBuilder, PartitionEvaluator,
-    TableType, Volatility, WindowFrame,
+    col, count, create_udwf, ident, max, min, Expr, LogicalPlanBuilder,
+    PartitionEvaluator, TableType, Volatility, WindowFrame,
 };
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -113,12 +113,14 @@ async fn main() {
         )),
     );
 
-    let bootstrap_servers = String::from("localhost:19092,localhost:29092,localhost:39092");
+    let bootstrap_servers =
+        String::from("localhost:19092,localhost:29092,localhost:39092");
     let canonical_schema = Arc::new(Schema::new(fields));
     let _config = KafkaStreamConfig {
         bootstrap_servers: bootstrap_servers.clone(),
         topic: String::from("driver-imu-data"),
-        consumer_group_id: String::from("my_test_consumer"),
+        // consumer_group_id: String::from("my_test_consumer"),
+        consumer_group_id: String::from("test-group"),
         original_schema: Arc::new(inferred_schema),
         schema: canonical_schema,
         batch_size: 10,
@@ -157,6 +159,7 @@ async fn main() {
             vec![
                 max(col("imu_measurement").field("gps").field("speed")),
                 min(col("imu_measurement").field("gps").field("altitude")),
+                count(col("imu_measurement")).alias("count"),
             ],
             Duration::from_millis(2000),
         )
@@ -165,7 +168,8 @@ async fn main() {
     // print_stream(&windowed_df).await;
 
     use datafusion::franz_sinks::{
-        FileSink, FranzSink, KafkaSink, PrettyPrinter, StdoutSink, KafkaSinkSettings,
+        FileSink, FranzSink, KafkaSink, KafkaSinkSettings, PrettyPrinter, StdoutSink,
+        StreamMonitor, StreamMonitorSettings,
     };
 
     // let fname = "/tmp/out.jsonl";
@@ -182,12 +186,28 @@ async fn main() {
     // let sink = Box::new(writer) as Box<dyn FranzSink>;
     // let _ = windowed_df.sink(sink).await;
 
-    let config = KafkaSinkSettings {
-        topic: "out_topic".to_string(),
+    // let config = KafkaSinkSettings {
+    //     topic: "out_topic".to_string(),
+    //     bootstrap_servers: bootstrap_servers.clone(),
+    // };
+    // let writer = KafkaSink::new(&config).unwrap();
+    // let sink = Box::new(writer) as Box<dyn FranzSink>;
+    // let _ = windowed_df.sink(sink).await;
+
+    let kafka_sink_config = KafkaSinkSettings {
+        topic: "out_topic_monitored".to_string(),
         bootstrap_servers: bootstrap_servers.clone(),
     };
-    let writer = KafkaSink::new(&config).unwrap();
-    let sink = Box::new(writer) as Box<dyn FranzSink>;
+    let kafka_writer = KafkaSink::new(&kafka_sink_config).unwrap();
+
+    let stream_monitor_config = StreamMonitorSettings::new();
+    let stream_monitor = StreamMonitor::new(
+        &stream_monitor_config,
+        Arc::new(tokio::sync::Mutex::new(kafka_writer)),
+    )
+    .unwrap();
+
+    let sink = Box::new(stream_monitor) as Box<dyn FranzSink>;
     let _ = windowed_df.sink(sink).await;
 }
 
