@@ -18,28 +18,35 @@
 //! Type variation constants
 //!
 //! To add support for types not in the [core specification](https://substrait.io/types/type_classes/),
-//! we make use of the [simple extensions](https://substrait.io/extensions/#simple-extensions) of substrait
-//! type. This module contains the constants used to identify the type variation.
+//! we make use of the [simple extensions] of substrait type. This module contains the constants used
+//! to identify the type variation.
 //!
 //! The rules of type variations here are:
 //! - Default type reference is 0. It is used when the actual type is the same with the original type.
 //! - Extended variant type references start from 1, and ususlly increase by 1.
+//!
+//! Definitions here are not the final form. All the non-system-preferred variations will be defined
+//! using [simple extensions] as per the [spec of type_variations](https://substrait.io/types/type_variations/)
+//!
+//! [simple extensions]: (https://substrait.io/extensions/#simple-extensions)
 
-// For type variations
-pub const DEFAULT_TYPE_REF: u32 = 0;
-pub const UNSIGNED_INTEGER_TYPE_REF: u32 = 1;
-pub const TIMESTAMP_SECOND_TYPE_REF: u32 = 0;
-pub const TIMESTAMP_MILLI_TYPE_REF: u32 = 1;
-pub const TIMESTAMP_MICRO_TYPE_REF: u32 = 2;
-pub const TIMESTAMP_NANO_TYPE_REF: u32 = 3;
-pub const DATE_32_TYPE_REF: u32 = 0;
-pub const DATE_64_TYPE_REF: u32 = 1;
-pub const DEFAULT_CONTAINER_TYPE_REF: u32 = 0;
-pub const LARGE_CONTAINER_TYPE_REF: u32 = 1;
-pub const DECIMAL_128_TYPE_REF: u32 = 0;
-pub const DECIMAL_256_TYPE_REF: u32 = 1;
+// For [type variations](https://substrait.io/types/type_variations/#type-variations) in substrait.
+// Type variations are used to represent different types based on one type class.
+/// The "system-preferred" variation (i.e., no variation).
+pub const DEFAULT_TYPE_VARIATION_REF: u32 = 0;
+pub const UNSIGNED_INTEGER_TYPE_VARIATION_REF: u32 = 1;
+pub const TIMESTAMP_SECOND_TYPE_VARIATION_REF: u32 = 0;
+pub const TIMESTAMP_MILLI_TYPE_VARIATION_REF: u32 = 1;
+pub const TIMESTAMP_MICRO_TYPE_VARIATION_REF: u32 = 2;
+pub const TIMESTAMP_NANO_TYPE_VARIATION_REF: u32 = 3;
+pub const DATE_32_TYPE_VARIATION_REF: u32 = 0;
+pub const DATE_64_TYPE_VARIATION_REF: u32 = 1;
+pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
+pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
+pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
+pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
 
-// For custom types
+// For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
 /// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].
 ///
 /// An `i32` for elapsed whole months. See also [`ScalarValue::IntervalYearMonth`]
