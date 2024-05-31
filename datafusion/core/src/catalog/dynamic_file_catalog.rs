@@ -28,6 +28,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
 use datafusion_common::plan_datafusion_err;
+use datafusion_common::Result;
 use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
@@ -44,21 +45,6 @@ impl DynamicFileCatalog {
     /// Create a new dynamic file catalog
     pub fn new(
         inner: Arc<dyn CatalogProviderList>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
-        Self { inner, state }
-    }
-}
-
-/// Wraps another catalog provider
-struct DynamicFileCatalogProvider {
-    inner: Arc<dyn CatalogProvider>,
-    state: Weak<RwLock<SessionState>>,
-}
-
-impl DynamicFileCatalogProvider {
-    pub fn new(
-        inner: Arc<dyn CatalogProvider>,
         state: Weak<RwLock<SessionState>>,
     ) -> Self {
         Self { inner, state }
@@ -110,8 +96,23 @@ impl CatalogProvider for DynamicFileCatalogProvider {
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         self.inner.register_schema(name, schema)
+    }
+}
+
+/// Wraps another catalog provider
+struct DynamicFileCatalogProvider {
+    inner: Arc<dyn CatalogProvider>,
+    state: Weak<RwLock<SessionState>>,
+}
+
+impl DynamicFileCatalogProvider {
+    pub fn new(
+        inner: Arc<dyn CatalogProvider>,
+        state: Weak<RwLock<SessionState>>,
+    ) -> Self {
+        Self { inner, state }
     }
 }
 
@@ -144,14 +145,14 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         self.inner.register_table(name, table)
     }
 
     async fn table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         let inner_table = self.inner.table(name).await?;
         if inner_table.is_some() {
             return Ok(inner_table);
@@ -213,7 +214,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     fn deregister_table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         self.inner.deregister_table(name)
     }
 
@@ -259,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_http_location_test() -> datafusion_common::Result<()> {
+    async fn query_http_location_test() -> Result<()> {
         // This is a unit test so not expecting a connection or a file to be
         // available
         let domain = "example.com";
@@ -286,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_s3_location_test() -> datafusion_common::Result<()> {
+    async fn query_s3_location_test() -> Result<()> {
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 
@@ -308,7 +309,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_gs_location_test() -> datafusion_common::Result<()> {
+    async fn query_gs_location_test() -> Result<()> {
         let bucket = "examplegsbucket";
         let location = format!("gs://{bucket}/file.parquet");
 
