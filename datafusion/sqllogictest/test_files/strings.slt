@@ -78,3 +78,14 @@ e1
 p2
 p2e1
 p2m1e1
+
+
+# Truncate
+# would error since the length is less than current
+query error
+SELECT '12345'::VARCHAR(2);
+
+query T
+SELECT '12345'::VARCHAR(10);
+----
+12345

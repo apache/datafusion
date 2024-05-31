@@ -276,7 +276,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
-
+                // <https://github.com/apache/datafusion/issues/10743> in this issue, when we try to
+                // use SELECT '12345'::VARCHAR(2) to truncate a string, we would like to throw an arrow since the length
+                // of the current string is longer than the given type.
+                // The reason to do the judgment here is that when we using sqlparser to transfer 12345'::VARCHAR(2) to AST, it
+                // would generate a AST like
+                // ```
+                // Cast {
+                //     kind: DoubleColon,
+                //     expr: Value(SingleQuotedString("12345")),
+                //     data_type: Varchar(Some(IntegerLength { length: 2, unit: None })),
+                //     format: None
+                // }
+                // ```
+                // but the arrow Datatype did not contain the length information, so we need to the judgement here
                 if let ast::DataType::Varchar(Some(IntegerLength { length, .. })) =
                     data_type
                 {
