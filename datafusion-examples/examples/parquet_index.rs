@@ -24,33 +24,34 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::{
-    RequestedStatistics, StatisticsConverter,
+use datafusion::datasource::physical_plan::{
+    parquet::{RequestedStatistics, StatisticsConverter},
+    {FileScanConfig, ParquetExec},
 };
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::arrow::{
+    arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
+};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::*;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::utils::conjunction;
-use datafusion_expr::{TableProviderFilterPushDown, TableType};
+use datafusion_expr::{utils::conjunction, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::PhysicalExpr;
+use gdatafusion::prelude::*;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::fs;
-use std::fs::{DirEntry, File};
+use std::fs::{self, DirEntry, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tempfile::TempDir;
 use url::Url;
 
