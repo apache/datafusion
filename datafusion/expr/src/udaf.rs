@@ -243,11 +243,6 @@ impl AggregateUDF {
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
     }
-
-    /// See [`AggregateUDFImpl::has_ordering_requirements`] for more details.
-    pub fn has_ordering_requirements(&self) -> bool {
-        self.inner.has_ordering_requirements()
-    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -450,10 +445,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`]
     /// for possible options.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // We have hard ordering requirements by default, meaning that order
-        // sensitive UDFs need their input orderings to satisfy their ordering
-        // requirements to generate correct results.
-        AggregateOrderSensitivity::HardRequirement
+        // We have Insensitive requirements by default, they don't care about ordering
+        // requirements
+        AggregateOrderSensitivity::Insensitive
     }
 
     /// Optionally apply per-UDaF simplification / rewrite rules.
@@ -507,11 +501,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
-    }
-
-    /// Returns true if the function has ordering requirements.
-    fn has_ordering_requirements(&self) -> bool {
-        false
     }
 }
 
