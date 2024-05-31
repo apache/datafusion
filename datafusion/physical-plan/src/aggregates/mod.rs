@@ -994,13 +994,13 @@ fn aggregate_expressions(
         | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
-                let mut result = agg.expressions();
-                // Append ordering requirements to expressions' results. This
+                let mut result = vec![];
+                let (args, order_by_exprs) = agg.all_expressions();
+                result.extend(args);
+                // Append order by expressions to the result. This
                 // way order sensitive aggregators can satisfy requirement
                 // themselves.
-                if let Some(ordering_req) = agg.order_bys() {
-                    result.extend(ordering_req.iter().map(|item| item.expr.clone()));
-                }
+                result.extend(order_by_exprs);
                 result
             })
             .collect()),

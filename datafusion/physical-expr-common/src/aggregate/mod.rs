@@ -185,7 +185,36 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
     }
+
+    /// Returns all expressions used in the [`AggregateExpr`].
+    /// First entry in the tuple corresponds to function arguments
+    /// Second entry in the tuple corresponds to order by expressions.
+    fn all_expressions(&self) -> AggregatePhysicalExpressions {
+        let args = self.expressions();
+        let order_bys = self.order_bys().unwrap_or(&[]);
+        let order_by_exprs = order_bys
+            .iter()
+            .map(|sort_expr| sort_expr.expr.clone())
+            .collect::<Vec<_>>();
+        (args, order_by_exprs)
+    }
+
+    /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`AggregateExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
+    fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn AggregateExpr>> {
+        None
+    }
 }
+
+/// Tuple contains the all physical expressions used in the aggregate expression
+/// each entry corresponds to function arguments, order by expressions respectively
+type AggregatePhysicalExpressions =
+    (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>);
 
 /// Physical aggregate expression of a UDAF.
 #[derive(Debug)]
