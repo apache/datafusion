@@ -28,13 +28,12 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::{get_object_store, register_options},
     print_options::{MaxRows, PrintOptions},
 };
 
 use datafusion::common::instant::Instant;
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::{listing::ListingTableUrl, file_format::object_storage::{get_object_store, register_options}};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};

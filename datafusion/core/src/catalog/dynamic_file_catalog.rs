@@ -15,24 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::{Arc, Weak};
+//! Implementation of a dynamic file catalog that automatically creates table providers
+//! for the file paths.
 
-use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
-
-use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
-use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+use crate::catalog::schema::SchemaProvider;
+use crate::catalog::{CatalogProvider, CatalogProviderList};
+use crate::datasource::file_format::object_storage::{
+    get_object_store, AwsOptions, GcpOptions,
 };
-use datafusion::datasource::TableProvider;
-use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
-
+use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
+use crate::datasource::TableProvider;
+use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_common::plan_datafusion_err;
 use dirs::home_dir;
 use parking_lot::RwLock;
+use std::any::Any;
+use std::sync::{Arc, Weak};
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -42,8 +41,24 @@ pub struct DynamicFileCatalog {
 }
 
 impl DynamicFileCatalog {
+    /// Create a new dynamic file catalog
     pub fn new(
         inner: Arc<dyn CatalogProviderList>,
+        state: Weak<RwLock<SessionState>>,
+    ) -> Self {
+        Self { inner, state }
+    }
+}
+
+/// Wraps another catalog provider
+struct DynamicFileCatalogProvider {
+    inner: Arc<dyn CatalogProvider>,
+    state: Weak<RwLock<SessionState>>,
+}
+
+impl DynamicFileCatalogProvider {
+    pub fn new(
+        inner: Arc<dyn CatalogProvider>,
         state: Weak<RwLock<SessionState>>,
     ) -> Self {
         Self { inner, state }
@@ -75,21 +90,6 @@ impl CatalogProviderList for DynamicFileCatalog {
     }
 }
 
-/// Wraps another catalog provider
-struct DynamicFileCatalogProvider {
-    inner: Arc<dyn CatalogProvider>,
-    state: Weak<RwLock<SessionState>>,
-}
-
-impl DynamicFileCatalogProvider {
-    pub fn new(
-        inner: Arc<dyn CatalogProvider>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
-        Self { inner, state }
-    }
-}
-
 impl CatalogProvider for DynamicFileCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -110,7 +110,7 @@ impl CatalogProvider for DynamicFileCatalogProvider {
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
         self.inner.register_schema(name, schema)
     }
 }
@@ -144,11 +144,14 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         self.inner.register_table(name, table)
     }
 
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn table(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         let inner_table = self.inner.table(name).await?;
         if inner_table.is_some() {
             return Ok(inner_table);
@@ -207,7 +210,10 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         Ok(Some(Arc::new(ListingTable::try_new(config)?)))
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    fn deregister_table(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         self.inner.deregister_table(name)
     }
 
@@ -230,8 +236,8 @@ fn substitute_tilde(cur: String) -> String {
 mod tests {
     use super::*;
 
-    use datafusion::catalog::schema::SchemaProvider;
-    use datafusion::prelude::SessionContext;
+    use crate::catalog::schema::SchemaProvider;
+    use crate::prelude::SessionContext;
 
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let mut ctx = SessionContext::new();
@@ -253,7 +259,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_http_location_test() -> Result<()> {
+    async fn query_http_location_test() -> datafusion_common::Result<()> {
         // This is a unit test so not expecting a connection or a file to be
         // available
         let domain = "example.com";
@@ -280,7 +286,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_s3_location_test() -> Result<()> {
+    async fn query_s3_location_test() -> datafusion_common::Result<()> {
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 
@@ -302,7 +308,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_gs_location_test() -> Result<()> {
+    async fn query_gs_location_test() -> datafusion_common::Result<()> {
         let bucket = "examplegsbucket";
         let location = format!("gs://{bucket}/file.parquet");
 

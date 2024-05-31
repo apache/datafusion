@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Implementations for object storage builders for different cloud storage schemes.
+
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use datafusion::common::config::{
+use crate::common::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
 };
-use datafusion::common::{config_err, exec_datafusion_err, exec_err};
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionState;
-use datafusion::prelude::SessionContext;
+use crate::common::{config_err, exec_datafusion_err, exec_err};
+use crate::error::{DataFusionError, Result};
+use crate::execution::context::SessionState;
+use crate::prelude::SessionContext;
 
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
@@ -35,7 +37,7 @@ use object_store::http::HttpBuilder;
 use object_store::{CredentialProvider, ObjectStore};
 use url::Url;
 
-pub async fn get_s3_object_store_builder(
+pub(crate) async fn get_s3_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
@@ -132,14 +134,14 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub fn get_oss_object_store_builder(
+pub(crate) fn get_oss_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
     get_object_store_builder(url, aws_options, true)
 }
 
-pub fn get_cos_object_store_builder(
+pub(crate) fn get_cos_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
@@ -173,7 +175,7 @@ fn get_object_store_builder(
     Ok(builder)
 }
 
-pub fn get_gcs_object_store_builder(
+pub(crate) fn get_gcs_object_store_builder(
     url: &Url,
     gs_options: &GcpOptions,
 ) -> Result<GoogleCloudStorageBuilder> {
@@ -416,7 +418,7 @@ impl ConfigExtension for GcpOptions {
 ///   Google Cloud Storage.
 ///
 /// NOTE: This function will not perform any action when given an unsupported scheme.
-pub(crate) fn register_options(ctx: &SessionContext, scheme: &str) {
+pub fn register_options(ctx: &SessionContext, scheme: &str) {
     // Match the provided scheme against supported cloud storage schemes:
     match scheme {
         // For Amazon S3 or Alibaba Cloud OSS
@@ -434,7 +436,8 @@ pub(crate) fn register_options(ctx: &SessionContext, scheme: &str) {
     }
 }
 
-pub(crate) async fn get_object_store(
+/// Used to get an object store based on the given scheme and options.
+pub async fn get_object_store(
     state: &SessionState,
     scheme: &str,
     url: &Url,
@@ -500,8 +503,8 @@ pub(crate) async fn get_object_store(
 mod tests {
     use super::*;
 
-    use datafusion::common::plan_err;
-    use datafusion::{
+    use crate::common::plan_err;
+    use crate::{
         datasource::listing::ListingTableUrl,
         logical_expr::{DdlStatement, LogicalPlan},
         prelude::SessionContext,
