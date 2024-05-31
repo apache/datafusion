@@ -1410,9 +1410,6 @@ fn get_filter_column(
             .map(|i| buffered_columns[i.index].clone())
             .collect::<Vec<_>>();
 
-        //        dbg!(&left_columns);
-        //        dbg!(&right_columns);
-
         filter_columns.extend(left_columns);
         filter_columns.extend(right_columns);
     }
