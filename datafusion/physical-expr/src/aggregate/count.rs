@@ -260,6 +260,21 @@ impl AggregateExpr for Count {
         // instantiate specialized accumulator
         Ok(Box::new(CountGroupsAccumulator::new()))
     }
+
+    fn with_new_expressions(
+        &self,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn AggregateExpr>> {
+        debug_assert_eq!(self.exprs.len(), args.len());
+        debug_assert!(order_by_exprs.is_empty());
+        Some(Arc::new(Count {
+            name: self.name.clone(),
+            data_type: self.data_type.clone(),
+            nullable: self.nullable,
+            exprs: args,
+        }))
+    }
 }
 
 impl PartialEq<dyn Any> for Count {
