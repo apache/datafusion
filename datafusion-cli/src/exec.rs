@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::str::FromStr;
 
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
@@ -300,11 +301,13 @@ async fn create_plan(
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        // To support custom formats, treat error as None
+        let format = FileType::from_str(&cmd.file_type).ok();
         register_object_store_and_config_extensions(
             ctx,
             &cmd.location,
             &cmd.options,
-            None,
+            format,
         )
         .await?;
     }
@@ -398,11 +401,12 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            let format = FileType::from_str(&cmd.file_type).ok();
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.location,
                 &cmd.options,
-                None,
+                format,
             )
             .await?;
         } else {
@@ -597,6 +601,18 @@ mod tests {
         // Ensure that local files are also registered
         let sql =
             format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        create_external_table_test(location, &sql).await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_external_table_format_option() -> Result<()> {
+        let location = "path/to/file.cvs";
+
+        // Test with format options
+        let sql =
+            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())
