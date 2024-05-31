@@ -365,11 +365,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.order_sensitivity().is_insensitive() {
-            return None
+        if self.ordering_req.is_empty() {
+            return None;
         }
 
-        Some(&self.ordering_req)
+        if !self.order_sensitivity().is_insensitive() {
+            return Some(&self.ordering_req);
+        }
+
+        None
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

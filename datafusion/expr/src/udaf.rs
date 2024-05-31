@@ -445,9 +445,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Gets the order sensitivity of the UDF. See [`AggregateOrderSensitivity`]
     /// for possible options.
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // We have Insensitive requirements by default, they don't care about ordering
-        // requirements
-        AggregateOrderSensitivity::Insensitive
+        // We have hard ordering requirements by default, meaning that order
+        // sensitive UDFs need their input orderings to satisfy their ordering
+        // requirements to generate correct results.
+        AggregateOrderSensitivity::HardRequirement
     }
 
     /// Optionally apply per-UDaF simplification / rewrite rules.
