@@ -33,10 +33,13 @@ pub(crate) struct MockContextProvider {
 }
 
 impl MockContextProvider {
+    // Surpressing dead code warning, as this is used in integration test crates
+    #[allow(dead_code)]
     pub(crate) fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_udf(mut self, udf: ScalarUDF) -> Self {
         self.udfs.insert(udf.name().to_string(), Arc::new(udf));
         self
