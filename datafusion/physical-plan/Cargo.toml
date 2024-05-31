@@ -65,7 +65,7 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-rstest_reuse = "0.6.0"
+rstest_reuse = "0.7.0"
 termtree = "0.4.1"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
