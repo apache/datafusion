@@ -161,26 +161,6 @@ LIMIT 3;
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
-CREATE EXTERNAL TABLE aggregate_test_100 (
-  c1  VARCHAR NOT NULL,
-  c2  TINYINT NOT NULL,
-  c3  SMALLINT NOT NULL,
-  c4  SMALLINT,
-  c5  INT,
-  c6  BIGINT NOT NULL,
-  c7  SMALLINT NOT NULL,
-  c8  INT NOT NULL,
-  c9  BIGINT UNSIGNED NOT NULL,
-  c10 VARCHAR NOT NULL,
-  c11 FLOAT NOT NULL,
-  c12 DOUBLE NOT NULL,
-  c13 VARCHAR NOT NULL
-)
-STORED AS CSV
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
-OPTIONS ('format.has_header' 'true');
-
 # Basic example: distinct on the first column project the second one, and
 # order by the third
 query TI
@@ -289,6 +269,9 @@ LIMIT 3;
 -25 15295
 45 15673
 -72 -11122
+
+statement ok
+drop table aggregate_test_100;
 
 # test distinct on
 statement ok
