@@ -143,3 +143,39 @@ LIMIT 3;
 -25 15295
 45 15673
 -72 -11122
+
+# test distinct on
+statement ok
+create table t(a int, b int, c int) as values (1, 2, 3);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select distinct on (a) b from t order by a desc, c;
+----
+logical_plan
+01)Projection: first_value(t.b) ORDER BY [t.a DESC NULLS FIRST, t.c ASC NULLS LAST] AS b
+02)--Sort: t.a DESC NULLS FIRST
+03)----Aggregate: groupBy=[[t.a]], aggr=[[first_value(t.b) ORDER BY [t.a DESC NULLS FIRST, t.c ASC NULLS LAST]]]
+04)------TableScan: t projection=[a, b, c]
+
+statement ok
+drop table t;
+
+# test distinct
+statement ok
+create table t(a int, b int) as values (1, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select distinct a, b from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[t.a, t.b]], aggr=[[]]
+02)--TableScan: t projection=[a, b]
+
+statement ok
+drop table t;
