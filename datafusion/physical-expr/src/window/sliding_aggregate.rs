@@ -141,6 +141,31 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     fn uses_bounded_memory(&self) -> bool {
         !self.window_frame.end_bound.is_unbounded()
     }
+
+    fn with_new_expressions(
+        &self,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        partition_bys: Vec<Arc<dyn PhysicalExpr>>,
+        order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn WindowExpr>> {
+        debug_assert_eq!(self.order_by.len(), order_by_exprs.len());
+
+        let new_order_by = self
+            .order_by
+            .iter()
+            .zip(order_by_exprs)
+            .map(|(req, new_expr)| PhysicalSortExpr {
+                expr: new_expr,
+                options: req.options,
+            })
+            .collect::<Vec<_>>();
+        Some(Arc::new(SlidingAggregateWindowExpr {
+            aggregate: self.aggregate.with_new_expressions(args, vec![])?,
+            partition_by: partition_bys,
+            order_by: new_order_by,
+            window_frame: self.window_frame.clone(),
+        }))
+    }
 }
 
 impl AggregateWindowExpr for SlidingAggregateWindowExpr {

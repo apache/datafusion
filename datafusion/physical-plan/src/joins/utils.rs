@@ -1494,10 +1494,9 @@ impl BuildProbeJoinMetrics {
 }
 
 /// The `handle_state` macro is designed to process the result of a state-changing
-/// operation, encountered e.g. in implementations of `EagerJoinStream`. It
-/// operates on a `StatefulStreamResult` by matching its variants and executing
-/// corresponding actions. This macro is used to streamline code that deals with
-/// state transitions, reducing boilerplate and improving readability.
+/// operation. It operates on a `StatefulStreamResult` by matching its variants and
+/// executing corresponding actions. This macro is used to streamline code that deals
+/// with state transitions, reducing boilerplate and improving readability.
 ///
 /// # Cases
 ///
@@ -1525,26 +1524,7 @@ macro_rules! handle_state {
     };
 }
 
-/// The `handle_async_state` macro adapts the `handle_state` macro for use in
-/// asynchronous operations, particularly when dealing with `Poll` results within
-/// async traits like `EagerJoinStream`. It polls the asynchronous state-changing
-/// function using `poll_unpin` and then passes the result to `handle_state` for
-/// further processing.
-///
-/// # Arguments
-///
-/// * `$state_func`: An async function or future that returns a
-///   `Result<StatefulStreamResult<_>>`.
-/// * `$cx`: The context to be passed for polling, usually of type `&mut Context`.
-///
-#[macro_export]
-macro_rules! handle_async_state {
-    ($state_func:expr, $cx:expr) => {
-        $crate::handle_state!(ready!($state_func.poll_unpin($cx)))
-    };
-}
-
-/// Represents the result of an operation on stateful join stream.
+/// Represents the result of a stateful operation.
 ///
 /// This enumueration indicates whether the state produced a result that is
 /// ready for use (`Ready`) or if the operation requires continuation (`Continue`).

@@ -73,11 +73,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::variation_const::{
-    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
-    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_REF, TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF,
-    TIMESTAMP_NANO_TYPE_REF, TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 
 enum ScalarFunctionType {
@@ -1130,29 +1133,29 @@ fn from_substrait_type(
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),
             r#type::Kind::I8(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(DataType::Int8),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt8),
+                DEFAULT_TYPE_VARIATION_REF => Ok(DataType::Int8),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(DataType::UInt8),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
             r#type::Kind::I16(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(DataType::Int16),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt16),
+                DEFAULT_TYPE_VARIATION_REF => Ok(DataType::Int16),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(DataType::UInt16),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
             r#type::Kind::I32(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(DataType::Int32),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt32),
+                DEFAULT_TYPE_VARIATION_REF => Ok(DataType::Int32),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(DataType::UInt32),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
             r#type::Kind::I64(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(DataType::Int64),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt64),
+                DEFAULT_TYPE_VARIATION_REF => Ok(DataType::Int64),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(DataType::UInt64),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1160,16 +1163,16 @@ fn from_substrait_type(
             r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
             r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_REF => {
+                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                     Ok(DataType::Timestamp(TimeUnit::Second, None))
                 }
-                TIMESTAMP_MILLI_TYPE_REF => {
+                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
                     Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
                 }
-                TIMESTAMP_MICRO_TYPE_REF => {
+                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
                     Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
                 }
-                TIMESTAMP_NANO_TYPE_REF => {
+                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
                     Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
                 }
                 v => not_impl_err!(
@@ -1177,15 +1180,15 @@ fn from_substrait_type(
                 ),
             },
             r#type::Kind::Date(date) => match date.type_variation_reference {
-                DATE_32_TYPE_REF => Ok(DataType::Date32),
-                DATE_64_TYPE_REF => Ok(DataType::Date64),
+                DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
+                DATE_64_TYPE_VARIATION_REF => Ok(DataType::Date64),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Binary),
-                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeBinary),
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1194,8 +1197,8 @@ fn from_substrait_type(
                 Ok(DataType::FixedSizeBinary(fixed.length))
             }
             r#type::Kind::String(string) => match string.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Utf8),
-                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeUtf8),
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1209,18 +1212,18 @@ fn from_substrait_type(
                     is_substrait_type_nullable(inner_type)?,
                 ));
                 match list.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
-                    LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),
+                    LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeList(field)),
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {s_kind:?}"
                     )?,
                 }
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
-                DECIMAL_128_TYPE_REF => {
+                DECIMAL_128_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
                 }
-                DECIMAL_256_TYPE_REF => {
+                DECIMAL_256_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal256(d.precision as u8, d.scale as i8))
                 }
                 v => not_impl_err!(
@@ -1397,29 +1400,29 @@ fn from_substrait_literal(
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
         Some(LiteralType::I8(n)) => match lit.type_variation_reference {
-            DEFAULT_TYPE_REF => ScalarValue::Int8(Some(*n as i8)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt8(Some(*n as u8)),
+            DEFAULT_TYPE_VARIATION_REF => ScalarValue::Int8(Some(*n as i8)),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF => ScalarValue::UInt8(Some(*n as u8)),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I16(n)) => match lit.type_variation_reference {
-            DEFAULT_TYPE_REF => ScalarValue::Int16(Some(*n as i16)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt16(Some(*n as u16)),
+            DEFAULT_TYPE_VARIATION_REF => ScalarValue::Int16(Some(*n as i16)),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF => ScalarValue::UInt16(Some(*n as u16)),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I32(n)) => match lit.type_variation_reference {
-            DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
+            DEFAULT_TYPE_VARIATION_REF => ScalarValue::Int32(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF => ScalarValue::UInt32(Some(*n as u32)),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I64(n)) => match lit.type_variation_reference {
-            DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
+            DEFAULT_TYPE_VARIATION_REF => ScalarValue::Int64(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF => ScalarValue::UInt64(Some(*n as u64)),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1427,25 +1430,35 @@ fn from_substrait_literal(
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
         Some(LiteralType::Timestamp(t)) => match lit.type_variation_reference {
-            TIMESTAMP_SECOND_TYPE_REF => ScalarValue::TimestampSecond(Some(*t), None),
-            TIMESTAMP_MILLI_TYPE_REF => ScalarValue::TimestampMillisecond(Some(*t), None),
-            TIMESTAMP_MICRO_TYPE_REF => ScalarValue::TimestampMicrosecond(Some(*t), None),
-            TIMESTAMP_NANO_TYPE_REF => ScalarValue::TimestampNanosecond(Some(*t), None),
+            TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                ScalarValue::TimestampSecond(Some(*t), None)
+            }
+            TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                ScalarValue::TimestampMillisecond(Some(*t), None)
+            }
+            TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                ScalarValue::TimestampMicrosecond(Some(*t), None)
+            }
+            TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                ScalarValue::TimestampNanosecond(Some(*t), None)
+            }
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
-            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Utf8(Some(s.clone())),
-            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
+            LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
-            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Binary(Some(b.clone())),
-            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeBinary(Some(b.clone())),
+            DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Binary(Some(b.clone())),
+            LARGE_CONTAINER_TYPE_VARIATION_REF => {
+                ScalarValue::LargeBinary(Some(b.clone()))
+            }
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1484,11 +1497,10 @@ fn from_substrait_literal(
             }
             let element_type = elements[0].data_type();
             match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => ScalarValue::List(ScalarValue::new_list(
-                    elements.as_slice(),
-                    &element_type,
-                )),
-                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
+                    ScalarValue::new_list(elements.as_slice(), &element_type),
+                ),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(elements.as_slice(), &element_type),
                 ),
                 others => {
@@ -1503,10 +1515,10 @@ fn from_substrait_literal(
                 name_idx,
             )?;
             match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => {
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
                     ScalarValue::List(ScalarValue::new_list(&[], &element_type))
                 }
-                LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeList(
+                LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(&[], &element_type),
                 ),
                 others => {
@@ -1590,29 +1602,29 @@ fn from_substrait_null(
         match kind {
             r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
             r#type::Kind::I8(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(ScalarValue::Int8(None)),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt8(None)),
+                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int8(None)),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt8(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
             },
             r#type::Kind::I16(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(ScalarValue::Int16(None)),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt16(None)),
+                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int16(None)),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt16(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
             },
             r#type::Kind::I32(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(ScalarValue::Int32(None)),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt32(None)),
+                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int32(None)),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt32(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
             },
             r#type::Kind::I64(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_REF => Ok(ScalarValue::Int64(None)),
-                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt64(None)),
+                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int64(None)),
+                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt64(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
@@ -1620,14 +1632,16 @@ fn from_substrait_null(
             r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
             r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
             r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_REF => Ok(ScalarValue::TimestampSecond(None, None)),
-                TIMESTAMP_MILLI_TYPE_REF => {
+                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                    Ok(ScalarValue::TimestampSecond(None, None))
+                }
+                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
                     Ok(ScalarValue::TimestampMillisecond(None, None))
                 }
-                TIMESTAMP_MICRO_TYPE_REF => {
+                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
                     Ok(ScalarValue::TimestampMicrosecond(None, None))
                 }
-                TIMESTAMP_NANO_TYPE_REF => {
+                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
                     Ok(ScalarValue::TimestampNanosecond(None, None))
                 }
                 v => not_impl_err!(
@@ -1635,23 +1649,23 @@ fn from_substrait_null(
                 ),
             },
             r#type::Kind::Date(date) => match date.type_variation_reference {
-                DATE_32_TYPE_REF => Ok(ScalarValue::Date32(None)),
-                DATE_64_TYPE_REF => Ok(ScalarValue::Date64(None)),
+                DATE_32_TYPE_VARIATION_REF => Ok(ScalarValue::Date32(None)),
+                DATE_64_TYPE_VARIATION_REF => Ok(ScalarValue::Date64(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
             },
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Binary(None)),
-                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeBinary(None)),
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Binary(None)),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeBinary(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
             },
             // FixedBinary is not supported because `None` doesn't have length
             r#type::Kind::String(string) => match string.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Utf8(None)),
-                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeUtf8(None)),
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Utf8(None)),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeUtf8(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
@@ -1671,12 +1685,12 @@ fn from_substrait_null(
                     true,
                 );
                 match l.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::List(Arc::new(
-                        GenericListArray::new_null(field.into(), 1),
-                    ))),
-                    LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeList(Arc::new(
-                        GenericListArray::new_null(field.into(), 1),
-                    ))),
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::List(
+                        Arc::new(GenericListArray::new_null(field.into(), 1)),
+                    )),
+                    LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeList(
+                        Arc::new(GenericListArray::new_null(field.into(), 1)),
+                    )),
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {kind:?}"
                     ),

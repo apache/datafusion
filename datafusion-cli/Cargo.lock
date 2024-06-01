@@ -1325,7 +1325,6 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-functions-aggregate",
  "datafusion-physical-expr",
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
