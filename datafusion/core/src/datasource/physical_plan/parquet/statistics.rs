@@ -407,7 +407,27 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::Dictionary(_, value_type) => {
             min_statistics(value_type, iterator)
         }
-        _ => {
+
+        DataType::Map(_,_) |
+        DataType::Float16 |
+        DataType::Time32(_) |
+        DataType::Time64(_) |
+        DataType::Duration(_) |
+        DataType::Interval(_) |
+        DataType::Null |
+        DataType::LargeBinary |
+        DataType::BinaryView |
+        DataType::LargeUtf8 |
+        DataType::Utf8View |
+        DataType::List(_) |
+        DataType::ListView(_) |
+        DataType::FixedSizeList(_, _) |
+        DataType::LargeList(_) |
+        DataType::LargeListView(_) |
+        DataType::Struct(_) |
+        DataType::Union(_, _) |
+        DataType::Decimal256(_, _) |
+        DataType::RunEndEncoded(_, _) => {
             let len = iterator.count();
             // don't know how to extract statistics, so return a null array
             Ok(new_null_array(data_type, len))
@@ -562,7 +582,27 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::Dictionary(_, value_type) => {
             max_statistics(value_type, iterator)
         }
-        _ => {
+
+        DataType::Map(_,_) |
+        DataType::Float16 |
+        DataType::Time32(_) |
+        DataType::Time64(_) |
+        DataType::Duration(_) |
+        DataType::Interval(_) |
+        DataType::Null |
+        DataType::LargeBinary |
+        DataType::BinaryView |
+        DataType::LargeUtf8 |
+        DataType::Utf8View |
+        DataType::List(_) |
+        DataType::ListView(_) |
+        DataType::FixedSizeList(_, _) |
+        DataType::LargeList(_) |
+        DataType::LargeListView(_) |
+        DataType::Struct(_) |
+        DataType::Union(_, _) |
+        DataType::Decimal256(_, _) |
+        DataType::RunEndEncoded(_, _) => {
             let len = iterator.count();
             // don't know how to extract statistics, so return a null array
             Ok(new_null_array(data_type, len))
