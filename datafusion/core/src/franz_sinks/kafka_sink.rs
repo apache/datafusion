@@ -16,12 +16,11 @@
 // under the License.
 
 use async_trait::async_trait;
-use rdkafka::producer::Producer;
 use std::time::Duration;
 
 use crate::error::{DataFusionError, Result};
-use arrow::record_batch::RecordBatch;
 use arrow::json::LineDelimitedWriter;
+use arrow::record_batch::RecordBatch;
 
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
@@ -65,8 +64,14 @@ impl KafkaSink {
             .set("bootstrap.servers", config.bootstrap_servers.as_str())
             .set("message.timeout.ms", "5000");
 
-        let producer: FutureProducer = client_config.create()
-                .expect("Producer creation error");
+        let producer: FutureProducer =
+            client_config.create().expect("Producer creation error");
+
+        log::info!(
+            "kafka connection established bootstrap_servers: {}, topic: {}",
+            config.bootstrap_servers,
+            config.topic
+        );
 
         Ok(Self {
             config: config.clone(),
@@ -87,12 +92,13 @@ impl FranzSink for KafkaSink {
         let buf = writer.into_inner();
 
         let record = FutureRecord::<[u8], _>::to(topic).payload(&buf);
-                // .key(key.as_str()),
+        // .key(key.as_str()),
 
         let _delivery_status = self
             .producer
             .send(record, Duration::from_secs(0))
-            .await.expect("Message not delivered");
+            .await
+            .expect("Message not delivered");
 
         Ok(())
     }

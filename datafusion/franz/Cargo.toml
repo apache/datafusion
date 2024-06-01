@@ -41,9 +41,12 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
-serde_json = { workspace = true }
 tokio = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
+tracing = "0.1.40"
+axum = { version = "0.7.5"}
 
 [dev-dependencies]
 env_logger = { workspace = true }

@@ -51,9 +51,18 @@ impl DataFrame {
 
         loop {
             let rb = stream.next().await.transpose();
-            if let Ok(Some(batch)) = rb {
-                if batch.num_rows() > 0 {
-                    let _ = sink.write_records(batch).await;
+            match rb {
+                Ok(result) => {
+                    if let Some(batch) = result {
+                        if batch.num_rows() > 0 {
+                            let _ = sink.write_records(batch).await;
+                        }
+                    } else {
+                        log::warn!("No RecordBatch in stream");
+                    }
+                }
+                Err(err) => {
+                    log::error!("Error reading stream {:?}", err);
                 }
             }
         }

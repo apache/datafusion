@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod stream_monitor;
-pub mod test;
 
-pub use stream_monitor::{StreamMonitor, StreamMonitorConfig};
-
+pub mod mock_sink;
+pub use mock_sink::MockSink;
