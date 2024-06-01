@@ -334,6 +334,8 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,backtrace
+          # 8MB stack size otherwise the cli_integration test fails  
+          export RUST_MIN_STACK=8000000
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
 
