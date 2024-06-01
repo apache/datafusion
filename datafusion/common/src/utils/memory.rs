@@ -35,6 +35,41 @@
 ///   - The fixed size overhead of the collection.
 /// - Returns `usize::MAX` if an overflow occurs.
 ///
+/// # Examples
+/// ---
+///
+/// ## From within a struct
+///
+/// ```rust
+/// use datafusion_common::utils::memory::estimate_memory_size;
+///
+/// struct MyStruct<T> {
+///     values: Vec<T>,
+///     other_data: usize,
+/// }
+///
+/// impl<T> MyStruct<T> {
+///     fn size(&self) -> usize {
+///         let num_elements = self.values.len();
+///         let fixed_size = std::mem::size_of_val(self) +
+///           std::mem::size_of_val(&self.values);
+///
+///         estimate_memory_size::<T>(num_elements, fixed_size)
+///     }
+/// }
+/// ```
+/// ---
+/// ## With a simple collection
+///
+/// ```rust
+/// use datafusion_common::utils::memory::estimate_memory_size;
+/// use std::collections::HashMap;
+///
+/// let num_rows = 100;
+/// let fixed_size = std::mem::size_of::<HashMap<u64, u64>>();
+/// let estimated_hashtable_size =
+///   estimate_memory_size::<(u64, u64)>(num_rows,fixed_size);
+/// ```
 pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> usize {
     // For the majority of cases hashbrown overestimates the bucket quantity
     // to keep ~1/8 of them empty. We take this factor into account by
