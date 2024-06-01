@@ -303,19 +303,18 @@ pub(crate) fn struct_null_count_statistics(
         return Ok(Arc::new(new_empty_array(&DataType::UInt64)) as ArrayRef);
     }
 
-    let mut null_count: u64 = 0;
-    for rg in row_groups {
-        let all_fields_null = struct_fields.iter().enumerate().all(|(idx, _)| {
-            rg.column(idx)
-                .statistics()
-                .map_or(false, |stats| stats.null_count() > 0)
-        });
-        if all_fields_null {
-            null_count += 1;
-        }
-    }
-    let array = Arc::new(UInt64Array::from(vec![null_count])) as ArrayRef;
-    Ok(array)
+    let null_count = row_groups
+        .iter()
+        .filter(|rg| {
+            struct_fields.iter().enumerate().all(|(idx, _)| {
+                rg.column(idx)
+                    .statistics()
+                    .map_or(false, |stats| stats.null_count() > 0)
+            })
+        })
+        .count() as u64;
+
+    Ok(Arc::new(UInt64Array::from(vec![null_count])) as ArrayRef)
 }
 
 /// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
