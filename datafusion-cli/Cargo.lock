@@ -3255,7 +3255,7 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 [[package]]
 name = "sqlparser"
 version = "0.46.0"
-source = "git+https://github.com/jmhain/sqlparser-rs?branch=subscript#4df6dc8ef343a7bace9d0cb43996d32ebc44f75c"
+source = "git+https://github.com/sqlparser-rs/sqlparser-rs?rev=afa5f08#afa5f08db9b1f3a4805f21fea6b1e72710cdb138"
 dependencies = [
  "log",
  "sqlparser_derive",
@@ -3264,7 +3264,7 @@ dependencies = [
 [[package]]
 name = "sqlparser_derive"
 version = "0.2.2"
-source = "git+https://github.com/jmhain/sqlparser-rs?branch=subscript#4df6dc8ef343a7bace9d0cb43996d32ebc44f75c"
+source = "git+https://github.com/sqlparser-rs/sqlparser-rs?rev=afa5f08#afa5f08db9b1f3a4805f21fea6b1e72710cdb138"
 dependencies = [
  "proc-macro2",
  "quote",
