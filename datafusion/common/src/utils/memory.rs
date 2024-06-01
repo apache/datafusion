@@ -17,8 +17,6 @@
 
 //! This module provides a function to estimate the memory size of a HashTable prior to alloaction
 
-use crate::{DataFusionError, Result};
-
 /// Estimates the memory size required for a hash table prior to allocation.
 ///
 /// # Parameters
@@ -35,27 +33,31 @@ use crate::{DataFusionError, Result};
 ///     buckets.
 ///   - One byte overhead for each bucket.
 ///   - The fixed size overhead of the collection.
+/// - Returns `usize::MAX` if an overflow occurs.
 ///
-/// # Panics
-/// - Returns an error if the multiplication of `num_elements` by 8 overflows
-///   `usize`.
-pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result<usize> {
+pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> usize {
     // For the majority of cases hashbrown overestimates the bucket quantity
     // to keep ~1/8 of them empty. We take this factor into account by
     // multiplying the number of elements with a fixed ratio of 8/7 (~1.14).
     // This formula leads to overallocation for small tables (< 8 elements)
     // but should be fine overall.
-    let estimated_buckets = (num_elements.checked_mul(8).ok_or_else(|| {
-        DataFusionError::Execution(
-            "usize overflow while estimating number of buckets".to_string(),
-        )
-    })? / 7)
-        .next_power_of_two();
-
-    // + size of entry * number of buckets
-    // + 1 byte for each bucket
-    // + fixed size of collection (HashSet/HashTable)
-    Ok(std::mem::size_of::<T>() * estimated_buckets + estimated_buckets + fixed_size)
+    num_elements
+        .checked_mul(8)
+        .and_then(|estimate| estimate.checked_div(7))
+        .map(|buckets| buckets.next_power_of_two())
+        .and_then(|estimated_buckets| {
+            // + size of entry * number of buckets
+            // + 1 byte for each bucket
+            // + fixed size of collection (HashSet/HashTable)
+            std::mem::size_of::<T>()
+                .checked_mul(estimated_buckets)
+                .and_then(|size_of_entries| {
+                    estimated_buckets
+                        .checked_add(fixed_size)
+                        .and_then(|overhead| size_of_entries.checked_add(overhead))
+                })
+        })
+        .unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -70,7 +72,7 @@ mod tests {
         // size: 48
         let fixed_size = std::mem::size_of::<HashSet<u32>>();
         // size: 128 = 16 * 4 + 16 + 48
-        let estimated = estimate_memory_size::<u32>(num_elements, fixed_size).unwrap();
+        let estimated = estimate_memory_size::<u32>(num_elements, fixed_size);
 
         assert_eq!(estimated, 128);
     }
@@ -81,6 +83,6 @@ mod tests {
         let fixed_size = std::mem::size_of::<HashSet<u32>>();
         let estimated = estimate_memory_size::<u32>(num_elements, fixed_size);
 
-        assert!(estimated.is_err());
+        assert_eq!(estimated, usize::MAX);
     }
 }
