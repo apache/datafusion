@@ -677,7 +677,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 args,
                 return_type,
-                params,
+                function_body,
+                behavior,
+                language,
+                ..
             } => {
                 let return_type = match return_type {
                     Some(t) => Some(self.convert_data_type(&t)?),
@@ -727,9 +730,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
 
-                let result_expression = match params.return_ {
+                let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
-                        r,
+                        match r {
+                            ast::CreateFunctionBody::AsBeforeOptions(expr) => expr,
+                            ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
+                            ast::CreateFunctionBody::Return(expr) => expr,
+                        },
                         &DFSchema::empty(),
                         &mut planner_context,
                     )?),
@@ -737,14 +744,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 let params = CreateFunctionBody {
-                    language: params.language,
-                    behavior: params.behavior.map(|b| match b {
+                    language,
+                    behavior: behavior.map(|b| match b {
                         ast::FunctionBehavior::Immutable => Volatility::Immutable,
                         ast::FunctionBehavior::Stable => Volatility::Stable,
                         ast::FunctionBehavior::Volatile => Volatility::Volatile,
                     }),
-                    as_: params.as_.map(|m| m.into()),
-                    return_: result_expression,
+                    function_body,
                 };
 
                 let statement = DdlStatement::CreateFunction(CreateFunction {
@@ -878,7 +884,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         for (key, value) in statement.options {
             let value_string = match value_to_string(&value) {
                 None => {
-                    return plan_err!("Unsupported Value in COPY statement {}", value)
+                    return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
                 Some(v) => v,
             };
