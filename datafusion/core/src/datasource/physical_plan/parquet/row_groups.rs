@@ -417,7 +417,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::physical_plan::parquet::ParquetFileReader;
+    use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
