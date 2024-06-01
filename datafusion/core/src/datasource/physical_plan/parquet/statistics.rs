@@ -23,9 +23,11 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
     FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Int8Array, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
-use arrow_schema::{Field, FieldRef, Schema};
+use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
@@ -336,9 +338,36 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             MinInt32StatsIterator::new(iterator)
                 .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000)),
         ))),
-        DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
-            MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
-        ))),
+        DataType::Timestamp(unit, timezone) =>{
+            let iter = MinInt64StatsIterator::new(iterator).map(|x| x.copied());
+
+            Ok(match unit {
+                TimeUnit::Second => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampSecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampSecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Millisecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampMillisecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampMillisecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Microsecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampMicrosecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampMicrosecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Nanosecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampNanosecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampNanosecondArray::from_iter(iter),
+                    })
+                }
+            })
+        },
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
             MinByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
         ))),
@@ -373,7 +402,7 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             let arr = Decimal128Array::from_iter(
                 MinDecimal128StatsIterator::new(iterator)
             ).with_precision_and_scale(*precision, *scale)?;
-            Ok(Arc::new(arr) as ArrayRef)
+            Ok(Arc::new(arr))
         },
         DataType::Dictionary(_, value_type) => {
             min_statistics(value_type, iterator)
@@ -464,9 +493,36 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             MaxInt32StatsIterator::new(iterator)
                 .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000)),
         ))),
-        DataType::Timestamp(_, _) => Ok(Arc::new(Int64Array::from_iter(
-            MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
-        ))),
+        DataType::Timestamp(unit, timezone) => {
+            let iter = MaxInt64StatsIterator::new(iterator).map(|x| x.copied());
+
+            Ok(match unit {
+                TimeUnit::Second => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampSecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampSecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Millisecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampMillisecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampMillisecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Microsecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampMicrosecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampMicrosecondArray::from_iter(iter),
+                    })
+                }
+                TimeUnit::Nanosecond => {
+                    Arc::new(match timezone {
+                        Some(tz) => TimestampNanosecondArray::from_iter(iter).with_timezone(tz.clone()),
+                        None => TimestampNanosecondArray::from_iter(iter),
+                    })
+                }
+            })
+        }
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
             MaxByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
         ))),
@@ -813,22 +869,207 @@ mod test {
     // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
-            input: timestamp_array([
-                // row group 1
-                Some(1),
+            input: timestamp_seconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                Some(3),
-                // row group 2
-                Some(9),
-                Some(5),
+            ),
+            expected_min: timestamp_seconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_seconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_milliseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                // row group 3
+            ),
+            expected_min: timestamp_milliseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_milliseconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_microseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
+            ),
+            expected_min: timestamp_microseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_microseconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_nanoseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                None,
-            ]),
-            expected_min: i64_array([Some(1), Some(5), None]),
-            expected_max: i64_array([Some(3), Some(9), None]),
+            ),
+            expected_min: timestamp_nanoseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_nanoseconds_array([Some(3), Some(9), None], None),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_timestamp_timezoned() {
+        Test {
+            input: timestamp_seconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_seconds_array([Some(1), Some(5), None], Some("UTC")),
+            expected_max: timestamp_seconds_array([Some(3), Some(9), None], Some("UTC")),
+        }
+        .run();
+
+        Test {
+            input: timestamp_milliseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_milliseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_milliseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
+        }
+        .run();
+
+        Test {
+            input: timestamp_microseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_microseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_microseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
+        }
+        .run();
+
+        Test {
+            input: timestamp_nanoseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_nanoseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_nanoseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
         }
         .run()
     }
@@ -1185,8 +1426,8 @@ mod test {
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: i64_array([None]),
-                expected_max: i64_array([None]),
+                expected_min: timestamp_nanoseconds_array([None], None),
+                expected_max: timestamp_nanoseconds_array([None], None),
             })
             .with_column(ExpectedColumn {
                 name: "year",
@@ -1406,9 +1647,48 @@ mod test {
         Arc::new(array)
     }
 
-    fn timestamp_array(input: impl IntoIterator<Item = Option<i64>>) -> ArrayRef {
+    fn timestamp_seconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampSecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_milliseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampMillisecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_microseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampMicrosecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_nanoseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        Arc::new(array)
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
     }
 
     fn utf8_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
