@@ -90,6 +90,18 @@ pub mod expr_fn {
         "converts an integer to RFC3339 timestamp format string",
         unixtime
     ),(
+        date_bin,
+        "coerces an arbitrary timestamp to the start of the nearest specified interval",
+        stride source origin
+    ),(
+        date_part,
+        "extracts a subfield from the date",
+        part date
+    ),(
+        date_trunc,
+        "truncates the date to a specified level of precision",
+        part date
+    ),(
         make_date,
         "make a date from year, month and day component parts",
         year month day
