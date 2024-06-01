@@ -113,7 +113,7 @@ pub mod expr_fn {
     ),(
         octet_length,
         "returns the number of bytes of a string",
-        args,
+        args
     ),(
         overlay,
         "replace the substring of string that starts at the start'th character and extends for count characters with new substring",
