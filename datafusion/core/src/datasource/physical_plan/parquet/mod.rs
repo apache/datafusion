@@ -268,7 +268,7 @@ impl ParquetExecBuilder {
     /// instance using individual I/O operations for the footer and each page.
     ///
     /// If a custom `ParquetFileReaderFactory` is provided, then data access
-    /// operations will be routed to this factory instead of `ObjectStore`.
+    /// operations will be routed to this factory instead of [`ObjectStore`].
     ///
     /// [`ObjectStore`]: object_store::ObjectStore
     pub fn with_parquet_file_reader_factory(

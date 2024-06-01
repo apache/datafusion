@@ -99,7 +99,6 @@ impl FileOpener for ParquetOpener {
 
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
-            // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
