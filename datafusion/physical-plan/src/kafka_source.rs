@@ -103,11 +103,9 @@ impl PartitionStream for KafkaStreamRead {
                 self.config.bootstrap_servers.to_string(),
             )
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
-            .set("auto.offset.reset", self.config.offset_reset.to_string());
-
-        if !self.config.consumer_group_id.is_empty() {
-            client_config.set("group.id", self.config.consumer_group_id.to_string());
-        }
+                                                // @TODO we need to store offsets somehow
+            .set("auto.offset.reset", self.config.offset_reset.to_string())
+            .set("group.id", self.config.consumer_group_id.to_string());
 
         let consumer: StreamConsumer =
             client_config.create().expect("Consumer creation failed");
@@ -170,6 +168,8 @@ impl PartitionStream for KafkaStreamRead {
                     })
                     .collect()
                     .await;
+
+                debug!("Batch size {}", batch.len());
 
                 let record_batch: RecordBatch =
                     json_records_to_arrow_record_batch(batch, json_schema.clone());
