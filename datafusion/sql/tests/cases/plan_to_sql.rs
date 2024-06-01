@@ -32,8 +32,6 @@ use sqlparser::parser::Parser;
 
 use crate::common::MockContextProvider;
 
-mod common;
-
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![

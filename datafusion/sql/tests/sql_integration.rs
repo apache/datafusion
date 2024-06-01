@@ -22,6 +22,7 @@ use std::vec;
 
 use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
+use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
@@ -35,10 +36,10 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use crate::common::MockContextProvider;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
+mod cases;
 mod common;
 
 #[test]
