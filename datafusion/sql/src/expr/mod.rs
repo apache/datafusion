@@ -575,13 +575,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                 )?),
-                DataType::Timestamp(TimeUnit::Nanosecond, Some(time_zone.into())),
+                match *time_zone {
+                    SQLExpr::Value(Value::SingleQuotedString(s)) => {
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into()))
+                    }
+                    _ => {
+                        return not_impl_err!(
+                            "Unsupported ast node in sqltorel: {time_zone:?}"
+                        )
+                    }
+                },
             ))),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
 
-    /// Simplifies an expresssion like `ARRAY_AGG(expr)[index]` to `NTH_VALUE(expr, index)`
+    /// Simplifies an expression like `ARRAY_AGG(expr)[index]` to `NTH_VALUE(expr, index)`
     ///
     /// returns Some(Expr) if the expression was simplified, otherwise None
     /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
