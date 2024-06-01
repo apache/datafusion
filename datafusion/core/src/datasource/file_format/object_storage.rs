@@ -591,7 +591,8 @@ mod tests {
                 .await
                 .unwrap_err();
 
-            assert_eq!(err.to_string(), "Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true");
+            // There are other backstraces in the error message, so we just check for containing the message
+            assert_eq!(err.to_string().contains("Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true"), true);
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
