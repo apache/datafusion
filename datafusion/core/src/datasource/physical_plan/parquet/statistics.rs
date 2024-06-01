@@ -304,12 +304,15 @@ pub(crate) fn struct_null_count_statistics(
     }
 
     let mut null_count: u64 = 0;
-    for (idx, _) in struct_fields.iter().enumerate() {
-        null_count += row_groups
-            .iter()
-            .filter_map(|rg| rg.column(idx).statistics())
-            .map(|stats| stats.null_count())
-            .sum::<u64>();
+    for rg in row_groups {
+        let all_fields_null = struct_fields.iter().enumerate().all(|(idx, _)| {
+            rg.column(idx)
+                .statistics()
+                .map_or(false, |stats| stats.null_count() > 0)
+        });
+        if all_fields_null {
+            null_count += 1;
+        }
     }
     let array = Arc::new(UInt64Array::from(vec![null_count])) as ArrayRef;
     Ok(array)
