@@ -1722,7 +1722,6 @@ impl ScalarValue {
                 );
             }
         };
-        println!("array is {:?}", array);
         Ok(array)
     }
 
