@@ -26,6 +26,7 @@ pub mod avro;
 pub mod csv;
 pub mod file_compression_type;
 pub mod json;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod object_storage;
 pub mod options;
 #[cfg(feature = "parquet")]

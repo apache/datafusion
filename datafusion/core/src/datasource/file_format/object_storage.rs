@@ -30,7 +30,6 @@ use crate::execution::context::SessionState;
 use crate::prelude::SessionContext;
 
 use async_trait::async_trait;
-use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
@@ -65,7 +64,7 @@ pub(crate) async fn get_s3_object_store_builder(
             builder = builder.with_token(session_token);
         }
     } else {
-        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        let config = aws_config::from_env().load().await;
         if let Some(region) = config.region() {
             builder = builder.with_region(region.to_string());
         }
@@ -592,7 +591,7 @@ mod tests {
                 .unwrap_err();
 
             // There are other backstraces in the error message, so we just check for containing the message
-            assert_eq!(err.to_string().contains("Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true"), true);
+            assert!(err.to_string().contains("Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true"));
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }

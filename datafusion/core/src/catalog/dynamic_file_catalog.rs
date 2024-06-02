@@ -20,6 +20,7 @@
 
 use crate::catalog::schema::SchemaProvider;
 use crate::catalog::{CatalogProvider, CatalogProviderList};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::datasource::file_format::object_storage::{
     get_object_store, AwsOptions, GcpOptions,
 };
@@ -33,6 +34,7 @@ use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::sync::{Arc, Weak};
+use url::Url;
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -157,7 +159,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let mut state = self
+        let state = self
             .state
             .upgrade()
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
@@ -175,25 +177,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         match state.runtime_env().object_store_registry.get_store(url) {
             Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
             Err(_) => {
-                // Register the store for this URL. Here we don't have access
-                // to any command options so the only choice is to use an empty collection
-                match scheme {
-                    "s3" | "oss" | "cos" => {
-                        state = state.add_table_options_extension(AwsOptions::default());
-                    }
-                    "gs" | "gcs" => {
-                        state = state.add_table_options_extension(GcpOptions::default())
-                    }
-                    _ => {}
-                };
-                let store = get_object_store(
-                    &state,
-                    table_url.scheme(),
-                    url,
-                    &state.default_table_options(),
-                )
-                .await?;
-                state.runtime_env().register_object_store(url, store);
+                let _ = Box::pin(handle_table_error(scheme, state.clone(), url)).await;
             }
         }
 
@@ -215,6 +199,32 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn handle_table_error(
+    scheme: &str,
+    mut state: SessionState,
+    url: &Url,
+) -> Result<()> {
+    // Register the store for this URL. Here we don't have access
+    // to any command options so the only choice is to use an empty collection
+    match scheme {
+        "s3" | "oss" | "cos" => {
+            state = state.add_table_options_extension(AwsOptions::default());
+        }
+        "gs" | "gcs" => state = state.add_table_options_extension(GcpOptions::default()),
+        _ => {}
+    };
+    let store =
+        get_object_store(&state, scheme, url, &state.default_table_options()).await?;
+    state.runtime_env().register_object_store(url, store);
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn handle_table_error(_: &str, _: SessionState, _: &Url) -> Result<()> {
+    unreachable!("Object storage is not supported in WASM")
 }
 fn substitute_tilde(cur: String) -> String {
     if let Some(usr_dir_path) = home_dir() {

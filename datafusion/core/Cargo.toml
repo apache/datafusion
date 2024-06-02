@@ -92,8 +92,8 @@ async-compression = { version = "0.4.0", features = [
     "tokio",
 ], optional = true }
 async-trait = { workspace = true }
-aws-config = "0.101.0"
-aws-credential-types = "0.101.0"
+aws-config = "0.55"
+aws-credential-types = "0.55"
 bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
@@ -160,6 +160,12 @@ tokio-postgres = "0.7.7"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+object_store = { version = "0.9.1", features = ["aws", "gcp", "http"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+object_store = { version = "0.9.1", default-features = false }
 
 [[bench]]
 harness = false
