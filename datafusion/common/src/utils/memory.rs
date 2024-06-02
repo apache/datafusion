@@ -35,7 +35,7 @@ use crate::{DataFusionError, Result};
 ///     buckets.
 ///   - One byte overhead for each bucket.
 ///   - The fixed size overhead of the collection.
-/// - Returns `usize::MAX` if an overflow occurs.
+/// - If the estimation overflows, we return a [`DataFusionError`]
 ///
 /// # Examples
 /// ---
@@ -43,7 +43,8 @@ use crate::{DataFusionError, Result};
 /// ## From within a struct
 ///
 /// ```rust
-/// use datafusion_common::utils::memory::estimate_memory_size;
+/// # use datafusion_common::utils::memory::estimate_memory_size;
+/// # use datafusion_common::Result;
 ///
 /// struct MyStruct<T> {
 ///     values: Vec<T>,
@@ -51,7 +52,7 @@ use crate::{DataFusionError, Result};
 /// }
 ///
 /// impl<T> MyStruct<T> {
-///     fn size(&self) -> usize {
+///     fn size(&self) -> Result<usize> {
 ///         let num_elements = self.values.len();
 ///         let fixed_size = std::mem::size_of_val(self) +
 ///           std::mem::size_of_val(&self.values);
@@ -64,13 +65,14 @@ use crate::{DataFusionError, Result};
 /// ## With a simple collection
 ///
 /// ```rust
-/// use datafusion_common::utils::memory::estimate_memory_size;
-/// use std::collections::HashMap;
+/// # use datafusion_common::utils::memory::estimate_memory_size;
+/// # use std::collections::HashMap;
 ///
 /// let num_rows = 100;
 /// let fixed_size = std::mem::size_of::<HashMap<u64, u64>>();
 /// let estimated_hashtable_size =
-///   estimate_memory_size::<(u64, u64)>(num_rows,fixed_size);
+///   estimate_memory_size::<(u64, u64)>(num_rows,fixed_size)
+///     .expect("Size estimation failed");
 /// ```
 pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result<usize> {
     // For the majority of cases hashbrown overestimates the bucket quantity
