@@ -34,7 +34,6 @@ use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::sync::{Arc, Weak};
-use url::Url;
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -159,7 +158,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self
+        let mut state = self
             .state
             .upgrade()
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
@@ -177,7 +176,17 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         match state.runtime_env().object_store_registry.get_store(url) {
             Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
             Err(_) => {
-                let _ = Box::pin(handle_table_error(scheme, state.clone(), url)).await;
+                // Register the store for this URL. Here we don't have access
+                // to any command options so the only choice is to use an empty collection
+                state = add_extension_option(state, scheme);
+                let store = get_object_store(
+                    &state,
+                    table_url.scheme(),
+                    url,
+                    &state.default_table_options(),
+                )
+                .await?;
+                state.runtime_env().register_object_store(url, store);
             }
         }
 
@@ -202,13 +211,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn handle_table_error(
-    scheme: &str,
-    mut state: SessionState,
-    url: &Url,
-) -> Result<()> {
-    // Register the store for this URL. Here we don't have access
-    // to any command options so the only choice is to use an empty collection
+fn add_extension_option(mut state: SessionState, scheme: &str) -> SessionState {
     match scheme {
         "s3" | "oss" | "cos" => {
             state = state.add_table_options_extension(AwsOptions::default());
@@ -216,16 +219,14 @@ async fn handle_table_error(
         "gs" | "gcs" => state = state.add_table_options_extension(GcpOptions::default()),
         _ => {}
     };
-    let store =
-        get_object_store(&state, scheme, url, &state.default_table_options()).await?;
-    state.runtime_env().register_object_store(url, store);
-    Ok(())
+    state
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn handle_table_error(_: &str, _: SessionState, _: &Url) -> Result<()> {
-    unreachable!("Object storage is not supported in WASM")
+fn add_extension_option(state: SessionState, _: &str) -> SessionState {
+    state
 }
+
 fn substitute_tilde(cur: String) -> String {
     if let Some(usr_dir_path) = home_dir() {
         if let Some(usr_dir) = usr_dir_path.to_str() {
