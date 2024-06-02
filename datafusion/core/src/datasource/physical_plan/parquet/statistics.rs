@@ -413,7 +413,10 @@ mod test {
     use arrow::compute::kernels::cast_utils::Parser;
     use arrow::datatypes::{Date32Type, Date64Type};
     use arrow_array::{
-        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray
+        new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
