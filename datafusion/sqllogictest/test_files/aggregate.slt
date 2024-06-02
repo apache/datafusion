@@ -2458,7 +2458,125 @@ NULL Float64
 statement ok
 drop table t;
 
+# aggregate variance f64_1
+statement ok
+create table t (c1 double) as values (1), (2);
 
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0.25 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_2
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_3
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_4
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate single input
+statement ok
+create table t (c1 double) as values (1);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 with nulls
+statement ok
+create table t (c1 int) as values (1), (null), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2.1875 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 all nulls
+statement ok
+create table t (c1 int) as values (null), (null);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
 
 # simple_mean
 query R
