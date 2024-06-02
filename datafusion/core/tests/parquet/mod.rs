@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
+use arrow_array::{make_array, BooleanArray, Float16Array, Float32Array, StructArray};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -36,11 +36,11 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use half::f16;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-
 mod arrow_statistics;
 mod custom_reader;
 mod file_statistics;
@@ -75,6 +75,7 @@ enum Scenario {
     /// 7 Rows, for each i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
     /// -MIN, -100, -1, 0, 1, 100, MAX
     NumericLimits,
+    Float16,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
@@ -496,6 +497,12 @@ fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_f16_batch(v: Vec<f16>) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
+    let array = Arc::new(Float16Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with decimal vector
 ///
 /// Columns are named
@@ -806,6 +813,34 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::NumericLimits => {
             vec![make_numeric_limit_batch()]
         }
+        Scenario::Float16 => {
+            vec![
+                make_f16_batch(
+                    vec![-5.0, -4.0, -3.0, -2.0, -1.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![-4.0, -3.0, -2.0, -1.0, 0.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![0.0, 1.0, 2.0, 3.0, 4.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![5.0, 6.0, 7.0, 8.0, 9.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+            ]
+        }
         Scenario::Float64 => {
             vec![
                 make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
@@ -981,7 +1016,6 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .build();
 
     let batches = create_data_batch(scenario);
-
     let schema = batches[0].schema();
 
     let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();

@@ -633,6 +633,10 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Boolean(b.to_owned())))
             }
             ScalarValue::Boolean(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float16(Some(f)) => {
+                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+            }
+            ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }

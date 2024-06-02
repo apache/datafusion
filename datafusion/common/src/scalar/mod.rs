@@ -18,13 +18,13 @@
 //! [`ScalarValue`]: stores single  values
 
 mod struct_builder;
-
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
+use std::hash::Hasher;
 use std::iter::repeat;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -55,6 +55,7 @@ use arrow::{
 use arrow_buffer::Buffer;
 use arrow_schema::{UnionFields, UnionMode};
 
+use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
 /// A dynamically typed, nullable single value.
@@ -192,6 +193,8 @@ pub enum ScalarValue {
     Null,
     /// true or false value
     Boolean(Option<bool>),
+    /// 16bit float
+    Float16(Option<f16>),
     /// 32bit float
     Float32(Option<f32>),
     /// 64bit float
@@ -285,6 +288,12 @@ pub enum ScalarValue {
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
+impl Hash for Fl<f16> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
 // manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
@@ -307,7 +316,12 @@ impl PartialEq for ScalarValue {
                 (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                 _ => v1.eq(v2),
             },
+            (Float16(v1), Float16(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float32(_), _) => false,
+            (Float16(_), _) => false,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
                 (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                 _ => v1.eq(v2),
@@ -425,7 +439,12 @@ impl PartialOrd for ScalarValue {
                 (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
             },
+            (Float16(v1), Float16(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
             (Float32(_), _) => None,
+            (Float16(_), _) => None,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
                 (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
@@ -637,6 +656,7 @@ impl std::hash::Hash for ScalarValue {
                 s.hash(state)
             }
             Boolean(v) => v.hash(state),
+            Float16(v) => v.map(Fl).hash(state),
             Float32(v) => v.map(Fl).hash(state),
             Float64(v) => v.map(Fl).hash(state),
             Int8(v) => v.hash(state),
@@ -1082,6 +1102,7 @@ impl ScalarValue {
             ScalarValue::TimestampNanosecond(_, tz_opt) => {
                 DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
             }
+            ScalarValue::Float16(_) => DataType::Float16,
             ScalarValue::Float32(_) => DataType::Float32,
             ScalarValue::Float64(_) => DataType::Float64,
             ScalarValue::Utf8(_) => DataType::Utf8,
@@ -1276,6 +1297,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Boolean(v) => v.is_none(),
             ScalarValue::Null => true,
+            ScalarValue::Float16(v) => v.is_none(),
             ScalarValue::Float32(v) => v.is_none(),
             ScalarValue::Float64(v) => v.is_none(),
             ScalarValue::Decimal128(v, _, _) => v.is_none(),
@@ -1522,6 +1544,7 @@ impl ScalarValue {
             }
             DataType::Null => ScalarValue::iter_to_null_array(scalars)?,
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
+            DataType::Float16 => build_array_primitive!(Float16Array, Float16),
             DataType::Float32 => build_array_primitive!(Float32Array, Float32),
             DataType::Float64 => build_array_primitive!(Float64Array, Float64),
             DataType::Int8 => build_array_primitive!(Int8Array, Int8),
@@ -1682,8 +1705,7 @@ impl ScalarValue {
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)
-            DataType::Float16
-            | DataType::Time32(TimeUnit::Microsecond)
+            DataType::Time32(TimeUnit::Microsecond)
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
@@ -1700,7 +1722,7 @@ impl ScalarValue {
                 );
             }
         };
-
+        println!("array is {:?}", array);
         Ok(array)
     }
 
@@ -1920,6 +1942,9 @@ impl ScalarValue {
             }
             ScalarValue::Float32(e) => {
                 build_array_from_option!(Float32, Float32Array, e, size)
+            }
+            ScalarValue::Float16(e) => {
+                build_array_from_option!(Float16, Float16Array, e, size)
             }
             ScalarValue::Int8(e) => build_array_from_option!(Int8, Int8Array, e, size),
             ScalarValue::Int16(e) => build_array_from_option!(Int16, Int16Array, e, size),
@@ -2595,6 +2620,9 @@ impl ScalarValue {
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)?
             }
+            ScalarValue::Float16(val) => {
+                eq_array_primitive!(array, index, Float16Array, val)?
+            }
             ScalarValue::Float32(val) => {
                 eq_array_primitive!(array, index, Float32Array, val)?
             }
@@ -2738,6 +2766,7 @@ impl ScalarValue {
             + match self {
                 ScalarValue::Null
                 | ScalarValue::Boolean(_)
+                | ScalarValue::Float16(_)
                 | ScalarValue::Float32(_)
                 | ScalarValue::Float64(_)
                 | ScalarValue::Decimal128(_, _, _)
@@ -3022,6 +3051,7 @@ impl TryFrom<&DataType> for ScalarValue {
     fn try_from(data_type: &DataType) -> Result<Self> {
         Ok(match data_type {
             DataType::Boolean => ScalarValue::Boolean(None),
+            DataType::Float16 => ScalarValue::Float16(None),
             DataType::Float64 => ScalarValue::Float64(None),
             DataType::Float32 => ScalarValue::Float32(None),
             DataType::Int8 => ScalarValue::Int8(None),
@@ -3147,6 +3177,7 @@ impl fmt::Display for ScalarValue {
                 write!(f, "{v:?},{p:?},{s:?}")?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
+            ScalarValue::Float16(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
             ScalarValue::Float64(e) => format_option!(f, e)?,
             ScalarValue::Int8(e) => format_option!(f, e)?,
@@ -3260,6 +3291,7 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
             ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
+            ScalarValue::Float16(_) => write!(f, "Float16({self})"),
             ScalarValue::Float32(_) => write!(f, "Float32({self})"),
             ScalarValue::Float64(_) => write!(f, "Float64({self})"),
             ScalarValue::Int8(_) => write!(f, "Int8({self})"),

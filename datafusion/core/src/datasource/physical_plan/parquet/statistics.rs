@@ -25,11 +25,11 @@ use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
 };
+use half::f16;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::sync::Arc;
-
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
 pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
@@ -37,6 +37,14 @@ pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
     i128::from_be_bytes(sign_extend_be(b))
+}
+
+// Convert the bytes array to f16
+pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
+    match b {
+        [low, high] => Some(f16::from_be_bytes([*high, *low])),
+        _ => None,
+    }
 }
 
 // Copy from arrow-rs
@@ -173,6 +181,9 @@ macro_rules! get_statistic {
                             *size,
                             value,
                         ))
+                    }
+                    Some(DataType::Float16) => {
+                        Some(ScalarValue::Float16(from_bytes_to_f16(s.$bytes_func())))
                     }
                     _ => None,
                 }
@@ -322,7 +333,6 @@ impl<'a> StatisticsConverter<'a> {
                 column_name
             );
         };
-
         Ok(Self {
             column_name,
             statistics_type,

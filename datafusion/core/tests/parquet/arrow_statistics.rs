@@ -21,23 +21,23 @@
 use std::fs::File;
 use std::sync::Arc;
 
+use crate::parquet::{struct_array, Scenario};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
+    Decimal128Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
     RequestedStatistics, StatisticsConverter,
 };
+use half::f16;
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
-
-use crate::parquet::{struct_array, Scenario};
 
 use super::make_test_file_rg;
 
@@ -959,6 +959,36 @@ async fn test_float64() {
         reader: reader.build().await,
         expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
         expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "f",
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float16() {
+    // This creates a parquet file of 1 column "f"
+    // file has 4 record batches, each has 5 rows. They will be saved into 4 row groups
+    let reader = TestReader {
+        scenario: Scenario::Float16,
+        row_per_group: 5,
+    };
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Float16Array::from(
+            vec![-5.0, -4.0, -0.0, 5.0]
+                .into_iter()
+                .map(f16::from_f32)
+                .collect::<Vec<_>>(),
+        )),
+        expected_max: Arc::new(Float16Array::from(
+            vec![-1.0, 0.0, 4.0, 9.0]
+                .into_iter()
+                .map(f16::from_f32)
+                .collect::<Vec<_>>(),
+        )),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
         column_name: "f",
