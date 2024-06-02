@@ -82,8 +82,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
     // but should be fine overall.
     num_elements
         .checked_mul(8)
-        .and_then(|estimate| estimate.checked_div(7))
-        .map(|buckets| buckets.next_power_of_two())
+        .and_then(|estimate| Some((estimate / 7).next_power_of_two()))
         .and_then(|estimated_buckets| {
             // + size of entry * number of buckets
             // + 1 byte for each bucket
