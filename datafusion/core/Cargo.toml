@@ -92,8 +92,8 @@ async-compression = { version = "0.4.0", features = [
     "tokio",
 ], optional = true }
 async-trait = { workspace = true }
-aws-config = "0.55"
-aws-credential-types = "0.55"
+aws-config = "0.101.0"
+aws-credential-types = "0.101.0"
 bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
