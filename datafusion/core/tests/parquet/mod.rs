@@ -28,7 +28,9 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
+use arrow_array::{
+    make_array, BooleanArray, Float32Array, LargeStringArray, StructArray,
+};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -86,6 +88,7 @@ enum Scenario {
     WithNullValues,
     WithNullValuesPageLevel,
     StructArray,
+    UTF8,
 }
 
 enum Unit {
@@ -745,6 +748,16 @@ fn make_numeric_limit_batch() -> RecordBatch {
     .unwrap()
 }
 
+fn make_utf8_batch(value: Vec<Option<&str>>) -> RecordBatch {
+    let utf8 = StringArray::from(value.clone());
+    let large_utf8 = LargeStringArray::from(value);
+    RecordBatch::try_from_iter(vec![
+        ("utf8", Arc::new(utf8) as _),
+        ("large_utf8", Arc::new(large_utf8) as _),
+    ])
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -963,6 +976,18 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 true,
             )]));
             vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
+        Scenario::UTF8 => {
+            vec![
+                make_utf8_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
+                make_utf8_batch(vec![
+                    Some("e"),
+                    Some("f"),
+                    Some("g"),
+                    Some("h"),
+                    Some("i"),
+                ]),
+            ]
         }
     }
 }

@@ -132,16 +132,18 @@ macro_rules! get_statistic {
                     Some(DataType::Binary) => {
                         Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
                     }
-                    _ => {
-                        let s = std::str::from_utf8(s.$bytes_func())
+                    Some(DataType::LargeUtf8) | _ => {
+                        let utf8_value = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
                             .ok();
-                        if s.is_none() {
-                            log::debug!(
-                                "Utf8 statistics is a non-UTF8 value, ignoring it."
-                            );
+                        if utf8_value.is_none() {
+                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
                         }
-                        Some(ScalarValue::Utf8(s))
+
+                        match $target_arrow_type {
+                            Some(DataType::LargeUtf8) => Some(ScalarValue::LargeUtf8(utf8_value)),
+                            _ => Some(ScalarValue::Utf8(utf8_value)),
+                        }
                     }
                 }
             }

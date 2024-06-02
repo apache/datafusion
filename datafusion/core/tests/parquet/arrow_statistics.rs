@@ -26,8 +26,8 @@ use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch, StringArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -1174,6 +1174,38 @@ async fn test_struct() {
     }
     .run();
 }
+
+// UTF8
+#[tokio::test]
+async fn test_utf8() {
+    let reader = TestReader {
+        scenario: Scenario::UTF8,
+        row_per_group: 5,
+    };
+
+    // test for utf8
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(StringArray::from(vec!["a", "e"])),
+        expected_max: Arc::new(StringArray::from(vec!["d", "i"])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5]),
+        column_name: "utf8",
+    }
+    .run();
+
+    // test for large_utf8
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(LargeStringArray::from(vec!["a", "e"])),
+        expected_max: Arc::new(LargeStringArray::from(vec!["d", "i"])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5]),
+        column_name: "large_utf8",
+    }
+    .run();
+}
+
 ////// Files with missing statistics ///////
 
 #[tokio::test]
