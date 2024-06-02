@@ -120,7 +120,7 @@ where
         let fixed_size =
             std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
 
-        estimate_memory_size::<T::Native>(num_elements, fixed_size)
+        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
 }
 
@@ -200,6 +200,6 @@ where
         let fixed_size =
             std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
 
-        estimate_memory_size::<T::Native>(num_elements, fixed_size)
+        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
 }

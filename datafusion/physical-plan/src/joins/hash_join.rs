@@ -877,7 +877,7 @@ async fn collect_left_input(
     // Final result can be verified using `RawTable.allocation_info()`
     let fixed_size = std::mem::size_of::<JoinHashMap>();
     let estimated_hashtable_size =
-        estimate_memory_size::<(u64, u64)>(num_rows, fixed_size);
+        estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)?;
 
     reservation.try_grow(estimated_hashtable_size)?;
     metrics.build_mem_used.add(estimated_hashtable_size);
