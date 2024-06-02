@@ -19,7 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow::{array::ArrayRef, datatypes::DataType, datatypes::TimeUnit};
 use arrow_array::{new_empty_array, new_null_array, UInt64Array};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
@@ -111,6 +111,26 @@ macro_rules! get_statistic {
                     }
                     Some(DataType::UInt64) => {
                         Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
+                    }
+                    Some(DataType::Timestamp(unit, timezone)) => {
+                        Some(match unit {
+                            TimeUnit::Second => ScalarValue::TimestampSecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                        })
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
@@ -534,10 +554,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
-    )]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
             input: timestamp_seconds_array(
