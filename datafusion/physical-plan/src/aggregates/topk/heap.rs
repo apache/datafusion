@@ -20,6 +20,7 @@
 use arrow::datatypes::i256;
 use arrow_array::cast::AsArray;
 use arrow_array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
@@ -431,6 +432,7 @@ macro_rules! compare_integer {
 
 compare_integer!(i8, i16, i32, i64, i128, i256);
 compare_integer!(u8, u16, u32, u64);
+compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
 pub fn new_heap(limit: usize, desc: bool, vt: DataType) -> Result<Box<dyn ArrowHeap>> {

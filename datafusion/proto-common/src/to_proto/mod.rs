@@ -24,8 +24,8 @@ use crate::protobuf_common::{
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
-    UnionMode,
+    DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    SchemaRef, TimeUnit, UnionMode,
 };
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
 use datafusion_common::{
@@ -447,11 +447,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalYearmonthValue(*s)
                 })
             }
-            ScalarValue::IntervalDayTime(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::IntervalDaytimeValue(*s)
-                })
-            }
             ScalarValue::Null => Ok(protobuf::ScalarValue {
                 value: Some(Value::NullValue((&data_type).try_into()?)),
             }),
@@ -519,6 +514,20 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         ),
                     })
                 })
+            }
+
+            ScalarValue::IntervalDayTime(val) => {
+                let value = if let Some(v) = val {
+                    let (days, milliseconds) = IntervalDayTimeType::to_parts(*v);
+                    Value::IntervalDaytimeValue(protobuf::IntervalDayTimeValue {
+                        days,
+                        milliseconds,
+                    })
+                } else {
+                    Value::NullValue((&data_type).try_into()?)
+                };
+
+                Ok(protobuf::ScalarValue { value: Some(value) })
             }
 
             ScalarValue::IntervalMonthDayNano(v) => {

@@ -64,20 +64,28 @@ version = "38.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "51.0.0", features = ["prettyprint"] }
-arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "51.0.0", default-features = false }
-arrow-flight = { version = "51.0.0", features = ["flight-sql-experimental"] }
-arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
-arrow-ord = { version = "51.0.0", default-features = false }
-arrow-schema = { version = "51.0.0", default-features = false }
-arrow-string = { version = "51.0.0", default-features = false }
+arrow = { path = "../arrow-rs/arrow", features = [
+    "prettyprint",
+] }
+arrow-array = { path = "../arrow-rs/arrow-array", version = "51.0.0", default-features = false, features = [
+    "chrono-tz",
+] }
+arrow-buffer = { path = "../arrow-rs/arrow-buffer", version = "51.0.0", default-features = false }
+arrow-flight = { path = "../arrow-rs/arrow-flight", version = "51.0.0", features = [
+    "flight-sql-experimental",
+] }
+arrow-ipc = { path = "../arrow-rs/arrow-ipc", version = "51.0.0", default-features = false, features = [
+    "lz4",
+] }
+arrow-ord = { path = "../arrow-rs/arrow-ord", version = "51.0.0", default-features = false }
+arrow-schema = { path = "../arrow-rs/arrow-schema", version = "51.0.0", default-features = false }
+arrow-string = { path = "../arrow-rs/arrow-string", version = "51.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
-dashmap = "5.4.0"
+dashmap = "5.5.0"
 datafusion = { path = "datafusion/core", version = "38.0.0", default-features = false }
 datafusion-common = { path = "datafusion/common", version = "38.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "38.0.0" }
@@ -104,9 +112,13 @@ indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.9.1", default-features = false }
+object_store = { version = "0.10.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { path = "../arrow-rs/parquet", version = "51.0.0", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+] }
 rand = "0.8"
 regex = "1.8"
 rstest = "0.20.0"
