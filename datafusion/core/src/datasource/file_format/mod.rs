@@ -121,7 +121,7 @@ pub async fn get_object_store(
     object_storage::get_object_store(state, scheme, url, table_options).await
 }
 
-/// Get the object store for the given scheme and url. Only available when targeting wasm32.
+/// Get the object store for the given scheme and url. Only available when not targeting wasm32.
 #[cfg(target_arch = "wasm32")]
 pub async fn get_object_store(
     state: &SessionState,
