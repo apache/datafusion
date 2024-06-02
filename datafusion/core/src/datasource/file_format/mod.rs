@@ -43,11 +43,13 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::not_impl_err;
+use datafusion_common::{not_impl_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
+use datafusion_common::config::TableOptions;
 use object_store::{ObjectMeta, ObjectStore};
+use url::Url;
 
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
@@ -106,6 +108,28 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
+}
+
+/// Get the object store for the given scheme and url. Only available when not targeting wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn get_object_store(
+    state: &SessionState,
+    scheme: &str,
+    url: &Url,
+    table_options: &TableOptions,
+) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
+    object_storage::get_object_store(state, scheme, url, table_options).await
+}
+
+/// Get the object store for the given scheme and url. Only available when targeting wasm32.
+#[cfg(target_arch = "wasm32")]
+pub async fn get_object_store(
+    state: &SessionState,
+    scheme: &str,
+    url: &Url,
+    table_options: &TableOptions,
+) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
+    unimplemented!("Object storage is not supported in WASM")
 }
 
 #[cfg(test)]

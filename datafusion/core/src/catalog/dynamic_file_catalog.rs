@@ -20,10 +20,9 @@
 
 use crate::catalog::schema::SchemaProvider;
 use crate::catalog::{CatalogProvider, CatalogProviderList};
+use crate::datasource::file_format::get_object_store;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::datasource::file_format::object_storage::{
-    get_object_store, AwsOptions, GcpOptions,
-};
+use crate::datasource::file_format::object_storage::{AwsOptions, GcpOptions};
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
