@@ -583,7 +583,7 @@
 <p>Find latest available Datafusion version on <a class="reference external" href="https://crates.io/crates/datafusion">DataFusion’s
 crates.io</a> page. Add the dependency to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;latest_version&quot;</span>
-<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span>
+<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </pre></div>
 </div>
 </section>
