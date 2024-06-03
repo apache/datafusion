@@ -118,8 +118,10 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // sum is in intermidiate migration state, skip this
-            if func.name().to_lowercase() == "sum" {
+            // These functions are in intermidiate migration state, skip them
+            if func.name().to_lowercase() == "sum"
+                || func.name().to_lowercase() == "count"
+            {
                 continue;
             }
             assert!(

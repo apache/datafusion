@@ -261,7 +261,10 @@ impl AggregateUDFImpl for Count {
         args.args_num == 1
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
         Ok(Box::new(CountGroupsAccumulator::new()))
     }

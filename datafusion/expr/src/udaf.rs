@@ -89,12 +89,6 @@ impl std::hash::Hash for AggregateUDF {
     }
 }
 
-impl std::fmt::Display for AggregateUDF {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
 impl AggregateUDF {
     /// Create a new AggregateUDF
     ///

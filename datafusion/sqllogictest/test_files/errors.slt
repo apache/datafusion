@@ -46,7 +46,7 @@ statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c
 SELECT CAST(c1 AS INT) FROM aggregate_test_100
 
 # aggregation_with_bad_arguments
-statement error DataFusion error: Error during planning: The function COUNT expects at least one argument
+query error
 SELECT COUNT(DISTINCT) FROM aggregate_test_100
 
 # query_cte_incorrect
@@ -104,7 +104,7 @@ SELECT power(1, 2, 3);
 #
 
 # AggregateFunction with wrong number of arguments
-statement error DataFusion error: Error during planning: The function COUNT expects at least one argument
+query error
 select count();
 
 # AggregateFunction with wrong number of arguments

@@ -47,8 +47,8 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column,
-    NotExpr, NthValue, PhysicalSortExpr, StringAgg,
+    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, NotExpr, NthValue,
+    PhysicalSortExpr, StringAgg,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
