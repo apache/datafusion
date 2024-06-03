@@ -105,7 +105,10 @@ impl AggregateUDFImpl for GeoMeanUdaf {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(GeometricMeanGroupsAccumulator::new()))
     }
 }

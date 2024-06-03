@@ -2350,6 +2350,10 @@ impl OptimizerConfig for SessionState {
     fn options(&self) -> &ConfigOptions {
         self.config_options()
     }
+
+    fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
+        Some(self)
+    }
 }
 
 /// Create a new task context instance from SessionContext

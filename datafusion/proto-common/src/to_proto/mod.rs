@@ -289,8 +289,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     type Error = Error;
 
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
-        use protobuf::scalar_value::Value;
-
         let data_type = val.data_type();
         match val {
             ScalarValue::Boolean(val) => {

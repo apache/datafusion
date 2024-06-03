@@ -33,7 +33,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
-use datafusion::physical_plan::{AggregateExpr, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{AggregateExpr, Partitioning, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
         file_format::{csv::CsvSink, json::JsonSink},
@@ -186,21 +186,29 @@ pub fn serialize_physical_window_expr(
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
-        let AggrFn { inner, distinct } =
-            aggr_expr_to_aggr_fn(sliding_aggr_window_expr.get_aggregate_expr().as_ref())?;
+        let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
+        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            )
+        } else {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
 
-        if distinct {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
+            if distinct {
+                // TODO
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         }
-
-        if window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-        }
-
-        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
@@ -550,6 +558,36 @@ pub fn serialize_physical_expr(
     } else {
         internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
     }
+}
+
+pub fn serialize_partitioning(
+    partitioning: &Partitioning,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::Partitioning> {
+    let serialized_partitioning = match partitioning {
+        Partitioning::RoundRobinBatch(partition_count) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::RoundRobin(
+                *partition_count as u64,
+            )),
+        },
+        Partitioning::Hash(exprs, partition_count) => {
+            let serialized_exprs = serialize_physical_exprs(exprs.clone(), codec)?;
+            protobuf::Partitioning {
+                partition_method: Some(protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr: serialized_exprs,
+                        partition_count: *partition_count as u64,
+                    },
+                )),
+            }
+        }
+        Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
+                *partition_count as u64,
+            )),
+        },
+    };
+    Ok(serialized_partitioning)
 }
 
 fn serialize_when_then_expr(

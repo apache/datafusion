@@ -121,12 +121,8 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(Arc::new(ParquetExec::new(
-                        base_config,
-                        None,
-                        None,
-                        Default::default(),
-                    )) as Arc<dyn ExecutionPlan>)
+                    Ok(ParquetExec::builder(base_config).build_arc()
+                        as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"
