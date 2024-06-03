@@ -1195,7 +1195,7 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, OrderSensitiveArrayAgg,
+        ApproxDistinct, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::PhysicalSortExpr;
 

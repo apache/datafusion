@@ -31,7 +31,9 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
-use datafusion::functions_aggregate::covariance::{covar_pop, covar_samp};
+use datafusion::functions_aggregate::expr_fn::{
+    count, count_distinct, covar_pop, covar_samp, first_value, median,
+};
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -645,10 +647,10 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
-        first_value(lit(1), Some(vec![lit(2)])),
-        first_value_builder(lit(1)).order_by(vec![lit(3)]).build(),
+        first_value(vec![lit(1)], false, None, None, None),
+        count(lit(1)),
+        count_distinct(lit(1)),
         covar_samp(lit(1.5), lit(2.2)),
-        covar_samp_builder(lit(1.5), lit(2.3)).build(),
         covar_pop(lit(1.5), lit(2.2)),
         median(lit(2)),
     ];

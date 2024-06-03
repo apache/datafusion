@@ -57,7 +57,6 @@ pub mod macros;
 
 pub mod count;
 pub mod covariance;
-pub mod expr_builder;
 pub mod first_last;
 pub mod median;
 
@@ -69,6 +68,8 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::count::count;
+    pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;

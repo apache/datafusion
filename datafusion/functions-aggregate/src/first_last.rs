@@ -43,8 +43,6 @@ use datafusion_physical_expr_common::sort_expr::{
 make_udaf_expr_and_func!(
     FirstValue,
     first_value,
-    expression,
-    order_by,
     "Returns the first value in a group of values.",
     first_value_udaf
 );

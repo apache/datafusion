@@ -31,11 +31,7 @@ pub trait VecAllocExt {
     ///
     /// # Example:
     /// ```
-<<<<<<<< HEAD:datafusion/common/src/memory_pool/proxy.rs
-    /// # use datafusion_common::memory_pool::proxy::VecAllocExt;
-========
     /// # use datafusion_common::utils::proxy::VecAllocExt;
->>>>>>>> upstream/main:datafusion/common/src/utils/proxy.rs
     /// // use allocated to incrementally track how much memory is allocated in the vec
     /// let mut allocated = 0;
     /// let mut vec = Vec::new();
@@ -53,11 +49,7 @@ pub trait VecAllocExt {
     /// ```
     /// # Example with other allocations:
     /// ```
-<<<<<<<< HEAD:datafusion/common/src/memory_pool/proxy.rs
-    /// # use datafusion_common::memory_pool::proxy::VecAllocExt;
-========
     /// # use datafusion_common::utils::proxy::VecAllocExt;
->>>>>>>> upstream/main:datafusion/common/src/utils/proxy.rs
     /// // You can use the same allocated size to track memory allocated by
     /// // another source. For example
     /// let mut allocated = 27;
@@ -76,11 +68,7 @@ pub trait VecAllocExt {
     ///
     /// # Example:
     /// ```
-<<<<<<<< HEAD:datafusion/common/src/memory_pool/proxy.rs
-    /// # use datafusion_common::memory_pool::proxy::VecAllocExt;
-========
     /// # use datafusion_common::utils::proxy::VecAllocExt;
->>>>>>>> upstream/main:datafusion/common/src/utils/proxy.rs
     /// let mut vec = Vec::new();
     /// // Push data into the vec and the accounting will be updated to reflect
     /// // memory allocation
@@ -131,11 +119,7 @@ pub trait RawTableAllocExt {
     ///
     /// # Example:
     /// ```
-<<<<<<<< HEAD:datafusion/common/src/memory_pool/proxy.rs
-    /// # use datafusion_common::memory_pool::proxy::RawTableAllocExt;
-========
     /// # use datafusion_common::utils::proxy::RawTableAllocExt;
->>>>>>>> upstream/main:datafusion/common/src/utils/proxy.rs
     /// # use hashbrown::raw::RawTable;
     /// let mut table = RawTable::new();
     /// let mut allocated = 0;

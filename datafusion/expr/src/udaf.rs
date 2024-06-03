@@ -17,7 +17,6 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::expr::AggregateFunction;
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
@@ -139,8 +138,16 @@ impl AggregateUDF {
     ///
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
-    pub fn call(&self, args: Vec<Expr>) -> ExprBuilder {
-        ExprBuilder::new(self, args)
+    pub fn call(&self, args: Vec<Expr>) -> Expr {
+        // TODO: Support dictinct, filter, order by and null_treatment
+        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+            Arc::new(self.clone()),
+            args,
+            false,
+            None,
+            None,
+            None,
+        ))
     }
 
     /// Returns this function's name
@@ -551,59 +558,5 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
-    }
-}
-
-pub struct ExprBuilder<'a> {
-    udf: &'a AggregateUDF,
-    /// List of expressions to feed to the functions as arguments
-    args: Vec<Expr>,
-    /// Whether this is a DISTINCT aggregation or not
-    distinct: bool,
-    /// Optional filter
-    filter: Option<Box<Expr>>,
-    /// Optional ordering
-    order_by: Option<Vec<Expr>>,
-    null_treatment: Option<NullTreatment>,
-}
-
-impl<'a> ExprBuilder<'a> {
-    pub fn new(udf: &'a AggregateUDF, args: Vec<Expr>) -> Self {
-        Self {
-            udf,
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        }
-    }
-}
-
-impl<'a> ExprBuilder<'a> {
-    pub fn build(self) -> Expr {
-        Expr::AggregateFunction(AggregateFunction::new_udf(
-            Arc::new(self.udf.clone()),
-            self.args,
-            self.distinct,
-            self.filter,
-            self.order_by,
-            self.null_treatment,
-        ))
-    }
-
-    pub fn order_by(mut self, order_by: Option<Vec<Expr>>) -> Self {
-        self.order_by = order_by;
-        self
-    }
-
-    pub fn filter(mut self, filter: Option<Box<Expr>>) -> Self {
-        self.filter = filter;
-        self
-    }
-
-    pub fn null_treatment(mut self, null_treatment: Option<NullTreatment>) -> Self {
-        self.null_treatment = null_treatment;
-        self
     }
 }

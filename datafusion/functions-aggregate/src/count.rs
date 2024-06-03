@@ -40,11 +40,11 @@ use datafusion_common::{
     downcast_value, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
+use datafusion_expr::{Expr, ReversedUDAF};
 use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 use datafusion_physical_expr_common::{
     aggregate::count_distinct::{
@@ -54,13 +54,26 @@ use datafusion_physical_expr_common::{
     binary_map::OutputType,
 };
 
-make_distinct_udaf_expr_and_func!(
+make_udaf_expr_and_func!(
     Count,
     count,
-    expression,
-    "Returns the number of non-null values in the group.",
+    expr,
+    "Count the number of non-null values in the column",
     count_udaf
 );
+
+pub fn count_distinct(expr: Expr) -> datafusion_expr::Expr {
+    datafusion_expr::Expr::AggregateFunction(
+        datafusion_expr::expr::AggregateFunction::new_udf(
+            count_udaf(),
+            vec![expr],
+            true,
+            None,
+            None,
+            None,
+        ),
+    )
+}
 
 pub struct Count {
     signature: Signature,
