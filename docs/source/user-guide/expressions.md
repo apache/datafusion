@@ -304,16 +304,6 @@ select log(-1), log(0), sqrt(-1);
 | rollup(exprs)                                                     | Creates a grouping set for rollup sets.                                                 |
 | sum(expr)                                                         | Сalculates the sum of `expr`.                                                           |
 
-## Aggregate Function Builder
-
-Another builder expression that ends with `build()`, it is useful if the functions has multiple optional arguments
-
-See datafusion-examples/examples/udaf_expr.rs for example usage.
-
-| Syntax                                                 | Equivalent to                       |
-| ------------------------------------------------------ | ----------------------------------- |
-| first_value_builder(expr).order_by(vec![expr]).build() | first_value(expr, Some(vec![expr])) |
-
 ## Subquery Expressions
 
 | Syntax          | Description                                                                                   |

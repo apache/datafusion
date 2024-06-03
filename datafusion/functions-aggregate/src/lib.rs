@@ -85,6 +85,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
         median::median_udaf(),
+        count::count_udaf(),
     ]
 }
 
