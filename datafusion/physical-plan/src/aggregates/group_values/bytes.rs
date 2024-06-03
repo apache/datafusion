@@ -18,8 +18,7 @@
 use crate::aggregates::group_values::GroupValues;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::binary_map::OutputType;
-use datafusion_physical_expr_common::binary_map::ArrowBytesMap;
+use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
