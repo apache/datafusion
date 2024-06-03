@@ -64,22 +64,22 @@ version = "38.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { path = "../arrow-rs/arrow", features = [
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", features = [
     "prettyprint",
 ] }
-arrow-array = { path = "../arrow-rs/arrow-array", version = "51.0.0", default-features = false, features = [
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { path = "../arrow-rs/arrow-buffer", version = "51.0.0", default-features = false }
-arrow-flight = { path = "../arrow-rs/arrow-flight", version = "51.0.0", features = [
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { path = "../arrow-rs/arrow-ipc", version = "51.0.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { path = "../arrow-rs/arrow-ord", version = "51.0.0", default-features = false }
-arrow-schema = { path = "../arrow-rs/arrow-schema", version = "51.0.0", default-features = false }
-arrow-string = { path = "../arrow-rs/arrow-string", version = "51.0.0", default-features = false }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -114,7 +114,7 @@ log = "^0.4"
 num_cpus = "1.13.0"
 object_store = { version = "0.10.1", default-features = false }
 parking_lot = "0.12"
-parquet = { path = "../arrow-rs/parquet", version = "51.0.0", default-features = false, features = [
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ce1a8fc664620f127115601880c07ed7657fd2ca", version = "52.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
