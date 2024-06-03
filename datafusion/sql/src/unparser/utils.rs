@@ -107,10 +107,7 @@ pub(crate) fn unproject_agg_exprs(expr: &Expr, agg: &Aggregate) -> Result<Expr> 
 ///
 /// For example, if expr contains the column expr "COUNT(*) PARTITION BY id" it will be transformed
 /// into an actual window expression as identified in the window node.
-pub(crate) fn unproject_window_exprs(
-    expr: &Expr,
-    windows: &[&Window],
-) -> Result<Expr> {
+pub(crate) fn unproject_window_exprs(expr: &Expr, windows: &[&Window]) -> Result<Expr> {
     expr.clone()
         .transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
