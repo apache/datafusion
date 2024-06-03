@@ -952,14 +952,11 @@ SELECT foo, first_value(time ORDER BY time DESC NULLS LAST) AS time FROM table1 
 me 1970-01-01T00:00:00.000000040Z
 you 1970-01-01T00:00:00.000000020Z
 
-query error
+query TP
 SELECT foo, last_value(time ORDER BY time DESC NULLS LAST) AS time FROM table1 GROUP BY foo ORDER BY foo;
 ----
-DataFusion error: Error during planning: Error during planning: Coercion from [Timestamp(Nanosecond, Some("+00:00"))] to the signature OneOf([ArraySignature(Array), Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64])]) failed. and No function matches the given name and argument types 'last_value(Timestamp(Nanosecond, Some("+00:00")))'. You might need to add explicit type casts.
-	Candidate functions:
-	last_value(array)
-	last_value(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)
-
+me 1970-01-01T00:00:00.000000010Z
+you 1970-01-01T00:00:00.000000020Z
 
 
 
