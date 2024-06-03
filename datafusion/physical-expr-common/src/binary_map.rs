@@ -605,7 +605,7 @@ where
 mod tests {
     use super::*;
     use arrow::array::{BinaryArray, LargeBinaryArray, StringArray};
-    use hashbrown::HashMap;
+    use std::collections::HashMap;
 
     #[test]
     fn string_set_empty() {
