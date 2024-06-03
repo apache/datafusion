@@ -541,28 +541,6 @@ pub enum GetFieldAccess {
     },
 }
 
-/// Returns the field of a [`ListArray`] or
-/// [`StructArray`] by `key`.
-///
-/// See [`GetFieldAccess`] for details.
-///
-/// [`ListArray`]: arrow::array::ListArray
-/// [`StructArray`]: arrow::array::StructArray
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct GetIndexedField {
-    /// The expression to take the field from
-    pub expr: Box<Expr>,
-    /// The name of the field to take
-    pub field: GetFieldAccess,
-}
-
-impl GetIndexedField {
-    /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, field: GetFieldAccess) -> Self {
-        Self { expr, field }
-    }
-}
-
 /// Cast expression
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Cast {
