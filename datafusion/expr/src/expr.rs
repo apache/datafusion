@@ -754,10 +754,14 @@ impl WindowFunctionDefinition {
 impl fmt::Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
-            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
         }
     }
 }
@@ -2263,7 +2267,11 @@ mod test {
             let fun = find_df_window_func(name).unwrap();
             let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
             assert_eq!(fun, fun2);
-            assert_eq!(fun.to_string(), name.to_uppercase());
+            if fun.to_string() == "first_value" || fun.to_string() == "last_value" {
+                assert_eq!(fun.to_string(), name);
+            } else {
+                assert_eq!(fun.to_string(), name.to_uppercase());
+            }
         }
         Ok(())
     }

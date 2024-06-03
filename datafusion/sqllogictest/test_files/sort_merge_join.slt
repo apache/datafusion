@@ -344,6 +344,7 @@ t1 as (
     select 11 a, 13 b)
     select t1.* from t1 where exists (select 1 from t1 t2 where t2.a = t1.a and t2.b != t1.b)
 ) order by 1, 2;
+----
 
 query II
 select * from (
