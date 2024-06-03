@@ -1444,7 +1444,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "temporary"]
     fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("interval_column", 1)),
@@ -1464,15 +1463,15 @@ mod tests {
             ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
         )?;
         let left_child = Interval::try_new(
-            // 2 days
+            // 2 days in millisecond
             ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 2,
-                milliseconds: 0,
+                days: 0,
+                milliseconds: 172_800_000,
             })),
-            // 10 days
+            // 10 days in millisecond
             ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 10,
-                milliseconds: 0,
+                days: 0,
+                milliseconds: 864_000_000,
             })),
         )?;
         let children = vec![&left_child, &right_child];
@@ -1483,15 +1482,15 @@ mod tests {
         assert_eq!(
             vec![
                 Interval::try_new(
-                    // 2 days
+                    // 2 days in millisecond
                     ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                        days: 2,
-                        milliseconds: 0,
+                        days: 0,
+                        milliseconds: 172_800_000,
                     })),
                     // 6 days
                     ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                        days: 6,
-                        milliseconds: 0,
+                        days: 0,
+                        milliseconds: 518_400_000,
                     })),
                 )?,
                 Interval::try_new(
