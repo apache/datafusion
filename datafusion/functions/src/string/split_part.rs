@@ -100,13 +100,13 @@ fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let split_string: Vec<&str> = string.split(delimiter).collect();
                 let len = split_string.len();
 
-                let index = if n == 0 {
-                    exec_err!("field position must not be zero")
-                } else if n < 0 {
-                    Ok((len as i64 + n) as usize)
-                } else {
-                    Ok((n - 1) as usize)
-                }?;
+                let index = match n.cmp(&0) {
+                    std::cmp::Ordering::Less => len as i64 + n,
+                    std::cmp::Ordering::Equal => {
+                        return exec_err!("field position must not be zero");
+                    }
+                    std::cmp::Ordering::Greater => n - 1,
+                } as usize;
 
                 if index < len {
                     Ok(Some(split_string[index]))
