@@ -483,14 +483,12 @@ async fn test_timestamp() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:01:11, 2020-01-01T01:11:01, 2020-01-10T01:01:01]
         expected_min: Arc::new(TimestampNanosecondArray::from(vec![
             TimestampNanosecondType::parse("2020-01-01T01:01:01"),
             TimestampNanosecondType::parse("2020-01-01T01:01:11"),
             TimestampNanosecondType::parse("2020-01-01T01:11:01"),
             TimestampNanosecondType::parse("2020-01-11T01:01:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-02T01:01:11, 2020-01-02T01:11:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampNanosecondArray::from(vec![
             TimestampNanosecondType::parse("2020-01-02T01:01:01"),
             TimestampNanosecondType::parse("2020-01-02T01:01:11"),
@@ -507,7 +505,6 @@ async fn test_timestamp() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:01:11+11:00, 2020-01-01T12:11:01+11:00, 2020-01-10T12:01:01+11:00]
         expected_min: Arc::new(
             TimestampNanosecondArray::from(vec![
                 TimestampNanosecondType::parse("2020-01-01T01:01:01"),
@@ -517,7 +514,6 @@ async fn test_timestamp() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T12:01:01+11:00, 2020-01-02T12:01:11+11:00, 2020-01-02T12:11:01+11:00, 2020-01-12T12:01:01+11:00]
         expected_max: Arc::new(
             TimestampNanosecondArray::from(vec![
                 TimestampNanosecondType::parse("2020-01-02T01:01:01"),
@@ -538,14 +534,12 @@ async fn test_timestamp() {
     // micros
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:01:11, 2020-01-01T01:11:01, 2020-01-10T01:01:01]
         expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-01T01:01:11"),
             TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
             TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-02T01:01:11, 2020-01-02T01:11:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-02T01:01:11"),
@@ -560,7 +554,6 @@ async fn test_timestamp() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:01:11+11:00, 2020-01-01T12:11:01+11:00, 2020-01-10T12:01:01+11:00]
         expected_min: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
@@ -570,7 +563,6 @@ async fn test_timestamp() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T12:01:01+11:00, 2020-01-02T12:01:11+11:00, 2020-01-02T12:11:01+11:00, 2020-01-12T12:01:01+11:00]
         expected_max: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
@@ -591,14 +583,12 @@ async fn test_timestamp() {
     // millis
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:01:11, 2020-01-01T01:11:01, 2020-01-10T01:01:01]
         expected_min: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-01T01:01:01"),
             TimestampMillisecondType::parse("2020-01-01T01:01:11"),
             TimestampMillisecondType::parse("2020-01-01T01:11:01"),
             TimestampMillisecondType::parse("2020-01-11T01:01:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-02T01:01:11, 2020-01-02T01:11:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-02T01:01:01"),
             TimestampMillisecondType::parse("2020-01-02T01:01:11"),
@@ -613,7 +603,6 @@ async fn test_timestamp() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:01:11+11:00, 2020-01-01T12:11:01+11:00, 2020-01-10T12:01:01+11:00]
         expected_min: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-01T01:01:01"),
@@ -623,7 +612,6 @@ async fn test_timestamp() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T12:01:01+11:00, 2020-01-02T12:01:11+11:00, 2020-01-02T12:11:01+11:00, 2020-01-12T12:01:01+11:00]
         expected_max: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-02T01:01:01"),
@@ -644,14 +632,12 @@ async fn test_timestamp() {
     // seconds
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:01:11, 2020-01-01T01:11:01, 2020-01-10T01:01:01]
         expected_min: Arc::new(TimestampSecondArray::from(vec![
             TimestampSecondType::parse("2020-01-01T01:01:01"),
             TimestampSecondType::parse("2020-01-01T01:01:11"),
             TimestampSecondType::parse("2020-01-01T01:11:01"),
             TimestampSecondType::parse("2020-01-11T01:01:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-02T01:01:11, 2020-01-02T01:11:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampSecondArray::from(vec![
             TimestampSecondType::parse("2020-01-02T01:01:01"),
             TimestampSecondType::parse("2020-01-02T01:01:11"),
@@ -666,7 +652,6 @@ async fn test_timestamp() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:01:11+11:00, 2020-01-01T12:11:01+11:00, 2020-01-10T12:01:01+11:00]
         expected_min: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-01T01:01:01"),
@@ -676,7 +661,6 @@ async fn test_timestamp() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T12:01:01+11:00, 2020-01-02T12:01:11+11:00, 2020-01-02T12:11:01+11:00, 2020-01-12T12:01:01+11:00]
         expected_max: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-02T01:01:01"),
@@ -719,13 +703,11 @@ async fn test_timestamp_diff_rg_sizes() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:11:01, 2020-01-11T01:02:01]
         expected_min: Arc::new(TimestampNanosecondArray::from(vec![
             TimestampNanosecondType::parse("2020-01-01T01:01:01"),
             TimestampNanosecondType::parse("2020-01-01T01:11:01"),
             TimestampNanosecondType::parse("2020-01-11T01:02:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-11T01:01:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampNanosecondArray::from(vec![
             TimestampNanosecondType::parse("2020-01-02T01:01:01"),
             TimestampNanosecondType::parse("2020-01-11T01:01:01"),
@@ -741,7 +723,6 @@ async fn test_timestamp_diff_rg_sizes() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:11:01+11:00, 2020-01-11T12:02:01+11:00]
         expected_min: Arc::new(
             TimestampNanosecondArray::from(vec![
                 TimestampNanosecondType::parse("2020-01-01T01:01:01"),
@@ -750,7 +731,6 @@ async fn test_timestamp_diff_rg_sizes() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T01:01:01+11:00, 2020-01-11T01:01:01+11:00, 2020-01-12T01:01:01+11:00]
         expected_max: Arc::new(
             TimestampNanosecondArray::from(vec![
                 TimestampNanosecondType::parse("2020-01-02T01:01:01"),
@@ -770,13 +750,11 @@ async fn test_timestamp_diff_rg_sizes() {
     // micros
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:11:01, 2020-01-11T01:02:01]
         expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
             TimestampMicrosecondType::parse("2020-01-11T01:02:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-11T01:01:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
@@ -790,7 +768,6 @@ async fn test_timestamp_diff_rg_sizes() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:11:01+11:00, 2020-01-11T12:02:01+11:00]
         expected_min: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
@@ -799,7 +776,6 @@ async fn test_timestamp_diff_rg_sizes() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T01:01:01+11:00, 2020-01-11T01:01:01+11:00, 2020-01-12T01:01:01+11:00]
         expected_max: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
@@ -819,13 +795,11 @@ async fn test_timestamp_diff_rg_sizes() {
     // millis
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:11:01, 2020-01-11T01:02:01]
         expected_min: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-01T01:01:01"),
             TimestampMillisecondType::parse("2020-01-01T01:11:01"),
             TimestampMillisecondType::parse("2020-01-11T01:02:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-11T01:01:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-02T01:01:01"),
             TimestampMillisecondType::parse("2020-01-11T01:01:01"),
@@ -839,7 +813,6 @@ async fn test_timestamp_diff_rg_sizes() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:11:01+11:00, 2020-01-11T12:02:01+11:00]
         expected_min: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-01T01:01:01"),
@@ -848,7 +821,6 @@ async fn test_timestamp_diff_rg_sizes() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T01:01:01+11:00, 2020-01-11T01:01:01+11:00, 2020-01-12T01:01:01+11:00]
         expected_max: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-02T01:01:01"),
@@ -868,13 +840,11 @@ async fn test_timestamp_diff_rg_sizes() {
     // seconds
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T01:01:01, 2020-01-01T01:11:01, 2020-01-11T01:02:01]
         expected_min: Arc::new(TimestampSecondArray::from(vec![
             TimestampSecondType::parse("2020-01-01T01:01:01"),
             TimestampSecondType::parse("2020-01-01T01:11:01"),
             TimestampSecondType::parse("2020-01-11T01:02:01"),
         ])),
-        // maxes are [2020-01-02T01:01:01, 2020-01-11T01:01:01, 2020-01-12T01:01:01]
         expected_max: Arc::new(TimestampSecondArray::from(vec![
             TimestampSecondType::parse("2020-01-02T01:01:01"),
             TimestampSecondType::parse("2020-01-11T01:01:01"),
@@ -888,7 +858,6 @@ async fn test_timestamp_diff_rg_sizes() {
 
     Test {
         reader: reader.build().await,
-        // mins are [2020-01-01T12:01:01+11:00, 2020-01-01T12:11:01+11:00, 2020-01-11T12:02:01+11:00]
         expected_min: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-01T01:01:01"),
@@ -897,7 +866,6 @@ async fn test_timestamp_diff_rg_sizes() {
             ])
             .with_timezone(tz),
         ),
-        // maxes are [2020-01-02T01:01:01+11:00, 2020-01-11T01:01:01+11:00, 2020-01-12T01:01:01+11:00]
         expected_max: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-02T01:01:01"),
