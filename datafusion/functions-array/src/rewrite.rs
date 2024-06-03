@@ -33,7 +33,7 @@ pub(crate) struct ArrayFunctionRewriter {}
 
 impl FunctionRewrite for ArrayFunctionRewriter {
     fn name(&self) -> &str {
-        "FunctionRewrite"
+        "ArrayFunctionRewriter"
     }
 
     fn rewrite(

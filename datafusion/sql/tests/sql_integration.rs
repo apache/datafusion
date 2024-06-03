@@ -18,30 +18,29 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
-use std::{sync::Arc, vec};
+use std::vec;
 
 use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
-use datafusion_common::config::ConfigOptions;
+use common::MockContextProvider;
 use datafusion_common::{
-    assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
-    ScalarValue, TableReference,
+    assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
-    Volatility, WindowUDF,
+    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
+    planner::{ParserOptions, SqlToRel},
 };
 
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
-use sqlparser::parser::Parser;
+
+mod cases;
+mod common;
 
 #[test]
 fn test_schema_support() {
@@ -1479,16 +1478,16 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(0), MIN(person.age)",
-            err.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
+        err.strip_backtrace()
+    );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.state could not be resolved from available columns: Int64(5), MIN(person.age)",
-            err2.strip_backtrace()
-        );
+        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
+        err2.strip_backtrace()
+    );
 }
 
 #[test]
@@ -2790,169 +2789,6 @@ fn prepare_stmt_replace_params_quick_test(
     assert_eq!(format!("{plan:?}"), expected_plan);
 
     plan
-}
-
-#[derive(Default)]
-struct MockContextProvider {
-    options: ConfigOptions,
-    udfs: HashMap<String, Arc<ScalarUDF>>,
-    udafs: HashMap<String, Arc<AggregateUDF>>,
-}
-
-impl MockContextProvider {
-    fn options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
-    }
-
-    fn with_udf(mut self, udf: ScalarUDF) -> Self {
-        self.udfs.insert(udf.name().to_string(), Arc::new(udf));
-        self
-    }
-}
-
-impl ContextProvider for MockContextProvider {
-    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        let schema = match name.table() {
-            "test" => Ok(Schema::new(vec![
-                Field::new("t_date32", DataType::Date32, false),
-                Field::new("t_date64", DataType::Date64, false),
-            ])),
-            "j1" => Ok(Schema::new(vec![
-                Field::new("j1_id", DataType::Int32, false),
-                Field::new("j1_string", DataType::Utf8, false),
-            ])),
-            "j2" => Ok(Schema::new(vec![
-                Field::new("j2_id", DataType::Int32, false),
-                Field::new("j2_string", DataType::Utf8, false),
-            ])),
-            "j3" => Ok(Schema::new(vec![
-                Field::new("j3_id", DataType::Int32, false),
-                Field::new("j3_string", DataType::Utf8, false),
-            ])),
-            "test_decimal" => Ok(Schema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("price", DataType::Decimal128(10, 2), false),
-            ])),
-            "person" => Ok(Schema::new(vec![
-                Field::new("id", DataType::UInt32, false),
-                Field::new("first_name", DataType::Utf8, false),
-                Field::new("last_name", DataType::Utf8, false),
-                Field::new("age", DataType::Int32, false),
-                Field::new("state", DataType::Utf8, false),
-                Field::new("salary", DataType::Float64, false),
-                Field::new(
-                    "birth_date",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    false,
-                ),
-                Field::new("😀", DataType::Int32, false),
-            ])),
-            "person_quoted_cols" => Ok(Schema::new(vec![
-                Field::new("id", DataType::UInt32, false),
-                Field::new("First Name", DataType::Utf8, false),
-                Field::new("Last Name", DataType::Utf8, false),
-                Field::new("Age", DataType::Int32, false),
-                Field::new("State", DataType::Utf8, false),
-                Field::new("Salary", DataType::Float64, false),
-                Field::new(
-                    "Birth Date",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    false,
-                ),
-                Field::new("😀", DataType::Int32, false),
-            ])),
-            "orders" => Ok(Schema::new(vec![
-                Field::new("order_id", DataType::UInt32, false),
-                Field::new("customer_id", DataType::UInt32, false),
-                Field::new("o_item_id", DataType::Utf8, false),
-                Field::new("qty", DataType::Int32, false),
-                Field::new("price", DataType::Float64, false),
-                Field::new("delivered", DataType::Boolean, false),
-            ])),
-            "array" => Ok(Schema::new(vec![
-                Field::new(
-                    "left",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-                    false,
-                ),
-                Field::new(
-                    "right",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-                    false,
-                ),
-            ])),
-            "lineitem" => Ok(Schema::new(vec![
-                Field::new("l_item_id", DataType::UInt32, false),
-                Field::new("l_description", DataType::Utf8, false),
-                Field::new("price", DataType::Float64, false),
-            ])),
-            "aggregate_test_100" => Ok(Schema::new(vec![
-                Field::new("c1", DataType::Utf8, false),
-                Field::new("c2", DataType::UInt32, false),
-                Field::new("c3", DataType::Int8, false),
-                Field::new("c4", DataType::Int16, false),
-                Field::new("c5", DataType::Int32, false),
-                Field::new("c6", DataType::Int64, false),
-                Field::new("c7", DataType::UInt8, false),
-                Field::new("c8", DataType::UInt16, false),
-                Field::new("c9", DataType::UInt32, false),
-                Field::new("c10", DataType::UInt64, false),
-                Field::new("c11", DataType::Float32, false),
-                Field::new("c12", DataType::Float64, false),
-                Field::new("c13", DataType::Utf8, false),
-            ])),
-            "UPPERCASE_test" => Ok(Schema::new(vec![
-                Field::new("Id", DataType::UInt32, false),
-                Field::new("lower", DataType::UInt32, false),
-            ])),
-            _ => plan_err!("No table named: {} found", name.table()),
-        };
-
-        match schema {
-            Ok(t) => Ok(Arc::new(EmptyTable::new(Arc::new(t)))),
-            Err(e) => Err(e),
-        }
-    }
-
-    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.udfs.get(name).cloned()
-    }
-
-    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).cloned()
-    }
-
-    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
-        unimplemented!()
-    }
-
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-        None
-    }
-
-    fn options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    fn create_cte_work_table(
-        &self,
-        _name: &str,
-        schema: SchemaRef,
-    ) -> Result<Arc<dyn TableSource>> {
-        Ok(Arc::new(EmptyTable::new(schema)))
-    }
-
-    fn udfs_names(&self) -> Vec<String> {
-        self.udfs.keys().cloned().collect()
-    }
-
-    fn udafs_names(&self) -> Vec<String> {
-        self.udafs.keys().cloned().collect()
-    }
-
-    fn udwfs_names(&self) -> Vec<String> {
-        Vec::new()
-    }
 }
 
 #[test]
@@ -4530,181 +4366,6 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
         }
         _ => panic!("assert_field_not_found wrong error type"),
     }
-}
-
-struct EmptyTable {
-    table_schema: SchemaRef,
-}
-
-impl EmptyTable {
-    fn new(table_schema: SchemaRef) -> Self {
-        Self { table_schema }
-    }
-}
-
-impl TableSource for EmptyTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.table_schema.clone()
-    }
-}
-
-#[test]
-fn roundtrip_expr() {
-    let tests: Vec<(TableReference, &str, &str)> = vec![
-        (
-            TableReference::bare("person"),
-            "age > 35",
-            r#"("age" > 35)"#,
-        ),
-        (
-            TableReference::bare("person"),
-            "id = '10'",
-            r#"("id" = '10')"#,
-        ),
-        (
-            TableReference::bare("person"),
-            "CAST(id AS VARCHAR)",
-            r#"CAST("id" AS VARCHAR)"#,
-        ),
-        (
-            TableReference::bare("person"),
-            "SUM((age * 2))",
-            r#"SUM(("age" * 2))"#,
-        ),
-    ];
-
-    let roundtrip = |table, sql: &str| -> Result<String> {
-        let dialect = GenericDialect {};
-        let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
-
-        let context = MockContextProvider::default();
-        let schema = context.get_table_source(table)?.schema();
-        let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
-        let sql_to_rel = SqlToRel::new(&context);
-        let expr =
-            sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
-
-        let ast = expr_to_sql(&expr)?;
-
-        Ok(format!("{}", ast))
-    };
-
-    for (table, query, expected) in tests {
-        let actual = roundtrip(table, query).unwrap();
-        assert_eq!(actual, expected);
-    }
-}
-
-#[test]
-fn roundtrip_statement() -> Result<()> {
-    let tests: Vec<&str> = vec![
-            "select ta.j1_id from j1 ta;",
-            "select ta.j1_id from j1 ta order by ta.j1_id;",
-            "select * from j1 ta order by ta.j1_id, ta.j1_string desc;",
-            "select * from j1 limit 10;",
-            "select ta.j1_id from j1 ta where ta.j1_id > 1;",
-            "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id);",
-            "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
-            "select * from (select id, first_name from person)",
-            "select * from (select id, first_name from (select * from person))",
-            "select id, count(*) as cnt from (select id from person) group by id",
-            "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
-            "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
-            r#"select "First Name" from person_quoted_cols"#,
-            r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
-            "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
-            "select id, count(*), first_name from person group by first_name, id",
-            "select id, sum(age), first_name from person group by first_name, id",
-            "select id, count(*), first_name 
-            from person 
-            where id!=3 and first_name=='test'
-            group by first_name, id 
-            having count(*)>5 and count(*)<10
-            order by count(*)",
-            r#"select id, count("First Name") as count_first_name, "Last Name" 
-            from person_quoted_cols
-            where id!=3 and "First Name"=='test'
-            group by "Last Name", id 
-            having count_first_name>5 and count_first_name<10
-            order by count_first_name, "Last Name""#,
-            r#"select p.id, count("First Name") as count_first_name,
-            "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person) 
-            from (select id, "First Name", "Last Name" from person_quoted_cols) qp
-            inner join (select * from person) p
-            on p.id = qp.id
-            where p.id!=3 and "First Name"=='test' and qp.id in 
-            (select id from (select id, count(*) from person group by id having count(*) > 0))
-            group by "Last Name", p.id 
-            having count_first_name>5 and count_first_name<10
-            order by count_first_name, "Last Name""#,
-        ];
-
-    // For each test sql string, we transform as follows:
-    // sql -> ast::Statement (s1) -> LogicalPlan (p1) -> ast::Statement (s2) -> LogicalPlan (p2)
-    // We test not that s1==s2, but rather p1==p2. This ensures that unparser preserves the logical
-    // query information of the original sql string and disreguards other differences in syntax or
-    // quoting.
-    for query in tests {
-        let dialect = GenericDialect {};
-        let statement = Parser::new(&dialect)
-            .try_with_sql(query)?
-            .parse_statement()?;
-
-        let context = MockContextProvider::default();
-        let sql_to_rel = SqlToRel::new(&context);
-        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
-
-        let roundtrip_statement = plan_to_sql(&plan)?;
-
-        let actual = format!("{}", &roundtrip_statement);
-        println!("roundtrip sql: {actual}");
-        println!("plan {}", plan.display_indent());
-
-        let plan_roundtrip = sql_to_rel
-            .sql_statement_to_plan(roundtrip_statement.clone())
-            .unwrap();
-
-        assert_eq!(plan, plan_roundtrip);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn roundtrip_crossjoin() -> Result<()> {
-    let query = "select j1.j1_id, j2.j2_string from j1, j2";
-
-    let dialect = GenericDialect {};
-    let statement = Parser::new(&dialect)
-        .try_with_sql(query)?
-        .parse_statement()?;
-
-    let context = MockContextProvider::default();
-    let sql_to_rel = SqlToRel::new(&context);
-    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
-
-    let roundtrip_statement = plan_to_sql(&plan)?;
-
-    let actual = format!("{}", &roundtrip_statement);
-    println!("roundtrip sql: {actual}");
-    println!("plan {}", plan.display_indent());
-
-    let plan_roundtrip = sql_to_rel
-        .sql_statement_to_plan(roundtrip_statement.clone())
-        .unwrap();
-
-    let expected = "Projection: j1.j1_id, j2.j2_string\
-        \n  Inner Join:  Filter: Boolean(true)\
-        \n    TableScan: j1\
-        \n    TableScan: j2";
-
-    assert_eq!(format!("{plan_roundtrip:?}"), expected);
-
-    Ok(())
 }
 
 #[cfg(test)]

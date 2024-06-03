@@ -29,7 +29,6 @@ use datafusion::{
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
-use datafusion_common::Statistics;
 
 use futures::StreamExt;
 use object_store::ObjectStore;
@@ -61,16 +60,11 @@ async fn main() -> Result<()> {
         Arc::new(object_store),
     );
 
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: schema.clone(),
-        file_groups: vec![vec![PartitionedFile::new(path.to_string(), 10)]],
-        statistics: Statistics::new_unknown(&schema),
-        projection: Some(vec![1, 0]),
-        limit: Some(5),
-        table_partition_cols: vec![],
-        output_ordering: vec![],
-    };
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema.clone())
+            .with_projection(Some(vec![1, 0]))
+            .with_limit(Some(5))
+            .with_file(PartitionedFile::new(path.to_string(), 10));
 
     let result =
         FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())

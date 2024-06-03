@@ -181,7 +181,7 @@ impl ScalarUDFImpl for PowUdf {
         &self.aliases
     }
 
-    fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The POW function preserves the order of its argument.
         Ok(input[0].sort_properties)
     }

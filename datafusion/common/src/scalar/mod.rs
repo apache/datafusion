@@ -45,8 +45,8 @@ use arrow::{
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
+        Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
@@ -3089,46 +3089,21 @@ impl TryFrom<&DataType> for ScalarValue {
                 Box::new(value_type.as_ref().try_into()?),
             ),
             // `ScalaValue::List` contains single element `ListArray`.
-            DataType::List(field) => ScalarValue::List(
-                new_null_array(
-                    &DataType::List(Arc::new(Field::new(
-                        "item",
-                        field.data_type().clone(),
-                        true,
-                    ))),
-                    1,
-                )
-                .as_list::<i32>()
-                .to_owned()
-                .into(),
-            ),
-            // 'ScalarValue::LargeList' contains single element `LargeListArray
-            DataType::LargeList(field) => ScalarValue::LargeList(
-                new_null_array(
-                    &DataType::LargeList(Arc::new(Field::new(
-                        "item",
-                        field.data_type().clone(),
-                        true,
-                    ))),
-                    1,
-                )
-                .as_list::<i64>()
-                .to_owned()
-                .into(),
-            ),
+            DataType::List(field_ref) => ScalarValue::List(Arc::new(
+                GenericListArray::new_null(field_ref.clone(), 1),
+            )),
+            // `ScalarValue::LargeList` contains single element `LargeListArray`.
+            DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
+                GenericListArray::new_null(field_ref.clone(), 1),
+            )),
             // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
-            DataType::FixedSizeList(field, _) => ScalarValue::FixedSizeList(
-                new_null_array(
-                    &DataType::FixedSizeList(
-                        Arc::new(Field::new("item", field.data_type().clone(), true)),
-                        1,
-                    ),
+            DataType::FixedSizeList(field_ref, fixed_length) => {
+                ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
+                    field_ref.clone(),
+                    *fixed_length,
                     1,
-                )
-                .as_fixed_size_list()
-                .to_owned()
-                .into(),
-            ),
+                )))
+            }
             DataType::Struct(fields) => ScalarValue::Struct(
                 new_null_array(&DataType::Struct(fields.to_owned()), 1)
                     .as_struct()
@@ -3204,8 +3179,12 @@ impl fmt::Display for ScalarValue {
             ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::Date32(e) => format_option!(f, e)?,
-            ScalarValue::Date64(e) => format_option!(f, e)?,
+            ScalarValue::Date32(e) => {
+                format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
+            }
+            ScalarValue::Date64(e) => {
+                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
+            }
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
             ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
             ScalarValue::Time64Microsecond(e) => format_option!(f, e)?,
@@ -4470,23 +4449,44 @@ mod tests {
     }
 
     #[test]
-    fn scalar_try_from_list() {
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-        let data_type = &data_type;
+    fn scalar_try_from_list_datatypes() {
+        let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Test for List
+        let data_type = &DataType::List(inner_field.clone());
         let scalar: ScalarValue = data_type.try_into().unwrap();
-
         let expected = ScalarValue::List(
-            new_null_array(
-                &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                1,
-            )
-            .as_list::<i32>()
-            .to_owned()
-            .into(),
+            new_null_array(data_type, 1)
+                .as_list::<i32>()
+                .to_owned()
+                .into(),
         );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
 
-        assert_eq!(expected, scalar)
+        // Test for LargeList
+        let data_type = &DataType::LargeList(inner_field.clone());
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::LargeList(
+            new_null_array(data_type, 1)
+                .as_list::<i64>()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
+
+        // Test for FixedSizeList(5)
+        let data_type = &DataType::FixedSizeList(inner_field.clone(), 5);
+        let scalar: ScalarValue = data_type.try_into().unwrap();
+        let expected = ScalarValue::FixedSizeList(
+            new_null_array(data_type, 1)
+                .as_fixed_size_list()
+                .to_owned()
+                .into(),
+        );
+        assert_eq!(expected, scalar);
+        assert!(expected.is_null());
     }
 
     #[test]

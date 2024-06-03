@@ -30,8 +30,8 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };
+use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::{collect, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 
@@ -63,7 +63,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     let file_schema = batch.schema().clone();
     let (in_memory_object_store, parquet_files_meta) =
         store_parquet_in_memory(vec![batch]).await;
-    let file_groups = parquet_files_meta
+    let file_group = parquet_files_meta
         .into_iter()
         .map(|meta| PartitionedFile {
             object_meta: meta,
@@ -75,22 +75,15 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         .collect();
 
     // prepare the scan
-    let parquet_exec = ParquetExec::new(
-        FileScanConfig {
+    let parquet_exec = ParquetExec::builder(
+        FileScanConfig::new(
             // just any url that doesn't point to in memory object store
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_groups: vec![file_groups],
-            statistics: Statistics::new_unknown(&file_schema),
+            ObjectStoreUrl::local_filesystem(),
             file_schema,
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
-        None,
-        None,
-        Default::default(),
+        )
+        .with_file_group(file_group),
     )
+    .build()
     .with_parquet_file_reader_factory(Arc::new(InMemoryParquetFileReaderFactory(
         Arc::clone(&in_memory_object_store),
     )));

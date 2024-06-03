@@ -49,7 +49,7 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -83,8 +83,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
-    Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
-    WindowFunction,
+    Cast, GroupingSet, InList, Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::expr_vec_fmt;
@@ -215,29 +214,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::IsNotUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
-        }
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
-            match field {
-                GetFieldAccess::NamedStructField { name: _ } => {
-                    unreachable!(
-                        "NamedStructField should have been rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListIndex { key: _ } => {
-                    unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
-                    )
-                }
-                GetFieldAccess::ListRange {
-                    start: _,
-                    stop: _,
-                    stride: _,
-                } => {
-                    unreachable!(
-                        "ListRange should have been rewritten in OperatorToFunction"
-                    )
-                }
-            };
         }
         Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
@@ -1136,24 +1112,18 @@ impl DefaultPhysicalPlanner {
                 Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
             }
             LogicalPlan::Unnest(Unnest {
-                columns,
+                list_type_columns,
+                struct_type_columns,
                 schema,
                 options,
                 ..
             }) => {
                 let input = children.one()?;
-                let column_execs = columns
-                    .iter()
-                    .map(|column| {
-                        schema
-                            .index_of_column(column)
-                            .map(|idx| Column::new(&column.name, idx))
-                    })
-                    .collect::<Result<_>>()?;
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                 Arc::new(UnnestExec::new(
                     input,
-                    column_execs,
+                    list_type_columns.clone(),
+                    struct_type_columns.clone(),
                     schema,
                     options.clone(),
                 ))
@@ -2842,7 +2812,11 @@ mod tests {
             write!(f, "NoOp")
         }
 
-        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
             unimplemented!("NoOp");
         }
     }
@@ -2895,7 +2869,7 @@ mod tests {
             &self.cache
         }
 
-        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
 

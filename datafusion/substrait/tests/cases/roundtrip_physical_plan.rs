@@ -23,7 +23,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::Result;
-use datafusion::physical_plan::{displayable, ExecutionPlan, Statistics};
+use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_substrait::physical_plan::{consumer, producer};
 
@@ -31,31 +31,22 @@ use substrait::proto::extensions;
 
 #[tokio::test]
 async fn parquet_exec() -> Result<()> {
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: Arc::new(Schema::empty()),
-        file_groups: vec![
-            vec![PartitionedFile::new(
-                "file://foo/part-0.parquet".to_string(),
-                123,
-            )],
-            vec![PartitionedFile::new(
-                "file://foo/part-1.parquet".to_string(),
-                123,
-            )],
-        ],
-        statistics: Statistics::new_unknown(&Schema::empty()),
-        projection: None,
-        limit: None,
-        table_partition_cols: vec![],
-        output_ordering: vec![],
-    };
-    let parquet_exec: Arc<dyn ExecutionPlan> = Arc::new(ParquetExec::new(
-        scan_config,
-        None,
-        None,
-        Default::default(),
-    ));
+    let scan_config = FileScanConfig::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::new(Schema::empty()),
+    )
+    .with_file_groups(vec![
+        vec![PartitionedFile::new(
+            "file://foo/part-0.parquet".to_string(),
+            123,
+        )],
+        vec![PartitionedFile::new(
+            "file://foo/part-1.parquet".to_string(),
+            123,
+        )],
+    ]);
+    let parquet_exec: Arc<dyn ExecutionPlan> =
+        ParquetExec::builder(scan_config).build_arc();
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

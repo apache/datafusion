@@ -529,7 +529,7 @@ impl<'a> TestCase<'a> {
 
         // verify expected pushdown
         let metrics =
-            TestParquetFile::parquet_metrics(exec).expect("found parquet metrics");
+            TestParquetFile::parquet_metrics(&exec).expect("found parquet metrics");
 
         let pushdown_expected = if scan_options.pushdown_filters {
             self.pushdown_expected

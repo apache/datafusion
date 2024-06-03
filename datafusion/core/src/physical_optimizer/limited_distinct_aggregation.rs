@@ -78,7 +78,7 @@ impl LimitedDistinctAggregation {
         let mut is_global_limit = false;
         if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
-            children = local_limit.children();
+            children = local_limit.children().into_iter().cloned().collect();
         } else if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>()
         {
             global_fetch = global_limit.fetch();
@@ -86,7 +86,7 @@ impl LimitedDistinctAggregation {
             global_skip = global_limit.skip();
             // the aggregate must read at least fetch+skip number of rows
             limit = global_fetch.unwrap() + global_skip;
-            children = global_limit.children();
+            children = global_limit.children().into_iter().cloned().collect();
             is_global_limit = true
         } else {
             return None;

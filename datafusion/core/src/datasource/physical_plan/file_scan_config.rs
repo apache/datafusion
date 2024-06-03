@@ -64,12 +64,41 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::Schema;
+/// use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # let file_schema = Arc::new(Schema::empty());
+/// // create FileScan config for reading data from file://
+/// let object_store_url = ObjectStoreUrl::local_filesystem();
+/// let config = FileScanConfig::new(object_store_url, file_schema)
+///   .with_limit(Some(1000))            // read only the first 1000 records
+///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
+///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
+///   .with_file(PartitionedFile::new("file1.parquet", 1234))
+///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
+///   // in a  single row group
+///   .with_file_group(vec![
+///    PartitionedFile::new("file2.parquet", 56),
+///    PartitionedFile::new("file3.parquet", 78),
+///   ]);
+/// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
     /// [`RuntimeEnv::object_store`]
     ///
+    /// This `ObjectStoreUrl` should be the prefix of the absolute url for files
+    /// as `file://` or `s3://my_bucket`. It should not include the path to the
+    /// file itself. The relevant URL prefix must be registered via
+    /// [`RuntimeEnv::register_object_store`]
+    ///
     /// [`ObjectStore`]: object_store::ObjectStore
+    /// [`RuntimeEnv::register_object_store`]: datafusion_execution::runtime_env::RuntimeEnv::register_object_store
     /// [`RuntimeEnv::object_store`]: datafusion_execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
     /// Schema before `projection` is applied. It contains the all columns that may
@@ -87,6 +116,7 @@ pub struct FileScanConfig {
     /// sequentially, one after the next.
     pub file_groups: Vec<Vec<PartitionedFile>>,
     /// Estimated overall statistics of the files, taking `filters` into account.
+    /// Defaults to [`Statistics::new_unknown`].
     pub statistics: Statistics,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
@@ -101,6 +131,86 @@ pub struct FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Create a new `FileScanConfig` with default settings for scanning files.
+    ///
+    /// See example on [`FileScanConfig`]
+    ///
+    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group]` and
+    /// [`Self::with_file_groups`].
+    ///
+    /// # Parameters:
+    /// * `object_store_url`: See [`Self::object_store_url`]
+    /// * `file_schema`: See [`Self::file_schema`]
+    pub fn new(object_store_url: ObjectStoreUrl, file_schema: SchemaRef) -> Self {
+        let statistics = Statistics::new_unknown(&file_schema);
+        Self {
+            object_store_url,
+            file_schema,
+            file_groups: vec![],
+            statistics,
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![],
+        }
+    }
+
+    /// Set the statistics of the files
+    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+        self.statistics = statistics;
+        self
+    }
+
+    /// Set the projection of the files
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set the limit of the files
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Add a file as a single group
+    ///
+    /// See [Self::file_groups] for more information.
+    pub fn with_file(self, file: PartitionedFile) -> Self {
+        self.with_file_group(vec![file])
+    }
+
+    /// Add the file groups
+    ///
+    /// See [Self::file_groups] for more information.
+    pub fn with_file_groups(
+        mut self,
+        mut file_groups: Vec<Vec<PartitionedFile>>,
+    ) -> Self {
+        self.file_groups.append(&mut file_groups);
+        self
+    }
+
+    /// Add a new file group
+    ///
+    /// See [Self::file_groups] for more information
+    pub fn with_file_group(mut self, file_group: Vec<PartitionedFile>) -> Self {
+        self.file_groups.push(file_group);
+        self
+    }
+
+    /// Set the partitioning columns of the files
+    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Set the output ordering of the files
+    pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
+        self.output_ordering = output_ordering;
+        self
+    }
+
     /// Project the schema and the statistics on the given column indices
     pub fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
@@ -1117,16 +1227,10 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
-        FileScanConfig {
-            file_schema,
-            file_groups: vec![vec![]],
-            limit: None,
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            projection,
-            statistics,
-            table_partition_cols,
-            output_ordering: vec![],
-        }
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), file_schema)
+            .with_projection(projection)
+            .with_statistics(statistics)
+            .with_table_partition_cols(table_partition_cols)
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>

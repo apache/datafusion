@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use super::convert_first_last::OptimizeAggregateOrder;
 use super::projection_pushdown::ProjectionPushdown;
+use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;

@@ -65,11 +65,15 @@ impl UserDefinedLogicalNodeCore for TestUserDefinedPlanNode {
         write!(f, "TestUserDefined")
     }
 
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 0, "expression size inconsistent");
-        Self {
-            input: inputs[0].clone(),
-        }
+        Ok(Self {
+            input: inputs.swap_remove(0),
+        })
     }
 }

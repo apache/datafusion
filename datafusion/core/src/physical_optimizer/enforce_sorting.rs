@@ -567,7 +567,7 @@ fn remove_corresponding_sort_from_sub_plan(
         // Replace with variants that do not preserve order.
         if is_sort_preserving_merge(&node.plan) {
             node.children = node.children.swap_remove(0).children;
-            node.plan = node.plan.children().swap_remove(0);
+            node.plan = node.plan.children().swap_remove(0).clone();
         } else if let Some(repartition) =
             node.plan.as_any().downcast_ref::<RepartitionExec>()
         {

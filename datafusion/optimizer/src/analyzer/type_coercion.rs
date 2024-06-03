@@ -450,7 +450,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Negative(_)
-            | Expr::GetIndexedField(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
             | Expr::Sort(_)
@@ -991,7 +990,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "type_coercion\ncaused by\nError during planning: [data_types_with_aggregate_udf] Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
             err.strip_backtrace()
         );
         Ok(())

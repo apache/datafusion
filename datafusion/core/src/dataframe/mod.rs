@@ -50,10 +50,11 @@ use datafusion_common::{
 };
 use datafusion_expr::lit;
 use datafusion_expr::{
-    avg, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    avg, max, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_expr::{case, is_null, sum};
+use datafusion_functions_aggregate::expr_fn::median;
 use datafusion_functions_aggregate::expr_fn::count;
 
 use async_trait::async_trait;
@@ -264,7 +265,7 @@ impl DataFrame {
         self.unnest_columns_with_options(&[column], options)
     }
 
-    /// Expand multiple list columns into a set of rows.
+    /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
     /// See also:
     ///
@@ -278,8 +279,8 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_columns(&["a", "b"])?;
+    /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
+    /// let df = df.unnest_columns(&["b","c","d"])?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1032,7 +1033,9 @@ impl DataFrame {
     }
 
     /// Return a reference to the unoptimized [`LogicalPlan`] that comprises
-    /// this DataFrame. See [`Self::into_unoptimized_plan`] for more details.
+    /// this DataFrame.
+    ///
+    /// See [`Self::into_unoptimized_plan`] for more details.
     pub fn logical_plan(&self) -> &LogicalPlan {
         &self.plan
     }
@@ -1049,6 +1052,9 @@ impl DataFrame {
     /// snapshot of the [`SessionState`] attached to this [`DataFrame`] and
     /// consequently subsequent operations may take place against a different
     /// state (e.g. a different value of `now()`)
+    ///
+    /// See [`Self::into_parts`] to retrieve the owned [`LogicalPlan`] and
+    /// corresponding [`SessionState`].
     pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }

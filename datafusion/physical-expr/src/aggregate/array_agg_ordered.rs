@@ -30,15 +30,13 @@ use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 
-use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::{new_empty_array, StructArray};
+use arrow_array::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{Fields, SortOptions};
-
-use datafusion_common::utils::array_into_list_array;
-use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::utils::{array_into_list_array, compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::Accumulator;
 
 /// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
@@ -129,6 +127,10 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::HardRequirement
     }
 
     fn name(&self) -> &str {

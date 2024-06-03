@@ -56,19 +56,139 @@ use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
-/// A LogicalPlan represents the different types of relational
-/// operators (such as Projection, Filter, etc) and can be created by
-/// the SQL query planner and the DataFrame API.
+/// A `LogicalPlan` is a node in a tree of relational operators (such as
+/// Projection or Filter).
 ///
-/// A LogicalPlan represents transforming an input relation (table) to
-/// an output relation (table) with a (potentially) different
-/// schema. A plan represents a dataflow tree where data flows
-/// from leaves up to the root to produce the query result.
+/// Represents transforming an input relation (table) to an output relation
+/// (table) with a potentially different schema. Plans form a dataflow tree
+/// where data flows from leaves up to the root to produce the query result.
+///
+/// `LogicalPlan`s can be created by the SQL query planner, the DataFrame API,
+/// or programmatically (for example custom query languages).
 ///
 /// # See also:
-/// * [`tree_node`]: To inspect and rewrite `LogicalPlan` trees
+/// * [`Expr`]: For the expressions that are evaluated by the plan
+/// * [`LogicalPlanBuilder`]: For building `LogicalPlan`s
+/// * [`tree_node`]: To inspect and rewrite `LogicalPlan`s
 ///
 /// [`tree_node`]: crate::logical_plan::tree_node
+///
+/// # Examples
+///
+/// ## Creating a LogicalPlan from SQL:
+///
+/// See [`SessionContext::sql`](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql)
+///
+/// ## Creating a LogicalPlan from the DataFrame API:
+///
+/// See [`DataFrame::logical_plan`](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.logical_plan)
+///
+/// ## Creating a LogicalPlan programmatically:
+///
+/// See [`LogicalPlanBuilder`]
+///
+/// # Visiting and Rewriting `LogicalPlan`s
+///
+/// Using the [`tree_node`] API, you can recursively walk all nodes in a
+/// `LogicalPlan`. For example, to find all column references in a plan:
+///
+/// ```
+/// # use std::collections::HashSet;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{Expr, col, lit, LogicalPlan, LogicalPlanBuilder, table_scan};
+/// # use datafusion_common::tree_node::{TreeNodeRecursion, TreeNode};
+/// # use datafusion_common::{Column, Result};
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// // Projection(name, salary)
+/// //   Filter(salary > 1000)
+/// //     TableScan(employee)
+/// # fn main() -> Result<()> {
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// // use apply to walk the plan and collect all expressions
+/// let mut expressions = HashSet::new();
+/// plan.apply(|node| {
+///   // collect all expressions in the plan
+///   node.apply_expressions(|expr| {
+///    expressions.insert(expr.clone());
+///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
+///   })?;
+///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
+/// }).unwrap();
+///
+/// // we found the expression in projection and filter
+/// assert_eq!(expressions.len(), 2);
+/// println!("Found expressions: {:?}", expressions);
+/// // found predicate in the Filter: employee.salary > 1000
+/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
+/// assert!(expressions.contains(&salary.gt(lit(1000))));
+/// // found projection in the Projection: employee.name
+/// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// assert!(expressions.contains(&name));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// You can also rewrite plans using the [`tree_node`] API. For example, to
+/// replace the filter predicate in a plan:
+///
+/// ```
+/// # use std::collections::HashSet;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{Expr, col, lit, LogicalPlan, LogicalPlanBuilder, table_scan};
+/// # use datafusion_common::tree_node::{TreeNodeRecursion, TreeNode};
+/// # use datafusion_common::{Column, Result};
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// // Projection(name, salary)
+/// //   Filter(salary > 1000)
+/// //     TableScan(employee)
+/// # fn main() -> Result<()> {
+/// use datafusion_common::tree_node::Transformed;
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// // use transform to rewrite the plan
+/// let transformed_result = plan.transform(|node| {
+///   // when we see the filter node
+///   if let LogicalPlan::Filter(mut filter) = node {
+///     // replace predicate with salary < 2000
+///     filter.predicate = Expr::Column(Column::new(Some("employee"), "salary")).lt(lit(2000));
+///     let new_plan = LogicalPlan::Filter(filter);
+///     return Ok(Transformed::yes(new_plan)); // communicate the node was changed
+///   }
+///   // return the node unchanged
+///   Ok(Transformed::no(node))
+/// }).unwrap();
+///
+/// // Transformed result contains rewritten plan and information about
+/// // whether the plan was changed
+/// assert!(transformed_result.transformed);
+/// let rewritten_plan = transformed_result.data;
+///
+/// // we found the filter
+/// assert_eq!(rewritten_plan.display_indent().to_string(),
+/// "Projection: employee.name\
+/// \n  Filter: employee.salary < Int32(2000)\
+/// \n    TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -625,7 +745,7 @@ impl LogicalPlan {
                 let expr = node.expressions();
                 let inputs: Vec<_> = node.inputs().into_iter().cloned().collect();
                 Ok(LogicalPlan::Extension(Extension {
-                    node: node.from_template(&expr, &inputs),
+                    node: node.with_exprs_and_inputs(expr, inputs)?,
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
@@ -667,12 +787,12 @@ impl LogicalPlan {
             LogicalPlan::DescribeTable(_) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
-                columns,
-                schema: _,
+                exec_columns,
                 options,
+                ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(unwrap_arc(input), columns, options)
+                unnest_with_options(unwrap_arc(input), exec_columns, options)
             }
         }
     }
@@ -923,7 +1043,7 @@ impl LogicalPlan {
                 definition: definition.clone(),
             }))),
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
-                node: e.node.from_template(&expr, &inputs),
+                node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
             LogicalPlan::Union(Union { schema, .. }) => {
                 let input_schema = inputs[0].schema();
@@ -1017,11 +1137,15 @@ impl LogicalPlan {
             }
             LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
-                columns, options, ..
+                exec_columns: columns,
+                options,
+                ..
             }) => {
                 // Update schema with unnested column type.
                 let input = inputs.swap_remove(0);
-                unnest_with_options(input, columns.clone(), options.clone())
+                let new_plan =
+                    unnest_with_options(input, columns.clone(), options.clone())?;
+                Ok(new_plan)
             }
         }
     }
@@ -1790,8 +1914,23 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { columns, .. }) => {
-                        write!(f, "Unnest: {}", expr_vec_fmt!(columns))
+                    LogicalPlan::Unnest(Unnest {
+                        input: plan,
+                        list_type_columns: list_col_indices,
+                        struct_type_columns: struct_col_indices, .. }) => {
+                        let input_columns = plan.schema().columns();
+                        let list_type_columns = list_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        let struct_type_columns = struct_col_indices
+                            .iter()
+                            .map(|i| &input_columns[*i])
+                            .collect::<Vec<&Column>>();
+                        // get items from input_columns indexed by list_col_indices
+                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        expr_vec_fmt!(list_type_columns),
+                        expr_vec_fmt!(struct_type_columns))
                     }
                 }
             }
@@ -2783,8 +2922,17 @@ pub enum Partitioning {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The columns to unnest
-    pub columns: Vec<Column>,
+    /// Columns to run unnest on, can be a list of (List/Struct) columns
+    pub exec_columns: Vec<Column>,
+    /// refer to the indices(in the input schema) of columns
+    /// that have type list to run unnest on
+    pub list_type_columns: Vec<usize>,
+    /// refer to the indices (in the input schema) of columns
+    /// that have type struct to run unnest on
+    pub struct_type_columns: Vec<usize>,
+    /// Having items aligned with the output columns
+    /// representing which column in the input schema each output column depends on
+    pub dependency_indices: Vec<usize>,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
     /// Options
@@ -2984,10 +3132,10 @@ digraph {
         strings: Vec<String>,
     }
 
-    impl TreeNodeVisitor for OkVisitor {
+    impl<'n> TreeNodeVisitor<'n> for OkVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -3001,7 +3149,7 @@ digraph {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -3067,10 +3215,10 @@ digraph {
         return_false_from_post_in: OptionalCounter,
     }
 
-    impl TreeNodeVisitor for StoppingVisitor {
+    impl<'n> TreeNodeVisitor<'n> for StoppingVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -3079,7 +3227,7 @@ digraph {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_post_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -3136,10 +3284,10 @@ digraph {
         return_error_from_post_in: OptionalCounter,
     }
 
-    impl TreeNodeVisitor for ErrorVisitor {
+    impl<'n> TreeNodeVisitor<'n> for ErrorVisitor {
         type Node = LogicalPlan;
 
-        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_pre_in.dec() {
                 return not_impl_err!("Error in pre_visit");
             }
@@ -3147,7 +3295,7 @@ digraph {
             self.inner.f_down(plan)
         }
 
-        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_post_in.dec() {
                 return not_impl_err!("Error in post_visit");
             }

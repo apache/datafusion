@@ -111,7 +111,7 @@ impl ExecutionPlan for AvroExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
     }
 
@@ -261,9 +261,7 @@ mod tests {
         let state = session_ctx.state();
 
         let url = Url::parse("file://").unwrap();
-        state
-            .runtime_env()
-            .register_object_store(&url, store.clone());
+        session_ctx.register_object_store(&url, store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
@@ -273,16 +271,11 @@ mod tests {
             .infer_schema(&state, &store, &[meta.clone()])
             .await?;
 
-        let avro_exec = AvroExec::new(FileScanConfig {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_groups: vec![vec![meta.into()]],
-            statistics: Statistics::new_unknown(&file_schema),
-            file_schema,
-            projection: Some(vec![0, 1, 2]),
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        });
+        let avro_exec = AvroExec::new(
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                .with_file(meta.into())
+                .with_projection(Some(vec![0, 1, 2])),
+        );
         assert_eq!(
             avro_exec
                 .properties()
@@ -350,16 +343,11 @@ mod tests {
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
-        let avro_exec = AvroExec::new(FileScanConfig {
-            object_store_url,
-            file_groups: vec![vec![meta.into()]],
-            statistics: Statistics::new_unknown(&file_schema),
-            file_schema,
-            projection,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        });
+        let avro_exec = AvroExec::new(
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file(meta.into())
+                .with_projection(projection),
+        );
         assert_eq!(
             avro_exec
                 .properties()
@@ -424,18 +412,19 @@ mod tests {
         let mut partitioned_file = PartitionedFile::from(meta);
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
-        let avro_exec = AvroExec::new(FileScanConfig {
-            // select specific columns of the files as well as the partitioning
-            // column which is supposed to be the last column in the table schema.
-            projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
-            object_store_url,
-            file_groups: vec![vec![partitioned_file]],
-            statistics: Statistics::new_unknown(&file_schema),
-            file_schema,
-            limit: None,
-            table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
-            output_ordering: vec![],
-        });
+        let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
+        let avro_exec = AvroExec::new(
+            FileScanConfig::new(object_store_url, file_schema)
+                // select specific columns of the files as well as the partitioning
+                // column which is supposed to be the last column in the table schema.
+                .with_projection(projection)
+                .with_file(partitioned_file)
+                .with_table_partition_cols(vec![Field::new(
+                    "date",
+                    DataType::Utf8,
+                    false,
+                )]),
+        );
         assert_eq!(
             avro_exec
                 .properties()

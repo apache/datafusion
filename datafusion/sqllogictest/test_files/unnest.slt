@@ -22,12 +22,19 @@
 statement ok
 CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3], [7], 1, [13, 14]),
-    ([4,5], [8,9,10], 2, [15, 16]),
-    ([6], [11,12], 3, null),
-    ([12], [null, 42, null], null, null),
+    ([1,2,3], [7], 1, [13, 14], struct(1,2)),
+    ([4,5], [8,9,10], 2, [15, 16], struct(3,4)),
+    ([6], [11,12], 3, null, null),
+    ([12], [null, 42, null], null, null, struct(7,8)),
     -- null array to verify the `preserve_nulls` option
-    (null, null, 4, [17, 18])
+    (null, null, 4, [17, 18], null)
+;
+
+statement ok
+CREATE TABLE nested_unnest_table
+AS VALUES 
+    (struct('a', 'b', struct('c')), (struct('a', 'b', [10,20])), [struct('a', 'b')]), 
+    (struct('d', 'e', struct('f')), (struct('x', 'y', [30,40, 50])), null)
 ;
 
 ## Basic unnest expression in select list
@@ -38,13 +45,33 @@ select unnest([1,2,3]);
 2
 3
 
-## Basic unnest expression in from clause
+## Basic unnest expression in select struct
+query III
+select unnest(struct(1,2,3));
+----
+1 2 3
+
+## Basic unnest list expression in from clause
 query I
 select * from unnest([1,2,3]);
 ----
 1
 2
 3
+
+## Basic unnest struct expression in from clause
+query III
+select * from unnest(struct(1,2,3));
+----
+1 2 3
+
+## Multiple unnest expression in from clause 
+query IIII
+select * from unnest(struct(1,2,3)),unnest([4,5,6]);
+----
+1 2 3 4
+1 2 3 5
+1 2 3 6
 
 
 ## Unnest null in select list
@@ -145,10 +172,6 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 [12] NULL NULL
 
 
-## Unnest column with scalars
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
-select unnest(column3) from unnest_table;
-
 ## Unnest doesn't work with untyped nulls
 query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null) from unnest_table;
@@ -233,12 +256,16 @@ select * from unnest([], NULL::int[]);
 
 
 ## Unnest struct expression in select list
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+query ?
 select unnest(struct(null));
+----
+NULL
 
 ## Unnest struct expression in from clause
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+query ?
 select * from unnest(struct(null));
+----
+NULL
 
 
 ## Unnest array expression
@@ -287,6 +314,18 @@ select unnest(array_remove(column1, 12)) from unnest_table;
 4
 5
 6
+
+## unnest struct-typed column and list-typed column at the same time
+query I?II?
+select unnest(column1), column1, unnest(column5), column5 from unnest_table;
+----
+1 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+2 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+3 [1, 2, 3] 1 2 {c0: 1, c1: 2}
+4 [4, 5] 3 4 {c0: 3, c1: 4}
+5 [4, 5] 3 4 {c0: 3, c1: 4}
+6 [6] NULL NULL NULL
+12 [12] 7 8 {c0: 7, c1: 8}
 
 
 ## Unnest in from clause with alias
@@ -383,8 +422,41 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 5 3
 11 NULL
 
+## unnest on nested(list(struct))
+query ?
+select unnest(column3) as struct_elem from nested_unnest_table;
+----
+{c0: a, c1: b}
+
+## unnest for nested struct(struct)
+query TT?
+select unnest(column1) from nested_unnest_table;
+----
+a b {c0: c}
+d e {c0: f}
+
+## unnest for nested(struct(list))
+query TT?
+select unnest(column2) from nested_unnest_table;
+----
+a b [10, 20]
+x y [30, 40, 50]
+
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
+
+## TODO: support unnest as a child expr
+query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression 
+select arrow_typeof(unnest(column5)) from unnest_table;
+
+
+## unnest from a result of a logical plan with limit and offset
+query I
+select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 offset 1);
+----
+4
+5
+6
 
 statement ok
 drop table unnest_table;

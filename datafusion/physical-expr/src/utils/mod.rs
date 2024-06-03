@@ -308,7 +308,7 @@ pub(crate) mod tests {
             }
         }
 
-        fn monotonicity(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
             Ok(input[0].sort_properties)
         }
 

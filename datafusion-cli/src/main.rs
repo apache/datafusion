@@ -304,7 +304,7 @@ enum ByteUnit {
 }
 
 impl ByteUnit {
-    fn multiplier(&self) -> usize {
+    fn multiplier(&self) -> u64 {
         match self {
             ByteUnit::Byte => 1,
             ByteUnit::KiB => 1 << 10,
@@ -349,8 +349,12 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
         let unit = byte_suffixes()
             .get(suffix)
             .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
+        let memory_pool_size = usize::try_from(unit.multiplier())
+            .ok()
+            .and_then(|multiplier| num.checked_mul(multiplier))
+            .ok_or_else(|| format!("Memory pool size '{}' is too large", size))?;
 
-        Ok(num * unit.multiplier())
+        Ok(memory_pool_size)
     } else {
         Err(format!("Invalid memory pool size '{}'", size))
     }
