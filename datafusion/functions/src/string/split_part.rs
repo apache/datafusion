@@ -172,7 +172,21 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
             ],
-            exec_err!("field position must be greater than zero"),
+            Ok(Some("ghi")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                    "abc~@~def~@~ghi"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            ],
+            exec_err!("field position must not be zero"),
             &str,
             Utf8,
             StringArray
