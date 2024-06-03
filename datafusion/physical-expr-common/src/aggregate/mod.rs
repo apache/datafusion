@@ -51,9 +51,7 @@ pub fn create_aggregate_expr(
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    // sort_exprs is used for udaf accumulator only, so it is not neccessary
-    // if the aggregate function does not care about accumulator
-    // debug_assert_eq!(sort_exprs.len(), ordering_req.len());
+    debug_assert_eq!(sort_exprs.len(), ordering_req.len());
 
     let input_exprs_types = input_phy_exprs
         .iter()
