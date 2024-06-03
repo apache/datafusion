@@ -162,7 +162,7 @@ nix = { version = "0.29.0", features = ["fs"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-config = "0.101.0"
 aws-credential-types = "0.101.0"
-object_store = { version = "0.9.1", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.9.1", default-features = false , features = ["aws", "gcp", "http"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 object_store = { version = "0.9.1", default-features = false }
