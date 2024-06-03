@@ -26,7 +26,8 @@ use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
+    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
@@ -676,6 +677,101 @@ async fn test_dates_32_diff_rg_sizes() {
         // row counts are [13, 7]
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "date32",
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
+    let reader_time32 = TestReader {
+        scenario: Scenario::Time32Second,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Second column
+    Test {
+        reader: reader_time32.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time32SecondArray::from(vec![18506, 18510, 18514, 18518])),
+        expected_max: Arc::new(Time32SecondArray::from(vec![18509, 18513, 18517, 18521])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "second",
+    }
+    .run();
+
+    let reader_time32_millisecond = TestReader {
+        scenario: Scenario::Time32Millisecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Millisecond column
+    Test {
+        reader: reader_time32_millisecond.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time32MillisecondArray::from(vec![
+            3600000, 3600004, 3600008, 3600012,
+        ])),
+        expected_max: Arc::new(Time32MillisecondArray::from(vec![
+            3600003, 3600007, 3600011, 3600015,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "millisecond",
+    }
+    .run();
+
+    let reader_time64_micro = TestReader {
+        scenario: Scenario::Time64Microsecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time64MicroSecond column
+    Test {
+        reader: reader_time64_micro.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time64MicrosecondArray::from(vec![
+            1234567890123,
+            1234567890127,
+            1234567890131,
+            1234567890135,
+        ])),
+        expected_max: Arc::new(Time64MicrosecondArray::from(vec![
+            1234567890126,
+            1234567890130,
+            1234567890134,
+            1234567890138,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "microsecond",
+    }
+    .run();
+
+    let reader_time64_nano = TestReader {
+        scenario: Scenario::Time64Nanosecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Second column
+    Test {
+        reader: reader_time64_nano.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time64NanosecondArray::from(vec![
+            987654321012345,
+            987654321012349,
+            987654321012353,
+            987654321012357,
+        ])),
+        expected_max: Arc::new(Time64NanosecondArray::from(vec![
+            987654321012348,
+            987654321012352,
+            987654321012356,
+            987654321012360,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "nanosecond",
     }
     .run();
 }

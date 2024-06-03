@@ -21,6 +21,7 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{new_empty_array, new_null_array, UInt64Array};
+use arrow_schema::TimeUnit;
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
@@ -96,6 +97,12 @@ macro_rules! get_statistic {
                     Some(DataType::Date64) => {
                         Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
                     }
+                    Some(DataType::Time32(TimeUnit::Second)) => {
+                        Some(ScalarValue::Time32Second(Some((*s.$func()))))
+                    }
+                    Some(DataType::Time32(TimeUnit::Millisecond)) => {
+                        Some(ScalarValue::Time32Millisecond(Some((*s.$func()))))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -111,6 +118,12 @@ macro_rules! get_statistic {
                     }
                     Some(DataType::UInt64) => {
                         Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
+                    }
+                    Some(DataType::Time64(TimeUnit::Microsecond)) => {
+                        Some(ScalarValue::Time64Microsecond(Some((*s.$func() as i64))))
+                    }
+                    Some(DataType::Time64(TimeUnit::Nanosecond)) => {
+                        Some(ScalarValue::Time64Nanosecond(Some((*s.$func() as i64))))
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
