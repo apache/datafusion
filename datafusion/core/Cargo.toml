@@ -162,9 +162,11 @@ nix = { version = "0.29.0", features = ["fs"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-config = "0.101.0"
 aws-credential-types = "0.101.0"
-object_store = { version = "0.9.1", default-features = false , features = ["aws", "gcp", "http"] }
+# the default features will cause libunwind error when testing on macos paltform.
+object_store = { version = "0.9.1", default-features = false, features = ["aws", "gcp", "http"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# the default features will cause libunwind error when testing on macos paltform.
 object_store = { version = "0.9.1", default-features = false }
 
 [[bench]]
