@@ -121,7 +121,7 @@ pub(crate) mod test_util {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
         PutMultipartOpts, PutOptions, PutPayload, PutResult,
     };
 
@@ -192,9 +192,9 @@ pub(crate) mod test_util {
 
         async fn put_multipart_opts(
             &self,
-            location: &Path,
-            opts: PutMultipartOpts,
-        ) -> Result<Box<dyn MultipartUpload>> {
+            _location: &Path,
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }
 
@@ -220,6 +220,7 @@ pub(crate) mod test_util {
                     version: None,
                 },
                 range: Default::default(),
+                attributes: Attributes::default(),
             })
         }
 

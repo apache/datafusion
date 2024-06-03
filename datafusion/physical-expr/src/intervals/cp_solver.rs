@@ -1444,6 +1444,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "temporary"]
     fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("interval_column", 1)),

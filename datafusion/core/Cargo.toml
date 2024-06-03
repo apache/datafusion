@@ -133,6 +133,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }

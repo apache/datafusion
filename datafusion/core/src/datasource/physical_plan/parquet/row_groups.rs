@@ -1398,7 +1398,7 @@ mod tests {
         };
         let in_memory = object_store::memory::InMemory::new();
         in_memory
-            .put(&object_meta.location, data)
+            .put(&object_meta.location, data.into())
             .await
             .expect("put parquet file into in memory object store");
 
