@@ -541,28 +541,6 @@ pub enum GetFieldAccess {
     },
 }
 
-/// Returns the field of a [`ListArray`] or
-/// [`StructArray`] by `key`.
-///
-/// See [`GetFieldAccess`] for details.
-///
-/// [`ListArray`]: arrow::array::ListArray
-/// [`StructArray`]: arrow::array::StructArray
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct GetIndexedField {
-    /// The expression to take the field from
-    pub expr: Box<Expr>,
-    /// The name of the field to take
-    pub field: GetFieldAccess,
-}
-
-impl GetIndexedField {
-    /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, field: GetFieldAccess) -> Self {
-        Self { expr, field }
-    }
-}
-
 /// Cast expression
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Cast {
@@ -754,10 +732,14 @@ impl WindowFunctionDefinition {
 impl fmt::Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
-            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
-            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                std::fmt::Display::fmt(fun, f)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
         }
     }
 }
@@ -2263,7 +2245,11 @@ mod test {
             let fun = find_df_window_func(name).unwrap();
             let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
             assert_eq!(fun, fun2);
-            assert_eq!(fun.to_string(), name.to_uppercase());
+            if fun.to_string() == "first_value" || fun.to_string() == "last_value" {
+                assert_eq!(fun.to_string(), name);
+            } else {
+                assert_eq!(fun.to_string(), name.to_uppercase());
+            }
         }
         Ok(())
     }
