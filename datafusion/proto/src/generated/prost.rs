@@ -1345,7 +1345,7 @@ pub struct PhysicalWindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(string, tag = "8")]
     pub name: ::prost::alloc::string::String,
-    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2, 3")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
     >,
@@ -1357,9 +1357,10 @@ pub mod physical_window_expr_node {
     pub enum WindowFunction {
         #[prost(enumeration = "super::AggregateFunction", tag = "1")]
         AggrFunction(i32),
-        /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
+        #[prost(string, tag = "3")]
+        UserDefinedAggrFunction(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
