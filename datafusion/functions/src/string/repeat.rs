@@ -88,7 +88,10 @@ fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .zip(number_array.iter())
         .map(|(string, number)| match (string, number) {
-            (Some(string), Some(number)) => Some(string.repeat(number as usize)),
+            (Some(string), Some(number)) if number >= 0 => {
+                Some(string.repeat(number as usize))
+            }
+            (Some(_), Some(_)) => Some("".to_string()),
             _ => None,
         })
         .collect::<GenericStringArray<T>>();
