@@ -26,8 +26,8 @@ use arrow::datatypes::{Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch, StringArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -994,15 +994,14 @@ async fn test_decimal() {
     .run();
 }
 
-// BUG: not convert BinaryArray to StringArray
-// https://github.com/apache/datafusion/issues/10605
 #[tokio::test]
 async fn test_byte() {
-    // This creates a parquet file of 4 columns
+    // This creates a parquet file of 5 columns
     // "name"
     // "service_string"
     // "service_binary"
     // "service_fixedsize"
+    // "service_large_binary"
 
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
@@ -1083,6 +1082,26 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "service_fixedsize",
+    }
+    .run();
+
+    let expected_service_large_binary_min_values: Vec<&[u8]> =
+        vec![b"frontend five", b"backend one", b"backend eight"];
+
+    let expected_service_large_binary_max_values: Vec<&[u8]> =
+        vec![b"frontend two", b"frontend six", b"backend six"];
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(LargeBinaryArray::from(
+            expected_service_large_binary_min_values,
+        )),
+        expected_max: Arc::new(LargeBinaryArray::from(
+            expected_service_large_binary_max_values,
+        )),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
+        column_name: "service_large_binary",
     }
     .run();
 }
@@ -1174,6 +1193,7 @@ async fn test_struct() {
     }
     .run();
 }
+
 ////// Files with missing statistics ///////
 
 #[tokio::test]

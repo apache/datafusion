@@ -132,6 +132,9 @@ macro_rules! get_statistic {
                     Some(DataType::Binary) => {
                         Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
                     }
+                    Some(DataType::LargeBinary) => {
+                        Some(ScalarValue::LargeBinary(Some(s.$bytes_func().to_vec())))
+                    }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
@@ -395,7 +398,8 @@ mod test {
     use arrow_array::{
         new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
+        Int8Array, LargeBinaryArray, RecordBatch, StringArray, StructArray,
+        TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -749,6 +753,34 @@ mod test {
             ]),
         }
         .run()
+    }
+
+    #[test]
+    fn roundtrip_large_binary_array() {
+        let input: Vec<Option<&[u8]>> = vec![
+            // row group 1
+            Some(b"A"),
+            None,
+            Some(b"Q"),
+            // row group 2
+            Some(b"ZZ"),
+            Some(b"AA"),
+            None,
+            // row group 3
+            None,
+            None,
+            None,
+        ];
+
+        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
+        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
+
+        Test {
+            input: large_binary_array(input),
+            expected_min: large_binary_array(expected_min),
+            expected_max: large_binary_array(expected_max),
+        }
+        .run();
     }
 
     #[test]
@@ -1184,6 +1216,15 @@ mod test {
                 .map(|s| Date64Type::parse(s.unwrap_or_default()))
                 .collect::<Vec<_>>(),
         );
+        Arc::new(array)
+    }
+
+    fn large_binary_array<'a>(
+        input: impl IntoIterator<Item = Option<&'a [u8]>>,
+    ) -> ArrayRef {
+        let array =
+            LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
+
         Arc::new(array)
     }
 }

@@ -28,7 +28,9 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
+use arrow_array::{
+    make_array, BooleanArray, Float32Array, LargeBinaryArray, StructArray,
+};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -598,6 +600,8 @@ fn make_bytearray_batch(
     string_values: Vec<&str>,
     binary_values: Vec<&[u8]>,
     fixedsize_values: Vec<&[u8; 3]>,
+    // i64 offset.
+    large_binary_values: Vec<&[u8]>,
 ) -> RecordBatch {
     let num_rows = string_values.len();
     let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
@@ -608,6 +612,8 @@ fn make_bytearray_batch(
         .map(|value| Some(value.as_slice()))
         .collect::<Vec<_>>()
         .into();
+    let service_large_binary: LargeBinaryArray =
+        large_binary_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![
         Field::new("name", name.data_type().clone(), true),
@@ -617,6 +623,11 @@ fn make_bytearray_batch(
         Field::new(
             "service_fixedsize",
             service_fixedsize.data_type().clone(),
+            true,
+        ),
+        Field::new(
+            "service_large_binary",
+            service_large_binary.data_type().clone(),
             true,
         ),
     ]);
@@ -629,6 +640,7 @@ fn make_bytearray_batch(
             Arc::new(service_string),
             Arc::new(service_binary),
             Arc::new(service_fixedsize),
+            Arc::new(service_large_binary),
         ],
     )
     .unwrap()
@@ -877,6 +889,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"frontend five",
                     ],
                     vec![b"fe1", b"fe2", b"fe3", b"fe7", b"fe5"],
+                    vec![
+                        b"frontend one",
+                        b"frontend two",
+                        b"frontend three",
+                        b"frontend seven",
+                        b"frontend five",
+                    ],
                 ),
                 make_bytearray_batch(
                     "mixed",
@@ -895,6 +914,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"backend three",
                     ],
                     vec![b"fe6", b"fe4", b"be1", b"be2", b"be3"],
+                    vec![
+                        b"frontend six",
+                        b"frontend four",
+                        b"backend one",
+                        b"backend two",
+                        b"backend three",
+                    ],
                 ),
                 make_bytearray_batch(
                     "all backends",
@@ -913,6 +939,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"backend eight",
                     ],
                     vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
+                    vec![
+                        b"backend four",
+                        b"backend five",
+                        b"backend six",
+                        b"backend seven",
+                        b"backend eight",
+                    ],
                 ),
             ]
         }
