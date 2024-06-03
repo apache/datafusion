@@ -871,7 +871,7 @@ message PhysicalWindowExprNode {
   oneof window_function {
     AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
-    // udaf = 3
+    string user_defined_aggr_function = 3;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;

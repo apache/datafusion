@@ -15,28 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::ScalarUDF;
-use std::sync::Arc;
-
-pub mod inner;
-
-// create `encode` and `decode` UDFs
-make_udf_function!(inner::EncodeFunc, ENCODE, encode);
-make_udf_function!(inner::DecodeFunc, DECODE, decode);
-
-// Export the functions out of this package, both as expr_fn as well as a list of functions
-pub mod expr_fn {
-    export_functions!( (
-        encode,
-        "encode the `input`, using the `encoding`. encoding can be base64 or hex",
-        input encoding
-    ),(
-        decode,
-        "decode the `input`, using the `encoding`. encoding can be base64 or hex",
-        input encoding
-    ));
-}
-
-pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![encode(), decode()]
-}
+mod plan_to_sql;

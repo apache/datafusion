@@ -30,7 +30,7 @@ crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
 datafusion = "latest_version"
-tokio = "1.0"
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
 ```
 
 ## Add latest non published DataFusion dependency
