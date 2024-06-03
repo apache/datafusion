@@ -79,8 +79,13 @@ pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
-    /// Adapts a `RecordBatch` that does not have all the columns (as defined in the schema).
-    /// This method is slower than `map_batch` and should only be used when explicitly needed.
+    /// Adapts a [`RecordBatch`] that does not  have all the columns from the
+    /// file schema.
+    ///
+    /// This method is used when applying a filter to a subset of the columns during
+    /// an `ArrowPredicate`.
+    ///
+    /// This method is slower than `map_batch` as it looks up columns by name.
     fn map_partial_batch(
         &self,
         batch: RecordBatch,

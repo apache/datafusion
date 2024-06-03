@@ -410,11 +410,9 @@ pub fn build_row_filter(
 
 #[cfg(test)]
 mod test {
-    use arrow::compute::kernels::cast_utils::Parser;
     use arrow::datatypes::Field;
-    use arrow_array::types::TimestampNanosecondType;
-    use arrow_array::TimestampNanosecondArray;
     use arrow_schema::TimeUnit::Nanosecond;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;
@@ -501,11 +499,10 @@ mod test {
         let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
             .expect("opening file");
 
-        let reader = SerializedFileReader::new(file).expect("creating reader");
-        let metadata = reader.metadata();
-        let file_schema =
-            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-                .expect("parsing schema");
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file).expect("creating reader");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
 
         // This is the schema we would like to coerce to,
         // which is different from the physical schema of the file.
@@ -515,52 +512,65 @@ mod test {
             false,
         )]);
 
-        let expr = col("timestamp_col").eq(Expr::Literal(
-            ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
-        ));
-        let expr = logical2physical(&expr, &table_schema);
-        let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
-            .build(metadata)
-            .expect("building candidate")
-            .expect("candidate expected");
-
         let schema_adapter =
-            DefaultSchemaAdapterFactory {}.create(Arc::new(table_schema));
+            DefaultSchemaAdapterFactory {}.create(Arc::new(table_schema.clone()));
         let (schema_mapping, _) = schema_adapter
             .map_schema(&file_schema)
             .expect("creating schema mapping");
 
+        let mut parquet_reader = parquet_reader_builder.build().expect("building reader");
+
+        // Parquet file is small, we only need 1 recordbatch
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        // Test all should fail
+        let expr = col("timestamp_col").lt(Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+        ));
+        let expr = logical2physical(&expr, &table_schema);
+        let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
             &file_schema,
-            metadata,
+            &metadata,
+            Count::new(),
+            Time::new(),
+            Arc::clone(&schema_mapping),
+        )
+        .expect("creating filter predicate");
+
+        let filtered = row_filter.evaluate(first_rb.clone());
+        assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![false; 8])));
+
+        // Test all should pass
+        let expr = col("timestamp_col").gt(Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+        ));
+        let expr = logical2physical(&expr, &table_schema);
+        let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            &file_schema,
+            &metadata,
             Count::new(),
             Time::new(),
             schema_mapping,
         )
         .expect("creating filter predicate");
 
-        // Create some fake data as if it was from the parquet file
-        let ts_array = TimestampNanosecondArray::new(
-            vec![TimestampNanosecondType::parse("2020-01-01T00:00:00")
-                .expect("should parse")]
-            .into(),
-            None,
-        );
-        // We need a matching schema to create a record batch
-        let batch_schema = Schema::new(vec![Field::new(
-            "timestamp_col",
-            DataType::Timestamp(Nanosecond, None),
-            false,
-        )]);
-
-        let record_batch =
-            RecordBatch::try_new(Arc::new(batch_schema), vec![Arc::new(ts_array)])
-                .expect("creating record batch");
-
-        let filtered = row_filter.evaluate(record_batch);
-
-        assert!(filtered.is_ok());
+        let filtered = row_filter.evaluate(first_rb);
+        assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
     }
 
     #[test]
