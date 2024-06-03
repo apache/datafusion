@@ -45,7 +45,8 @@ pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
     i256::from_be_bytes(sign_extend_be::<32>(b))
 }
 
-// Copy from arrow-rshttps://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
+// Copy from arrow-rs
+// https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
 // Convert the byte slice to fixed length byte array with the length of N.
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     assert!(b.len() <= N, "Array too large, expected less than {N}");
