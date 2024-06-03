@@ -162,7 +162,9 @@ impl Unparser<'_> {
                 // A second projection implies a derived tablefactor
                 if !select.already_projected() {
                     // Special handling when projecting an agregation plan
-                    if let Some(aggvariant) = find_agg_node_within_select(plan, true) {
+                    if let Some(aggvariant) =
+                        find_agg_node_within_select(plan, None, true)
+                    {
                         match aggvariant {
                             AggVariant::Aggregate(agg) => {
                                 let items = p
@@ -188,7 +190,7 @@ impl Unparser<'_> {
                                     .iter()
                                     .map(|proj_expr| {
                                         let unproj =
-                                            unproject_window_exprs(proj_expr, window)?;
+                                            unproject_window_exprs(proj_expr, &window)?;
                                         self.select_item_to_sql(&unproj)
                                     })
                                     .collect::<Result<Vec<_>>>()?;
@@ -228,7 +230,7 @@ impl Unparser<'_> {
             }
             LogicalPlan::Filter(filter) => {
                 if let Some(AggVariant::Aggregate(agg)) =
-                    find_agg_node_within_select(plan, select.already_projected())
+                    find_agg_node_within_select(plan, None, select.already_projected())
                 {
                     let unprojected = unproject_agg_exprs(&filter.predicate, agg)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
