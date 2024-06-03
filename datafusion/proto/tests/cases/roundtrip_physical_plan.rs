@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow::csv::WriterBuilder;
+use datafusion::functions_aggregate::sum::sum_udaf;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
@@ -47,7 +48,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
+    NotExpr, NthValue, PhysicalSortExpr, StringAgg,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -296,12 +297,20 @@ fn roundtrip_window() -> Result<()> {
         WindowFrameBound::Preceding(ScalarValue::Int64(None)),
     );
 
+    let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
+    let sum_expr = udaf::create_aggregate_expr(
+        &sum_udaf(),
+        &args,
+        &[],
+        &[],
+        &schema,
+        "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
+        false,
+        false,
+    )?;
+
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
-        Arc::new(Sum::new(
-            cast(col("a", &schema)?, &schema, DataType::Float64)?,
-            "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
-            DataType::Float64,
-        )),
+        sum_expr,
         &[],
         &[],
         Arc::new(window_frame),
