@@ -2271,7 +2271,11 @@ mod test {
             let fun = find_df_window_func(name).unwrap();
             let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
             assert_eq!(fun, fun2);
-            assert_eq!(fun.to_string(), name.to_uppercase());
+            if fun.to_string() == "first_value" || fun.to_string() == "last_value" {
+                assert_eq!(fun.to_string(), name);
+            } else {
+                assert_eq!(fun.to_string(), name.to_uppercase());
+            }
         }
         Ok(())
     }

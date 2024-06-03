@@ -53,8 +53,9 @@ use datafusion_expr::{
     avg, count, max, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_expr::{case, is_null, sum};
+use datafusion_expr::{case, is_null};
 use datafusion_functions_aggregate::expr_fn::median;
+use datafusion_functions_aggregate::expr_fn::sum;
 
 use async_trait::async_trait;
 
@@ -1590,7 +1591,7 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        array_agg, cast, create_udf, expr, lit, sum, BuiltInWindowFunction,
+        array_agg, cast, count_distinct, create_udf, expr, sum, lit, BuiltInWindowFunction,
         ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct};

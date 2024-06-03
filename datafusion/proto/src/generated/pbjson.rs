@@ -15982,6 +15982,9 @@ impl serde::Serialize for PhysicalWindowExprNode {
                         .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
                     struct_ser.serialize_field("builtInFunction", &v)?;
                 }
+                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(v) => {
+                    struct_ser.serialize_field("userDefinedAggrFunction", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16006,6 +16009,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             "aggrFunction",
             "built_in_function",
             "builtInFunction",
+            "user_defined_aggr_function",
+            "userDefinedAggrFunction",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16017,6 +16022,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             Name,
             AggrFunction,
             BuiltInFunction,
+            UserDefinedAggrFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16045,6 +16051,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             "name" => Ok(GeneratedField::Name),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
+                            "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16113,6 +16120,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                                 return Err(serde::de::Error::duplicate_field("builtInFunction"));
                             }
                             window_function__ = map_.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| physical_window_expr_node::WindowFunction::BuiltInFunction(x as i32));
+                        }
+                        GeneratedField::UserDefinedAggrFunction => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
+                            }
+                            window_function__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_window_expr_node::WindowFunction::UserDefinedAggrFunction);
                         }
                     }
                 }

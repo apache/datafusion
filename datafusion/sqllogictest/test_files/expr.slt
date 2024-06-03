@@ -542,6 +542,11 @@ SELECT repeat('Pg', 4)
 PgPgPgPg
 
 query T
+SELECT repeat('Pg', -1)
+----
+(empty)
+
+query T
 SELECT repeat('Pg', CAST(NULL AS INT))
 ----
 NULL

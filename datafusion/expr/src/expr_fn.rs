@@ -169,6 +169,8 @@ pub fn max(expr: Expr) -> Expr {
 }
 
 /// Create an expression to represent the sum() aggregate function
+///
+/// TODO: Remove this function and use `sum` from `datafusion_functions_aggregate::expr_fn` instead
 pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Sum,

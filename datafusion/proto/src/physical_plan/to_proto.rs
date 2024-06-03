@@ -186,21 +186,29 @@ pub fn serialize_physical_window_expr(
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
-        let AggrFn { inner, distinct } =
-            aggr_expr_to_aggr_fn(sliding_aggr_window_expr.get_aggregate_expr().as_ref())?;
+        let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
+        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            )
+        } else {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
 
-        if distinct {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
+            if distinct {
+                // TODO
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         }
-
-        if window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-        }
-
-        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
