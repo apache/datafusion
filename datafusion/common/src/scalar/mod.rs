@@ -2127,7 +2127,6 @@ impl ScalarValue {
             ),
             ScalarValue::Union(value, fields, _mode) => match value {
                 Some((v_id, value)) => {
-                    let mut field_type_ids = Vec::<i8>::with_capacity(fields.len());
                     let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
                     for (f_id, field) in fields.iter() {

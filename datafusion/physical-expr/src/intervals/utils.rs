@@ -26,7 +26,7 @@ use crate::{
 
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, SchemaRef};
-use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
 
@@ -171,9 +171,7 @@ fn convert_duration_bound_to_interval(
 /// Otherwise, it returns an error.
 fn interval_mdn_to_duration_ns(mdn: &IntervalMonthDayNano) -> Result<i64> {
     if mdn.months == 0 && mdn.days == 0 {
-        mdn.nanoseconds
-            .try_into()
-            .map_err(|_| internal_datafusion_err!("Resulting duration exceeds i64::MAX"))
+        Ok(mdn.nanoseconds)
     } else {
         internal_err!(
             "The interval cannot have a non-zero month or day value for duration convertibility"
