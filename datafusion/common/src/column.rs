@@ -127,6 +127,13 @@ impl Column {
             })
     }
 
+    /// return the column's name.
+    ///
+    /// Note: This ignores the relation and returns the column name only.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Serialize column into a flat name string
     pub fn flat_name(&self) -> String {
         match &self.relation {
