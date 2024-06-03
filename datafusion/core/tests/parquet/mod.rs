@@ -17,6 +17,7 @@
 
 //! Parquet integration tests
 use arrow::array::Decimal128Array;
+use arrow::datatypes::i256;
 use arrow::{
     array::{
         Array, ArrayRef, BinaryArray, Date32Array, Date64Array, FixedSizeBinaryArray,
@@ -28,7 +29,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
+use arrow_array::{make_array, BooleanArray, Decimal256Array, Float32Array, StructArray};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -77,6 +78,7 @@ enum Scenario {
     NumericLimits,
     Float64,
     Decimal,
+    Decimal256,
     DecimalBloomFilterInt32,
     DecimalBloomFilterInt64,
     DecimalLargePrecision,
@@ -514,6 +516,24 @@ fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: i8) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+/// Return record batch with decimal256 vector
+///
+/// Columns are named
+/// "decimal256_col" -> Decimal256Array
+fn make_decimal256_batch(v: Vec<i256>, precision: u8, scale: i8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal256_col",
+        DataType::Decimal256(precision, scale),
+        true,
+    )]));
+    let array = Arc::new(
+        Decimal256Array::from(v)
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    ) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array]).unwrap()
+}
+
 /// Return record batch with a few rows of data for all of the supported date
 /// types with the specified offset (in days)
 ///
@@ -820,6 +840,44 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
                 make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
                 make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::Decimal256 => {
+            // decimal256 record batch
+            vec![
+                make_decimal256_batch(
+                    vec![
+                        i256::from(100),
+                        i256::from(200),
+                        i256::from(300),
+                        i256::from(400),
+                        i256::from(600),
+                    ],
+                    9,
+                    2,
+                ),
+                make_decimal256_batch(
+                    vec![
+                        i256::from(-500),
+                        i256::from(100),
+                        i256::from(300),
+                        i256::from(400),
+                        i256::from(600),
+                    ],
+                    9,
+                    2,
+                ),
+                make_decimal256_batch(
+                    vec![
+                        i256::from(2000),
+                        i256::from(3000),
+                        i256::from(3000),
+                        i256::from(4000),
+                        i256::from(6000),
+                    ],
+                    9,
+                    2,
+                ),
             ]
         }
         Scenario::DecimalBloomFilterInt32 => {

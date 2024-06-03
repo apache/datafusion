@@ -22,11 +22,11 @@ use std::fs::File;
 use std::sync::Arc;
 
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{Date32Type, Date64Type};
+use arrow::datatypes::{i256, Date32Type, Date64Type};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
+    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
@@ -990,6 +990,38 @@ async fn test_decimal() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "decimal_col",
+    }
+    .run();
+
+    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
+    // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
+    let decimal256_reader = TestReader {
+        scenario: Scenario::Decimal256,
+        row_per_group: 5,
+    };
+    Test {
+        reader: decimal256_reader.build().await,
+        expected_min: Arc::new(
+            Decimal256Array::from(vec![
+                i256::from(100),
+                i256::from(-500),
+                i256::from(2000),
+            ])
+            .with_precision_and_scale(9, 2)
+            .unwrap(),
+        ),
+        expected_max: Arc::new(
+            Decimal256Array::from(vec![
+                i256::from(600),
+                i256::from(600),
+                i256::from(6000),
+            ])
+            .with_precision_and_scale(9, 2)
+            .unwrap(),
+        ),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
+        column_name: "decimal256_col",
     }
     .run();
 }

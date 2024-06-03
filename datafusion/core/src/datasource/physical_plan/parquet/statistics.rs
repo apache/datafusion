@@ -19,7 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow::{array::ArrayRef, datatypes::i256, datatypes::DataType};
 use arrow_array::{new_empty_array, new_null_array, UInt64Array};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
@@ -36,17 +36,22 @@ pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(sign_extend_be(b))
+    i128::from_be_bytes(sign_extend_be::<16>(b))
 }
 
-// Copy from arrow-rs
-// https://github.com/apache/arrow-rs/blob/733b7e7fd1e8c43a404c3ce40ecf741d493c21b4/parquet/src/arrow/buffer/bit_util.rs#L55
-// Convert the byte slice to fixed length byte array with the length of 16
-fn sign_extend_be(b: &[u8]) -> [u8; 16] {
-    assert!(b.len() <= 16, "Array too large, expected less than 16");
+// Convert the bytes array to i256.
+// The endian of the input bytes array must be big-endian.
+pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
+    i256::from_be_bytes(sign_extend_be::<32>(b))
+}
+
+// Copy from arrow-rshttps://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
+// Convert the byte slice to fixed length byte array with the length of N.
+pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
-    let mut result = if is_negative { [255u8; 16] } else { [0u8; 16] };
-    for (d, s) in result.iter_mut().skip(16 - b.len()).zip(b) {
+    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
         *d = *s;
     }
     result
@@ -71,6 +76,13 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(*s.$func() as i128),
+                            *precision,
+                            *scale,
+                        ))
+                    }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(i256::from(*s.$func())),
                             *precision,
                             *scale,
                         ))
@@ -109,6 +121,13 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(i256::from(*s.$func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
                     Some(DataType::UInt64) => {
                         Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
                     }
@@ -125,6 +144,13 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(from_bytes_to_i256(s.$bytes_func())),
                             *precision,
                             *scale,
                         ))
@@ -153,6 +179,13 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(from_bytes_to_i256(s.$bytes_func())),
                             *precision,
                             *scale,
                         ))
@@ -391,11 +424,12 @@ impl<'a> StatisticsConverter<'a> {
 mod test {
     use super::*;
     use arrow::compute::kernels::cast_utils::Parser;
-    use arrow::datatypes::{Date32Type, Date64Type};
+    use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow_array::{
         new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
+        Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, StructArray,
+        TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -592,6 +626,42 @@ mod test {
                 Decimal128Array::from(vec![Some(22000), Some(500000), None])
                     .with_precision_and_scale(9, 2)
                     .unwrap(),
+            ),
+        }
+        .run();
+
+        Test {
+            input: Arc::new(
+                Decimal256Array::from(vec![
+                    // row group 1
+                    Some(i256::from(100)),
+                    None,
+                    Some(i256::from(22000)),
+                    // row group 2
+                    Some(i256::MAX),
+                    Some(i256::MIN),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
+            ),
+            expected_min: Arc::new(
+                Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::MIN), None])
+                    .with_precision_and_scale(76, 76)
+                    .unwrap(),
+            ),
+            expected_max: Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::from(22000)),
+                    Some(i256::MAX),
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
             ),
         }
         .run()
