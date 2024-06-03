@@ -28,7 +28,8 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{make_array, BooleanArray, Float32Array, StructArray};
+use arrow_array::types::{Int32Type, Int8Type};
+use arrow_array::{make_array, BooleanArray, DictionaryArray, Float32Array, StructArray};
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -81,7 +82,10 @@ enum Scenario {
     DecimalBloomFilterInt64,
     DecimalLargePrecision,
     DecimalLargePrecisionBloomFilter,
+    /// StringArray, BinaryArray, FixedSizeBinaryArray
     ByteArray,
+    /// DictionaryArray
+    Dictionary,
     PeriodsInColumnNames,
     WithNullValues,
     WithNullValuesPageLevel,
@@ -783,6 +787,41 @@ fn make_numeric_limit_batch() -> RecordBatch {
     .unwrap()
 }
 
+fn make_dict_batch() -> RecordBatch {
+    let values = [
+        Some("abc"),
+        Some("def"),
+        None,
+        Some("def"),
+        Some("abc"),
+        Some("fffff"),
+        Some("aaa"),
+    ];
+    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().cloned());
+    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().cloned());
+
+    // Dictionary array of integers
+    let int64_values = Int64Array::from(vec![0, -100, 100]);
+    let keys = Int8Array::from_iter([
+        Some(0),
+        Some(1),
+        None,
+        Some(0),
+        Some(0),
+        Some(2),
+        Some(0),
+    ]);
+    let dict_i8_int_array =
+        DictionaryArray::<Int8Type>::try_new(keys, Arc::new(int64_values)).unwrap();
+
+    RecordBatch::try_from_iter(vec![
+        ("string_dict_i8", Arc::new(dict_i8_array) as _),
+        ("string_dict_i32", Arc::new(dict_i32_array) as _),
+        ("int_dict_i8", Arc::new(dict_i8_int_array) as _),
+    ])
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -953,6 +992,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                     vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
                 ),
             ]
+        }
+        Scenario::Dictionary => {
+            vec![make_dict_batch()]
         }
         Scenario::PeriodsInColumnNames => {
             vec![

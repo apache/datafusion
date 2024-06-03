@@ -1231,8 +1231,44 @@ async fn test_decimal() {
     .run();
 }
 
-// BUG: not convert BinaryArray to StringArray
-// https://github.com/apache/datafusion/issues/10605
+#[tokio::test]
+async fn test_dictionary() {
+    let reader = TestReader {
+        scenario: Scenario::Dictionary,
+        row_per_group: 5,
+    };
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(StringArray::from(vec!["abc", "aaa"])),
+        expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "string_dict_i8",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(StringArray::from(vec!["abc", "aaa"])),
+        expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "string_dict_i32",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(Int64Array::from(vec![-100, 0])),
+        expected_max: Arc::new(Int64Array::from(vec![0, 100])),
+        expected_null_counts: UInt64Array::from(vec![1, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 2]),
+        column_name: "int_dict_i8",
+    }
+    .run();
+}
+
 #[tokio::test]
 async fn test_byte() {
     // This creates a parquet file of 4 columns
