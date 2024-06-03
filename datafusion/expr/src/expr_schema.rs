@@ -176,10 +176,6 @@ impl ExprSchemable for Expr {
                         Ok(fun.return_type(&new_types)?)
                     }
                     _ => {
-                        let data_types = args
-                            .iter()
-                            .map(|e| e.get_type(schema))
-                            .collect::<Result<Vec<_>>>()?;
                         fun.return_type(&data_types)
                     }
                 }
