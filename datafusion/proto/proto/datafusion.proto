@@ -407,15 +407,6 @@ message ListRange {
   LogicalExprNode stride = 3;
 }
 
-message GetIndexedField {
-  LogicalExprNode expr = 1;
-  oneof field {
-    NamedStructField named_struct_field = 2;
-    ListIndex list_index = 3;
-    ListRange list_range = 4;
-  }
-}
-
 message IsNull {
   LogicalExprNode expr = 1;
 }
