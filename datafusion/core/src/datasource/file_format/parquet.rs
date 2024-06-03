@@ -1266,14 +1266,6 @@ mod tests {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
-        }
-
         async fn get_opts(
             &self,
             location: &Path,

@@ -4631,6 +4631,17 @@ mod tests {
 
         let str_vals = [Some("foo"), None, Some("bar")];
 
+        let interval_dt_vals = [
+            Some(IntervalDayTime::MINUS_ONE),
+            None,
+            Some(IntervalDayTime::ONE),
+        ];
+        let interval_mdn_vals = [
+            Some(IntervalMonthDayNano::MINUS_ONE),
+            None,
+            Some(IntervalMonthDayNano::ONE),
+        ];
+
         /// Test each value in `scalar` with the corresponding element
         /// at `array`. Assumes each element is unique (aka not equal
         /// with all other indexes)
@@ -4776,8 +4787,13 @@ mod tests {
                 Some("UTC".into())
             ),
             // TODO: add them back
-            // make_test_case!(i32_vals, IntervalYearMonthArray, IntervalYearMonth),
-            // make_test_case!(i64_vals, IntervalDayTimeArray, IntervalDayTime),
+            make_test_case!(i32_vals, IntervalYearMonthArray, IntervalYearMonth),
+            make_test_case!(interval_dt_vals, IntervalDayTimeArray, IntervalDayTime),
+            make_test_case!(
+                interval_mdn_vals,
+                IntervalMonthDayNanoArray,
+                IntervalMonthDayNano
+            ),
             make_str_dict_test_case!(str_vals, Int8Type),
             make_str_dict_test_case!(str_vals, Int16Type),
             make_str_dict_test_case!(str_vals, Int32Type),
