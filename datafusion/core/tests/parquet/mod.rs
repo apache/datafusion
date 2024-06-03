@@ -332,9 +332,13 @@ fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
 ///
 /// Columns are named:
 /// "nanos" --> TimestampNanosecondArray
+/// "nanos_timezoned" --> TimestampNanosecondArray with timezone
 /// "micros" --> TimestampMicrosecondArray
+/// "micros_timezoned" --> TimestampMicrosecondArray with timezone
 /// "millis" --> TimestampMillisecondArray
+/// "millis_timezoned" --> TimestampMillisecondArray with timezone
 /// "seconds" --> TimestampSecondArray
+/// "seconds_timezoned" --> TimestampSecondArray with timezone
 /// "names" --> StringArray
 fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     let ts_strings = vec![
@@ -344,6 +348,8 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         None,
         Some("2020-01-02T01:01:01.0000000000001"),
     ];
+
+    let tz_string = "Pacific/Efate";
 
     let offset_nanos = offset.num_nanoseconds().expect("non overflow nanos");
 
@@ -382,19 +388,47 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         .map(|(i, _)| format!("Row {i} + {offset}"))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
-    let arr_micros = TimestampMicrosecondArray::from(ts_micros);
-    let arr_millis = TimestampMillisecondArray::from(ts_millis);
-    let arr_seconds = TimestampSecondArray::from(ts_seconds);
+    let arr_nanos = TimestampNanosecondArray::from(ts_nanos.clone());
+    let arr_nanos_timezoned =
+        TimestampNanosecondArray::from(ts_nanos).with_timezone(tz_string);
+    let arr_micros = TimestampMicrosecondArray::from(ts_micros.clone());
+    let arr_micros_timezoned =
+        TimestampMicrosecondArray::from(ts_micros).with_timezone(tz_string);
+    let arr_millis = TimestampMillisecondArray::from(ts_millis.clone());
+    let arr_millis_timezoned =
+        TimestampMillisecondArray::from(ts_millis).with_timezone(tz_string);
+    let arr_seconds = TimestampSecondArray::from(ts_seconds.clone());
+    let arr_seconds_timezoned =
+        TimestampSecondArray::from(ts_seconds).with_timezone(tz_string);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);
 
     let schema = Schema::new(vec![
         Field::new("nanos", arr_nanos.data_type().clone(), true),
+        Field::new(
+            "nanos_timezoned",
+            arr_nanos_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("micros", arr_micros.data_type().clone(), true),
+        Field::new(
+            "micros_timezoned",
+            arr_micros_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("millis", arr_millis.data_type().clone(), true),
+        Field::new(
+            "millis_timezoned",
+            arr_millis_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("seconds", arr_seconds.data_type().clone(), true),
+        Field::new(
+            "seconds_timezoned",
+            arr_seconds_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("name", arr_names.data_type().clone(), true),
     ]);
     let schema = Arc::new(schema);
@@ -403,9 +437,13 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         schema,
         vec![
             Arc::new(arr_nanos),
+            Arc::new(arr_nanos_timezoned),
             Arc::new(arr_micros),
+            Arc::new(arr_micros_timezoned),
             Arc::new(arr_millis),
+            Arc::new(arr_millis_timezoned),
             Arc::new(arr_seconds),
+            Arc::new(arr_seconds_timezoned),
             Arc::new(arr_names),
         ],
     )

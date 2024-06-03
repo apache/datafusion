@@ -22,12 +22,16 @@ use std::fs::File;
 use std::sync::Arc;
 
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{Date32Type, Date64Type};
+use arrow::datatypes::{
+    Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -456,36 +460,40 @@ async fn test_int_8() {
 // timestamp
 #[tokio::test]
 async fn test_timestamp() {
-    // This creates a parquet files of 5 columns named "nanos", "micros", "millis", "seconds", "names"
+    // This creates a parquet files of 9 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned", "names"
     // "nanos" --> TimestampNanosecondArray
+    // "nanos_timezoned" --> TimestampNanosecondArray
     // "micros" --> TimestampMicrosecondArray
+    // "micros_timezoned" --> TimestampMicrosecondArray
     // "millis" --> TimestampMillisecondArray
+    // "millis_timezoned" --> TimestampMillisecondArray
     // "seconds" --> TimestampSecondArray
+    // "seconds_timezoned" --> TimestampSecondArray
     // "names" --> StringArray
     //
     // The file is created by 4 record batches, each has 5 rowws.
     // Since the row group isze is set to 5, those 4 batches will go into 4 row groups
-    // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
+    // This creates a parquet files of 4 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned"
     let reader = TestReader {
         scenario: Scenario::Timestamps,
         row_per_group: 5,
     };
 
+    let tz = "Pacific/Efate";
+
     Test {
         reader: reader.build().await,
-        // mins are [1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,]
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000000000,
-            1577840471000000000,
-            1577841061000000000,
-            1578704461000000000,
+        expected_min: Arc::new(TimestampNanosecondArray::from(vec![
+            TimestampNanosecondType::parse("2020-01-01T01:01:01"),
+            TimestampNanosecondType::parse("2020-01-01T01:01:11"),
+            TimestampNanosecondType::parse("2020-01-01T01:11:01"),
+            TimestampNanosecondType::parse("2020-01-11T01:01:01"),
         ])),
-        // maxes are [1577926861000000000, 1577926871000000000, 1577927461000000000, 1578790861000000000,]
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000000000,
-            1577926871000000000,
-            1577927461000000000,
-            1578790861000000000,
+        expected_max: Arc::new(TimestampNanosecondArray::from(vec![
+            TimestampNanosecondType::parse("2020-01-02T01:01:01"),
+            TimestampNanosecondType::parse("2020-01-02T01:01:11"),
+            TimestampNanosecondType::parse("2020-01-02T01:11:01"),
+            TimestampNanosecondType::parse("2020-01-12T01:01:01"),
         ])),
         // nulls are [1, 1, 1, 1]
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
@@ -495,21 +503,48 @@ async fn test_timestamp() {
     }
     .run();
 
-    // micros
-
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000000,
-            1577840471000000,
-            1577841061000000,
-            1578704461000000,
+        expected_min: Arc::new(
+            TimestampNanosecondArray::from(vec![
+                TimestampNanosecondType::parse("2020-01-01T01:01:01"),
+                TimestampNanosecondType::parse("2020-01-01T01:01:11"),
+                TimestampNanosecondType::parse("2020-01-01T01:11:01"),
+                TimestampNanosecondType::parse("2020-01-11T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampNanosecondArray::from(vec![
+                TimestampNanosecondType::parse("2020-01-02T01:01:01"),
+                TimestampNanosecondType::parse("2020-01-02T01:01:11"),
+                TimestampNanosecondType::parse("2020-01-02T01:11:01"),
+                TimestampNanosecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 1, 1, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "nanos_timezoned",
+    }
+    .run();
+
+    // micros
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
+            TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
+            TimestampMicrosecondType::parse("2020-01-01T01:01:11"),
+            TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
+            TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000000,
-            1577926871000000,
-            1577927461000000,
-            1578790861000000,
+        expected_max: Arc::new(TimestampMicrosecondArray::from(vec![
+            TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
+            TimestampMicrosecondType::parse("2020-01-02T01:01:11"),
+            TimestampMicrosecondType::parse("2020-01-02T01:11:01"),
+            TimestampMicrosecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
@@ -517,20 +552,48 @@ async fn test_timestamp() {
     }
     .run();
 
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
+                TimestampMicrosecondType::parse("2020-01-01T01:01:11"),
+                TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
+                TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
+                TimestampMicrosecondType::parse("2020-01-02T01:01:11"),
+                TimestampMicrosecondType::parse("2020-01-02T01:11:01"),
+                TimestampMicrosecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 1, 1, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "micros_timezoned",
+    }
+    .run();
+
     // millis
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000,
-            1577840471000,
-            1577841061000,
-            1578704461000,
+        expected_min: Arc::new(TimestampMillisecondArray::from(vec![
+            TimestampMillisecondType::parse("2020-01-01T01:01:01"),
+            TimestampMillisecondType::parse("2020-01-01T01:01:11"),
+            TimestampMillisecondType::parse("2020-01-01T01:11:01"),
+            TimestampMillisecondType::parse("2020-01-11T01:01:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000,
-            1577926871000,
-            1577927461000,
-            1578790861000,
+        expected_max: Arc::new(TimestampMillisecondArray::from(vec![
+            TimestampMillisecondType::parse("2020-01-02T01:01:01"),
+            TimestampMillisecondType::parse("2020-01-02T01:01:11"),
+            TimestampMillisecondType::parse("2020-01-02T01:11:01"),
+            TimestampMillisecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
@@ -538,18 +601,80 @@ async fn test_timestamp() {
     }
     .run();
 
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampMillisecondArray::from(vec![
+                TimestampMillisecondType::parse("2020-01-01T01:01:01"),
+                TimestampMillisecondType::parse("2020-01-01T01:01:11"),
+                TimestampMillisecondType::parse("2020-01-01T01:11:01"),
+                TimestampMillisecondType::parse("2020-01-11T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampMillisecondArray::from(vec![
+                TimestampMillisecondType::parse("2020-01-02T01:01:01"),
+                TimestampMillisecondType::parse("2020-01-02T01:01:11"),
+                TimestampMillisecondType::parse("2020-01-02T01:11:01"),
+                TimestampMillisecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 1, 1, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "millis_timezoned",
+    }
+    .run();
+
     // seconds
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461, 1577840471, 1577841061, 1578704461,
+        expected_min: Arc::new(TimestampSecondArray::from(vec![
+            TimestampSecondType::parse("2020-01-01T01:01:01"),
+            TimestampSecondType::parse("2020-01-01T01:01:11"),
+            TimestampSecondType::parse("2020-01-01T01:11:01"),
+            TimestampSecondType::parse("2020-01-11T01:01:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861, 1577926871, 1577927461, 1578790861,
+        expected_max: Arc::new(TimestampSecondArray::from(vec![
+            TimestampSecondType::parse("2020-01-02T01:01:01"),
+            TimestampSecondType::parse("2020-01-02T01:01:11"),
+            TimestampSecondType::parse("2020-01-02T01:11:01"),
+            TimestampSecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
         column_name: "seconds",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampSecondArray::from(vec![
+                TimestampSecondType::parse("2020-01-01T01:01:01"),
+                TimestampSecondType::parse("2020-01-01T01:01:11"),
+                TimestampSecondType::parse("2020-01-01T01:11:01"),
+                TimestampSecondType::parse("2020-01-11T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampSecondArray::from(vec![
+                TimestampSecondType::parse("2020-01-02T01:01:01"),
+                TimestampSecondType::parse("2020-01-02T01:01:11"),
+                TimestampSecondType::parse("2020-01-02T01:11:01"),
+                TimestampSecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 1, 1, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "seconds_timezoned",
     }
     .run();
 }
@@ -557,11 +682,15 @@ async fn test_timestamp() {
 // timestamp with different row group sizes
 #[tokio::test]
 async fn test_timestamp_diff_rg_sizes() {
-    // This creates a parquet files of 5 columns named "nanos", "micros", "millis", "seconds", "names"
+    // This creates a parquet files of 9 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned", "names"
     // "nanos" --> TimestampNanosecondArray
+    // "nanos_timezoned" --> TimestampNanosecondArray
     // "micros" --> TimestampMicrosecondArray
+    // "micros_timezoned" --> TimestampMicrosecondArray
     // "millis" --> TimestampMillisecondArray
+    // "millis_timezoned" --> TimestampMillisecondArray
     // "seconds" --> TimestampSecondArray
+    // "seconds_timezoned" --> TimestampSecondArray
     // "names" --> StringArray
     //
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 3 row groups with size 8, 8, 4
@@ -570,19 +699,19 @@ async fn test_timestamp_diff_rg_sizes() {
         row_per_group: 8, // note that the row group size is 8
     };
 
+    let tz = "Pacific/Efate";
+
     Test {
         reader: reader.build().await,
-        // mins are [1577840461000000000, 1577841061000000000, 1578704521000000000]
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000000000,
-            1577841061000000000,
-            1578704521000000000,
+        expected_min: Arc::new(TimestampNanosecondArray::from(vec![
+            TimestampNanosecondType::parse("2020-01-01T01:01:01"),
+            TimestampNanosecondType::parse("2020-01-01T01:11:01"),
+            TimestampNanosecondType::parse("2020-01-11T01:02:01"),
         ])),
-        // maxes are [1577926861000000000, 1578704461000000000, 157879086100000000]
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000000000,
-            1578704461000000000,
-            1578790861000000000,
+        expected_max: Arc::new(TimestampNanosecondArray::from(vec![
+            TimestampNanosecondType::parse("2020-01-02T01:01:01"),
+            TimestampNanosecondType::parse("2020-01-11T01:01:01"),
+            TimestampNanosecondType::parse("2020-01-12T01:01:01"),
         ])),
         // nulls are [1, 2, 1]
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
@@ -592,18 +721,44 @@ async fn test_timestamp_diff_rg_sizes() {
     }
     .run();
 
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampNanosecondArray::from(vec![
+                TimestampNanosecondType::parse("2020-01-01T01:01:01"),
+                TimestampNanosecondType::parse("2020-01-01T01:11:01"),
+                TimestampNanosecondType::parse("2020-01-11T01:02:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampNanosecondArray::from(vec![
+                TimestampNanosecondType::parse("2020-01-02T01:01:01"),
+                TimestampNanosecondType::parse("2020-01-11T01:01:01"),
+                TimestampNanosecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 2, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
+        // row counts are [8, 8, 4]
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+        column_name: "nanos_timezoned",
+    }
+    .run();
+
     // micros
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000000,
-            1577841061000000,
-            1578704521000000,
+        expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
+            TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
+            TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
+            TimestampMicrosecondType::parse("2020-01-11T01:02:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000000,
-            1578704461000000,
-            1578790861000000,
+        expected_max: Arc::new(TimestampMicrosecondArray::from(vec![
+            TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
+            TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
+            TimestampMicrosecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
@@ -611,18 +766,44 @@ async fn test_timestamp_diff_rg_sizes() {
     }
     .run();
 
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
+                TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
+                TimestampMicrosecondType::parse("2020-01-11T01:02:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2020-01-02T01:01:01"),
+                TimestampMicrosecondType::parse("2020-01-11T01:01:01"),
+                TimestampMicrosecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 2, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
+        // row counts are [8, 8, 4]
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+        column_name: "micros_timezoned",
+    }
+    .run();
+
     // millis
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461000,
-            1577841061000,
-            1578704521000,
+        expected_min: Arc::new(TimestampMillisecondArray::from(vec![
+            TimestampMillisecondType::parse("2020-01-01T01:01:01"),
+            TimestampMillisecondType::parse("2020-01-01T01:11:01"),
+            TimestampMillisecondType::parse("2020-01-11T01:02:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861000,
-            1578704461000,
-            1578790861000,
+        expected_max: Arc::new(TimestampMillisecondArray::from(vec![
+            TimestampMillisecondType::parse("2020-01-02T01:01:01"),
+            TimestampMillisecondType::parse("2020-01-11T01:01:01"),
+            TimestampMillisecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
@@ -630,18 +811,74 @@ async fn test_timestamp_diff_rg_sizes() {
     }
     .run();
 
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampMillisecondArray::from(vec![
+                TimestampMillisecondType::parse("2020-01-01T01:01:01"),
+                TimestampMillisecondType::parse("2020-01-01T01:11:01"),
+                TimestampMillisecondType::parse("2020-01-11T01:02:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampMillisecondArray::from(vec![
+                TimestampMillisecondType::parse("2020-01-02T01:01:01"),
+                TimestampMillisecondType::parse("2020-01-11T01:01:01"),
+                TimestampMillisecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 2, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
+        // row counts are [8, 8, 4]
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+        column_name: "millis_timezoned",
+    }
+    .run();
+
     // seconds
     Test {
         reader: reader.build().await,
-        expected_min: Arc::new(Int64Array::from(vec![
-            1577840461, 1577841061, 1578704521,
+        expected_min: Arc::new(TimestampSecondArray::from(vec![
+            TimestampSecondType::parse("2020-01-01T01:01:01"),
+            TimestampSecondType::parse("2020-01-01T01:11:01"),
+            TimestampSecondType::parse("2020-01-11T01:02:01"),
         ])),
-        expected_max: Arc::new(Int64Array::from(vec![
-            1577926861, 1578704461, 1578790861,
+        expected_max: Arc::new(TimestampSecondArray::from(vec![
+            TimestampSecondType::parse("2020-01-02T01:01:01"),
+            TimestampSecondType::parse("2020-01-11T01:01:01"),
+            TimestampSecondType::parse("2020-01-12T01:01:01"),
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
         column_name: "seconds",
+    }
+    .run();
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(
+            TimestampSecondArray::from(vec![
+                TimestampSecondType::parse("2020-01-01T01:01:01"),
+                TimestampSecondType::parse("2020-01-01T01:11:01"),
+                TimestampSecondType::parse("2020-01-11T01:02:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        expected_max: Arc::new(
+            TimestampSecondArray::from(vec![
+                TimestampSecondType::parse("2020-01-02T01:01:01"),
+                TimestampSecondType::parse("2020-01-11T01:01:01"),
+                TimestampSecondType::parse("2020-01-12T01:01:01"),
+            ])
+            .with_timezone(tz),
+        ),
+        // nulls are [1, 2, 1]
+        expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
+        // row counts are [8, 8, 4]
+        expected_row_counts: UInt64Array::from(vec![8, 8, 4]),
+        column_name: "seconds_timezoned",
     }
     .run();
 }
