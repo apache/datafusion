@@ -1347,7 +1347,6 @@ mod tests {
             false,
         )?];
 
-
         let task_ctx = if spill {
             new_spill_ctx(4, 1000)
         } else {
