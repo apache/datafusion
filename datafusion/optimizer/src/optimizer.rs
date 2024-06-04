@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use datafusion_expr::registry::FunctionRegistry;
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
@@ -122,6 +123,10 @@ pub trait OptimizerConfig {
     fn alias_generator(&self) -> Arc<AliasGenerator>;
 
     fn options(&self) -> &ConfigOptions;
+
+    fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
+        None
+    }
 }
 
 /// A standalone [`OptimizerConfig`] that can be used independently

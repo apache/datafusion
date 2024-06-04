@@ -70,6 +70,9 @@ pub struct AccumulatorArgs<'a> {
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
 
+    /// The name of the aggregate expression
+    pub name: &'a str,
+
     /// Whether the aggregate function is distinct.
     ///
     /// ```sql
@@ -82,9 +85,6 @@ pub struct AccumulatorArgs<'a> {
 
     /// The number of arguments the aggregate function takes.
     pub args_num: usize,
-
-    /// The name of the expression
-    pub name: &'a str,
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an
@@ -131,6 +131,19 @@ pub type StateTypeFunction =
 pub type AggregateFunctionSimplification = Box<
     dyn Fn(
         crate::expr::AggregateFunction,
+        &dyn crate::simplify::SimplifyInfo,
+    ) -> Result<Expr>,
+>;
+
+/// [crate::udwf::WindowUDFImpl::simplify] simplifier closure
+/// A closure with two arguments:
+/// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+/// * 'info': [crate::simplify::SimplifyInfo]
+///
+/// closure returns simplified [Expr] or an error.
+pub type WindowFunctionSimplification = Box<
+    dyn Fn(
+        crate::expr::WindowFunction,
         &dyn crate::simplify::SimplifyInfo,
     ) -> Result<Expr>,
 >;

@@ -79,45 +79,60 @@ make_udf_function!(
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
-    #[doc = "returns current UTC date as a Date32 value"]
-    pub fn current_date() -> Expr {
-        super::current_date().call(vec![])
-    }
-
-    #[doc = "returns current UTC time as a Time64 value"]
-    pub fn current_time() -> Expr {
-        super::current_time().call(vec![])
-    }
-
-    #[doc = "coerces an arbitrary timestamp to the start of the nearest specified interval"]
-    pub fn date_bin(stride: Expr, source: Expr, origin: Expr) -> Expr {
-        super::date_bin().call(vec![stride, source, origin])
-    }
-
-    #[doc = "extracts a subfield from the date"]
-    pub fn date_part(part: Expr, date: Expr) -> Expr {
-        super::date_part().call(vec![part, date])
-    }
-
-    #[doc = "truncates the date to a specified level of precision"]
-    pub fn date_trunc(part: Expr, date: Expr) -> Expr {
-        super::date_trunc().call(vec![part, date])
-    }
-
-    #[doc = "converts an integer to RFC3339 timestamp format string"]
-    pub fn from_unixtime(unixtime: Expr) -> Expr {
-        super::from_unixtime().call(vec![unixtime])
-    }
-
-    #[doc = "make a date from year, month and day component parts"]
-    pub fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
-        super::make_date().call(vec![year, month, day])
-    }
-
-    #[doc = "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement"]
-    pub fn now() -> Expr {
-        super::now().call(vec![])
-    }
+    export_functions!((
+        current_date,
+        "returns current UTC date as a Date32 value",
+    ),(
+        current_time,
+        "returns current UTC time as a Time64 value",
+    ),(
+        from_unixtime,
+        "converts an integer to RFC3339 timestamp format string",
+        unixtime
+    ),(
+        date_bin,
+        "coerces an arbitrary timestamp to the start of the nearest specified interval",
+        stride source origin
+    ),(
+        date_part,
+        "extracts a subfield from the date",
+        part date
+    ),(
+        date_trunc,
+        "truncates the date to a specified level of precision",
+        part date
+    ),(
+        make_date,
+        "make a date from year, month and day component parts",
+        year month day
+    ),(
+        now,
+        "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
+    ),(
+        to_unixtime,
+        "converts a string and optional formats to a Unixtime",
+        args,
+    ),(
+        to_timestamp,
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
+        args,
+    ),(
+        to_timestamp_seconds,
+        "converts a string and optional formats to a `Timestamp(Seconds, None)`",
+        args,
+    ),(
+        to_timestamp_millis,
+        "converts a string and optional formats to a `Timestamp(Milliseconds, None)`",
+        args,
+    ),(
+        to_timestamp_micros,
+        "converts a string and optional formats to a `Timestamp(Microseconds, None)`",
+        args,
+    ),(
+        to_timestamp_nanos,
+        "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`",
+        args,
+    ));
 
     /// Returns a string representation of a date, time, timestamp or duration based
     /// on a Chrono pattern.
@@ -246,36 +261,6 @@ pub mod expr_fn {
     /// ```
     pub fn to_date(args: Vec<Expr>) -> Expr {
         super::to_date().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a Unixtime"]
-    pub fn to_unixtime(args: Vec<Expr>) -> Expr {
-        super::to_unixtime().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
-    pub fn to_timestamp(args: Vec<Expr>) -> Expr {
-        super::to_timestamp().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a `Timestamp(Seconds, None)`"]
-    pub fn to_timestamp_seconds(args: Vec<Expr>) -> Expr {
-        super::to_timestamp_seconds().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a `Timestamp(Milliseconds, None)`"]
-    pub fn to_timestamp_millis(args: Vec<Expr>) -> Expr {
-        super::to_timestamp_millis().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a `Timestamp(Microseconds, None)`"]
-    pub fn to_timestamp_micros(args: Vec<Expr>) -> Expr {
-        super::to_timestamp_micros().call(args)
-    }
-
-    #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
-    pub fn to_timestamp_nanos(args: Vec<Expr>) -> Expr {
-        super::to_timestamp_nanos().call(args)
     }
 }
 

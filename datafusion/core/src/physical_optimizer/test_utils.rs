@@ -274,13 +274,11 @@ pub fn sort_preserving_merge_exec(
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    Arc::new(ParquetExec::new(
+    ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100)),
-        None,
-        None,
-        Default::default(),
-    ))
+    )
+    .build_arc()
 }
 
 // Created a sorted parquet exec
@@ -290,14 +288,12 @@ pub fn parquet_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(ParquetExec::new(
+    ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]),
-        None,
-        None,
-        Default::default(),
-    ))
+    )
+    .build_arc()
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {

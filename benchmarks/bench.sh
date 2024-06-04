@@ -66,9 +66,11 @@ compare:      Compares results from benchmark runs
 * Benchmarks
 **********
 all(default): Data/Run/Compare for all benchmarks
-tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
+tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+tpch_smj:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, sort merge join
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
-tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table
+tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, hash join
+tpch_smj10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, sort merge join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
