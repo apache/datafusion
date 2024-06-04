@@ -25,7 +25,7 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 
-use datafusion_common::{downcast_value, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -100,7 +100,11 @@ impl AggregateUDFImpl for VarianceSample {
         ])
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("VAR(DISTINCT) aggregations are not available")
+        }
+
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
