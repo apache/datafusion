@@ -24,10 +24,12 @@ use arrow::{
         Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array,
         Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
         LargeBinaryArray, LargeStringArray, StringArray, StructArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     },
-    datatypes::{DataType, Field, Int32Type, Int8Type, Schema},
+    datatypes::{DataType, Field, Int32Type, Int8Type, Schema, TimeUnit},
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
@@ -74,6 +76,10 @@ enum Scenario {
     Int32Range,
     UInt,
     UInt32Range,
+    Time32Second,
+    Time32Millisecond,
+    Time64Nanosecond,
+    Time64Microsecond,
     /// 7 Rows, for each i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
     /// -MIN, -100, -1, 0, 1, 100, MAX
     NumericLimits,
@@ -488,6 +494,55 @@ fn make_int_batches(start: i8, end: i8) -> RecordBatch {
     .unwrap()
 }
 
+/// Return record batch with Time32Second, Time32Millisecond sequences
+fn make_time32_batches(scenario: Scenario, v: Vec<i32>) -> RecordBatch {
+    match scenario {
+        Scenario::Time32Second => {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "second",
+                DataType::Time32(TimeUnit::Second),
+                true,
+            )]));
+            let array = Arc::new(Time32SecondArray::from(v)) as ArrayRef;
+            RecordBatch::try_new(schema, vec![array]).unwrap()
+        }
+        Scenario::Time32Millisecond => {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "millisecond",
+                DataType::Time32(TimeUnit::Millisecond),
+                true,
+            )]));
+            let array = Arc::new(Time32MillisecondArray::from(v)) as ArrayRef;
+            RecordBatch::try_new(schema, vec![array]).unwrap()
+        }
+        _ => panic!("Unsupported scenario for Time32"),
+    }
+}
+
+/// Return record batch with Time64Microsecond, Time64Nanosecond sequences
+fn make_time64_batches(scenario: Scenario, v: Vec<i64>) -> RecordBatch {
+    match scenario {
+        Scenario::Time64Microsecond => {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "microsecond",
+                DataType::Time64(TimeUnit::Microsecond),
+                true,
+            )]));
+            let array = Arc::new(Time64MicrosecondArray::from(v)) as ArrayRef;
+            RecordBatch::try_new(schema, vec![array]).unwrap()
+        }
+        Scenario::Time64Nanosecond => {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "nanosecond",
+                DataType::Time64(TimeUnit::Nanosecond),
+                true,
+            )]));
+            let array = Arc::new(Time64NanosecondArray::from(v)) as ArrayRef;
+            RecordBatch::try_new(schema, vec![array]).unwrap()
+        }
+        _ => panic!("Unsupported scenario for Time64"),
+    }
+}
 /// Return record batch with u8, u16, u32, and u64 sequences
 ///
 /// Columns are named
@@ -1178,6 +1233,106 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 true,
             )]));
             vec![RecordBatch::try_new(schema, vec![struct_array_data]).unwrap()]
+        }
+        Scenario::Time32Second => {
+            vec![
+                make_time32_batches(
+                    Scenario::Time32Second,
+                    vec![18506, 18507, 18508, 18509],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Second,
+                    vec![18510, 18511, 18512, 18513],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Second,
+                    vec![18514, 18515, 18516, 18517],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Second,
+                    vec![18518, 18519, 18520, 18521],
+                ),
+            ]
+        }
+        Scenario::Time32Millisecond => {
+            vec![
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600000, 3600001, 3600002, 3600003],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600004, 3600005, 3600006, 3600007],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600008, 3600009, 3600010, 3600011],
+                ),
+                make_time32_batches(
+                    Scenario::Time32Millisecond,
+                    vec![3600012, 3600013, 3600014, 3600015],
+                ),
+            ]
+        }
+        Scenario::Time64Microsecond => {
+            vec![
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890123, 1234567890124, 1234567890125, 1234567890126],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890127, 1234567890128, 1234567890129, 1234567890130],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890131, 1234567890132, 1234567890133, 1234567890134],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Microsecond,
+                    vec![1234567890135, 1234567890136, 1234567890137, 1234567890138],
+                ),
+            ]
+        }
+        Scenario::Time64Nanosecond => {
+            vec![
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012345,
+                        987654321012346,
+                        987654321012347,
+                        987654321012348,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012349,
+                        987654321012350,
+                        987654321012351,
+                        987654321012352,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012353,
+                        987654321012354,
+                        987654321012355,
+                        987654321012356,
+                    ],
+                ),
+                make_time64_batches(
+                    Scenario::Time64Nanosecond,
+                    vec![
+                        987654321012357,
+                        987654321012358,
+                        987654321012359,
+                        987654321012360,
+                    ],
+                ),
+            ]
         }
         Scenario::UTF8 => {
             vec![
