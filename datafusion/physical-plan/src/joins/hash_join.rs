@@ -18,7 +18,6 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 use std::fmt;
-use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -59,6 +58,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
     JoinSide, JoinType, Result,
@@ -875,23 +875,12 @@ async fn collect_left_input(
 
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
-    //
-    // For majority of cases hashbrown overestimates buckets qty to keep ~1/8 of them empty.
-    // This formula leads to overallocation for small tables (< 8 elements) but fine overall.
-    let estimated_buckets = (num_rows.checked_mul(8).ok_or_else(|| {
-        DataFusionError::Execution(
-            "usize overflow while estimating number of hasmap buckets".to_string(),
-        )
-    })? / 7)
-        .next_power_of_two();
-    // 16 bytes per `(u64, u64)`
-    // + 1 byte for each bucket
-    // + fixed size of JoinHashMap (RawTable + Vec)
-    let estimated_hastable_size =
-        16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
+    let fixed_size = std::mem::size_of::<JoinHashMap>();
+    let estimated_hashtable_size =
+        estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)?;
 
-    reservation.try_grow(estimated_hastable_size)?;
-    metrics.build_mem_used.add(estimated_hastable_size);
+    reservation.try_grow(estimated_hashtable_size)?;
+    metrics.build_mem_used.add(estimated_hashtable_size);
 
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();

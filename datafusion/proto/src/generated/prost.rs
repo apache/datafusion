@@ -651,27 +651,6 @@ pub struct ListRange {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetIndexedField {
-    #[prost(message, optional, tag = "1")]
-    pub expr: ::core::option::Option<LogicalExprNode>,
-    #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4")]
-    pub field: ::core::option::Option<get_indexed_field::Field>,
-}
-/// Nested message and enum types in `GetIndexedField`.
-pub mod get_indexed_field {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Field {
-        #[prost(message, tag = "2")]
-        NamedStructField(super::NamedStructField),
-        #[prost(message, tag = "3")]
-        ListIndex(super::ListIndex),
-        #[prost(message, tag = "4")]
-        ListRange(super::ListRange),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IsNull {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
@@ -1345,7 +1324,7 @@ pub struct PhysicalWindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(string, tag = "8")]
     pub name: ::prost::alloc::string::String,
-    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2, 3")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
     >,
@@ -1357,9 +1336,10 @@ pub mod physical_window_expr_node {
     pub enum WindowFunction {
         #[prost(enumeration = "super::AggregateFunction", tag = "1")]
         AggrFunction(i32),
-        /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
+        #[prost(string, tag = "3")]
+        UserDefinedAggrFunction(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
