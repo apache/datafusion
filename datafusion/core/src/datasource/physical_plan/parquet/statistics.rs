@@ -104,6 +104,12 @@ macro_rules! get_statistic {
                     Some(DataType::Date64) => {
                         Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
                     }
+                    Some(DataType::Time32(TimeUnit::Second)) => {
+                        Some(ScalarValue::Time32Second(Some((*s.$func()))))
+                    }
+                    Some(DataType::Time32(TimeUnit::Millisecond)) => {
+                        Some(ScalarValue::Time32Millisecond(Some((*s.$func()))))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -119,6 +125,12 @@ macro_rules! get_statistic {
                     }
                     Some(DataType::UInt64) => {
                         Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
+                    }
+                    Some(DataType::Time64(TimeUnit::Microsecond)) => {
+                        Some(ScalarValue::Time64Microsecond(Some((*s.$func() as i64))))
+                    }
+                    Some(DataType::Time64(TimeUnit::Nanosecond)) => {
+                        Some(ScalarValue::Time64Nanosecond(Some((*s.$func() as i64))))
                     }
                     Some(DataType::Timestamp(unit, timezone)) => {
                         Some(match unit {
@@ -159,6 +171,9 @@ macro_rules! get_statistic {
                     }
                     Some(DataType::Binary) => {
                         Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
+                    }
+                    Some(DataType::LargeBinary) => {
+                        Some(ScalarValue::LargeBinary(Some(s.$bytes_func().to_vec())))
                     }
                     Some(DataType::LargeUtf8) | _ => {
                         let utf8_value = std::str::from_utf8(s.$bytes_func())
@@ -427,8 +442,9 @@ mod test {
     use arrow_array::{
         new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        Int8Array, LargeBinaryArray, RecordBatch, StringArray, StructArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -966,6 +982,34 @@ mod test {
     }
 
     #[test]
+    fn roundtrip_large_binary_array() {
+        let input: Vec<Option<&[u8]>> = vec![
+            // row group 1
+            Some(b"A"),
+            None,
+            Some(b"Q"),
+            // row group 2
+            Some(b"ZZ"),
+            Some(b"AA"),
+            None,
+            // row group 3
+            None,
+            None,
+            None,
+        ];
+
+        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
+        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
+
+        Test {
+            input: large_binary_array(input),
+            expected_min: large_binary_array(expected_min),
+            expected_max: large_binary_array(expected_max),
+        }
+        .run();
+    }
+
+    #[test]
     fn struct_and_non_struct() {
         // Ensures that statistics for an array that appears *after* a struct
         // array are not wrong
@@ -1437,6 +1481,15 @@ mod test {
                 .map(|s| Date64Type::parse(s.unwrap_or_default()))
                 .collect::<Vec<_>>(),
         );
+        Arc::new(array)
+    }
+
+    fn large_binary_array<'a>(
+        input: impl IntoIterator<Item = Option<&'a [u8]>>,
+    ) -> ArrayRef {
+        let array =
+            LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
+
         Arc::new(array)
     }
 }

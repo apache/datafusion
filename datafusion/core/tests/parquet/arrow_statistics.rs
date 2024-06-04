@@ -30,10 +30,11 @@ use arrow::datatypes::{
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, RecordBatch,
-    StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
+    RecordBatch, StringArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::{
@@ -919,6 +920,101 @@ async fn test_dates_32_diff_rg_sizes() {
 }
 
 #[tokio::test]
+async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
+    let reader_time32 = TestReader {
+        scenario: Scenario::Time32Second,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Second column
+    Test {
+        reader: reader_time32.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time32SecondArray::from(vec![18506, 18510, 18514, 18518])),
+        expected_max: Arc::new(Time32SecondArray::from(vec![18509, 18513, 18517, 18521])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "second",
+    }
+    .run();
+
+    let reader_time32_millisecond = TestReader {
+        scenario: Scenario::Time32Millisecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Millisecond column
+    Test {
+        reader: reader_time32_millisecond.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time32MillisecondArray::from(vec![
+            3600000, 3600004, 3600008, 3600012,
+        ])),
+        expected_max: Arc::new(Time32MillisecondArray::from(vec![
+            3600003, 3600007, 3600011, 3600015,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "millisecond",
+    }
+    .run();
+
+    let reader_time64_micro = TestReader {
+        scenario: Scenario::Time64Microsecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time64MicroSecond column
+    Test {
+        reader: reader_time64_micro.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time64MicrosecondArray::from(vec![
+            1234567890123,
+            1234567890127,
+            1234567890131,
+            1234567890135,
+        ])),
+        expected_max: Arc::new(Time64MicrosecondArray::from(vec![
+            1234567890126,
+            1234567890130,
+            1234567890134,
+            1234567890138,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "microsecond",
+    }
+    .run();
+
+    let reader_time64_nano = TestReader {
+        scenario: Scenario::Time64Nanosecond,
+        row_per_group: 4,
+    };
+
+    // Test for Time32Second column
+    Test {
+        reader: reader_time64_nano.build().await,
+        // Assuming specific minimum and maximum values for demonstration
+        expected_min: Arc::new(Time64NanosecondArray::from(vec![
+            987654321012345,
+            987654321012349,
+            987654321012353,
+            987654321012357,
+        ])),
+        expected_max: Arc::new(Time64NanosecondArray::from(vec![
+            987654321012348,
+            987654321012352,
+            987654321012356,
+            987654321012360,
+        ])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 4]),
+        column_name: "nanosecond",
+    }
+    .run();
+}
+
+#[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
     let reader = TestReader {
@@ -1261,7 +1357,6 @@ async fn test_decimal() {
     }
     .run();
 }
-
 #[tokio::test]
 async fn test_dictionary() {
     let reader = TestReader {
@@ -1302,11 +1397,12 @@ async fn test_dictionary() {
 
 #[tokio::test]
 async fn test_byte() {
-    // This creates a parquet file of 4 columns
+    // This creates a parquet file of 5 columns
     // "name"
     // "service_string"
     // "service_binary"
     // "service_fixedsize"
+    // "service_large_binary"
 
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
@@ -1387,6 +1483,26 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "service_fixedsize",
+    }
+    .run();
+
+    let expected_service_large_binary_min_values: Vec<&[u8]> =
+        vec![b"frontend five", b"backend one", b"backend eight"];
+
+    let expected_service_large_binary_max_values: Vec<&[u8]> =
+        vec![b"frontend two", b"frontend six", b"backend six"];
+
+    Test {
+        reader: reader.build().await,
+        expected_min: Arc::new(LargeBinaryArray::from(
+            expected_service_large_binary_min_values,
+        )),
+        expected_max: Arc::new(LargeBinaryArray::from(
+            expected_service_large_binary_max_values,
+        )),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
+        column_name: "service_large_binary",
     }
     .run();
 }
