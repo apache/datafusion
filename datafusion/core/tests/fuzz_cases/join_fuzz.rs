@@ -21,7 +21,7 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{Field, Schema};
+use arrow_schema::Schema;
 
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
@@ -299,35 +299,8 @@ impl JoinFuzzTestCase {
 
         let on_filter = JoinFilter::new(expression, column_indices, intermediate_schema);
 
-        let join_filter = match self.join_filter() {
-            None => on_filter,
-            Some(filter) => {
-                let expr = Arc::new(BinaryExpr::new(
-                    filter.expression().clone(),
-                    Operator::And,
-                    on_filter.expression().clone(),
-                )) as _;
-                let mut column_indices = vec![];
-                column_indices.extend_from_slice(filter.column_indices());
-                column_indices.extend_from_slice(on_filter.column_indices());
-                let mut fields: Vec<Field> = vec![];
-                filter
-                    .schema()
-                    .fields
-                    .into_iter()
-                    .for_each(|field| fields.push(field.as_ref().clone()));
-                on_filter
-                    .schema()
-                    .fields
-                    .into_iter()
-                    .for_each(|field| fields.push(field.as_ref().clone()));
-                let schema = Schema::new(fields);
-                JoinFilter::new(expr, column_indices, schema)
-            }
-        };
-
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(join_filter), &self.join_type)
+            NestedLoopJoinExec::try_new(left, right, Some(on_filter), &self.join_type)
                 .unwrap(),
         )
     }
