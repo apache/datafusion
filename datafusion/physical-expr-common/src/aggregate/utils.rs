@@ -17,9 +17,10 @@
 
 use std::{any::Any, sync::Arc};
 
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::ArrowNativeType;
 use arrow::{
-    array::{ArrayRef, ArrowNativeTypeOp, AsArray},
+    array::ArrowNativeTypeOp,
     compute::SortOptions,
     datatypes::{
         DataType, Decimal128Type, DecimalType, Field, TimeUnit, TimestampMicrosecondType,
