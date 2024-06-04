@@ -15,22 +15,54 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::common::{config_err, Result};
 use datafusion::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
 };
+use datafusion::error::DataFusionError;
 use futures::stream::BoxStream;
-use object_store::http::HttpStore;
+use http::{header, HeaderMap};
+use object_store::http::{HttpBuilder, HttpStore};
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions,
-    PutResult,
+    ClientOptions, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult
 };
 use std::any::Any;
+use std::env;
 use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+
+pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+
+pub enum HFConfigKey {
+    Endpoint,
+    UserAccessToken,
+}
+
+impl AsRef<str> for HFConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Endpoint => "endpoint",
+            Self::UserAccessToken => "user_access_token",
+        }
+    }
+}
+
+impl FromStr for HFConfigKey {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "endpoint" => Ok(Self::Endpoint),
+            "user_access_token" => Ok(Self::UserAccessToken),
+            _ => config_err!("Invalid HuggingFace configuration key: {}", s),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ParsedHFUrl {
@@ -44,7 +76,7 @@ pub struct ParsedHFUrl {
 impl Default for ParsedHFUrl {
     fn default() -> Self {
         Self {
-            endpoint: Some("https://huggingface.com".to_string()),
+            endpoint: Some(DEFAULT_ENDPOINT.to_string()),
             path: None,
             repository: None,
             revision: Some("main".to_string()),
@@ -60,10 +92,10 @@ impl ParsedHFUrl {
     /// The URL should be in the format `hf://<repo_type>/<repository>[@revision]/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
     /// If the revision is not provided, it defaults to `main`.
-    /// If the endpoint is not provided, it defaults to `https://huggingface.com`.
+    /// If the endpoint is not provided, it defaults to `https://huggingface.co`.
     ///
     /// url: The HuggingFace URL to parse.
-    pub fn parse(url: String) -> Result<Self> {
+    pub fn parse(url: String, hf_options: HFOptions) -> Result<Self> {
         if !url.starts_with(Self::SCHEMA) {
             return config_err!(
                 "Invalid HuggingFace URL: {}, only 'hf://' URLs are supported",
@@ -72,6 +104,10 @@ impl ParsedHFUrl {
         }
 
         let mut parsed_url = Self::default();
+        if let Some(endpoint) = hf_options.endpoint {
+            parsed_url.endpoint = Some(endpoint);
+        }
+
         let mut last_delim = 5;
 
         // parse repository type.
@@ -236,8 +272,11 @@ impl ExtensionOptions for HFOptions {
         }
 
         let mut v = Visitor(vec![]);
-        self.endpoint
-            .visit(&mut v, "endpoint", "The HuggingFace API endpoint");
+        self.endpoint.visit(
+            &mut v,
+            "endpoint",
+            "The HuggingFace API endpoint",
+        );
         self.user_access_token.visit(
             &mut v,
             "user_access_token",
@@ -247,101 +286,164 @@ impl ExtensionOptions for HFOptions {
     }
 }
 
-// pub struct HFStoreBuilder {}
+#[derive(Debug, Clone, Default)]
+pub struct HFStoreBuilder {
+    endpoint: Option<String>,
+    user_access_token: Option<String>,
+}
 
-// #[derive(Debug, Clone)]
-// pub struct HFStore {
-//     inner: Arc<HttpStore>,
-// }
+impl HFStoreBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-// impl Display for HFStore {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "HFStore")
-//     }
-// }
+    pub fn with_endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = Some(endpoint);
+        self
+    }
 
-// impl HFStore {}
+    pub fn with_user_access_token(mut self, user_access_token: String) -> Self {
+        self.user_access_token = Some(user_access_token);
+        self
+    }
 
-// impl ObjectStore for HFStore {
-//     async fn put_opts(
-//         &self,
-//         location: &Path,
-//         bytes: Bytes,
-//         opts: PutOptions,
-//     ) -> object_store::Result<PutResult> {
-//         todo!()
-//     }
+    pub fn from_env() -> Self {
+        let mut builder = Self::new();
+        if let Ok(endpoint) = env::var("HF_ENDPOINT") {
+            builder = builder.with_endpoint(endpoint);
+        }
 
-//     async fn put_multipart(
-//         &self,
-//         location: &Path,
-//     ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-//         todo!()
-//     }
+        if let Ok(user_access_token) = env::var("HF_USER_ACCESS_TOKEN") {
+            builder = builder.with_user_access_token(user_access_token);
+        }
 
-//     async fn abort_multipart(
-//         &self,
-//         location: &Path,
-//         multipart_id: &MultipartId,
-//     ) -> object_store::Result<()> {
-//         todo!()
-//     }
+        builder
+    }
 
-//     async fn get_opts(
-//         &self,
-//         location: &Path,
-//         options: GetOptions,
-//     ) -> object_store::Result<GetResult> {
-//         todo!()
-//     }
+    pub fn build(&self) -> Result<HFStore> {
+        let mut inner_builder = HttpBuilder::new();
 
-//     async fn delete(&self, location: &Path) -> object_store::Result<()> {
-//         todo!()
-//     }
+        if let Some(ep) = &self.endpoint {
+            inner_builder = inner_builder.with_url(ep);
+        } else {
+            inner_builder = inner_builder.with_url(DEFAULT_ENDPOINT);
+        }
 
-//     fn list(
-//         &self,
-//         prefix: Option<&Path>,
-//     ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
-//         todo!()
-//     }
+        if let Some(user_access_token) = &self.user_access_token {
+            if let Ok(token) = format!("Bearer {}", user_access_token).parse() {
+                let mut header_map = HeaderMap::new();
+                header_map.insert(
+                    header::AUTHORIZATION,
+                    token,
+                );
+                let options = ClientOptions::new().with_default_headers(header_map);
 
-//     async fn list_with_delimiter(
-//         &self,
-//         prefix: Option<&Path>,
-//     ) -> object_store::Result<ListResult> {
-//         todo!()
-//     }
+                inner_builder = inner_builder.with_client_options(options);
+            }
+        }
+        let inner_store = inner_builder.build()?;
 
-//     async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-//         todo!()
-//     }
+        return Ok(HFStore {
+            inner: Arc::new(inner_store),
+        });
+    }
+}
 
-//     async fn copy_if_not_exists(
-//         &self,
-//         from: &Path,
-//         to: &Path,
-//     ) -> object_store::Result<()> {
-//         todo!()
-//     }
-// }
+#[derive(Debug, Clone)]
+pub struct HFStore {
+    inner: Arc<HttpStore>,
+}
+
+impl Display for HFStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HFStore")
+    }
+}
+
+#[async_trait]
+impl ObjectStore for HFStore {
+    async fn put_opts(
+        &self,
+        _location: &Path,
+        _bytes: Bytes,
+        _opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::put_opts".to_string().into()})
+    }
+
+    async fn put_multipart(
+        &self,
+        _location: &Path,
+    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::put_multipart".to_string().into()})
+    }
+
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> object_store::Result<()> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::abort_multipart".to_string().into()})
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        println!("HFStore::get_opts: {:?}", location);
+
+        self.inner.get_opts(location, options).await
+    }
+
+    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::delete".to_string().into()})
+    }
+
+    fn list(
+        &self,
+        _prefix: Option<&Path>,
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        Box::pin(futures::stream::empty())
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        _prefix: Option<&Path>,
+    ) -> object_store::Result<ListResult> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::list_with_delimiter".to_string().into()})
+    }
+
+    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::copy".to_string().into()})
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        _from: &Path,
+        _to: &Path,
+    ) -> object_store::Result<()> {
+        Err(ObjectStoreError::NotSupported {source: "HFStore::copy_if_not_exists".to_string().into()})
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use datafusion::error::DataFusionError;
 
-    use crate::hf_store::ParsedHFUrl;
+    use crate::hf_store::{HFOptions, ParsedHFUrl};
 
     #[test]
     fn test_parse_hf_url() {
         let url =
             "hf://datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+        let options = HFOptions::default();
 
-        let parsed_url = ParsedHFUrl::parse(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse(url, options).unwrap();
 
         assert_eq!(
             parsed_url.endpoint,
-            Some("https://huggingface.com".to_string())
+            Some("https://huggingface.co".to_string())
         );
         assert_eq!(parsed_url.repo_type, Some("datasets".to_string()));
         assert_eq!(
@@ -356,12 +458,13 @@ mod tests {
     fn test_parse_hf_url_with_revision() {
         let url =
             "hf://datasets/datasets-examples/doc-formats-csv-1@~csv/data.csv".to_string();
+        let options = HFOptions::default();
 
-        let parsed_url = ParsedHFUrl::parse(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse(url, options).unwrap();
 
         assert_eq!(
             parsed_url.endpoint,
-            Some("https://huggingface.com".to_string())
+            Some("https://huggingface.co".to_string())
         );
         assert_eq!(parsed_url.repo_type, Some("datasets".to_string()));
         assert_eq!(
@@ -404,14 +507,15 @@ mod tests {
     fn test_file_url() {
         let url =
             "hf://datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+        let options = HFOptions::default();
 
-        let parsed_url = ParsedHFUrl::parse(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse(url, options).unwrap();
 
         let file_url = parsed_url.file_url().unwrap();
 
         assert_eq!(
             file_url,
-            "https://huggingface.com/datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv"
+            "https://huggingface.co/datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv"
         );
     }
 
@@ -419,19 +523,22 @@ mod tests {
     fn test_tree_url() {
         let url =
             "hf://datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+        let options = HFOptions::default();
 
-        let parsed_url = ParsedHFUrl::parse(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse(url, options).unwrap();
 
         let tree_url = parsed_url.tree_url().unwrap();
 
         assert_eq!(
             tree_url,
-            "https://huggingface.com/api/datasets/datasets-examples/doc-formats-csv-1/tree/main/data.csv"
+            "https://huggingface.co/api/datasets/datasets-examples/doc-formats-csv-1/tree/main/data.csv"
         );
     }
 
     fn test_error(url: &str, expected: &str) {
-        let parsed_url_result = ParsedHFUrl::parse(url.to_string());
+        let options = HFOptions::default();
+
+        let parsed_url_result = ParsedHFUrl::parse(url.to_string(), options);
 
         match parsed_url_result {
             Ok(_) => panic!("Expected error, but got success"),
