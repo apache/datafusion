@@ -465,11 +465,11 @@ ORDER BY db15;
 ----
 logical_plan
 01)Sort: db15 ASC NULLS LAST
-02)--Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
+02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
 03)----TableScan: csv_with_timestamps projection=[ts]
 physical_plan
 01)SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
+02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0, 1659537600000000000) as db15]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
 
