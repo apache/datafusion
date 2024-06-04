@@ -642,6 +642,23 @@ pub fn json_type() -> DataType {
     DataType::Struct(json_struct)
 }
 
+pub fn enum_type(enum_name: String) -> DataType {
+    let json_struct = Fields::from(vec![
+        Field::new("enum", DataType::Utf8, false),
+        Field::new(enum_name, DataType::Utf8, false),
+    ]);
+    DataType::Struct(json_struct)
+}
+
+pub fn extract_enum_name(t: &DataType) -> Option<String> {
+    if let DataType::Struct(fields) = t {
+        if fields.len() == 2 && fields[0].name() == "enum" {
+            return Some(fields[1].name().to_string());
+        }
+    }
+    None
+}
+
 pub fn get_arrow_return_type(
     left: &DataType,
     right: &DataType,
@@ -697,6 +714,13 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (List(_), List(_)) => Some(lhs_type.clone()),
         (List(_), _) => Some(lhs_type.clone()),
         (_, List(_)) => Some(rhs_type.clone()),
+        (Struct(f), Utf8) | (Utf8, Struct(f)) => {
+            return if f.len() == 2 && f[0].name() == "enum" {
+                Some(Utf8)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }

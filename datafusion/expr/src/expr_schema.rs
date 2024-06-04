@@ -22,7 +22,7 @@ use crate::expr::{
     TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
-use crate::type_coercion::binary::get_result_type;
+use crate::type_coercion::binary::{extract_enum_name, get_result_type};
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -321,6 +321,11 @@ impl ExprSchemable for Expr {
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
+            return Ok(self);
+        }
+
+        // Specific handling for enum
+        if extract_enum_name(&this_type).is_some() && cast_to_type == &DataType::Utf8 {
             return Ok(self);
         }
 
