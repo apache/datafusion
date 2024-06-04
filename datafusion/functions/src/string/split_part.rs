@@ -97,14 +97,21 @@ fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(n_array.iter())
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
-                if n <= 0 {
-                    exec_err!("field position must be greater than zero")
-                } else {
-                    let split_string: Vec<&str> = string.split(delimiter).collect();
-                    match split_string.get(n as usize - 1) {
-                        Some(s) => Ok(Some(*s)),
-                        None => Ok(Some("")),
+                let split_string: Vec<&str> = string.split(delimiter).collect();
+                let len = split_string.len();
+
+                let index = match n.cmp(&0) {
+                    std::cmp::Ordering::Less => len as i64 + n,
+                    std::cmp::Ordering::Equal => {
+                        return exec_err!("field position must not be zero");
                     }
+                    std::cmp::Ordering::Greater => n - 1,
+                } as usize;
+
+                if index < len {
+                    Ok(Some(split_string[index]))
+                } else {
+                    Ok(Some(""))
                 }
             }
             _ => Ok(None),
@@ -165,7 +172,21 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
             ],
-            exec_err!("field position must be greater than zero"),
+            Ok(Some("ghi")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SplitPartFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                    "abc~@~def~@~ghi"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            ],
+            exec_err!("field position must not be zero"),
             &str,
             Utf8,
             StringArray

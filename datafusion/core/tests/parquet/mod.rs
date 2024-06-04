@@ -19,20 +19,18 @@
 use arrow::array::Decimal128Array;
 use arrow::{
     array::{
-        Array, ArrayRef, BinaryArray, Date32Array, Date64Array, FixedSizeBinaryArray,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+        make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
+        DictionaryArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, StructArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Int32Type, Int8Type, Schema, TimeUnit},
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{
-    make_array, BooleanArray, Float32Array, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-};
-use arrow_schema::TimeUnit;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
@@ -40,11 +38,11 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use half::f16;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-
 mod arrow_statistics;
 mod custom_reader;
 mod file_statistics;
@@ -83,17 +81,22 @@ enum Scenario {
     /// 7 Rows, for each i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
     /// -MIN, -100, -1, 0, 1, 100, MAX
     NumericLimits,
+    Float16,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
     DecimalBloomFilterInt64,
     DecimalLargePrecision,
     DecimalLargePrecisionBloomFilter,
+    /// StringArray, BinaryArray, FixedSizeBinaryArray
     ByteArray,
+    /// DictionaryArray
+    Dictionary,
     PeriodsInColumnNames,
     WithNullValues,
     WithNullValuesPageLevel,
     StructArray,
+    UTF8,
 }
 
 enum Unit {
@@ -340,9 +343,13 @@ fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
 ///
 /// Columns are named:
 /// "nanos" --> TimestampNanosecondArray
+/// "nanos_timezoned" --> TimestampNanosecondArray with timezone
 /// "micros" --> TimestampMicrosecondArray
+/// "micros_timezoned" --> TimestampMicrosecondArray with timezone
 /// "millis" --> TimestampMillisecondArray
+/// "millis_timezoned" --> TimestampMillisecondArray with timezone
 /// "seconds" --> TimestampSecondArray
+/// "seconds_timezoned" --> TimestampSecondArray with timezone
 /// "names" --> StringArray
 fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     let ts_strings = vec![
@@ -352,6 +359,8 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         None,
         Some("2020-01-02T01:01:01.0000000000001"),
     ];
+
+    let tz_string = "Pacific/Efate";
 
     let offset_nanos = offset.num_nanoseconds().expect("non overflow nanos");
 
@@ -390,19 +399,47 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         .map(|(i, _)| format!("Row {i} + {offset}"))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
-    let arr_micros = TimestampMicrosecondArray::from(ts_micros);
-    let arr_millis = TimestampMillisecondArray::from(ts_millis);
-    let arr_seconds = TimestampSecondArray::from(ts_seconds);
+    let arr_nanos = TimestampNanosecondArray::from(ts_nanos.clone());
+    let arr_nanos_timezoned =
+        TimestampNanosecondArray::from(ts_nanos).with_timezone(tz_string);
+    let arr_micros = TimestampMicrosecondArray::from(ts_micros.clone());
+    let arr_micros_timezoned =
+        TimestampMicrosecondArray::from(ts_micros).with_timezone(tz_string);
+    let arr_millis = TimestampMillisecondArray::from(ts_millis.clone());
+    let arr_millis_timezoned =
+        TimestampMillisecondArray::from(ts_millis).with_timezone(tz_string);
+    let arr_seconds = TimestampSecondArray::from(ts_seconds.clone());
+    let arr_seconds_timezoned =
+        TimestampSecondArray::from(ts_seconds).with_timezone(tz_string);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);
 
     let schema = Schema::new(vec![
         Field::new("nanos", arr_nanos.data_type().clone(), true),
+        Field::new(
+            "nanos_timezoned",
+            arr_nanos_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("micros", arr_micros.data_type().clone(), true),
+        Field::new(
+            "micros_timezoned",
+            arr_micros_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("millis", arr_millis.data_type().clone(), true),
+        Field::new(
+            "millis_timezoned",
+            arr_millis_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("seconds", arr_seconds.data_type().clone(), true),
+        Field::new(
+            "seconds_timezoned",
+            arr_seconds_timezoned.data_type().clone(),
+            true,
+        ),
         Field::new("name", arr_names.data_type().clone(), true),
     ]);
     let schema = Arc::new(schema);
@@ -411,9 +448,13 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         schema,
         vec![
             Arc::new(arr_nanos),
+            Arc::new(arr_nanos_timezoned),
             Arc::new(arr_micros),
+            Arc::new(arr_micros_timezoned),
             Arc::new(arr_millis),
+            Arc::new(arr_millis_timezoned),
             Arc::new(arr_seconds),
+            Arc::new(arr_seconds_timezoned),
             Arc::new(arr_names),
         ],
     )
@@ -553,6 +594,12 @@ fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_f16_batch(v: Vec<f16>) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
+    let array = Arc::new(Float16Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with decimal vector
 ///
 /// Columns are named
@@ -655,6 +702,8 @@ fn make_bytearray_batch(
     string_values: Vec<&str>,
     binary_values: Vec<&[u8]>,
     fixedsize_values: Vec<&[u8; 3]>,
+    // i64 offset.
+    large_binary_values: Vec<&[u8]>,
 ) -> RecordBatch {
     let num_rows = string_values.len();
     let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
@@ -665,6 +714,8 @@ fn make_bytearray_batch(
         .map(|value| Some(value.as_slice()))
         .collect::<Vec<_>>()
         .into();
+    let service_large_binary: LargeBinaryArray =
+        large_binary_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![
         Field::new("name", name.data_type().clone(), true),
@@ -674,6 +725,11 @@ fn make_bytearray_batch(
         Field::new(
             "service_fixedsize",
             service_fixedsize.data_type().clone(),
+            true,
+        ),
+        Field::new(
+            "service_large_binary",
+            service_large_binary.data_type().clone(),
             true,
         ),
     ]);
@@ -686,6 +742,7 @@ fn make_bytearray_batch(
             Arc::new(service_string),
             Arc::new(service_binary),
             Arc::new(service_fixedsize),
+            Arc::new(service_large_binary),
         ],
     )
     .unwrap()
@@ -802,6 +859,51 @@ fn make_numeric_limit_batch() -> RecordBatch {
     .unwrap()
 }
 
+fn make_utf8_batch(value: Vec<Option<&str>>) -> RecordBatch {
+    let utf8 = StringArray::from(value.clone());
+    let large_utf8 = LargeStringArray::from(value);
+    RecordBatch::try_from_iter(vec![
+        ("utf8", Arc::new(utf8) as _),
+        ("large_utf8", Arc::new(large_utf8) as _),
+    ])
+    .unwrap()
+}
+
+fn make_dict_batch() -> RecordBatch {
+    let values = [
+        Some("abc"),
+        Some("def"),
+        None,
+        Some("def"),
+        Some("abc"),
+        Some("fffff"),
+        Some("aaa"),
+    ];
+    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().cloned());
+    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().cloned());
+
+    // Dictionary array of integers
+    let int64_values = Int64Array::from(vec![0, -100, 100]);
+    let keys = Int8Array::from_iter([
+        Some(0),
+        Some(1),
+        None,
+        Some(0),
+        Some(0),
+        Some(2),
+        Some(0),
+    ]);
+    let dict_i8_int_array =
+        DictionaryArray::<Int8Type>::try_new(keys, Arc::new(int64_values)).unwrap();
+
+    RecordBatch::try_from_iter(vec![
+        ("string_dict_i8", Arc::new(dict_i8_array) as _),
+        ("string_dict_i32", Arc::new(dict_i32_array) as _),
+        ("int_dict_i8", Arc::new(dict_i8_int_array) as _),
+    ])
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -862,6 +964,34 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         }
         Scenario::NumericLimits => {
             vec![make_numeric_limit_batch()]
+        }
+        Scenario::Float16 => {
+            vec![
+                make_f16_batch(
+                    vec![-5.0, -4.0, -3.0, -2.0, -1.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![-4.0, -3.0, -2.0, -1.0, 0.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![0.0, 1.0, 2.0, 3.0, 4.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+                make_f16_batch(
+                    vec![5.0, 6.0, 7.0, 8.0, 9.0]
+                        .into_iter()
+                        .map(f16::from_f32)
+                        .collect(),
+                ),
+            ]
         }
         Scenario::Float64 => {
             vec![
@@ -934,6 +1064,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"frontend five",
                     ],
                     vec![b"fe1", b"fe2", b"fe3", b"fe7", b"fe5"],
+                    vec![
+                        b"frontend one",
+                        b"frontend two",
+                        b"frontend three",
+                        b"frontend seven",
+                        b"frontend five",
+                    ],
                 ),
                 make_bytearray_batch(
                     "mixed",
@@ -952,6 +1089,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"backend three",
                     ],
                     vec![b"fe6", b"fe4", b"be1", b"be2", b"be3"],
+                    vec![
+                        b"frontend six",
+                        b"frontend four",
+                        b"backend one",
+                        b"backend two",
+                        b"backend three",
+                    ],
                 ),
                 make_bytearray_batch(
                     "all backends",
@@ -970,8 +1114,18 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                         b"backend eight",
                     ],
                     vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
+                    vec![
+                        b"backend four",
+                        b"backend five",
+                        b"backend six",
+                        b"backend seven",
+                        b"backend eight",
+                    ],
                 ),
             ]
+        }
+        Scenario::Dictionary => {
+            vec![make_dict_batch()]
         }
         Scenario::PeriodsInColumnNames => {
             vec![
@@ -1121,6 +1275,18 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ),
             ]
         }
+        Scenario::UTF8 => {
+            vec![
+                make_utf8_batch(vec![Some("a"), Some("b"), Some("c"), Some("d"), None]),
+                make_utf8_batch(vec![
+                    Some("e"),
+                    Some("f"),
+                    Some("g"),
+                    Some("h"),
+                    Some("i"),
+                ]),
+            ]
+        }
     }
 }
 
@@ -1138,7 +1304,6 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .build();
 
     let batches = create_data_batch(scenario);
-
     let schema = batches[0].schema();
 
     let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
