@@ -546,7 +546,7 @@ async fn test_timestamp() {
 
     // micros
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-01T01:01:11"),
@@ -566,7 +566,7 @@ async fn test_timestamp() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
@@ -596,7 +596,6 @@ async fn test_timestamp() {
     // millis
     Test {
         reader: &reader,
-        reader: reader.build().await,
         expected_min: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-01T01:01:01"),
             TimestampMillisecondType::parse("2020-01-01T01:01:11"),
@@ -616,7 +615,7 @@ async fn test_timestamp() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-01T01:01:01"),
@@ -665,7 +664,7 @@ async fn test_timestamp() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-01T01:01:01"),
@@ -738,7 +737,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampNanosecondArray::from(vec![
                 TimestampNanosecondType::parse("2020-01-01T01:01:01"),
@@ -765,7 +764,7 @@ async fn test_timestamp_diff_rg_sizes() {
 
     // micros
     Test {
-       reader: &reader,
+        reader: &reader,
         expected_min: Arc::new(TimestampMicrosecondArray::from(vec![
             TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
             TimestampMicrosecondType::parse("2020-01-01T01:11:01"),
@@ -783,7 +782,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampMicrosecondArray::from(vec![
                 TimestampMicrosecondType::parse("2020-01-01T01:01:01"),
@@ -811,7 +810,6 @@ async fn test_timestamp_diff_rg_sizes() {
     // millis
     Test {
         reader: &reader,
-        reader: reader.build().await,
         expected_min: Arc::new(TimestampMillisecondArray::from(vec![
             TimestampMillisecondType::parse("2020-01-01T01:01:01"),
             TimestampMillisecondType::parse("2020-01-01T01:11:01"),
@@ -829,7 +827,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampMillisecondArray::from(vec![
                 TimestampMillisecondType::parse("2020-01-01T01:01:01"),
@@ -874,7 +872,7 @@ async fn test_timestamp_diff_rg_sizes() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             TimestampSecondArray::from(vec![
                 TimestampSecondType::parse("2020-01-01T01:01:01"),
@@ -915,6 +913,7 @@ async fn test_dates_32_diff_rg_sizes() {
     }
     .build()
     .await;
+
     Test {
         reader: &reader,
         // mins are [2020-01-01, 2020-10-30]
@@ -937,15 +936,17 @@ async fn test_dates_32_diff_rg_sizes() {
 }
 
 #[tokio::test]
-async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
-    let reader_time32 = TestReader {
+async fn test_time32_second_diff_rg_sizes() {
+    let reader = TestReader {
         scenario: Scenario::Time32Second,
         row_per_group: 4,
-    };
+    }
+    .build()
+    .await;
 
     // Test for Time32Second column
     Test {
-        reader: reader_time32.build().await,
+        reader: &reader,
         // Assuming specific minimum and maximum values for demonstration
         expected_min: Arc::new(Time32SecondArray::from(vec![18506, 18510, 18514, 18518])),
         expected_max: Arc::new(Time32SecondArray::from(vec![18509, 18513, 18517, 18521])),
@@ -954,15 +955,20 @@ async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
         column_name: "second",
     }
     .run();
+}
 
-    let reader_time32_millisecond = TestReader {
+#[tokio::test]
+async fn test_time32_millisecond_diff_rg_sizes() {
+    let reader = TestReader {
         scenario: Scenario::Time32Millisecond,
         row_per_group: 4,
-    };
+    }
+    .build()
+    .await;
 
     // Test for Time32Millisecond column
     Test {
-        reader: reader_time32_millisecond.build().await,
+        reader: &reader,
         // Assuming specific minimum and maximum values for demonstration
         expected_min: Arc::new(Time32MillisecondArray::from(vec![
             3600000, 3600004, 3600008, 3600012,
@@ -975,15 +981,20 @@ async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
         column_name: "millisecond",
     }
     .run();
+}
 
-    let reader_time64_micro = TestReader {
+#[tokio::test]
+async fn test_time64_microsecond_diff_rg_sizes() {
+    let reader = TestReader {
         scenario: Scenario::Time64Microsecond,
         row_per_group: 4,
-    };
+    }
+    .build()
+    .await;
 
     // Test for Time64MicroSecond column
     Test {
-        reader: reader_time64_micro.build().await,
+        reader: &reader,
         // Assuming specific minimum and maximum values for demonstration
         expected_min: Arc::new(Time64MicrosecondArray::from(vec![
             1234567890123,
@@ -1002,15 +1013,20 @@ async fn test_time32_second_and_time64_nanosecond_diff_rg_sizes() {
         column_name: "microsecond",
     }
     .run();
+}
 
-    let reader_time64_nano = TestReader {
+#[tokio::test]
+async fn test_time64_nanosecond_diff_rg_sizes() {
+    let reader = TestReader {
         scenario: Scenario::Time64Nanosecond,
         row_per_group: 4,
-    };
+    }
+    .build()
+    .await;
 
     // Test for Time32Second column
     Test {
-        reader: reader_time64_nano.build().await,
+        reader: &reader,
         // Assuming specific minimum and maximum values for demonstration
         expected_min: Arc::new(Time64NanosecondArray::from(vec![
             987654321012345,
@@ -1340,10 +1356,12 @@ async fn test_float16() {
     let reader = TestReader {
         scenario: Scenario::Float16,
         row_per_group: 5,
-    };
+    }
+    .build()
+    .await;
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(Float16Array::from(
             vec![-5.0, -4.0, -0.0, 5.0]
                 .into_iter()
@@ -1391,15 +1409,20 @@ async fn test_decimal() {
         column_name: "decimal_col",
     }
     .run();
-
+}
+#[tokio::test]
+async fn test_decimal_256() {
     // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
-    let decimal256_reader = TestReader {
+    let reader = TestReader {
         scenario: Scenario::Decimal256,
         row_per_group: 5,
-    };
+    }
+    .build()
+    .await;
+
     Test {
-        reader: decimal256_reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(
             Decimal256Array::from(vec![
                 i256::from(100),
@@ -1429,10 +1452,12 @@ async fn test_dictionary() {
     let reader = TestReader {
         scenario: Scenario::Dictionary,
         row_per_group: 5,
-    };
+    }
+    .build()
+    .await;
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(StringArray::from(vec!["abc", "aaa"])),
         expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
@@ -1442,7 +1467,7 @@ async fn test_dictionary() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(StringArray::from(vec!["abc", "aaa"])),
         expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
@@ -1452,7 +1477,7 @@ async fn test_dictionary() {
     .run();
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(Int64Array::from(vec![-100, 0])),
         expected_max: Arc::new(Int64Array::from(vec![0, 100])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
@@ -1562,7 +1587,7 @@ async fn test_byte() {
         vec![b"frontend two", b"frontend six", b"backend six"];
 
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(LargeBinaryArray::from(
             expected_service_large_binary_min_values,
         )),
@@ -1676,11 +1701,13 @@ async fn test_utf8() {
     let reader = TestReader {
         scenario: Scenario::UTF8,
         row_per_group: 5,
-    };
+    }
+    .build()
+    .await;
 
     // test for utf8
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(StringArray::from(vec!["a", "e"])),
         expected_max: Arc::new(StringArray::from(vec!["d", "i"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
@@ -1691,7 +1718,7 @@ async fn test_utf8() {
 
     // test for large_utf8
     Test {
-        reader: reader.build().await,
+        reader: &reader,
         expected_min: Arc::new(LargeStringArray::from(vec!["a", "e"])),
         expected_max: Arc::new(LargeStringArray::from(vec!["d", "i"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
