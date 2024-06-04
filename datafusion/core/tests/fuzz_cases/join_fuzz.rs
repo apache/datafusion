@@ -108,12 +108,35 @@ async fn test_left_join_1k() {
 }
 
 #[tokio::test]
+async fn test_left_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::Left,
+        Some(Box::new(less_than_10_join_filter)),
+    )
+    .run_test()
+    .await
+}
+
+#[tokio::test]
 async fn test_right_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Right,
         None,
+    )
+    .run_test()
+    .await
+}
+#[tokio::test]
+async fn test_right_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::Right,
+        Some(Box::new(less_than_10_join_filter)),
     )
     .run_test()
     .await
@@ -132,12 +155,36 @@ async fn test_full_join_1k() {
 }
 
 #[tokio::test]
+async fn test_full_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::Full,
+        Some(Box::new(less_than_10_join_filter)),
+    )
+    .run_test()
+    .await
+}
+
+#[tokio::test]
 async fn test_semi_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftSemi,
         None,
+    )
+    .run_test()
+    .await
+}
+
+#[tokio::test]
+async fn test_semi_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::LeftSemi,
+        Some(Box::new(less_than_10_join_filter)),
     )
     .run_test()
     .await
@@ -155,12 +202,26 @@ async fn test_anti_join_1k() {
     .await
 }
 
+#[tokio::test]
+async fn test_anti_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::LeftAnti,
+        Some(Box::new(less_than_10_join_filter)),
+    )
+    .run_test()
+    .await
+}
+
+type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
+
 struct JoinFuzzTestCase {
     batch_sizes: &'static [usize],
     input1: Vec<RecordBatch>,
     input2: Vec<RecordBatch>,
     join_type: JoinType,
-    join_filter_builder: Option<Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>>,
+    join_filter_builder: Option<JoinFilterBuilder>,
 }
 
 impl JoinFuzzTestCase {
@@ -168,7 +229,7 @@ impl JoinFuzzTestCase {
         input1: Vec<RecordBatch>,
         input2: Vec<RecordBatch>,
         join_type: JoinType,
-        join_filter_builder: Option<Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>>,
+        join_filter_builder: Option<JoinFilterBuilder>,
     ) -> Self {
         Self {
             batch_sizes: &[1, 2, 7, 49, 50, 51, 100],
