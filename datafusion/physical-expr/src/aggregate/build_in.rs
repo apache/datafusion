@@ -62,7 +62,7 @@ pub fn create_aggregate_expr(
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, _) => {
-            todo!("Builtin Count will be removed")
+            return internal_err!("Builtin Count will be removed");
         }
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
