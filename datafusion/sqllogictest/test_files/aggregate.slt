@@ -2344,6 +2344,12 @@ create table t (c double) as values (1), (2), (3), (4), (5);
 
 query RT
 select var(c), arrow_typeof(var(c)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
 # aggregate stddev f64_1
 statement ok
 create table t (c1 double) as values (1), (2);
@@ -2506,6 +2512,12 @@ create table t (c double) as values (1.1), (2), (3);
 
 query RT
 select var(c), arrow_typeof(var(c)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
 # aggregate variance f64_4
 statement ok
 create table t (c1 double) as values (1.1), (2), (3);
@@ -2536,6 +2548,12 @@ create table t (a int) as values (null), (null);
 
 query RT
 select var(a), arrow_typeof(var(a)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
 # aggregate variance i32
 statement ok
 create table t (c1 int) as values (1), (2), (3), (4), (5);
