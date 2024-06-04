@@ -109,7 +109,7 @@ parking_lot = "0.12"
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
 regex = "1.8"
-rstest = "0.20.0"
+rstest = "0.21.0"
 serde_json = "1"
 sqlparser = { version = "0.45.0", features = ["visitor"] }
 tempfile = "3"

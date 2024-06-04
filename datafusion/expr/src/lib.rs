@@ -63,8 +63,8 @@ pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, Sort as SortExpr, TryCast, WindowFunctionDefinition,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
+    Sort as SortExpr, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
