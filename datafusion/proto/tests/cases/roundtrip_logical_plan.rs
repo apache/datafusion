@@ -653,7 +653,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         covar_pop(lit(1.5), lit(2.2)),
         sum(lit(1)),
         median(lit(2)),
-        var_sample(lit(1.5), lit(2.2)),
+        var_sample(lit(2.2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

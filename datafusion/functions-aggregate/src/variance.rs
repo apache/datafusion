@@ -38,7 +38,7 @@ use datafusion_physical_expr_common::aggregate::stats::StatsType;
 make_udaf_expr_and_func!(
     VarianceSample,
     var_sample,
-    y x,
+    expression,
     "Computes the sample variance.",
     var_samp_udaf
 );
