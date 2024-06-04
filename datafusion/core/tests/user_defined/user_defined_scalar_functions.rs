@@ -957,7 +957,6 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
     let function_factory = Arc::new(RecordingFunctonFactory::new());
     let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
-
     let sql = r#"
       CREATE FUNCTION strlen(name TEXT)
       RETURNS int LANGUAGE plrust AS
