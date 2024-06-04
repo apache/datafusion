@@ -46,29 +46,30 @@ pub(crate) fn find_agg_node_within_select<'a>(
     } else {
         input.first()?
     };
+
     // Agg nodes explicitly return immediately with a single node
     // Window nodes accumulate in a vec until encountering a TableScan or 2nd projection
-    if let LogicalPlan::Aggregate(agg) = input {
-        Some(AggVariant::Aggregate(agg))
-    } else if let LogicalPlan::Window(window) = input {
-        prev_windows = match &mut prev_windows {
-            Some(AggVariant::Window(windows)) => {
-                windows.push(window);
-                prev_windows
-            }
-            _ => Some(AggVariant::Window(vec![window])),
-        };
-        find_agg_node_within_select(input, prev_windows, already_projected)
-    } else if let LogicalPlan::TableScan(_) = input {
-        prev_windows
-    } else if let LogicalPlan::Projection(_) = input {
-        if already_projected {
-            prev_windows
-        } else {
-            find_agg_node_within_select(input, prev_windows, true)
+    match input {
+        LogicalPlan::Aggregate(agg) => Some(AggVariant::Aggregate(agg)),
+        LogicalPlan::Window(window) => {
+            prev_windows = match &mut prev_windows {
+                Some(AggVariant::Window(windows)) => {
+                    windows.push(window);
+                    prev_windows
+                }
+                _ => Some(AggVariant::Window(vec![window])),
+            };
+            find_agg_node_within_select(input, prev_windows, already_projected)
         }
-    } else {
-        find_agg_node_within_select(input, prev_windows, already_projected)
+        LogicalPlan::Projection(_) => {
+            if already_projected {
+                prev_windows
+            } else {
+                find_agg_node_within_select(input, prev_windows, true)
+            }
+        }
+        LogicalPlan::TableScan(_) => prev_windows,
+        _ => find_agg_node_within_select(input, prev_windows, already_projected),
     }
 }
 
