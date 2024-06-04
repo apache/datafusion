@@ -26,9 +26,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{
-    exec_err, internal_err, Result,
-};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
 use std::any::Any;
@@ -138,7 +136,7 @@ impl ScalarUDFImpl for ArrayIntersect {
         match (arg_types[0].clone(), arg_types[1].clone()) {
             (Null, Null) | (Null, _) => Ok(Null),
             (_, Null) => Ok(empty_array_type()),
-            (dt, _) => Ok(dt)
+            (dt, _) => Ok(dt),
         }
     }
 
