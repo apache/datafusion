@@ -28,6 +28,8 @@ fn init() {
     let _ = env_logger::try_init();
 }
 
+// Disabled due to https://github.com/apache/datafusion/issues/10793
+#[cfg(not(target_family = "windows"))]
 #[rstest]
 #[case::exec_from_commands(
     ["--command", "select 1", "--format", "json", "-q"],
@@ -45,6 +47,7 @@ fn init() {
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
     "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
 )]
+
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
