@@ -236,8 +236,8 @@ impl Unparser<'_> {
                     .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
                     .collect::<Result<Vec<_>>>()?;
 
-                let start_bound = self.convert_bound(&window_frame.start_bound);
-                let end_bound = self.convert_bound(&window_frame.end_bound);
+                let start_bound = self.convert_bound(&window_frame.start_bound)?;
+                let end_bound = self.convert_bound(&window_frame.end_bound)?;
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
                     window_name: None,
                     partition_by: partition_by
@@ -513,20 +513,30 @@ impl Unparser<'_> {
     fn convert_bound(
         &self,
         bound: &datafusion_expr::window_frame::WindowFrameBound,
-    ) -> ast::WindowFrameBound {
+    ) -> Result<ast::WindowFrameBound> {
         match bound {
             datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
-                ast::WindowFrameBound::Preceding(
-                    self.scalar_to_sql(val).map(Box::new).ok(),
-                )
+                Ok(ast::WindowFrameBound::Preceding({
+                    let val = self.scalar_to_sql(val)?;
+                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                        None
+                    } else {
+                        Some(Box::new(val))
+                    }
+                }))
             }
             datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
-                ast::WindowFrameBound::Following(
-                    self.scalar_to_sql(val).map(Box::new).ok(),
-                )
+                Ok(ast::WindowFrameBound::Following({
+                    let val = self.scalar_to_sql(val)?;
+                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                        None
+                    } else {
+                        Some(Box::new(val))
+                    }
+                }))
             }
             datafusion_expr::window_frame::WindowFrameBound::CurrentRow => {
-                ast::WindowFrameBound::CurrentRow
+                Ok(ast::WindowFrameBound::CurrentRow)
             }
         }
     }
@@ -633,6 +643,10 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Boolean(b.to_owned())))
             }
             ScalarValue::Boolean(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float16(Some(f)) => {
+                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+            }
+            ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
@@ -1148,7 +1162,7 @@ mod tests {
                     window_frame: WindowFrame::new(None),
                     null_treatment: None,
                 }),
-                r#"ROW_NUMBER(col) OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
+                r#"ROW_NUMBER(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
                 Expr::WindowFunction(WindowFunction {

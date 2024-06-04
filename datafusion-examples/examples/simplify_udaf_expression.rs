@@ -78,9 +78,13 @@ impl AggregateUDFImpl for BetterAvgUdaf {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         unimplemented!("should not get here");
     }
+
     // we override method, to return new expression which would substitute
     // user defined function call
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {

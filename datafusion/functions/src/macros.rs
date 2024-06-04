@@ -36,25 +36,31 @@
 ///    ]
 /// }
 /// ```
+///
+/// Exported functions accept:
+/// - `Vec<Expr>` argument (single argument followed by a comma)
+/// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 macro_rules! export_functions {
-    ($(($FUNC:ident,  $($arg:ident)*, $DOC:expr)),*) => {
-        pub mod expr_fn {
-            $(
-                #[doc = $DOC]
-                /// Return $name(arg)
-                pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-                    super::$FUNC().call(vec![$($arg),*],)
-                }
-            )*
-        }
+    ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
+        $(
+            // switch to single-function cases below
+            export_functions!(single $FUNC, $DOC, $($arg)*);
+        )*
+    };
 
-        /// Return a list of all functions in this package
-        pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
-            vec![
-                $(
-                    $FUNC(),
-                )*
-            ]
+    // single vector argument (a single argument followed by a comma)
+    (single $FUNC:ident, $DOC:expr, $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            super::$FUNC().call($arg)
+        }
+    };
+
+    // variadic arguments (zero or more arguments, without commas)
+    (single $FUNC:ident, $DOC:expr, $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            super::$FUNC().call(vec![$($arg),*])
         }
     };
 }
