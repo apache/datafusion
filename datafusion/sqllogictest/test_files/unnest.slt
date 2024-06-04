@@ -65,7 +65,7 @@ select * from unnest(struct(1,2,3));
 ----
 1 2 3
 
-## Multiple unnest expression in from clause 
+## Multiple unnest expression in from clause
 query IIII
 select * from unnest(struct(1,2,3)),unnest([4,5,6]);
 ----
@@ -446,7 +446,7 @@ query error DataFusion error: type_coercion\ncaused by\nThis feature is not impl
 select sum(unnest(generate_series(1,10)));
 
 ## TODO: support unnest as a child expr
-query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression 
+query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
 
 

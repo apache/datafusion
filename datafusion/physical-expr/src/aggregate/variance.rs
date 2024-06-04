@@ -257,7 +257,6 @@ impl Accumulator for VarianceAccumulator {
     }
 }
 
-// TODO (yyin): Move to aggregations.slt
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,24 +284,6 @@ mod tests {
         generic_test_op!(a, DataType::Float64, VariancePop, ScalarValue::from(2_f64))
     }
 
-    // #[test]
-    // fn variance_f64_3() -> Result<()> {
-    //     let a: ArrayRef =
-    //         Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-    //     generic_test_op!(a, DataType::Float64, Variance, ScalarValue::from(2.5_f64))
-    // }
-
-    // #[test]
-    // fn variance_f64_4() -> Result<()> {
-    //     let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-    //     generic_test_op!(
-    //         a,
-    //         DataType::Float64,
-    //         Variance,
-    //         ScalarValue::from(0.9033333333333333_f64)
-    //     )
-    // }
-
     #[test]
     fn variance_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
@@ -323,23 +304,6 @@ mod tests {
         generic_test_op!(a, DataType::Float32, VariancePop, ScalarValue::from(2_f64))
     }
 
-    // #[test]
-    // fn test_variance_1_input() -> Result<()> {
-    //     let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
-    //     let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-    //     let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-
-    //     let agg = Arc::new(Variance::new(
-    //         col("a", &schema)?,
-    //         "bla".to_string(),
-    //         DataType::Float64,
-    //     ));
-    //     let actual = aggregate(&batch, agg).unwrap();
-    //     assert_eq!(actual, ScalarValue::Float64(None));
-
-    //     Ok(())
-    // }
-
     #[test]
     fn variance_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
@@ -356,23 +320,6 @@ mod tests {
             ScalarValue::from(2.1875_f64)
         )
     }
-
-    // #[test]
-    // fn variance_i32_all_nulls() -> Result<()> {
-    //     let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-    //     let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-    //     let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-
-    //     let agg = Arc::new(Variance::new(
-    //         col("a", &schema)?,
-    //         "bla".to_string(),
-    //         DataType::Float64,
-    //     ));
-    //     let actual = aggregate(&batch, agg).unwrap();
-    //     assert_eq!(actual, ScalarValue::Float64(None));
-
-    //     Ok(())
-    // }
 
     #[test]
     fn variance_f64_merge_1() -> Result<()> {
