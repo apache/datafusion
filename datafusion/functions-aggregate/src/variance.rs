@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`CovarianceSample`]: covariance sample aggregations.
+//! [`VarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
 
@@ -25,7 +25,9 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 
-use datafusion_common::{downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -102,7 +104,7 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("VAR(DISTINCT) aggregations are not available")
+            return not_impl_err!("VAR(DISTINCT) aggregations are not available");
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))

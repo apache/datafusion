@@ -58,8 +58,8 @@ pub mod macros;
 pub mod covariance;
 pub mod first_last;
 pub mod median;
-pub mod variance;
 pub mod sum;
+pub mod variance;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
