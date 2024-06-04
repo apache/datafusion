@@ -1183,6 +1183,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "futures",
+ "http",
  "mimalloc",
  "object_store",
  "parking_lot",
