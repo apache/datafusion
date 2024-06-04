@@ -66,7 +66,7 @@ use datafusion_optimizer::{
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{CopyToSource, CopyToStatement, DFParser};
+use datafusion_sql::parser::{CopyToSource, CopyToStatement, DFParser, Statement};
 use datafusion_sql::planner::{
     object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel,
 };
@@ -85,6 +85,8 @@ use uuid::Uuid;
 /// Note that there is no `Default` or `new()` for SessionState,
 /// to avoid accidentally running queries or other operations without passing through
 /// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
+///
+/// [`SessionContext`]: crate::execution::context::SessionContext
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -122,6 +124,8 @@ pub struct SessionState {
     /// This is used to create [`TableProvider`] instances for the
     /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
     /// formats other than those built into DataFusion
+    ///
+    /// [`TableProvider`]: crate::datasource::provider::TableProvider
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
@@ -446,11 +450,13 @@ impl SessionState {
 
     /// Parse an SQL string into an DataFusion specific AST
     /// [`Statement`]. See [`SessionContext::sql`] for running queries.
+    ///
+    /// [`SessionContext::sql`]: crate::execution::context::SessionContext::sql
     pub fn sql_to_statement(
         &self,
         sql: &str,
         dialect: &str,
-    ) -> datafusion_common::Result<datafusion_sql::parser::Statement> {
+    ) -> datafusion_common::Result<Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
@@ -605,6 +611,9 @@ impl SessionState {
     /// [`SessionContext::sql_with_options`] for a higher-level
     /// interface that handles DDL and verification of allowed
     /// statements.
+    ///
+    /// [`SessionContext::sql`]: crate::execution::context::SessionContext::sql
+    /// [`SessionContext::sql_with_options`]: crate::execution::context::SessionContext::sql_with_options
     pub async fn create_logical_plan(
         &self,
         sql: &str,
@@ -698,6 +707,8 @@ impl SessionState {
     /// This function will error for [`LogicalPlan`]s such as catalog DDL like
     /// `CREATE TABLE`, which do not have corresponding physical plans and must
     /// be handled by another layer, typically [`SessionContext`].
+    ///
+    /// [`SessionContext`]: crate::execution::context::SessionContext
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -721,6 +732,7 @@ impl SessionState {
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
     /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [`SessionContext::create_physical_expr`]: crate::execution::context::SessionContext::create_physical_expr
     pub fn create_physical_expr(
         &self,
         expr: Expr,
