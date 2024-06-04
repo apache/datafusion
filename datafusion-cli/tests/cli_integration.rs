@@ -47,7 +47,6 @@ fn init() {
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
     "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
 )]
-
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
