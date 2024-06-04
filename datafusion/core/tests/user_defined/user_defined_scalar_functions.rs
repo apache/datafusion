@@ -30,7 +30,6 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
     not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
 };
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
@@ -856,15 +855,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let function_factory = Arc::new(CustomFunctionFactory::default());
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config)?;
-
-    let session_config = SessionConfig::new();
-    let state =
-        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-            .with_function_factory(function_factory.clone());
-
-    let ctx = SessionContext::new_with_state(state);
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
     let options = SQLOptions::new().with_allow_ddl(false);
 
     let sql = r#"
@@ -964,15 +955,8 @@ impl FunctionFactory for RecordingFunctonFactory {
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<()> {
     let function_factory = Arc::new(RecordingFunctonFactory::new());
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config)?;
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
-    let session_config = SessionConfig::new();
-    let state =
-        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-            .with_function_factory(function_factory.clone());
-
-    let ctx = SessionContext::new_with_state(state);
 
     let sql = r#"
       CREATE FUNCTION strlen(name TEXT)
