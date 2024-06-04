@@ -1272,9 +1272,7 @@ impl SessionContext {
     pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
         self.state
             .write()
-            .default_table_options()
-            .extensions
-            .insert(extension)
+            .register_table_options_extension(extension)
     }
 }
 
