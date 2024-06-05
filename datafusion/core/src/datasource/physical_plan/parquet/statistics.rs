@@ -256,6 +256,13 @@ macro_rules! get_statistic {
                     Some(DataType::Float16) => {
                         Some(ScalarValue::Float16(from_bytes_to_f16(s.$bytes_func())))
                     }
+                    Some(DataType::Interval(unit)) => {
+                        match unit {
+                            IntervalUnit::YearMonth => unimplemented!("Interval statistics not yet supported by parquet")
+                            IntervalUnit::DayTime => unimplemented!("Interval statistics not yet supported by parquet")
+                            IntervalUnit::MonthDayNano => unimplemented!("Interval statistics not yet supported by parquet")
+                        }
+                    }
                     _ => None,
                 }
             }
