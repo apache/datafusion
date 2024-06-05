@@ -316,10 +316,13 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     for (idx, stop) in stop_array.iter().enumerate() {
         let mut stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|x| x.value(idx)).unwrap_or(0);
-        let step = step_array
-            .as_ref()
-            .map(|arr| arr.value(idx))
-            .unwrap_or(IntervalMonthDayNano::ONE);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(
+            IntervalMonthDayNano {
+                months: 0,
+                days: 0,
+                nanoseconds: 1,
+            },
+        );
         let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
         let neg = months < 0 || days < 0;
         if !include_upper {
