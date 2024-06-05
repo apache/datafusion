@@ -488,6 +488,20 @@ macro_rules! typed_min_max {
     }};
 }
 
+macro_rules! typed_min_max_float {
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
+        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
+            (None, None) => None,
+            (Some(a), None) => Some(*a),
+            (None, Some(b)) => Some(*b),
+            (Some(a), Some(b)) => match a.total_cmp(b) {
+                choose_min_max!($OP) => Some(*b),
+                _ => Some(*a),
+            },
+        })
+    }};
+}
+
 // min/max of two scalar string values.
 macro_rules! typed_min_max_string {
     ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
@@ -500,7 +514,7 @@ macro_rules! typed_min_max_string {
     }};
 }
 
-macro_rules! cmp_choose_min_max {
+macro_rules! choose_min_max {
     (min) => {
         std::cmp::Ordering::Greater
     };
@@ -509,11 +523,10 @@ macro_rules! cmp_choose_min_max {
     };
 }
 
-// Use ScalarValue::partial_cmp to compare the values
-macro_rules! cmp_min_max {
+macro_rules! interval_min_max {
     ($OP:tt, $LHS:expr, $RHS:expr) => {{
         match $LHS.partial_cmp(&$RHS) {
-            Some(cmp_choose_min_max!($OP)) => $RHS.clone(),
+            Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
                 return internal_err!("Comparison error while computing interval min/max")
@@ -555,11 +568,11 @@ macro_rules! min_max {
             (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
                 typed_min_max!(lhs, rhs, Boolean, $OP)
             }
-            (ScalarValue::Float64(_), ScalarValue::Float64(_)) => {
-                cmp_min_max!($OP, $VALUE, $DELTA)
+            (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
+                typed_min_max_float!(lhs, rhs, Float64, $OP)
             }
-            (ScalarValue::Float32(_), ScalarValue::Float32(_)) => {
-                cmp_min_max!($OP, $VALUE, $DELTA)
+            (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
+                typed_min_max_float!(lhs, rhs, Float32, $OP)
             }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
                 typed_min_max!(lhs, rhs, UInt64, $OP)
@@ -691,7 +704,7 @@ macro_rules! min_max {
                 ScalarValue::IntervalDayTime(_),
                 ScalarValue::IntervalMonthDayNano(_),
             ) => {
-                cmp_min_max!($OP, $VALUE, $DELTA)
+                interval_min_max!($OP, $VALUE, $DELTA)
             }
                     (
                 ScalarValue::DurationSecond(lhs),
