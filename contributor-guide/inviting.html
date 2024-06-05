@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Inviting New Committers and PMC Members &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Specifications" href="specification/index.html" />
+    <link rel="prev" title="Governance" href="governance.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/cli/index.html">
+   DataFusion CLI
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/operators.html">
+     Operators
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/sql_status.html">
+     Status
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/write_options.html">
+     Write Options
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/adding-udfs.html">
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="getting_started.html">
+   Getting Started
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../index.html">
+    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#new-committers">
+   New Committers
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-1-start-a-discussion-thread">
+     Step 1: Start a Discussion Thread
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-2-formal-vote">
+     Step 2: Formal Vote
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-3-send-invitation-to-the-candidate">
+     Step 3: Send Invitation to the Candidate
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-4-announce-and-celebrate-the-new-committer">
+     Step 4: Announce and Celebrate the New Committer
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#email-templates-for-inviting-new-committers">
+   Email Templates for Inviting New Committers
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#committers-without-an-apache-account-and-without-icla-on-file">
+     Committers WITHOUT an Apache account and WITHOUT ICLA on file
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#committers-without-an-apache-account-but-with-an-icla-on-file">
+     Committers WITHOUT an Apache account but WITH an ICLA on file
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#committers-with-an-existing-apache-account">
+     Committers WITH an existing Apache account
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#new-pmc-members">
+   New PMC Members
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id1">
+     Step 1: Start a Discussion Thread
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id2">
+     Step 2: Formal Vote
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-3-send-notice-to-asf-board">
+     Step 3: Send Notice to ASF Board
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-4-send-invitation-email">
+     Step 4: Send invitation email
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-5-chair-promotes-the-committer-to-pmc">
+     Step 5: Chair Promotes the Committer to PMC
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-6-announce-and-celebrate-the-new-pmc-member">
+     Step 6: Announce and Celebrate the New PMC Member
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/inviting.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="inviting-new-committers-and-pmc-members">
+<h1>Inviting New Committers and PMC Members<a class="headerlink" href="#inviting-new-committers-and-pmc-members" title="Link to this heading">¶</a></h1>
+<p>This is a cookbook of the recommended DataFusion specific process for inviting
+new committers and PMC members. It is intended to follow the <a class="reference external" href="https://www.apache.org/dev/pmc.html">Apache Project
+Management Committee guidelines</a>, which takes precedence over this document if
+there is a conflict.</p>
+<p>This process is intended for PMC members. While the process is open, the actual
+discussions and invitations are not (one of the very few things that we do not
+do in the open).</p>
+<p>When following this process, in doubt, check the <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>
+<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;datafusion.apache.org">mailing list archive</a> for examples of previous emails.</p>
+<p>The general process is:</p>
+<ol class="arabic simple">
+<li><p>A PMC member starts a discussion on <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>
+about a candidate they feel should be considered who would use the additional
+trust granted to a committer or PMC member to help the community grow and thrive.</p></li>
+<li><p>When consensus is reached a formal <a class="reference external" href="https://www.apache.org/foundation/voting">vote</a> occurs</p></li>
+<li><p>Assuming the vote is successful, that person is granted the appropriate
+access via ASF systems.</p></li>
+</ol>
+<section id="new-committers">
+<h2>New Committers<a class="headerlink" href="#new-committers" title="Link to this heading">¶</a></h2>
+<section id="step-1-start-a-discussion-thread">
+<h3>Step 1: Start a Discussion Thread<a class="headerlink" href="#step-1-start-a-discussion-thread" title="Link to this heading">¶</a></h3>
+<p>The goal of this step is to allow free form discussion prior to calling a vote.
+This helps the other PMC members understand why you are proposing to invite the
+person to become a committer and makes the voting process easier.</p>
+<p>Best practice is to include some details about why you are proposing to invite
+the person. Here is an example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
+Subject: [DISCUSS] $PERSONS_NAME for Committer
+
+$PERSONS_NAME has been an active contributor to the Datafusion community for the
+last 6 months[1][2], helping others, answering questions, and improving the
+project&#39;s code.
+
+Are there any thoughts about inviting $PERSONS_NAME to become a committer?
+
+Thanks,
+Your Name
+
+[1]: https://github.com/apache/datafusion/issues?q=commenter%3A&lt;github id&gt;
+[2]: https://github.com/apache/datafusion/commits?author=&lt;github id&gt;
+</pre></div>
+</div>
+</section>
+<section id="step-2-formal-vote">
+<h3>Step 2: Formal Vote<a class="headerlink" href="#step-2-formal-vote" title="Link to this heading">¶</a></h3>
+<p>Assuming the discussion thread goes well, start a formal vote, with an email like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
+Subject: [VOTE] $PERSONS_NAME for DataFusion Committer
+I propose to invite $PERSONS_NAME to be a committer. See discussion here [1].
+
+[ ] +1 : Invite $PERSONS_NAME to become a committer
+[ ] +0: ...
+[ ] -1: I disagree because ...
+
+The vote will be open for at least 48 hours.
+
+My vote: +1
+
+Thanks,
+Your Name
+
+[1] LINK TO DISCUSSION THREAD (e.g. https://lists.apache.org/thread/7rocc026wckknrjt9j6bsqk3z4c0g5yf)
+</pre></div>
+</div>
+<p>If the vote passes (requires 3 <code class="docutils literal notranslate"><span class="pre">+1</span></code>, and no <code class="docutils literal notranslate"><span class="pre">-1</span></code> voites) , send a result email
+like the following (substitute <code class="docutils literal notranslate"><span class="pre">N</span></code> with the number of <code class="docutils literal notranslate"><span class="pre">+1</span></code> votes)</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>to: private@datafusion.apache.org
+subject: [RESULT][VOTE] $PERSONS_NAME for DataFusion Committer
+
+The vote carries with N +1 votes.
+</pre></div>
+</div>
+</section>
+<section id="step-3-send-invitation-to-the-candidate">
+<h3>Step 3: Send Invitation to the Candidate<a class="headerlink" href="#step-3-send-invitation-to-the-candidate" title="Link to this heading">¶</a></h3>
+<p>Once the vote on <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code> has passed and the <code class="docutils literal notranslate"><span class="pre">[RESULT]</span></code> e-mail sent, send an
+invitation to the new committer and cc: <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code></p>
+<p>In order to be given write access, the committer needs an apache.org account (e.g. <code class="docutils literal notranslate"><span class="pre">name&#64;apache.org</span></code>). To get one they need:</p>
+<ol class="arabic simple">
+<li><p>An <a class="reference external" href="http://www.apache.org/licenses/#clas">ICLA</a> on file. Note that Sending an ICLA to <code class="docutils literal notranslate"><span class="pre">secretary&#64;apache.org</span></code> will trigger account creation. If they already have an ICLA on file, but no Apache account, see instructions below.</p></li>
+<li><p>Add GitHub username to the account at <a class="reference external" href="http://id.apache.org/">id.apache.org</a></p></li>
+<li><p>Connect <a class="reference external" href="https://gitbox.apache.org">gitbox.apache.org</a> to their GitHub account</p></li>
+<li><p>Follow the instructions at <a class="reference external" href="https://gitbox.apache.org">gitbox.apache.org</a> to link your GitHub account with your</p></li>
+</ol>
+<p>If the new committer is already a committer on another Apache project (so they
+already had an Apache account), The PMC Chair (or an ASF member) simply needs to
+explicitly add them to the roster on the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>.</p>
+</section>
+<section id="step-4-announce-and-celebrate-the-new-committer">
+<h3>Step 4: Announce and Celebrate the New Committer<a class="headerlink" href="#step-4-announce-and-celebrate-the-new-committer" title="Link to this heading">¶</a></h3>
+<p>Email to Send an email such as the following to
+<a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org%5D">dev<span>&#64;</span>datafusion<span>&#46;</span>apache<span>&#46;</span>org</a> to celebrate and
+acknowledge the new committer to the community.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: dev@datafusion.apache.org
+Subject: [ANNOUNCE] New DataFusion committer: $NEW_COMMITTER
+
+On behalf of the DataFusion PMC, I&#39;m happy to announce that $NEW_COMMITTER
+has accepted an invitation to become a committer on Apache
+DataFusion. Welcome, and thank you for your contributions!
+
+&lt;your name&gt;
+</pre></div>
+</div>
+</section>
+</section>
+<section id="email-templates-for-inviting-new-committers">
+<h2>Email Templates for Inviting New Committers<a class="headerlink" href="#email-templates-for-inviting-new-committers" title="Link to this heading">¶</a></h2>
+<section id="committers-without-an-apache-account-and-without-icla-on-file">
+<h3>Committers WITHOUT an Apache account and WITHOUT ICLA on file<a class="headerlink" href="#committers-without-an-apache-account-and-without-icla-on-file" title="Link to this heading">¶</a></h3>
+<p>You can check here to see if someone has an Apache account: http://people.apache.org/committer-index.html</p>
+<p>If you aren’t sure whether someone has an ICLA on file, ask the DataFusion PMC
+chair or an ASF Member to check <a class="reference external" href="https://whimsy.apache.org/officers/unlistedclas.cgi">the ICLA file list</a>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
+Cc: private@datafusion.apache.org
+Subject: Invitation to become a DataFusion Committer
+
+Dear $NEW_COMMITTER,
+
+The DataFusion Project Management Committee (PMC) hereby offers you
+committer privileges to the project. These privileges are offered on
+the understanding that you&#39;ll use them reasonably and with common
+sense. We like to work on trust rather than unnecessary constraints.
+
+Being a committer enables you to merge PRs to DataFusion git repositories.
+
+Being a committer does not require you to participate any more than
+you already do. It does tend to make one even more committed. You will
+probably find that you spend more time here.
+
+Of course, you can decline and instead remain as a contributor,
+participating as you do now.
+
+A. This personal invitation is a chance for you to accept or decline
+in private. Either way, please let us know in reply to the
+private@datafusion.apache.org address only.
+
+B. If you accept, the next step is to register an ICLA:
+
+Details of the iCLA and how to submit them are found through this link:
+https://www.apache.org/licenses/contributor-agreements.html#clas
+
+When you transmit the completed ICLA, request to notify Apache
+DataFusion and choose a unique Apache id. Look to see if your preferred id
+is already taken at http://people.apache.org/committer-index.html This
+will allow the Secretary to notify the PMC when your ICLA has been
+recorded.
+
+Once you are notified that your Apache account has been created, you must then:
+
+1. Add your GitHub username to your account at id.apache.org
+
+2. Follow the instructions at gitbox.apache.org to link your GitHub account
+with your Apache account.
+
+You will then have write (but not admin) access to the DataFusion repositories.
+If you have questions or run into issues, please reply-all to this e-mail.
+</pre></div>
+</div>
+<p>After the new account has been created, you can announce the new committer on <code class="docutils literal notranslate"><span class="pre">dev&#64;</span></code></p>
+</section>
+<section id="committers-without-an-apache-account-but-with-an-icla-on-file">
+<h3>Committers WITHOUT an Apache account but WITH an ICLA on file<a class="headerlink" href="#committers-without-an-apache-account-but-with-an-icla-on-file" title="Link to this heading">¶</a></h3>
+<p>In this scenario, an officer (the project VP or an Apache Member) needs only to
+request an account to be created for the new committer, since through the
+ordinary process the ASF Secretary will do it automatically. This is done at
+https://whimsy.apache.org/officers/acreq. Before requesting the new account,
+send an e-mail to the new committer (cc’ing <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code>) like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
+Cc: private@datafusion.apache.org
+Subject: Invitation to become a DataFusion Committer
+
+Dear $NEW_COMMITTER,
+
+The DataFusion Project Management Committee (PMC) hereby offers you
+committer privileges to the project. These privileges are offered on
+the understanding that you&#39;ll use them reasonably and with common
+sense. We like to work on trust rather than unnecessary constraints.
+
+Being a committer enables you to merge PRs to DataFusion git repositories.
+
+Being a committer does not require you to participate any more than
+you already do. It does tend to make one even more committed. You will
+probably find that you spend more time here.
+
+Of course, you can decline and instead remain as a contributor,
+participating as you do now.
+
+This personal invitation is a chance for you to accept or decline
+in private. Either way, please let us know in reply to the
+private@datafusion.apache.org address only. We will have to request an
+Apache account be created for you, so please let us know what user id
+you would prefer.
+
+Once you are notified that your Apache account has been created, you must then:
+
+1. Add your GitHub username to your account at id.apache.org
+
+2. Follow the instructions at gitbox.apache.org to link your GitHub account
+with your Apache account.
+
+You will then have write (but not admin) access to the DataFusion repositories.
+If you have questions or run into issues, please reply-all to this e-mail.
+</pre></div>
+</div>
+</section>
+<section id="committers-with-an-existing-apache-account">
+<h3>Committers WITH an existing Apache account<a class="headerlink" href="#committers-with-an-existing-apache-account" title="Link to this heading">¶</a></h3>
+<p>In this scenario, an officer (the project PMC Chair or an ASF Member) can simply add
+the new committer on the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>. Before doing this, e-mail the new
+committer inviting them to be a committer like so (cc private&#64;):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
+Cc: private@datafusion.apache.org
+Subject: Invitation to become a DataFusion Committer
+
+Dear $NEW_COMMITTER,
+
+The DataFusion Project Management Committee (PMC) hereby offers you
+committer privileges to the project. These privileges are offered on
+the understanding that you&#39;ll use them reasonably and with common
+sense. We like to work on trust rather than unnecessary constraints.
+
+Being a committer enables you to merge PRs to DataFusion git repositories.
+
+Being a committer does not require you to participate any more than
+you already do. It does tend to make one even more committed. You will
+probably find that you spend more time here.
+
+Of course, you can decline and instead remain as a contributor,
+participating as you do now.
+
+If you accept, please let us know by replying to private@datafusion.apache.org.
+</pre></div>
+</div>
+</section>
+</section>
+<section id="new-pmc-members">
+<h2>New PMC Members<a class="headerlink" href="#new-pmc-members" title="Link to this heading">¶</a></h2>
+<p>See also the ASF instructions on <a class="reference external" href="https://www.apache.org/dev/pmc.html#newpmc">how to add a PMC member</a>.</p>
+<section id="id1">
+<h3>Step 1: Start a Discussion Thread<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p>As for committers, start a discussion thread on the <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code> mailing list</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
+Subject: [DISCUSS] $NEW_PMC_MEMBER for PMC
+
+I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
+
+$NEW_PMC_MEMBMER has been a committer since $COMMITER_MONTH [2], has a
+strong and sustained contribution record for more than a year, and focused on
+helping the community and the project grow[3].
+
+Are there any thoughts about inviting $NEW_PMC_MEMBER to become a PMC member?
+
+[1] https://github.com/$NEW_PMC_MEMBERS_GITHUB_ACCOUNT
+[2] LINK TO COMMMITER VOTE RESULT THREAD (e.g. https://lists.apache.org/thread/ovgp8z97l1vh0wzjkgn0ktktggomxq9t)
+[3]: https://github.com/apache/datafusion/pulls?q=commenter%3A&lt;$NEW_PMC_MEMBERS_GITHUB_ACCOUNT&gt;+
+
+Thanks,
+YOUR NAME
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3>Step 2: Formal Vote<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>Assuming the discussion thread goes well, start a formal vote with an email like:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
+Subject: [VOTE] $NEW_PMC_MEMBER for PMC
+
+I propose inviting $NEW_PMC_MEMBER to join the DataFusion PMC. We previously
+discussed the merits of inviting $NEW_PMC_MEMBER to join the PMC [1].
+
+The vote will be open for at least 7 days.
+
+[ ] +1 : Invite $NEW_PMC_MEMBER to become a PMC member
+[ ] +0: ...
+[ ] -1: I disagree because ...
+
+My vote: +1
+
+[1] LINK TO DISCUSSION THREAD (e.g. https://lists.apache.org/thread/x2zno2hs1ormvfy13n7h82hmsxp3j66c)
+
+Thanks,
+Your Name
+</pre></div>
+</div>
+</section>
+<section id="step-3-send-notice-to-asf-board">
+<h3>Step 3: Send Notice to ASF Board<a class="headerlink" href="#step-3-send-notice-to-asf-board" title="Link to this heading">¶</a></h3>
+<p>The DataFusion PMC Chair then sends a NOTICE to <code class="docutils literal notranslate"><span class="pre">board&#64;apache.org</span></code> (cc’ing
+<code class="docutils literal notranslate"><span class="pre">private&#64;</span></code>) like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: board@apache.org
+Cc: private@datafusion.apache.org
+Subject: [NOTICE] $NEW_PMC_MEMBER for DataFusion PMC
+
+DataFusion proposes to invite $NEW_PMC_MEMBER ($NEW_PMC_MEMBER_APACHE_ID) to join the PMC.
+
+The vote result is available here:
+$VOTE_RESULT_URL
+
+FYI: Full vote details:
+$VOTE_URL
+</pre></div>
+</div>
+</section>
+<section id="step-4-send-invitation-email">
+<h3>Step 4: Send invitation email<a class="headerlink" href="#step-4-send-invitation-email" title="Link to this heading">¶</a></h3>
+<p>Once, the PMC chair has confirmed that the email sent to <code class="docutils literal notranslate"><span class="pre">board&#64;apache.org</span></code> has
+made it to the archives, the Chair sends an invitation e-mail to the new PMC
+member (cc’ing <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code>) like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
+Cc: private@datafusion.apache.org
+Subject: Invitation to join the DataFusion PMC
+Dear $NEW_PMC_MEMBER,
+
+In recognition of your demonstrated commitment to, and alignment with, the
+goals of the Apache DataFusion project, the DataFusion PMC has voted to offer you
+membership in the DataFusion PMC (&quot;Project Management Committee&quot;).
+
+Please let us know if you accept by subscribing to the private alias [by
+sending mail to private-subscribe@datafusion.apache.org], and posting
+a message to private@datafusion.apache.org.
+
+The PMC for every top-level project is tasked by the Apache Board of
+Directors with official oversight and binding votes in that project.
+
+As a PMC member, you are responsible for continuing the general project, code,
+and community oversight that you have exhibited so far. The votes of the PMC
+are legally binding.
+
+All PMC members are subscribed to the project&#39;s private mail list, which is
+used to discuss issues unsuitable for an open, public forum, such as people
+issues (e.g. new committers, problematic community members, etc.), security
+issues, and the like. It can&#39;t be emphasized enough that care should be taken
+to minimize the use of the private list, discussing everything possible on the
+appropriate public list.
+
+The private PMC list is *private* - it is strictly for the use of the
+PMC. Messages are not to be forwarded to anyone else without the express
+permission of the PMC. Also note that any Member of the Foundation has the
+right to review and participate in any PMC list, as a PMC is acting on behalf
+of the Membership.
+
+Finally, the PMC is not meant to create a hierarchy within the committership or
+the community. Therefore, in our day-to-day interactions with the rest of the
+community, we continue to interact as peers, where every reasonable opinion is
+considered, and all community members are invited to participate in our public
+voting. If there ever is a situation where the PMC&#39;s view differs significantly
+from that of the rest of the community, this is a symptom of a problem that
+needs to be addressed.
+
+With the expectation of your acceptance, welcome!
+
+The Apache DataFusion PMC
+</pre></div>
+</div>
+</section>
+<section id="step-5-chair-promotes-the-committer-to-pmc">
+<h3>Step 5: Chair Promotes the Committer to PMC<a class="headerlink" href="#step-5-chair-promotes-the-committer-to-pmc" title="Link to this heading">¶</a></h3>
+<p>The PMC chair adds the user to the PMC using the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>.</p>
+</section>
+<section id="step-6-announce-and-celebrate-the-new-pmc-member">
+<h3>Step 6: Announce and Celebrate the New PMC Member<a class="headerlink" href="#step-6-announce-and-celebrate-the-new-pmc-member" title="Link to this heading">¶</a></h3>
+<p>Send an email such as the following to <code class="docutils literal notranslate"><span class="pre">dev&#64;datafusion.apache.org</span></code> to celebrate:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: dev@datafusion.apache.org
+Subject: [ANNOUNCE] New DataFusion PMC member: $NEW_PMC_MEMBER
+
+The Project Management Committee (PMC) for Apache DataFusion has invited
+$NEW_PMC_MEMBER to become a PMC member and we are pleased to announce
+that $NEW_PMC_MEMBER has accepted.
+
+Congratulations and welcome!
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="governance.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Governance</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="specification/index.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Specifications</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2024, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.3.7.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
