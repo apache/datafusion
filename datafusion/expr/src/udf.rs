@@ -445,8 +445,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// # Arguments
-    /// * 'args': The arguments of the function
-    /// * 'schema': The schema of the function
+    /// * `args`: The arguments of the function
+    /// * `info`: The necessary information for simplification
     ///
     /// # Returns
     /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE

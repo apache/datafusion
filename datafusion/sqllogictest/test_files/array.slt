@@ -1136,6 +1136,10 @@ from arrays_values_without_nulls;
 
 ## array_element (aliases: array_extract, list_extract, list_element)
 
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: Error during planning: \[data_types_with_scalar_udf\] signature ArraySignature\(ArrayAndIndex\) does not support zero arguments.
+select array_element();
+
 # array_element error
 query error
 select array_element(1, 2);
@@ -1973,6 +1977,10 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [] [] [] []
 [] [] [] []
 [6.0] [6.0] [] []
+
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: Error during planning: \[data_types_with_scalar_udf\] signature VariadicAny does not support zero arguments.
+select array_slice();
 
 
 # make_array with nulls
