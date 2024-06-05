@@ -24,8 +24,7 @@ use std::sync::Arc;
 use crate::parquet::{struct_array, Scenario};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalYearMonthType, TimestampMicrosecondType, TimestampMillisecondType,
+    i256, Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
@@ -1076,8 +1075,11 @@ async fn test_dates_64_diff_rg_sizes() {
 
 #[tokio::test]
 #[should_panic]
-// Statistics for `Intervals` are not supported yet, see for ref:
-// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
+// Currently this test `should_panic` since statistics for `Intervals`
+// are not supported and `IntervalMonthDayNano` cannot be written
+// to parquet yet.
+// Refer to issue: https://github.com/apache/arrow-rs/issues/5847
+// and https://github.com/apache/arrow-rs/blob/master/parquet/src/arrow/arrow_writer/mod.rs#L747
 async fn test_interval_diff_rg_sizes() {
     // This creates a parquet files of 3 columns:
     // "year_month" --> IntervalYearMonthArray
@@ -1093,48 +1095,55 @@ async fn test_interval_diff_rg_sizes() {
     .build()
     .await;
 
+    // TODO: expected values need to be changed once issue is resolved
+    // expected_min: Arc::new(IntervalYearMonthArray::from(vec![
+    //     IntervalYearMonthType::make_value(1, 10),
+    //     IntervalYearMonthType::make_value(4, 13),
+    // ])),
+    // expected_max: Arc::new(IntervalYearMonthArray::from(vec![
+    //     IntervalYearMonthType::make_value(6, 51),
+    //     IntervalYearMonthType::make_value(8, 53),
+    // ])),
     Test {
         reader: &reader,
-        expected_min: Arc::new(IntervalYearMonthArray::from(vec![
-            IntervalYearMonthType::make_value(1, 10),
-            IntervalYearMonthType::make_value(4, 13),
-        ])),
-        expected_max: Arc::new(IntervalYearMonthArray::from(vec![
-            IntervalYearMonthType::make_value(6, 51),
-            IntervalYearMonthType::make_value(8, 53),
-        ])),
+        expected_min: Arc::new(IntervalYearMonthArray::from(vec![None, None])),
+        expected_max: Arc::new(IntervalYearMonthArray::from(vec![None, None])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "year_month",
     }
     .run();
 
+    // expected_min: Arc::new(IntervalDayTimeArray::from(vec![
+    //     IntervalDayTimeType::make_value(1, 10),
+    //     IntervalDayTimeType::make_value(4, 13),
+    // ])),
+    // expected_max: Arc::new(IntervalDayTimeArray::from(vec![
+    //     IntervalDayTimeType::make_value(6, 51),
+    //     IntervalDayTimeType::make_value(8, 53),
+    // ])),
     Test {
         reader: &reader,
-        expected_min: Arc::new(IntervalDayTimeArray::from(vec![
-            IntervalDayTimeType::make_value(1, 10),
-            IntervalDayTimeType::make_value(4, 13),
-        ])),
-        expected_max: Arc::new(IntervalDayTimeArray::from(vec![
-            IntervalDayTimeType::make_value(6, 51),
-            IntervalDayTimeType::make_value(8, 53),
-        ])),
+        expected_min: Arc::new(IntervalDayTimeArray::from(vec![None, None])),
+        expected_max: Arc::new(IntervalDayTimeArray::from(vec![None, None])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "day_time",
     }
     .run();
 
+    // expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![
+    //     IntervalMonthDayNanoType::make_value(1, 10, 100),
+    //     IntervalMonthDayNanoType::make_value(4, 13, 103),
+    // ])),
+    // expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![
+    //     IntervalMonthDayNanoType::make_value(6, 51, 501),
+    //     IntervalMonthDayNanoType::make_value(8, 53, 503),
+    // ])),
     Test {
         reader: &reader,
-        expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNanoType::make_value(1, 10, 100),
-            IntervalMonthDayNanoType::make_value(4, 13, 103),
-        ])),
-        expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNanoType::make_value(6, 51, 501),
-            IntervalMonthDayNanoType::make_value(8, 53, 503),
-        ])),
+        expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![None, None])),
+        expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![None, None])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "month_day_nano",
