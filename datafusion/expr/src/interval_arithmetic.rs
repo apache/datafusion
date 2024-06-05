@@ -1021,13 +1021,20 @@ impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
 impl OneTrait for IntervalDayTime {
     fn one() -> Self {
-        IntervalDayTime::ONE
+        IntervalDayTime {
+            days: 0,
+            milliseconds: 1,
+        }
     }
 }
 
 impl OneTrait for IntervalMonthDayNano {
     fn one() -> Self {
-        IntervalMonthDayNano::ONE
+        IntervalMonthDayNano {
+            months: 0,
+            days: 0,
+            nanoseconds: 1,
+        }
     }
 }
 
