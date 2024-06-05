@@ -23,8 +23,10 @@ use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
+    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array,
 };
@@ -195,8 +197,10 @@ make_stats_iterator!(
 /// * `$iterator_type` is the name of the iterator type (e.g. `MinBooleanStatsIterator`)
 /// * `$func` is the function to call to get the value (e.g. `min` or `max`)
 /// * `$bytes_func` is the function to call to get the value as bytes (e.g. `min_bytes` or `max_bytes`)
+/// * `$stat_value_type` is the type of the statistics value (e.g. `i128`)
+/// * `convert_func` is the function to convert the bytes to stats value (e.g. `from_bytes_to_i128`)
 macro_rules! make_decimal_stats_iterator {
-    ($iterator_type:ident, $func:ident, $bytes_func:ident) => {
+    ($iterator_type:ident, $func:ident, $bytes_func:ident, $stat_value_type:ident, $convert_func: ident) => {
         struct $iterator_type<'a, I>
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
@@ -217,7 +221,7 @@ macro_rules! make_decimal_stats_iterator {
         where
             I: Iterator<Item = Option<&'a ParquetStatistics>>,
         {
-            type Item = Option<i128>;
+            type Item = Option<$stat_value_type>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
@@ -227,13 +231,17 @@ macro_rules! make_decimal_stats_iterator {
                             return None;
                         }
                         match stats {
-                            ParquetStatistics::Int32(s) => Some(*s.$func() as i128),
-                            ParquetStatistics::Int64(s) => Some(*s.$func() as i128),
+                            ParquetStatistics::Int32(s) => {
+                                Some($stat_value_type::from(*s.$func()))
+                            }
+                            ParquetStatistics::Int64(s) => {
+                                Some($stat_value_type::from(*s.$func()))
+                            }
                             ParquetStatistics::ByteArray(s) => {
-                                Some(from_bytes_to_i128(s.$bytes_func()))
+                                Some($convert_func(s.$bytes_func()))
                             }
                             ParquetStatistics::FixedLenByteArray(s) => {
-                                Some(from_bytes_to_i128(s.$bytes_func()))
+                                Some($convert_func(s.$bytes_func()))
                             }
                             _ => None,
                         }
@@ -248,8 +256,34 @@ macro_rules! make_decimal_stats_iterator {
     };
 }
 
-make_decimal_stats_iterator!(MinDecimal128StatsIterator, min, min_bytes);
-make_decimal_stats_iterator!(MaxDecimal128StatsIterator, max, max_bytes);
+make_decimal_stats_iterator!(
+    MinDecimal128StatsIterator,
+    min,
+    min_bytes,
+    i128,
+    from_bytes_to_i128
+);
+make_decimal_stats_iterator!(
+    MaxDecimal128StatsIterator,
+    max,
+    max_bytes,
+    i128,
+    from_bytes_to_i128
+);
+make_decimal_stats_iterator!(
+    MinDecimal256StatsIterator,
+    min,
+    min_bytes,
+    i256,
+    from_bytes_to_i256
+);
+make_decimal_stats_iterator!(
+    MaxDecimal256StatsIterator,
+    max,
+    max_bytes,
+    i256,
+    from_bytes_to_i256
+);
 
 /// Lookups up the parquet column by name
 ///
@@ -341,6 +375,11 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::UInt64 => Ok(Arc::new(UInt64Array::from_iter(
             MinInt64StatsIterator::new(iterator).map(|x| x.map(|x| *x as u64)),
         ))),
+        DataType::Float16 => Ok(Arc::new(Float16Array::from_iter(
+            MinFixedLenByteArrayStatsIterator::new(iterator).map(|x| x.and_then(|x| {
+                from_bytes_to_f16(x)
+            })),
+        ))),
         DataType::Float32 => Ok(Arc::new(Float32Array::from_iter(
             MinFloatStatsIterator::new(iterator).map(|x| x.copied()),
         ))),
@@ -384,8 +423,41 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 }
             })
         },
+        DataType::Time32(unit) => {
+            Ok(match unit {
+                TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                    MinInt32StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                    MinInt32StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                _ => {
+                    let len = iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    new_null_array(data_type, len)
+                }
+            })
+        },
+        DataType::Time64(unit) => {
+            Ok(match unit {
+                TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                    MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                    MinInt64StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                _ => {
+                    let len = iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    new_null_array(data_type, len)
+                }
+            })
+        },
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
             MinByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
+        ))),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter(
+            MinByteArrayStatsIterator::new(iterator).map(|x| x.map(|x|x.to_vec())),
         ))),
         DataType::Utf8 => Ok(Arc::new(StringArray::from_iter(
             MinByteArrayStatsIterator::new(iterator).map(|x| {
@@ -398,6 +470,19 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 })
             }),
         ))),
+        DataType::LargeUtf8 => {
+            Ok(Arc::new(LargeStringArray::from_iter(
+                MinByteArrayStatsIterator::new(iterator).map(|x| {
+                    x.and_then(|x| {
+                        let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
+                        if res.is_none() {
+                            log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                        }
+                        res
+                    })
+                }),
+            )))
+        }
         DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
             MinFixedLenByteArrayStatsIterator::new(iterator).map(|x| {
                 x.and_then(|x| {
@@ -420,20 +505,21 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
             ).with_precision_and_scale(*precision, *scale)?;
             Ok(Arc::new(arr))
         },
+        DataType::Decimal256(precision, scale) => {
+            let arr = Decimal256Array::from_iter(
+                MinDecimal256StatsIterator::new(iterator)
+            ).with_precision_and_scale(*precision, *scale)?;
+            Ok(Arc::new(arr))
+        },
         DataType::Dictionary(_, value_type) => {
             min_statistics(value_type, iterator)
         }
 
         DataType::Map(_,_) |
-        DataType::Float16 |
-        DataType::Time32(_) |
-        DataType::Time64(_) |
         DataType::Duration(_) |
         DataType::Interval(_) |
         DataType::Null |
-        DataType::LargeBinary |
         DataType::BinaryView |
-        DataType::LargeUtf8 |
         DataType::Utf8View |
         DataType::List(_) |
         DataType::ListView(_) |
@@ -442,7 +528,6 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::LargeListView(_) |
         DataType::Struct(_) |
         DataType::Union(_, _) |
-        DataType::Decimal256(_, _) |
         DataType::RunEndEncoded(_, _) => {
             let len = iterator.count();
             // don't know how to extract statistics, so return a null array
@@ -516,6 +601,11 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::UInt64 => Ok(Arc::new(UInt64Array::from_iter(
             MaxInt64StatsIterator::new(iterator).map(|x| x.map(|x| *x as u64)),
         ))),
+        DataType::Float16 => Ok(Arc::new(Float16Array::from_iter(
+            MaxFixedLenByteArrayStatsIterator::new(iterator).map(|x| x.and_then(|x| {
+                from_bytes_to_f16(x)
+            })),
+        ))),
         DataType::Float32 => Ok(Arc::new(Float32Array::from_iter(
             MaxFloatStatsIterator::new(iterator).map(|x| x.copied()),
         ))),
@@ -559,8 +649,41 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 }
             })
         }
+        DataType::Time32(unit) => {
+            Ok(match unit {
+                TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                    MaxInt32StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                    MaxInt32StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                _ => {
+                    let len = iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    new_null_array(data_type, len)
+                }
+            })
+        },
+        DataType::Time64(unit) => {
+            Ok(match unit {
+                TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                    MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                    MaxInt64StatsIterator::new(iterator).map(|x| x.copied()),
+                )),
+                _ => {
+                    let len = iterator.count();
+                    // don't know how to extract statistics, so return a null array
+                    new_null_array(data_type, len)
+                }
+            })
+        },
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
             MaxByteArrayStatsIterator::new(iterator).map(|x| x.map(|x| x.to_vec())),
+        ))),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter(
+            MaxByteArrayStatsIterator::new(iterator).map(|x| x.map(|x|x.to_vec())),
         ))),
         DataType::Utf8 => Ok(Arc::new(StringArray::from_iter(
             MaxByteArrayStatsIterator::new(iterator).map(|x| {
@@ -573,6 +696,19 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 })
             }),
         ))),
+        DataType::LargeUtf8 => {
+            Ok(Arc::new(LargeStringArray::from_iter(
+                MaxByteArrayStatsIterator::new(iterator).map(|x| {
+                    x.and_then(|x| {
+                        let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
+                        if res.is_none() {
+                            log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                        }
+                        res
+                    })
+                }),
+            )))
+        }
         DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
             MaxFixedLenByteArrayStatsIterator::new(iterator).map(|x| {
                 x.and_then(|x| {
@@ -595,20 +731,21 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr) as ArrayRef)
         }
+        DataType::Decimal256(precision, scale) => {
+            let arr = Decimal256Array::from_iter(
+                MaxDecimal256StatsIterator::new(iterator)
+            ).with_precision_and_scale(*precision, *scale)?;
+            Ok(Arc::new(arr))
+        },
         DataType::Dictionary(_, value_type) => {
             max_statistics(value_type, iterator)
         }
 
         DataType::Map(_,_) |
-        DataType::Float16 |
-        DataType::Time32(_) |
-        DataType::Time64(_) |
         DataType::Duration(_) |
         DataType::Interval(_) |
         DataType::Null |
-        DataType::LargeBinary |
         DataType::BinaryView |
-        DataType::LargeUtf8 |
         DataType::Utf8View |
         DataType::List(_) |
         DataType::ListView(_) |
@@ -617,7 +754,6 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
         DataType::LargeListView(_) |
         DataType::Struct(_) |
         DataType::Union(_, _) |
-        DataType::Decimal256(_, _) |
         DataType::RunEndEncoded(_, _) => {
             let len = iterator.count();
             // don't know how to extract statistics, so return a null array
@@ -926,6 +1062,8 @@ mod test {
             input: timestamp_seconds_array(
                 [
                     Some(1),
+                    None,
+                    Some(3),
                     // row group 2
                     Some(9),
                     Some(5),
