@@ -29,7 +29,7 @@ use datafusion::physical_plan::expressions::{
     DistinctCount, DistinctSum, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
     Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
     OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop,
-    StringAgg, Sum, TryCastExpr, Variance, VariancePop, WindowShift,
+    StringAgg, Sum, TryCastExpr, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -186,21 +186,29 @@ pub fn serialize_physical_window_expr(
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
-        let AggrFn { inner, distinct } =
-            aggr_expr_to_aggr_fn(sliding_aggr_window_expr.get_aggregate_expr().as_ref())?;
+        let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
+        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            )
+        } else {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
 
-        if distinct {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
+            if distinct {
+                // TODO
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         }
-
-        if window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-        }
-
-        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
@@ -273,8 +281,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Max
     } else if aggr_expr.downcast_ref::<Avg>().is_some() {
         protobuf::AggregateFunction::Avg
-    } else if aggr_expr.downcast_ref::<Variance>().is_some() {
-        protobuf::AggregateFunction::Variance
     } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
         protobuf::AggregateFunction::VariancePop
     } else if aggr_expr.downcast_ref::<Stddev>().is_some() {

@@ -127,7 +127,13 @@ fn roundtrip_statement() -> Result<()> {
             UNION ALL
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
-            LIMIT 10"#
+            LIMIT 10"#,
+            "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
+            last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
+            first_name from person",
+            r#"SELECT id, count(distinct id) over (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
+            sum(id) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from person"#,
+            "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",            
         ];
 
     // For each test sql string, we transform as follows:

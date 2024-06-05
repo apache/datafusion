@@ -70,29 +70,90 @@ make_udf_function!(uuid::UuidFunc, UUID, uuid);
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
-    #[doc = "Returns the numeric code of the first character of the argument."]
-    pub fn ascii(arg1: Expr) -> Expr {
-        super::ascii().call(vec![arg1])
-    }
-
-    #[doc = "Returns the number of bits in the `string`"]
-    pub fn bit_length(arg: Expr) -> Expr {
-        super::bit_length().call(vec![arg])
-    }
+    export_functions!((
+        ascii,
+        "Returns the numeric code of the first character of the argument.",
+        arg1
+    ),(
+        bit_length,
+        "Returns the number of bits in the `string`",
+        arg1
+    ),(
+        btrim,
+        "Removes all characters, spaces by default, from both sides of a string",
+        args,
+    ),(
+        chr,
+        "Converts the Unicode code point to a UTF8 character",
+        arg1
+    ),(
+        concat,
+        "Concatenates the text representations of all the arguments. NULL arguments are ignored",
+        args,
+    ),(
+        ends_with,
+        "Returns true if the `string` ends with the `suffix`, false otherwise.",
+        string suffix
+    ),(
+        initcap,
+        "Converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase",
+        string
+    ),(
+        levenshtein,
+        "Returns the Levenshtein distance between the two given strings",
+        arg1 arg2
+    ),(
+        lower,
+        "Converts a string to lowercase.",
+        arg1
+    ),(
+        ltrim,
+        "Removes all characters, spaces by default, from the beginning of a string",
+        args,
+    ),(
+        octet_length,
+        "returns the number of bytes of a string",
+        args
+    ),(
+        overlay,
+        "replace the substring of string that starts at the start'th character and extends for count characters with new substring",
+        args,
+    ),(
+        repeat,
+        "Repeats the `string` to `n` times",
+        string n
+    ),(
+        replace,
+        "Replaces all occurrences of `from` with `to` in the `string`",
+        string from to
+    ),(
+        rtrim,
+        "Removes all characters, spaces by default, from the end of a string",
+        args,
+    ),(
+        split_part,
+        "Splits a string based on a delimiter and picks out the desired field based on the index.",
+        string delimiter index
+    ),(
+        starts_with,
+        "Returns true if string starts with prefix.",
+        arg1 arg2
+    ),(
+        to_hex,
+        "Converts an integer to a hexadecimal string.",
+        arg1
+    ),(
+        upper,
+        "Converts a string to uppercase.",
+        arg1
+    ),(
+        uuid,
+        "returns uuid v4 as a string value",
+    ));
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
-    pub fn btrim(args: Vec<Expr>) -> Expr {
+    pub fn trim(args: Vec<Expr>) -> Expr {
         super::btrim().call(args)
-    }
-
-    #[doc = "Converts the Unicode code point to a UTF8 character"]
-    pub fn chr(arg: Expr) -> Expr {
-        super::chr().call(vec![arg])
-    }
-
-    #[doc = "Concatenates the text representations of all the arguments. NULL arguments are ignored"]
-    pub fn concat(args: Vec<Expr>) -> Expr {
-        super::concat().call(args)
     }
 
     #[doc = "Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored."]
@@ -100,86 +161,6 @@ pub mod expr_fn {
         let mut args = args;
         args.insert(0, delimiter);
         super::concat_ws().call(args)
-    }
-
-    #[doc = "Returns true if the `string` ends with the `suffix`, false otherwise."]
-    pub fn ends_with(string: Expr, suffix: Expr) -> Expr {
-        super::ends_with().call(vec![string, suffix])
-    }
-
-    #[doc = "Converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase"]
-    pub fn initcap(string: Expr) -> Expr {
-        super::initcap().call(vec![string])
-    }
-
-    #[doc = "Returns the Levenshtein distance between the two given strings"]
-    pub fn levenshtein(arg1: Expr, arg2: Expr) -> Expr {
-        super::levenshtein().call(vec![arg1, arg2])
-    }
-
-    #[doc = "Converts a string to lowercase."]
-    pub fn lower(arg1: Expr) -> Expr {
-        super::lower().call(vec![arg1])
-    }
-
-    #[doc = "Removes all characters, spaces by default, from the beginning of a string"]
-    pub fn ltrim(args: Vec<Expr>) -> Expr {
-        super::ltrim().call(args)
-    }
-
-    #[doc = "returns the number of bytes of a string"]
-    pub fn octet_length(args: Expr) -> Expr {
-        super::octet_length().call(vec![args])
-    }
-
-    #[doc = "replace the substring of string that starts at the start'th character and extends for count characters with new substring"]
-    pub fn overlay(args: Vec<Expr>) -> Expr {
-        super::overlay().call(args)
-    }
-
-    #[doc = "Repeats the `string` to `n` times"]
-    pub fn repeat(string: Expr, n: Expr) -> Expr {
-        super::repeat().call(vec![string, n])
-    }
-
-    #[doc = "Replaces all occurrences of `from` with `to` in the `string`"]
-    pub fn replace(string: Expr, from: Expr, to: Expr) -> Expr {
-        super::replace().call(vec![string, from, to])
-    }
-
-    #[doc = "Removes all characters, spaces by default, from the end of a string"]
-    pub fn rtrim(args: Vec<Expr>) -> Expr {
-        super::rtrim().call(args)
-    }
-
-    #[doc = "Splits a string based on a delimiter and picks out the desired field based on the index."]
-    pub fn split_part(string: Expr, delimiter: Expr, index: Expr) -> Expr {
-        super::split_part().call(vec![string, delimiter, index])
-    }
-
-    #[doc = "Returns true if string starts with prefix."]
-    pub fn starts_with(arg1: Expr, arg2: Expr) -> Expr {
-        super::starts_with().call(vec![arg1, arg2])
-    }
-
-    #[doc = "Converts an integer to a hexadecimal string."]
-    pub fn to_hex(arg1: Expr) -> Expr {
-        super::to_hex().call(vec![arg1])
-    }
-
-    #[doc = "Removes all characters, spaces by default, from both sides of a string"]
-    pub fn trim(args: Vec<Expr>) -> Expr {
-        super::btrim().call(args)
-    }
-
-    #[doc = "Converts a string to uppercase."]
-    pub fn upper(arg1: Expr) -> Expr {
-        super::upper().call(vec![arg1])
-    }
-
-    #[doc = "returns uuid v4 as a string value"]
-    pub fn uuid() -> Expr {
-        super::uuid().call(vec![])
     }
 }
 

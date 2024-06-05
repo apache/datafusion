@@ -19,34 +19,48 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow::{array::ArrayRef, datatypes::i256, datatypes::DataType, datatypes::TimeUnit};
 use arrow_array::{new_empty_array, new_null_array, UInt64Array};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
 };
+use half::f16;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::sync::Arc;
-
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
 pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(sign_extend_be(b))
+    i128::from_be_bytes(sign_extend_be::<16>(b))
+}
+
+// Convert the bytes array to i256.
+// The endian of the input bytes array must be big-endian.
+pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
+    i256::from_be_bytes(sign_extend_be::<32>(b))
+}
+
+// Convert the bytes array to f16
+pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
+    match b {
+        [low, high] => Some(f16::from_be_bytes([*high, *low])),
+        _ => None,
+    }
 }
 
 // Copy from arrow-rs
-// https://github.com/apache/arrow-rs/blob/733b7e7fd1e8c43a404c3ce40ecf741d493c21b4/parquet/src/arrow/buffer/bit_util.rs#L55
-// Convert the byte slice to fixed length byte array with the length of 16
-fn sign_extend_be(b: &[u8]) -> [u8; 16] {
-    assert!(b.len() <= 16, "Array too large, expected less than 16");
+// https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
+// Convert the byte slice to fixed length byte array with the length of N.
+pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
-    let mut result = if is_negative { [255u8; 16] } else { [0u8; 16] };
-    for (d, s) in result.iter_mut().skip(16 - b.len()).zip(b) {
+    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
         *d = *s;
     }
     result
@@ -75,6 +89,13 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(i256::from(*s.$func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
                     Some(DataType::Int8) => {
                         Some(ScalarValue::Int8(Some((*s.$func()).try_into().unwrap())))
                     }
@@ -96,6 +117,12 @@ macro_rules! get_statistic {
                     Some(DataType::Date64) => {
                         Some(ScalarValue::Date64(Some(i64::from(*s.$func()) * 24 * 60 * 60 * 1000)))
                     }
+                    Some(DataType::Time32(TimeUnit::Second)) => {
+                        Some(ScalarValue::Time32Second(Some((*s.$func()))))
+                    }
+                    Some(DataType::Time32(TimeUnit::Millisecond)) => {
+                        Some(ScalarValue::Time32Millisecond(Some((*s.$func()))))
+                    }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
                 }
             }
@@ -109,8 +136,41 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(i256::from(*s.$func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
                     Some(DataType::UInt64) => {
                         Some(ScalarValue::UInt64(Some((*s.$func()) as u64)))
+                    }
+                    Some(DataType::Time64(TimeUnit::Microsecond)) => {
+                        Some(ScalarValue::Time64Microsecond(Some((*s.$func() as i64))))
+                    }
+                    Some(DataType::Time64(TimeUnit::Nanosecond)) => {
+                        Some(ScalarValue::Time64Nanosecond(Some((*s.$func() as i64))))
+                    }
+                    Some(DataType::Timestamp(unit, timezone)) => {
+                        Some(match unit {
+                            TimeUnit::Second => ScalarValue::TimestampSecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
+                                Some(*s.$func()),
+                                timezone.clone(),
+                            ),
+                        })
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
@@ -129,19 +189,31 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(from_bytes_to_i256(s.$bytes_func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
                     Some(DataType::Binary) => {
                         Some(ScalarValue::Binary(Some(s.$bytes_func().to_vec())))
                     }
-                    _ => {
-                        let s = std::str::from_utf8(s.$bytes_func())
+                    Some(DataType::LargeBinary) => {
+                        Some(ScalarValue::LargeBinary(Some(s.$bytes_func().to_vec())))
+                    }
+                    Some(DataType::LargeUtf8) | _ => {
+                        let utf8_value = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
                             .ok();
-                        if s.is_none() {
-                            log::debug!(
-                                "Utf8 statistics is a non-UTF8 value, ignoring it."
-                            );
+                        if utf8_value.is_none() {
+                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
                         }
-                        Some(ScalarValue::Utf8(s))
+
+                        match $target_arrow_type {
+                            Some(DataType::LargeUtf8) => Some(ScalarValue::LargeUtf8(utf8_value)),
+                            _ => Some(ScalarValue::Utf8(utf8_value)),
+                        }
                     }
                 }
             }
@@ -153,6 +225,13 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
+                            *precision,
+                            *scale,
+                        ))
+                    }
+                    Some(DataType::Decimal256(precision, scale)) => {
+                        Some(ScalarValue::Decimal256(
+                            Some(from_bytes_to_i256(s.$bytes_func())),
                             *precision,
                             *scale,
                         ))
@@ -173,6 +252,9 @@ macro_rules! get_statistic {
                             *size,
                             value,
                         ))
+                    }
+                    Some(DataType::Float16) => {
+                        Some(ScalarValue::Float16(from_bytes_to_f16(s.$bytes_func())))
                     }
                     _ => None,
                 }
@@ -322,7 +404,6 @@ impl<'a> StatisticsConverter<'a> {
                 column_name
             );
         };
-
         Ok(Self {
             column_name,
             statistics_type,
@@ -391,11 +472,13 @@ impl<'a> StatisticsConverter<'a> {
 mod test {
     use super::*;
     use arrow::compute::kernels::cast_utils::Parser;
-    use arrow::datatypes::{Date32Type, Date64Type};
+    use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow_array::{
         new_null_array, Array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
+        Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch, StringArray,
+        StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -536,28 +619,209 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
-    )]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
-            input: timestamp_array([
-                // row group 1
-                Some(1),
+            input: timestamp_seconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                Some(3),
-                // row group 2
-                Some(9),
-                Some(5),
+            ),
+            expected_min: timestamp_seconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_seconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_milliseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                // row group 3
+            ),
+            expected_min: timestamp_milliseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_milliseconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_microseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
+            ),
+            expected_min: timestamp_microseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_microseconds_array([Some(3), Some(9), None], None),
+        }
+        .run();
+
+        Test {
+            input: timestamp_nanoseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
                 None,
-                None,
-            ]),
-            expected_min: timestamp_array([Some(1), Some(5), None]),
-            expected_max: timestamp_array([Some(3), Some(9), None]),
+            ),
+            expected_min: timestamp_nanoseconds_array([Some(1), Some(5), None], None),
+            expected_max: timestamp_nanoseconds_array([Some(3), Some(9), None], None),
+        }
+        .run()
+    }
+
+    #[test]
+    fn roundtrip_timestamp_timezoned() {
+        Test {
+            input: timestamp_seconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_seconds_array([Some(1), Some(5), None], Some("UTC")),
+            expected_max: timestamp_seconds_array([Some(3), Some(9), None], Some("UTC")),
+        }
+        .run();
+
+        Test {
+            input: timestamp_milliseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_milliseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_milliseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
+        }
+        .run();
+
+        Test {
+            input: timestamp_microseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_microseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_microseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
+        }
+        .run();
+
+        Test {
+            input: timestamp_nanoseconds_array(
+                [
+                    // row group 1
+                    Some(1),
+                    None,
+                    Some(3),
+                    // row group 2
+                    Some(9),
+                    Some(5),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ],
+                Some("UTC"),
+            ),
+            expected_min: timestamp_nanoseconds_array(
+                [Some(1), Some(5), None],
+                Some("UTC"),
+            ),
+            expected_max: timestamp_nanoseconds_array(
+                [Some(3), Some(9), None],
+                Some("UTC"),
+            ),
         }
         .run()
     }
@@ -592,6 +856,42 @@ mod test {
                 Decimal128Array::from(vec![Some(22000), Some(500000), None])
                     .with_precision_and_scale(9, 2)
                     .unwrap(),
+            ),
+        }
+        .run();
+
+        Test {
+            input: Arc::new(
+                Decimal256Array::from(vec![
+                    // row group 1
+                    Some(i256::from(100)),
+                    None,
+                    Some(i256::from(22000)),
+                    // row group 2
+                    Some(i256::MAX),
+                    Some(i256::MIN),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
+            ),
+            expected_min: Arc::new(
+                Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::MIN), None])
+                    .with_precision_and_scale(76, 76)
+                    .unwrap(),
+            ),
+            expected_max: Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::from(22000)),
+                    Some(i256::MAX),
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
             ),
         }
         .run()
@@ -749,6 +1049,34 @@ mod test {
             ]),
         }
         .run()
+    }
+
+    #[test]
+    fn roundtrip_large_binary_array() {
+        let input: Vec<Option<&[u8]>> = vec![
+            // row group 1
+            Some(b"A"),
+            None,
+            Some(b"Q"),
+            // row group 2
+            Some(b"ZZ"),
+            Some(b"AA"),
+            None,
+            // row group 3
+            None,
+            None,
+            None,
+        ];
+
+        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
+        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
+
+        Test {
+            input: large_binary_array(input),
+            expected_min: large_binary_array(expected_min),
+            expected_max: large_binary_array(expected_max),
+        }
+        .run();
     }
 
     #[test]
@@ -914,8 +1242,8 @@ mod test {
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: timestamp_array([None]),
-                expected_max: timestamp_array([None]),
+                expected_min: timestamp_nanoseconds_array([None], None),
+                expected_max: timestamp_nanoseconds_array([None], None),
             })
             .with_column(ExpectedColumn {
                 name: "year",
@@ -1135,9 +1463,48 @@ mod test {
         Arc::new(array)
     }
 
-    fn timestamp_array(input: impl IntoIterator<Item = Option<i64>>) -> ArrayRef {
+    fn timestamp_seconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampSecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_milliseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampMillisecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_microseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
+        let array: TimestampMicrosecondArray = input.into_iter().collect();
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
+    }
+
+    fn timestamp_nanoseconds_array(
+        input: impl IntoIterator<Item = Option<i64>>,
+        timzezone: Option<&str>,
+    ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        Arc::new(array)
+        match timzezone {
+            Some(tz) => Arc::new(array.with_timezone(tz)),
+            None => Arc::new(array),
+        }
     }
 
     fn utf8_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
@@ -1184,6 +1551,15 @@ mod test {
                 .map(|s| Date64Type::parse(s.unwrap_or_default()))
                 .collect::<Vec<_>>(),
         );
+        Arc::new(array)
+    }
+
+    fn large_binary_array<'a>(
+        input: impl IntoIterator<Item = Option<&'a [u8]>>,
+    ) -> ArrayRef {
+        let array =
+            LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
+
         Arc::new(array)
     }
 }

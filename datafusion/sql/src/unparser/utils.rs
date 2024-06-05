@@ -20,16 +20,24 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     Result,
 };
-use datafusion_expr::{Aggregate, Expr, LogicalPlan};
+use datafusion_expr::{Aggregate, Expr, LogicalPlan, Window};
 
-/// Recursively searches children of [LogicalPlan] to find an Aggregate node if one exists
+/// One of the possible aggregation plans which can be found within a single select query.
+pub(crate) enum AggVariant<'a> {
+    Aggregate(&'a Aggregate),
+    Window(Vec<&'a Window>),
+}
+
+/// Recursively searches children of [LogicalPlan] to find an Aggregate or window node if one exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
-/// If an Aggregate node is not found prior to this or at all before reaching the end
-/// of the tree, None is returned.
-pub(crate) fn find_agg_node_within_select(
-    plan: &LogicalPlan,
+/// If an Aggregate or window node is not found prior to this or at all before reaching the end
+/// of the tree, None is returned. It is assumed that a Window and Aggegate node cannot both
+/// be found in a single select query.
+pub(crate) fn find_agg_node_within_select<'a>(
+    plan: &'a LogicalPlan,
+    mut prev_windows: Option<AggVariant<'a>>,
     already_projected: bool,
-) -> Option<&Aggregate> {
+) -> Option<AggVariant<'a>> {
     // Note that none of the nodes that have a corresponding agg node can have more
     // than 1 input node. E.g. Projection / Filter always have 1 input node.
     let input = plan.inputs();
@@ -38,18 +46,30 @@ pub(crate) fn find_agg_node_within_select(
     } else {
         input.first()?
     };
-    if let LogicalPlan::Aggregate(agg) = input {
-        Some(agg)
-    } else if let LogicalPlan::TableScan(_) = input {
-        None
-    } else if let LogicalPlan::Projection(_) = input {
-        if already_projected {
-            None
-        } else {
-            find_agg_node_within_select(input, true)
+
+    // Agg nodes explicitly return immediately with a single node
+    // Window nodes accumulate in a vec until encountering a TableScan or 2nd projection
+    match input {
+        LogicalPlan::Aggregate(agg) => Some(AggVariant::Aggregate(agg)),
+        LogicalPlan::Window(window) => {
+            prev_windows = match &mut prev_windows {
+                Some(AggVariant::Window(windows)) => {
+                    windows.push(window);
+                    prev_windows
+                }
+                _ => Some(AggVariant::Window(vec![window])),
+            };
+            find_agg_node_within_select(input, prev_windows, already_projected)
         }
-    } else {
-        find_agg_node_within_select(input, already_projected)
+        LogicalPlan::Projection(_) => {
+            if already_projected {
+                prev_windows
+            } else {
+                find_agg_node_within_select(input, prev_windows, true)
+            }
+        }
+        LogicalPlan::TableScan(_) => prev_windows,
+        _ => find_agg_node_within_select(input, prev_windows, already_projected),
     }
 }
 
@@ -75,6 +95,31 @@ pub(crate) fn unproject_agg_exprs(expr: &Expr, agg: &Aggregate) -> Result<Expr> 
                     internal_err!(
                         "Tried to unproject agg expr not found in provided Aggregate!"
                     )
+                }
+            } else {
+                Ok(Transformed::no(sub_expr))
+            }
+        })
+        .map(|e| e.data)
+}
+
+/// Recursively identify all Column expressions and transform them into the appropriate
+/// window expression contained in window.
+///
+/// For example, if expr contains the column expr "COUNT(*) PARTITION BY id" it will be transformed
+/// into an actual window expression as identified in the window node.
+pub(crate) fn unproject_window_exprs(expr: &Expr, windows: &[&Window]) -> Result<Expr> {
+    expr.clone()
+        .transform(|sub_expr| {
+            if let Expr::Column(c) = sub_expr {
+                if let Some(unproj) = windows
+                    .iter()
+                    .flat_map(|w| w.window_expr.iter())
+                    .find(|window_expr| window_expr.display_name().unwrap() == c.name)
+                {
+                    Ok(Transformed::yes(unproj.clone()))
+                } else {
+                    Ok(Transformed::no(Expr::Column(c)))
                 }
             } else {
                 Ok(Transformed::no(sub_expr))
