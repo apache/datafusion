@@ -1545,8 +1545,13 @@ mod tests {
             input_schema,
         )?);
 
-        let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
+        // enlarge memory limit in spill mode
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2600)
+        } else {
+            task_ctx.clone()
+        };
+        let result = common::collect(merged_aggregate.execute(0, task_ctx)?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
@@ -2032,7 +2037,7 @@ mod tests {
         spill: bool,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 3200)
+            new_spill_ctx(2, 4200)
         } else {
             Arc::new(TaskContext::default())
         };
