@@ -479,7 +479,7 @@ enum AggregateFunction {
   COUNT = 4;
   APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
-  VARIANCE = 7;
+  // VARIANCE = 7;
   VARIANCE_POP = 8;
   // COVARIANCE = 9;
   // COVARIANCE_POP = 10;

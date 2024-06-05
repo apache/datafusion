@@ -518,4 +518,3 @@ set datafusion.optimizer.prefer_hash_join = true;
 
 statement ok
 set datafusion.execution.batch_size = 8192;
-

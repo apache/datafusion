@@ -160,14 +160,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Avg, true) => {
             return not_impl_err!("AVG(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::Variance, true) => {
-            return not_impl_err!("VAR(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::VariancePop, false) => Arc::new(
             expressions::VariancePop::new(input_phy_exprs[0].clone(), name, data_type),
         ),
@@ -367,12 +359,13 @@ pub fn create_aggregate_expr(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use expressions::{StddevPop, VariancePop};
 
     use super::*;
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
-        Max, Min, Stddev, Variance,
+        Max, Min, Stddev,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
@@ -720,44 +713,6 @@ mod tests {
     }
 
     #[test]
-    fn test_variance_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Variance];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Variance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Variance>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_var_pop_expr() -> Result<()> {
         let funcs = vec![AggregateFunction::VariancePop];
         let data_types = vec![
@@ -782,8 +737,8 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                if fun == AggregateFunction::Variance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Variance>());
+                if fun == AggregateFunction::VariancePop {
+                    assert!(result_agg_phy_exprs.as_any().is::<VariancePop>());
                     assert_eq!("c1", result_agg_phy_exprs.name());
                     assert_eq!(
                         Field::new("c1", DataType::Float64, true),
@@ -820,7 +775,7 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                if fun == AggregateFunction::Variance {
+                if fun == AggregateFunction::Stddev {
                     assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
                     assert_eq!("c1", result_agg_phy_exprs.name());
                     assert_eq!(
@@ -858,8 +813,8 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                if fun == AggregateFunction::Variance {
-                    assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
+                if fun == AggregateFunction::StddevPop {
+                    assert!(result_agg_phy_exprs.as_any().is::<StddevPop>());
                     assert_eq!("c1", result_agg_phy_exprs.name());
                     assert_eq!(
                         Field::new("c1", DataType::Float64, true),
@@ -984,32 +939,6 @@ mod tests {
     #[test]
     fn test_avg_no_utf8() {
         let observed = AggregateFunction::Avg.return_type(&[DataType::Utf8]);
-        assert!(observed.is_err());
-    }
-
-    #[test]
-    fn test_variance_return_type() -> Result<()> {
-        let observed = AggregateFunction::Variance.return_type(&[DataType::Float32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Variance.return_type(&[DataType::Float64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Variance.return_type(&[DataType::Int32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Variance.return_type(&[DataType::UInt32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Variance.return_type(&[DataType::Int64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_variance_no_utf8() {
-        let observed = AggregateFunction::Variance.return_type(&[DataType::Utf8]);
         assert!(observed.is_err());
     }
 
