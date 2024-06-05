@@ -59,6 +59,7 @@ pub mod covariance;
 pub mod first_last;
 pub mod median;
 pub mod sum;
+pub mod variance;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -74,6 +75,7 @@ pub mod expr_fn {
     pub use super::first_last::last_value;
     pub use super::median::median;
     pub use super::sum::sum;
+    pub use super::variance::var_sample;
 }
 
 /// Returns all default aggregate functions
@@ -85,6 +87,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         sum::sum_udaf(),
         covariance::covar_pop_udaf(),
         median::median_udaf(),
+        variance::var_samp_udaf(),
     ]
 }
 
