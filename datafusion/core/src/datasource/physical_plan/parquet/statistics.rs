@@ -192,7 +192,7 @@ make_stats_iterator!(
 /// `Int32`, `Int64` or `ByteArray` or `FixedSizeByteArray` :mindblown:
 ///
 /// This iterator handles all cases, extracting the values
-/// and converting it to `i128`.
+/// and converting it to `stat_value_type`.
 ///
 /// Parameters:
 /// * `$iterator_type` is the name of the iterator type (e.g. `MinBooleanStatsIterator`)
