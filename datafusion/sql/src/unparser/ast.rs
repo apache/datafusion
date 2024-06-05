@@ -242,8 +242,8 @@ impl SelectBuilder {
             from: self
                 .from
                 .iter()
-                .filter_map(|b| b.build().ok().unwrap())
-                .collect(),
+                .filter_map(|b| b.build().transpose())
+                .collect::<Result<Vec<_>, BuilderError>>()?,
             lateral_views: self.lateral_views.clone(),
             selection: self.selection.clone(),
             group_by: match self.group_by {
