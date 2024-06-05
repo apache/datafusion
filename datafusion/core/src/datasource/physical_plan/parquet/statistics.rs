@@ -1061,6 +1061,7 @@ mod test {
         Test {
             input: timestamp_seconds_array(
                 [
+                    // row group 1
                     Some(1),
                     None,
                     Some(3),
