@@ -1136,6 +1136,10 @@ from arrays_values_without_nulls;
 
 ## array_element (aliases: array_extract, list_extract, list_element)
 
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: Error during planning: \[data_types_with_scalar_udf\] signature ArraySignature\(ArrayAndIndex\) does not support zero arguments.
+select array_element();
+
 # array_element error
 query error
 select array_element(1, 2);
@@ -1974,6 +1978,10 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [] [] [] []
 [6.0] [6.0] [] []
 
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: Error during planning: \[data_types_with_scalar_udf\] signature VariadicAny does not support zero arguments.
+select array_slice();
+
 
 # make_array with nulls
 query ???????
@@ -2030,6 +2038,18 @@ NULL
 [, 51, 52, 54, 55, 56, 57, 58, 59, 60]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
+statement ok
+create table t1(a int, b int) as values (100, 1), (101, 2), (102, 3), (101, 2);
+
+# rowsort is to ensure the order of group by is deterministic, array_sort has no effect here, since the sum() always returns single row.
+query ? rowsort
+select array_sort([sum(a)]) from t1 where a > 100 group by b;
+----
+[102]
+[202]
+
+statement ok
+drop table t1;
 
 ## list_sort (aliases: `array_sort`)
 query ???

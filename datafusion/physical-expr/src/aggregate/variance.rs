@@ -35,86 +35,11 @@ use datafusion_common::downcast_value;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-/// VAR and VAR_SAMP aggregate expression
-#[derive(Debug)]
-pub struct Variance {
-    name: String,
-    expr: Arc<dyn PhysicalExpr>,
-}
-
 /// VAR_POP aggregate expression
 #[derive(Debug)]
 pub struct VariancePop {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
-}
-
-impl Variance {
-    /// Create a new VARIANCE aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
-        // the result of variance just support FLOAT64 data type.
-        assert!(matches!(data_type, DataType::Float64));
-        Self {
-            name: name.into(),
-            expr,
-        }
-    }
-}
-
-impl AggregateExpr for Variance {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64, true))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(&self.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(&self.name, "mean"),
-                DataType::Float64,
-                true,
-            ),
-            Field::new(format_state_name(&self.name, "m2"), DataType::Float64, true),
-        ])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl PartialEq<dyn Any> for Variance {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
-            .unwrap_or(false)
-    }
 }
 
 impl VariancePop {
