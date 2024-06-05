@@ -149,7 +149,7 @@ DataFusion. Welcome, and thank you for your contributions!
 You can check here to see if someone has an Apache account: http://people.apache.org/committer-index.html
 
 If you aren't sure whether someone has an ICLA on file, ask the DataFusion PMC
-chair or an ASF Member to check [The ICLA file list].
+chair or an ASF Member to check [the ICLA file list].
 
 [the icla file list]: https://whimsy.apache.org/officers/unlistedclas.cgi
 
@@ -282,7 +282,7 @@ If you accept, please let us know by replying to private@datafusion.apache.org.
 
 See also the ASF instructions on [how to add a PMC member].
 
-[how to add a PMC member]: https://www.apache.org/dev/pmc.html#newpmc
+[how to add a pmc member]: https://www.apache.org/dev/pmc.html#newpmc
 
 ### Step 1: Start a Discussion Thread
 
