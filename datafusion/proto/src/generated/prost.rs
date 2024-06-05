@@ -1925,7 +1925,7 @@ pub enum AggregateFunction {
     Count = 4,
     ApproxDistinct = 5,
     ArrayAgg = 6,
-    Variance = 7,
+    /// VARIANCE = 7;
     VariancePop = 8,
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
@@ -1968,7 +1968,6 @@ impl AggregateFunction {
             AggregateFunction::Count => "COUNT",
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Variance => "VARIANCE",
             AggregateFunction::VariancePop => "VARIANCE_POP",
             AggregateFunction::Stddev => "STDDEV",
             AggregateFunction::StddevPop => "STDDEV_POP",
@@ -2007,7 +2006,6 @@ impl AggregateFunction {
             "COUNT" => Some(Self::Count),
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "VARIANCE" => Some(Self::Variance),
             "VARIANCE_POP" => Some(Self::VariancePop),
             "STDDEV" => Some(Self::Stddev),
             "STDDEV_POP" => Some(Self::StddevPop),
