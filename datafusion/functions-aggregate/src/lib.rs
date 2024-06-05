@@ -75,6 +75,7 @@ pub mod expr_fn {
     pub use super::first_last::last_value;
     pub use super::median::median;
     pub use super::sum::sum;
+    pub use super::variance::var_sample;
 }
 
 /// Returns all default aggregate functions
