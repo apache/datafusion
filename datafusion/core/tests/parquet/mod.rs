@@ -949,19 +949,19 @@ fn make_interval_batch(offset: i32) -> RecordBatch {
     let schema = Arc::new(schema);
 
     let ym_arr = IntervalYearMonthArray::from(vec![
-        Some(IntervalYearMonthType::make_value(1 + offset, 1 + offset)),
-        Some(IntervalYearMonthType::make_value(2 + offset, 2 + offset)),
-        Some(IntervalYearMonthType::make_value(3 + offset, 3 + offset)),
+        Some(IntervalYearMonthType::make_value(1 + offset, 10 + offset)),
+        Some(IntervalYearMonthType::make_value(2 + offset, 20 + offset)),
+        Some(IntervalYearMonthType::make_value(3 + offset, 30 + offset)),
         None,
-        Some(IntervalYearMonthType::make_value(5 + offset, 5 + offset)),
+        Some(IntervalYearMonthType::make_value(5 + offset, 50 + offset)),
     ]);
 
     let dt_arr = IntervalDayTimeArray::from(vec![
-        Some(IntervalDayTimeType::make_value(1 + offset, 1 + offset)),
-        Some(IntervalDayTimeType::make_value(2 + offset, 2 + offset)),
-        Some(IntervalDayTimeType::make_value(3 + offset, 3 + offset)),
+        Some(IntervalDayTimeType::make_value(1 + offset, 10 + offset)),
+        Some(IntervalDayTimeType::make_value(2 + offset, 20 + offset)),
+        Some(IntervalDayTimeType::make_value(3 + offset, 30 + offset)),
         None,
-        Some(IntervalDayTimeType::make_value(5 + offset, 5 + offset)),
+        Some(IntervalDayTimeType::make_value(5 + offset, 50 + offset)),
     ]);
 
     // Not yet implemented, see for ref:
@@ -969,24 +969,24 @@ fn make_interval_batch(offset: i32) -> RecordBatch {
     let mdn_arr = IntervalMonthDayNanoArray::from(vec![
         Some(IntervalMonthDayNanoType::make_value(
             1 + offset,
-            1 + offset,
-            1 + (offset as i64),
+            10 + offset,
+            100 + (offset as i64),
         )),
         Some(IntervalMonthDayNanoType::make_value(
             2 + offset,
-            2 + offset,
-            2 + (offset as i64),
+            20 + offset,
+            200 + (offset as i64),
         )),
         Some(IntervalMonthDayNanoType::make_value(
             3 + offset,
-            3 + offset,
-            3 + (offset as i64),
+            30 + offset,
+            300 + (offset as i64),
         )),
         None,
         Some(IntervalMonthDayNanoType::make_value(
             5 + offset,
-            5 + offset,
-            5 + (offset as i64),
+            50 + offset,
+            500 + (offset as i64),
         )),
     ]);
 
