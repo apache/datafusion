@@ -29,11 +29,13 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
+    avg, col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
     ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions_aggregate::expr_fn::sum;
 use datafusion_optimizer::analyzer::Analyzer;
+use datafusion_optimizer::common_subexpr_eliminate::{expr_to_identifier, ExprMask};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::GuaranteeRewriter;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
@@ -357,4 +359,73 @@ fn validate_unchanged_cases(rewriter: &mut GuaranteeRewriter, cases: &[Expr]) {
             expr, output
         );
     }
+}
+
+// Test from CommonSubexprEliminate
+#[test]
+fn id_array_visitor() -> Result<()> {
+    let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
+
+    let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]
+        .into(),
+        Default::default(),
+    )?);
+
+    // skip aggregates
+    let mut id_array = vec![];
+    expr_to_identifier(
+        &expr,
+        &mut HashMap::new(),
+        &mut id_array,
+        Arc::clone(&schema),
+        ExprMask::Normal,
+    )?;
+
+    let expected = vec![
+        (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+        (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+        (3, ""),
+        (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+        (0, ""),
+        (1, ""),
+        (5, ""),
+        (4, ""),
+        (7, "")
+    ]
+    .into_iter()
+    .map(|(number, id)| (number, id.into()))
+    .collect::<Vec<_>>();
+    assert_eq!(expected, id_array);
+
+    // include aggregates
+    let mut id_array = vec![];
+    expr_to_identifier(
+        &expr,
+        &mut HashMap::new(),
+        &mut id_array,
+        Arc::clone(&schema),
+        ExprMask::NormalAndAggregates,
+    )?;
+
+    let expected = vec![
+        (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+        (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+        (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}"),
+        (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+        (0, ""),
+        (1, ""),
+        (5, "{AVG(c)|{c}}"),
+        (4, ""),
+        (7, "")
+    ]
+    .into_iter()
+    .map(|(number, id)| (number, id.into()))
+    .collect::<Vec<_>>();
+    assert_eq!(expected, id_array);
+
+    Ok(())
 }

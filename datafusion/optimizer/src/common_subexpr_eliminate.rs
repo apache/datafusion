@@ -576,7 +576,7 @@ fn extract_expressions(
 
 /// Which type of [expressions](Expr) should be considered for rewriting?
 #[derive(Debug, Clone, Copy)]
-enum ExprMask {
+pub enum ExprMask {
     /// Ignores:
     ///
     /// - [`Literal`](Expr::Literal)
@@ -736,7 +736,7 @@ fn expr_identifier(expr: &Expr, sub_expr_identifier: Identifier) -> Identifier {
 }
 
 /// Go through an expression tree and generate identifier for every node in this tree.
-fn expr_to_identifier(
+pub fn expr_to_identifier(
     expr: &Expr,
     expr_stats: &mut ExprStats,
     id_array: &mut Vec<(usize, Identifier)>,
@@ -840,7 +840,7 @@ mod test {
     use arrow::datatypes::Schema;
 
     use datafusion_expr::logical_plan::{table_scan, JoinType};
-    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder, sum};
+    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
         SimpleAggregateUDF, Volatility,
@@ -859,105 +859,6 @@ mod test {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(expected, formatted_plan);
-    }
-
-    #[test]
-    fn id_array_visitor() -> Result<()> {
-        let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
-
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
-            vec![
-                Field::new("a", DataType::Int64, false),
-                Field::new("c", DataType::Int64, false),
-            ]
-            .into(),
-            Default::default(),
-        )?);
-
-        // skip aggregates
-        let mut id_array = vec![];
-        expr_to_identifier(
-            &expr,
-            &mut HashMap::new(),
-            &mut id_array,
-            Arc::clone(&schema),
-            ExprMask::Normal,
-        )?;
-
-        let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
-            (3, ""),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
-            (0, ""),
-            (1, ""),
-            (5, ""),
-            (4, ""),
-            (7, "")
-        ]
-        .into_iter()
-        .map(|(number, id)| (number, id.into()))
-        .collect::<Vec<_>>();
-        assert_eq!(expected, id_array);
-
-        // include aggregates
-        let mut id_array = vec![];
-        expr_to_identifier(
-            &expr,
-            &mut HashMap::new(),
-            &mut id_array,
-            Arc::clone(&schema),
-            ExprMask::NormalAndAggregates,
-        )?;
-
-        let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
-            (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}"),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
-            (0, ""),
-            (1, ""),
-            (5, "{AVG(c)|{c}}"),
-            (4, ""),
-            (7, "")
-        ]
-        .into_iter()
-        .map(|(number, id)| (number, id.into()))
-        .collect::<Vec<_>>();
-        assert_eq!(expected, id_array);
-
-        Ok(())
-    }
-
-    #[test]
-    fn tpch_q1_simplified() -> Result<()> {
-        // SQL:
-        //  select
-        //      sum(a * (1 - b)),
-        //      sum(a * (1 - b) * (1 + c))
-        //  from T;
-        //
-        // The manual assembled logical plan don't contains the outermost `Projection`.
-
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(
-                iter::empty::<Expr>(),
-                vec![
-                    sum(col("a") * (lit(1) - col("b"))),
-                    sum((col("a") * (lit(1) - col("b"))) * (lit(1) + col("c"))),
-                ],
-            )?
-            .build()?;
-
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b), SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
-        \n  Projection: test.a * (Int32(1) - test.b) AS {test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}}, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, &plan);
-
-        Ok(())
     }
 
     #[test]
