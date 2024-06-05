@@ -389,7 +389,10 @@ impl Unparser<'_> {
                 )?;
 
                 let ast_join = ast::Join {
-                    relation: right_relation.build()?,
+                    relation: match right_relation.build()? {
+                        Some(relation) => relation,
+                        None => return internal_err!("Failed to build right relation"),
+                    },
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
                 };
@@ -417,7 +420,10 @@ impl Unparser<'_> {
                 )?;
 
                 let ast_join = ast::Join {
-                    relation: right_relation.build()?,
+                    relation: match right_relation.build()? {
+                        Some(relation) => relation,
+                        None => return internal_err!("Failed to build right relation"),
+                    },
                     join_operator: self.join_operator_to_sql(
                         JoinType::Inner,
                         ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
@@ -482,6 +488,10 @@ impl Unparser<'_> {
                     select,
                     relation,
                 )
+            }
+            LogicalPlan::EmptyRelation(_) => {
+                relation.empty();
+                Ok(())
             }
             LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
             _ => not_impl_err!("Unsupported operator: {plan:?}"),
