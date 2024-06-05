@@ -48,6 +48,7 @@ pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod registry;
 pub mod simplify;
 pub mod sort_properties;
 pub mod tree_node;
@@ -62,8 +63,8 @@ pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, TryCast, WindowFunctionDefinition,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
+    Sort as SortExpr, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;

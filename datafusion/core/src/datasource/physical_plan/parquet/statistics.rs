@@ -19,6 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
+use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -29,6 +30,7 @@ use arrow_array::{
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use half::f16;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
@@ -40,17 +42,31 @@ pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(sign_extend_be(b))
+    i128::from_be_bytes(sign_extend_be::<16>(b))
+}
+
+// Convert the bytes array to i256.
+// The endian of the input bytes array must be big-endian.
+pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
+    i256::from_be_bytes(sign_extend_be::<32>(b))
+}
+
+// Convert the bytes array to f16
+pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
+    match b {
+        [low, high] => Some(f16::from_be_bytes([*high, *low])),
+        _ => None,
+    }
 }
 
 // Copy from arrow-rs
-// https://github.com/apache/arrow-rs/blob/733b7e7fd1e8c43a404c3ce40ecf741d493c21b4/parquet/src/arrow/buffer/bit_util.rs#L55
-// Convert the byte slice to fixed length byte array with the length of 16
-fn sign_extend_be(b: &[u8]) -> [u8; 16] {
-    assert!(b.len() <= 16, "Array too large, expected less than 16");
+// https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
+// Convert the byte slice to fixed length byte array with the length of N.
+pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
-    let mut result = if is_negative { [255u8; 16] } else { [0u8; 16] };
-    for (d, s) in result.iter_mut().skip(16 - b.len()).zip(b) {
+    let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+    for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
         *d = *s;
     }
     result
@@ -691,7 +707,6 @@ impl<'a> StatisticsConverter<'a> {
                 column_name
             );
         };
-
         Ok(Self {
             column_name,
             statistics_type,
@@ -760,12 +775,12 @@ impl<'a> StatisticsConverter<'a> {
 mod test {
     use super::*;
     use arrow::compute::kernels::cast_utils::Parser;
-    use arrow::datatypes::{Date32Type, Date64Type};
+    use arrow::datatypes::{i256, Date32Type, Date64Type};
     use arrow_array::{
         new_empty_array, new_null_array, Array, BinaryArray, BooleanArray, Date32Array,
-        Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, RecordBatch, StringArray, StructArray,
-        TimestampNanosecondArray,
+        Date64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, RecordBatch,
+        StringArray, StructArray, TimestampNanosecondArray,
     };
     use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
@@ -906,15 +921,11 @@ mod test {
     }
 
     #[test]
-    // Due to https://github.com/apache/datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
             input: timestamp_seconds_array(
                 [
-                    // row group 1
                     Some(1),
-                    None,
-                    Some(3),
                     // row group 2
                     Some(9),
                     Some(5),
@@ -1146,6 +1157,42 @@ mod test {
                     .unwrap(),
             ),
         }
+        .run();
+
+        Test {
+            input: Arc::new(
+                Decimal256Array::from(vec![
+                    // row group 1
+                    Some(i256::from(100)),
+                    None,
+                    Some(i256::from(22000)),
+                    // row group 2
+                    Some(i256::MAX),
+                    Some(i256::MIN),
+                    None,
+                    // row group 3
+                    None,
+                    None,
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
+            ),
+            expected_min: Arc::new(
+                Decimal256Array::from(vec![Some(i256::from(100)), Some(i256::MIN), None])
+                    .with_precision_and_scale(76, 76)
+                    .unwrap(),
+            ),
+            expected_max: Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::from(22000)),
+                    Some(i256::MAX),
+                    None,
+                ])
+                .with_precision_and_scale(76, 76)
+                .unwrap(),
+            ),
+        }
         .run()
     }
 
@@ -1301,6 +1348,34 @@ mod test {
             ]),
         }
         .run()
+    }
+
+    #[test]
+    fn roundtrip_large_binary_array() {
+        let input: Vec<Option<&[u8]>> = vec![
+            // row group 1
+            Some(b"A"),
+            None,
+            Some(b"Q"),
+            // row group 2
+            Some(b"ZZ"),
+            Some(b"AA"),
+            None,
+            // row group 3
+            None,
+            None,
+            None,
+        ];
+
+        let expected_min: Vec<Option<&[u8]>> = vec![Some(b"A"), Some(b"AA"), None];
+        let expected_max: Vec<Option<&[u8]>> = vec![Some(b"Q"), Some(b"ZZ"), None];
+
+        Test {
+            input: large_binary_array(input),
+            expected_min: large_binary_array(expected_min),
+            expected_max: large_binary_array(expected_max),
+        }
+        .run();
     }
 
     #[test]
@@ -1775,6 +1850,15 @@ mod test {
                 .map(|s| Date64Type::parse(s.unwrap_or_default()))
                 .collect::<Vec<_>>(),
         );
+        Arc::new(array)
+    }
+
+    fn large_binary_array<'a>(
+        input: impl IntoIterator<Item = Option<&'a [u8]>>,
+    ) -> ArrayRef {
+        let array =
+            LargeBinaryArray::from(input.into_iter().collect::<Vec<Option<&[u8]>>>());
+
         Arc::new(array)
     }
 }

@@ -128,6 +128,45 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
+
+    /// Returns all expressions used in the [`WindowExpr`].
+    /// These expressions are (1) function arguments, (2) partition by expressions, (3) order by expressions.
+    fn all_expressions(&self) -> WindowPhysicalExpressions {
+        let args = self.expressions();
+        let partition_by_exprs = self.partition_by().to_vec();
+        let order_by_exprs = self
+            .order_by()
+            .iter()
+            .map(|sort_expr| sort_expr.expr.clone())
+            .collect::<Vec<_>>();
+        WindowPhysicalExpressions {
+            args,
+            partition_by_exprs,
+            order_by_exprs,
+        }
+    }
+
+    /// Rewrites [`WindowExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`WindowExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn WindowExpr>)` if re-write is supported, otherwise returns `None`.
+    fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _partition_bys: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn WindowExpr>> {
+        None
+    }
+}
+
+/// Stores the physical expressions used inside the `WindowExpr`.
+pub struct WindowPhysicalExpressions {
+    /// Window function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// PARTITION BY expressions
+    pub partition_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// ORDER BY expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
