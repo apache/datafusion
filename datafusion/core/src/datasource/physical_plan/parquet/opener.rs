@@ -18,7 +18,7 @@
 //! [`ParquetOpener`] for opening Parquet files
 
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
-use crate::datasource::physical_plan::parquet::row_groups::RowGroupPlanBuilder;
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
     row_filter, should_enable_page_index, ParquetAccessPlan,
 };
@@ -139,7 +139,7 @@ impl FileOpener for ParquetOpener {
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
             let access_plan = ParquetAccessPlan::new_all(rg_metadata.len());
-            let mut row_groups = RowGroupPlanBuilder::new(access_plan);
+            let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
             // if there is a range restricting what parts of the file to read
             if let Some(range) = file_range.as_ref() {
                 row_groups.prune_by_range(rg_metadata, range);

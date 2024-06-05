@@ -38,18 +38,19 @@ use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::{ParquetAccessPlan, ParquetFileMetrics};
 
-/// Calculates which RowGroups within a parquet file should be scanned.
+/// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
-/// This struct implements the various types of pruning that are applied to
-/// a set of row groups within a parquet file, progressively narrowing down the
-/// set of row groups that should be scanned.
+/// This struct implements the various types of pruning that are applied to a
+/// set of row groups within a parquet file, progressively narrowing down the
+/// set of row groups (and ranges/selections within those row groups) that
+/// should be scanned, based on the available metadata.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RowGroupPlanBuilder {
+pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
 }
 
-impl RowGroupPlanBuilder {
+impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
     /// based on metadata and statistics
     pub fn new(access_plan: ParquetAccessPlan) -> Self {
@@ -476,7 +477,7 @@ mod tests {
         );
 
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -510,7 +511,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -557,7 +558,7 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -575,7 +576,7 @@ mod tests {
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -631,7 +632,7 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group should be left because c1 is greater than zero
         // the second should be filtered out because c1 is less than zero
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &file_schema,
             &schema_descr,
@@ -680,7 +681,7 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(2));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -713,7 +714,7 @@ mod tests {
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
         let mut row_groups =
-            RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(groups.len()));
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -773,7 +774,7 @@ mod tests {
             vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(3));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -841,7 +842,7 @@ mod tests {
             vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(4));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -892,7 +893,7 @@ mod tests {
             vec![ParquetStatistics::int64(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(3));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -966,7 +967,7 @@ mod tests {
             )],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(3));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -1029,7 +1030,7 @@ mod tests {
             vec![ParquetStatistics::byte_array(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupPlanBuilder::new(ParquetAccessPlan::new_all(3));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -1228,7 +1229,7 @@ mod tests {
 
     impl ExpectedPruning {
         /// asserts that the pruned row group match this expectation
-        fn assert(&self, row_groups: &RowGroupPlanBuilder) {
+        fn assert(&self, row_groups: &RowGroupAccessPlanFilter) {
             let num_row_groups = row_groups.access_plan.len();
             assert!(num_row_groups > 0);
             let num_pruned = (0..num_row_groups)
@@ -1262,7 +1263,7 @@ mod tests {
         }
     }
 
-    fn assert_pruned(row_groups: RowGroupPlanBuilder, expected: ExpectedPruning) {
+    fn assert_pruned(row_groups: RowGroupAccessPlanFilter, expected: ExpectedPruning) {
         expected.assert(&row_groups);
     }
 
@@ -1363,7 +1364,7 @@ mod tests {
         file_name: &str,
         data: bytes::Bytes,
         pruning_predicate: &PruningPredicate,
-    ) -> Result<RowGroupPlanBuilder> {
+    ) -> Result<RowGroupAccessPlanFilter> {
         use object_store::{ObjectMeta, ObjectStore};
 
         let object_meta = ObjectMeta {
@@ -1389,7 +1390,7 @@ mod tests {
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
-        let mut pruned_row_groups = RowGroupPlanBuilder::new(access_plan);
+        let mut pruned_row_groups = RowGroupAccessPlanFilter::new(access_plan);
         pruned_row_groups
             .prune_by_bloom_filters(
                 pruning_predicate.schema(),
