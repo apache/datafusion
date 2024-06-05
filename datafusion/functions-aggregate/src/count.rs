@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ahash::RandomState;
 use std::collections::HashSet;
-use std::hash::RandomState;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
 
