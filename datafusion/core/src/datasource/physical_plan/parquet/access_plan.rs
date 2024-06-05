@@ -170,6 +170,12 @@ impl ParquetAccessPlan {
     /// The returned selection represents which rows to scan across any row
     /// row groups which are not skipped.
     ///
+    /// # Notes
+    ///
+    /// If there are no [`RowGroupAccess::Selection`]s, the overall row
+    /// selection is `None` because each row group is either entirely skipped or
+    /// scanned, as specified by [`Self::row_group_indexes`].
+    ///
     /// # Example
     ///
     /// Given an access plan like this:
@@ -196,6 +202,10 @@ impl ParquetAccessPlan {
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Option<RowSelection> {
         assert_eq!(row_group_meta_data.len(), self.row_groups.len());
+        // Intuition: entire row groups are filtered out using
+        // `row_group_indexes` which come from Skip and Scan. An overall
+        // RowSelection is only useful if there is any parts *within* a row group
+        // which can be filtered out, that is a `Selection`.
         if !self
             .row_groups
             .iter()
@@ -273,41 +283,55 @@ mod test {
     use std::sync::{Arc, OnceLock};
 
     #[test]
-    fn test_overall_row_selection_only_scans() {
-        assert_eq!(
-            overall_row_selection(vec![
-                RowGroupAccess::Scan,
-                RowGroupAccess::Scan,
-                RowGroupAccess::Scan,
-                RowGroupAccess::Scan,
-            ]),
-            None
-        );
+    fn test_only_scans() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+
+        // scan all row groups, no selection
+        assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
+        assert_eq!(row_selection, None);
     }
 
     #[test]
-    fn test_overall_row_selection_only_skips() {
-        assert_eq!(
-            overall_row_selection(vec![
-                RowGroupAccess::Skip,
-                RowGroupAccess::Skip,
-                RowGroupAccess::Skip,
-                RowGroupAccess::Skip,
-            ]),
-            None
-        );
+    fn test_only_skips() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+
+        // skip all row groups, no selection
+        assert_eq!(row_group_indexes, vec![] as Vec<usize>);
+        assert_eq!(row_selection, None);
     }
     #[test]
-    fn test_overall_row_selection_mixed_1() {
+    fn test_mixed_1() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            RowGroupAccess::Selection(
+                vec![RowSelector::select(5), RowSelector::skip(7)].into(),
+            ),
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+
+        assert_eq!(row_group_indexes, vec![0, 1]);
         assert_eq!(
-            overall_row_selection(vec![
-                RowGroupAccess::Scan,
-                RowGroupAccess::Selection(
-                    vec![RowSelector::select(5), RowSelector::skip(7)].into()
-                ),
-                RowGroupAccess::Skip,
-                RowGroupAccess::Skip,
-            ]),
+            row_selection,
             Some(
                 vec![
                     // select the entire first row group
@@ -322,16 +346,22 @@ mod test {
     }
 
     #[test]
-    fn test_overall_row_selection_mixed_2() {
+    fn test_mixed_2() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Skip,
+            RowGroupAccess::Scan,
+            RowGroupAccess::Selection(
+                vec![RowSelector::select(5), RowSelector::skip(7)].into(),
+            ),
+            RowGroupAccess::Scan,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+
+        assert_eq!(row_group_indexes, vec![1, 2, 3]);
         assert_eq!(
-            overall_row_selection(vec![
-                RowGroupAccess::Skip,
-                RowGroupAccess::Scan,
-                RowGroupAccess::Selection(
-                    vec![RowSelector::select(5), RowSelector::skip(7)].into()
-                ),
-                RowGroupAccess::Scan,
-            ]),
+            row_selection,
             Some(
                 vec![
                     // select the entire second row group
@@ -345,14 +375,6 @@ mod test {
                 .into()
             )
         );
-    }
-
-    /// Computes the overall row selection for the given row group access list
-    fn overall_row_selection(
-        row_group_access: Vec<RowGroupAccess>,
-    ) -> Option<RowSelection> {
-        let access_plan = ParquetAccessPlan::new(row_group_access);
-        access_plan.into_overall_row_selection(row_group_metadata())
     }
 
     static ROW_GROUP_METADATA: OnceLock<Vec<RowGroupMetaData>> = OnceLock::new();
