@@ -64,7 +64,7 @@ use datafusion_expr::{
 };
 
 // backwards compatibility
-pub use crate::execution::state::SessionState;
+pub use crate::execution::session_state::SessionState;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
