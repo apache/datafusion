@@ -421,9 +421,7 @@ impl Unparser<'_> {
 
                 let ast_join = ast::Join {
                     relation: match right_relation.build()? {
-                        Some(relation) => {
-                            relation
-                        },
+                        Some(relation) => relation,
                         None => return internal_err!("Failed to build right relation"),
                     },
                     join_operator: self.join_operator_to_sql(
