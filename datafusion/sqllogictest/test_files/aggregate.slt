@@ -5397,3 +5397,75 @@ set datafusion.explain.logical_plan_only = false;
 
 statement ok
 drop table t1;
+
+# test filter with always false statement
+statement ok
+create table t1(a int, b int) as values (1, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# normal, without filter
+query TT
+explain select sum(b) from t1 where b > 10 group by a
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+03)----Filter: t1.b > Int32(10)
+04)------TableScan: t1 projection=[a, b]
+
+# empty
+query TT
+explain select sum(b) from t1 where 1 > 2 group by a;
+----
+logical_plan EmptyRelation
+
+# lhs is empty, so only rhs is left
+query TT
+explain 
+    select sum(b) from t1 where 1 > 2 group by a 
+        union all 
+    select sum(b) from t1 group by a;
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+03)----TableScan: t1 projection=[a, b]
+
+# always true
+query TT
+explain select sum(b) from t1 where 2 > 1 group by a
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+03)----TableScan: t1 projection=[a, b]
+
+# always true with union
+query TT
+explain 
+    select sum(b) from t1 where 3 > 2 group by a 
+        union all 
+    select sum(b) from t1 group by a;
+----
+logical_plan
+01)Union
+02)--Projection: SUM(t1.b)
+03)----Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+04)------TableScan: t1 projection=[a, b]
+05)--Projection: SUM(t1.b)
+06)----Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+07)------TableScan: t1 projection=[a, b]
+
+# filter from subquery
+query TT
+explain select a from (select a from t1 where false) where true
+----
+logical_plan EmptyRelation
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table t1;
