@@ -5563,3 +5563,111 @@ set datafusion.explain.logical_plan_only = false;
 
 statement ok
 drop table t1;
+
+# test single distinct to group by
+
+statement ok
+create table t1(a int, b int) as values (1, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# order by is not None, so distinct is not replaced to group by
+query TT
+explain select sum(a), count(distinct a order by a) from t1 group by b;
+----
+logical_plan
+01)Projection: SUM(t1.a), COUNT(DISTINCT t1.a) ORDER BY [t1.a ASC NULLS LAST]
+02)--Aggregate: groupBy=[[t1.b]], aggr=[[SUM(CAST(t1.a AS Int64)), COUNT(DISTINCT t1.a) ORDER BY [t1.a ASC NULLS LAST]]]
+03)----TableScan: t1 projection=[a, b]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# filter is not None, so distinct is not replaced to group by
+query TT
+explain select sum(a), count(distinct a) filter (where a > 5) from t1 group by b;
+----
+logical_plan
+01)Projection: SUM(t1.a), COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int64(5))
+02)--Aggregate: groupBy=[[t1.b]], aggr=[[SUM(CAST(t1.a AS Int64)), COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int32(5)) AS COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int64(5))]]
+03)----TableScan: t1 projection=[a, b]
+
+# filter + order by
+query TT
+explain select sum(a), count(distinct a order by a) filter (where a > 5) from t1 group by b;
+----
+logical_plan
+01)Projection: SUM(t1.a), COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int64(5)) ORDER BY [t1.a ASC NULLS LAST]
+02)--Aggregate: groupBy=[[t1.b]], aggr=[[SUM(CAST(t1.a AS Int64)), COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int32(5)) ORDER BY [t1.a ASC NULLS LAST] AS COUNT(DISTINCT t1.a) FILTER (WHERE t1.a > Int64(5)) ORDER BY [t1.a ASC NULLS LAST]]]
+03)----TableScan: t1 projection=[a, b]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+statement ok
+drop table t1;
+
+# test common with order by
+
+statement ok
+create table t1(a int, b int, c int) as values (1, 2, 3);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select sum(a order by a), count(distinct b) from t1 group by c;
+----
+logical_plan
+01)Projection: SUM(t1.a) ORDER BY [t1.a ASC NULLS LAST], COUNT(DISTINCT t1.b)
+02)--Aggregate: groupBy=[[t1.c]], aggr=[[SUM(CAST(t1.a AS Int64)) ORDER BY [t1.a ASC NULLS LAST], COUNT(DISTINCT t1.b)]]
+03)----TableScan: t1 projection=[a, b, c]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# test common with filter
+query TT
+explain select sum(a) filter (where a > 5), count(distinct b) from t1 group by c;
+----
+logical_plan
+01)Projection: SUM(t1.a) FILTER (WHERE t1.a > Int64(5)), COUNT(DISTINCT t1.b)
+02)--Aggregate: groupBy=[[t1.c]], aggr=[[SUM(CAST(t1.a AS Int64)) FILTER (WHERE t1.a > Int32(5)) AS SUM(t1.a) FILTER (WHERE t1.a > Int64(5)), COUNT(DISTINCT t1.b)]]
+03)----TableScan: t1 projection=[a, b, c]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+# test with two distinct, should eliminate distinct
+query TT
+explain select sum(c), count(distinct b), max(distinct b) from t1;
+----
+logical_plan
+01)Projection: SUM(alias2) AS SUM(t1.c), COUNT(alias1) AS COUNT(DISTINCT t1.b), MAX(alias1) AS MAX(DISTINCT t1.b)
+02)--Aggregate: groupBy=[[]], aggr=[[SUM(alias2), COUNT(alias1), MAX(alias1)]]
+03)----Aggregate: groupBy=[[t1.b AS alias1]], aggr=[[SUM(CAST(t1.c AS Int64)) AS alias2]]
+04)------TableScan: t1 projection=[b, c]
+
+# test with one distinct, should eliminate distinct
+query TT
+explain select sum(c), max(c), count(distinct b) from t1;
+----
+logical_plan
+01)Projection: SUM(alias2) AS SUM(t1.c), MAX(alias3) AS MAX(t1.c), COUNT(alias1) AS COUNT(DISTINCT t1.b)
+02)--Aggregate: groupBy=[[]], aggr=[[SUM(alias2), MAX(alias3), COUNT(alias1)]]
+03)----Aggregate: groupBy=[[t1.b AS alias1]], aggr=[[SUM(CAST(t1.c AS Int64)) AS alias2, MAX(t1.c) AS alias3]]
+04)------TableScan: t1 projection=[b, c]
+
+# test with one distinct, should eliminate distinct
+query TT
+explain select min(a), count(distinct b) from t1 group by c;
+----
+logical_plan
+01)Projection: MIN(alias2) AS MIN(t1.a), COUNT(alias1) AS COUNT(DISTINCT t1.b)
+02)--Aggregate: groupBy=[[t1.c]], aggr=[[MIN(alias2), COUNT(alias1)]]
+03)----Aggregate: groupBy=[[t1.c, t1.b AS alias1]], aggr=[[MIN(t1.a) AS alias2]]
+04)------TableScan: t1 projection=[a, b, c]
+
+statement ok
+drop table t1;
