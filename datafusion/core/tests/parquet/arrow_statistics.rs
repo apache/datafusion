@@ -24,14 +24,16 @@ use std::sync::Arc;
 use crate::parquet::{struct_array, Scenario};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, IntervalYearMonthType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    i256, Date32Type, Date64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalYearMonthType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray,
-    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -1105,6 +1107,38 @@ async fn test_interval_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "year_month",
+    }
+    .run();
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(1, 1),
+            IntervalDayTimeType::make_value(4, 4),
+        ])),
+        expected_max: Arc::new(IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(6, 6),
+            IntervalDayTimeType::make_value(8, 8),
+        ])),
+        expected_null_counts: UInt64Array::from(vec![2, 2]),
+        expected_row_counts: UInt64Array::from(vec![13, 7]),
+        column_name: "day_time",
+    }
+    .run();
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 1, 1),
+            IntervalMonthDayNanoType::make_value(4, 4, 4),
+        ])),
+        expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(6, 6, 6),
+            IntervalMonthDayNanoType::make_value(8, 8, 8),
+        ])),
+        expected_null_counts: UInt64Array::from(vec![2, 2]),
+        expected_row_counts: UInt64Array::from(vec![13, 7]),
+        column_name: "month_day_nano",
     }
     .run();
 }

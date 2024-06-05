@@ -19,7 +19,10 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::{array::ArrayRef, datatypes::i256, datatypes::DataType, datatypes::TimeUnit};
+use arrow::{
+    array::ArrayRef, datatypes::i256, datatypes::DataType, datatypes::IntervalUnit,
+    datatypes::TimeUnit,
+};
 use arrow_array::{new_empty_array, new_null_array, UInt64Array};
 use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{
@@ -258,8 +261,8 @@ macro_rules! get_statistic {
                     }
                     Some(DataType::Interval(unit)) => {
                         match unit {
-                            IntervalUnit::YearMonth => unimplemented!("Interval statistics not yet supported by parquet")
-                            IntervalUnit::DayTime => unimplemented!("Interval statistics not yet supported by parquet")
+                            IntervalUnit::YearMonth => unimplemented!("Interval statistics not yet supported by parquet"),
+                            IntervalUnit::DayTime => unimplemented!("Interval statistics not yet supported by parquet"),
                             IntervalUnit::MonthDayNano => unimplemented!("Interval statistics not yet supported by parquet")
                         }
                     }
