@@ -156,7 +156,7 @@ chair or an ASF Member to check [The ICLA file list].
 ```
 To: $EMAIL
 Cc: private@datafusion.apache.org
-Subject: Invitation to become an DataFusion Committer
+Subject: Invitation to become a DataFusion Committer
 
 Dear $NEW_COMMITTER,
 
@@ -282,7 +282,7 @@ If you accept, please let us know by replying to private@datafusion.apache.org.
 
 See also the ASF instructions on [how to add a PMC member].
 
-[how to add a pmc member]: https://www.apache.org/dev/pmc.html#newpmc
+[how to add a PMC member]: https://www.apache.org/dev/pmc.html#newpmc
 
 ### Step 1: Start a Discussion Thread
 
@@ -296,7 +296,7 @@ I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
 
 $NEW_PMC_MEMBMER has been a committer since $COMMITER_MONTH [2], has a
 strong and sustained contribution record for more than a year, and focused on
-helping the commity and the project grow[3].
+helping the community and the project grow[3].
 
 Are there any thoughts about inviting $NEW_PMC_MEMBER to become a PMC member?
 
@@ -372,7 +372,7 @@ Please let us know if you accept by subscribing to the private alias [by
 sending mail to private-subscribe@datafusion.apache.org], and posting
 a message to private@datafusion.apache.org.
 
-The PMC is for every top-level project is tasked by the Apache Board of
+The PMC for every top-level project is tasked by the Apache Board of
 Directors with official oversight and binding votes in that project.
 
 As a PMC member, you are responsible for continuing the general project, code,
