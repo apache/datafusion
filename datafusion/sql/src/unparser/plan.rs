@@ -40,7 +40,7 @@ use super::{
 /// # Example
 /// ```
 /// use arrow::datatypes::{DataType, Field, Schema};
-/// use datafusion_expr::{col, logical_plan::table_scan};
+/// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
 /// use datafusion_sql::unparser::plan_to_sql;
 /// let schema = Schema::new(vec![
 ///     Field::new("id", DataType::Utf8, false),
@@ -389,7 +389,10 @@ impl Unparser<'_> {
                 )?;
 
                 let ast_join = ast::Join {
-                    relation: right_relation.build()?,
+                    relation: match right_relation.build()? {
+                        Some(relation) => relation,
+                        None => return internal_err!("Failed to build right relation"),
+                    },
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
                 };
@@ -417,7 +420,10 @@ impl Unparser<'_> {
                 )?;
 
                 let ast_join = ast::Join {
-                    relation: right_relation.build()?,
+                    relation: match right_relation.build()? {
+                        Some(relation) => relation,
+                        None => return internal_err!("Failed to build right relation"),
+                    },
                     join_operator: self.join_operator_to_sql(
                         JoinType::Inner,
                         ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
@@ -482,6 +488,10 @@ impl Unparser<'_> {
                     select,
                     relation,
                 )
+            }
+            LogicalPlan::EmptyRelation(_) => {
+                relation.empty();
+                Ok(())
             }
             LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
             _ => not_impl_err!("Unsupported operator: {plan:?}"),
