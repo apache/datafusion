@@ -964,6 +964,8 @@ fn make_interval_batch(offset: i32) -> RecordBatch {
         Some(IntervalDayTimeType::make_value(5 + offset, 5 + offset)),
     ]);
 
+    // Not yet implemented, see for ref:
+    // https://github.com/apache/arrow-rs/blob/master/parquet/src/arrow/arrow_writer/mod.rs#L747
     let mdn_arr = IntervalMonthDayNanoArray::from(vec![
         Some(IntervalMonthDayNanoType::make_value(
             1 + offset,
