@@ -5365,3 +5365,13 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+
+# test count wildcard on non-count aggregate
+statement ok
+create table t1(a int, b int) as values (1, 2), (null, 4), (null, null);
+
+query error
+select sum(*) from t1;
+
+statement ok
+drop table t1;

@@ -123,7 +123,7 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        out_ref_col, scalar_subquery, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
@@ -270,17 +270,6 @@ mod tests {
         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
-    }
-
-    #[test]
-    fn test_count_wildcard_on_non_count_aggregate() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let err = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Error during planning: No function matches the given name and argument types 'SUM(Null)'."), "{err}");
-        Ok(())
     }
 
     #[test]
