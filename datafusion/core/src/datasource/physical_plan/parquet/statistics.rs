@@ -286,7 +286,7 @@ make_decimal_stats_iterator!(
     from_bytes_to_i256
 );
 
-/// Special macro to combine the statistics iterators for min and max using the [`paste`] macro.
+/// Special macro to combine the statistics iterators for min and max using the [`mod@paste`] macro.
 /// This is used to avoid repeating the same code for min and max statistics extractions
 ///
 /// Parameters:
