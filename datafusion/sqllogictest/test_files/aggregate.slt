@@ -5398,7 +5398,7 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 drop table t1;
 
-# test filter with always false statement
+# test filter
 statement ok
 create table t1(a int, b int) as values (1, 2);
 
@@ -5463,6 +5463,100 @@ query TT
 explain select a from (select a from t1 where false) where true
 ----
 logical_plan EmptyRelation
+
+# test with limit
+
+# limit with 0
+query TT
+explain select sum(b) from t1 group by a limit 0;
+----
+logical_plan EmptyRelation
+
+# union with limit 0
+query TT
+explain 
+    (select sum(b) from t1 group by a limit 0)
+        union all
+    select sum(b) from t1 group by a;
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+03)----TableScan: t1 projection=[a, b]
+
+# limit 2 first and skip 2
+query TT
+explain 
+    (select sum(b) from t1 group by a limit 2) offset 2
+----
+logical_plan EmptyRelation
+
+# multi limit offset sort eliminate
+query TT
+explain 
+    (select sum(b) from t1 group by a limit 2) order by a limit 1 offset 2
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Limit: skip=2, fetch=1
+03)----Sort: t1.a ASC NULLS LAST, fetch=3
+04)------Projection: SUM(t1.b), t1.a
+05)--------Limit: skip=0, fetch=2
+06)----------Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+07)------------TableScan: t1 projection=[a, b]
+
+# multi limit with sort
+query TT
+explain 
+    (select sum(b) from t1 group by a limit 2) order by a limit 1
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Limit: skip=0, fetch=1
+03)----Sort: t1.a ASC NULLS LAST, fetch=1
+04)------Projection: SUM(t1.b), t1.a
+05)--------Limit: skip=0, fetch=2
+06)----------Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+07)------------TableScan: t1 projection=[a, b]
+
+# multi limit with larger offset
+query TT
+explain 
+    (select sum(b) from t1 group by a limit 1 offset 2) order by a limit 1 offset 3
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Limit: skip=3, fetch=1
+03)----Sort: t1.a ASC NULLS LAST, fetch=4
+04)------Projection: SUM(t1.b), t1.a
+05)--------Limit: skip=2, fetch=1
+06)----------Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+07)------------TableScan: t1 projection=[a, b]
+
+# zero offset should be removed
+query TT
+explain select sum(b) from t1 group by a offset 0
+----
+logical_plan
+01)Projection: SUM(t1.b)
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[SUM(CAST(t1.b AS Int64))]]
+03)----TableScan: t1 projection=[a, b]
+
+statement ok
+create table t2(a int, b int) as values (1, 3);
+
+# test eliminate limit with inner join
+query TT
+explain select * from t1 inner join t2 on t1.a = t2.a limit 1 offset 3;
+----
+logical_plan
+01)Limit: skip=3, fetch=1
+02)--Inner Join: t1.a = t2.a
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[a, b]
+
+statement ok
+drop table t2;
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
