@@ -40,7 +40,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{get_arg_name, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -97,8 +97,11 @@ impl ScalarUDFImpl for ArrayElement {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
-        Ok(format!("{}[{}]", args_name[0], args_name[1]))
+        Ok(format!(
+            "{}[{}]",
+            get_arg_name(args, 0),
+            get_arg_name(args, 1)
+        ))
     }
 
     fn signature(&self) -> &Signature {
@@ -251,8 +254,14 @@ impl ScalarUDFImpl for ArraySlice {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name: Vec<String> = args.iter().map(|e| e.to_string()).collect();
-        Ok(format!("{}[{}]", args_name[0], args_name[1..].join(":")))
+        Ok(format!(
+            "{}[{}]",
+            get_arg_name(args, 0),
+            (1..args.len())
+                .map(|i| get_arg_name(args, i))
+                .collect::<Vec<String>>()
+                .join(":")
+        ))
     }
 
     fn name(&self) -> &str {

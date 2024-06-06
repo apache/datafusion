@@ -173,7 +173,7 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Variance | AggregateFunction::VariancePop => {
+        AggregateFunction::VariancePop => {
             if !is_variance_support_arg_type(&input_types[0]) {
                 return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",

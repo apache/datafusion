@@ -495,7 +495,6 @@ async fn test_timestamp() {
 
     Test {
         reader: &reader,
-        // mins are [1577840461000000000, 1577840471000000000, 1577841061000000000, 1578704461000000000,]
         expected_min: Arc::new(TimestampNanosecondArray::from(vec![
             TimestampNanosecondType::parse("2020-01-01T01:01:01"),
             TimestampNanosecondType::parse("2020-01-01T01:01:11"),
