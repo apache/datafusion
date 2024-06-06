@@ -21,7 +21,7 @@ use crate::utils::make_scalar_function;
 use arrow_array::{ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow_schema::DataType;
 use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
-use datafusion_common::cast::{as_generic_list_array, as_null_array};
+use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -85,12 +85,7 @@ pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_empty expects one argument");
     }
 
-    if as_null_array(&args[0]).is_ok() {
-        // Make sure to return Boolean type.
-        return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
-    }
     let array_type = args[0].data_type();
-
     match array_type {
         List(_) => general_array_empty::<i32>(&args[0]),
         LargeList(_) => general_array_empty::<i64>(&args[0]),
@@ -100,9 +95,10 @@ pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let array = as_generic_list_array::<O>(array)?;
+
     let builder = array
         .iter()
-        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .map(|arr| arr.map(|arr| arr.is_empty()))
         .collect::<BooleanArray>();
     Ok(Arc::new(builder))
 }

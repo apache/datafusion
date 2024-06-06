@@ -69,8 +69,8 @@ impl ExprSchemable for Expr {
     ///
     /// # Examples
     ///
-    /// ## Get the type of an expression that adds 2 columns. Adding an Int32
-    /// ## and Float32 results in Float32 type
+    /// Get the type of an expression that adds 2 columns. Adding an Int32
+    /// and Float32 results in Float32 type
     ///
     /// ```
     /// # use arrow::datatypes::{DataType, Field};

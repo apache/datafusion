@@ -78,6 +78,11 @@ fn roundtrip_expr() {
 #[test]
 fn roundtrip_statement() -> Result<()> {
     let tests: Vec<&str> = vec![
+            "select 1;",
+            "select 1 limit 0;",
+            "select ta.j1_id from j1 ta join (select 1 as j1_id) tb on ta.j1_id = tb.j1_id;",
+            "select ta.j1_id from j1 ta join (select 1 as j1_id) tb on ta.j1_id = tb.j1_id where ta.j1_id > 1;",
+            "select ta.j1_id from (select 1 as j1_id) ta;",
             "select ta.j1_id from j1 ta;",
             "select ta.j1_id from j1 ta order by ta.j1_id;",
             "select * from j1 ta order by ta.j1_id, ta.j1_string desc;",
