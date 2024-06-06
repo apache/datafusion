@@ -18,8 +18,10 @@
 //! [`ParquetOpener`] for opening Parquet files
 
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
-use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
-use crate::datasource::physical_plan::parquet::{row_filter, should_enable_page_index};
+use crate::datasource::physical_plan::parquet::row_groups::RowGroupAccessPlanFilter;
+use crate::datasource::physical_plan::parquet::{
+    row_filter, should_enable_page_index, ParquetAccessPlan,
+};
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, ParquetFileMetrics, ParquetFileReaderFactory,
 };
@@ -137,7 +139,8 @@ impl FileOpener for ParquetOpener {
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
-            let mut row_groups = RowGroupSet::new(rg_metadata.len());
+            let access_plan = ParquetAccessPlan::new_all(rg_metadata.len());
+            let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
             // if there is a range restricting what parts of the file to read
             if let Some(range) = file_range.as_ref() {
                 row_groups.prune_by_range(rg_metadata, range);
@@ -164,22 +167,28 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let mut access_plan = row_groups.build();
+
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if enable_page_index && !row_groups.is_empty() {
+            if enable_page_index && !access_plan.is_empty() {
                 if let Some(p) = page_pruning_predicate {
-                    let pruned = p.prune(
+                    access_plan = p.prune_plan_with_page_index(
+                        access_plan,
                         &file_schema,
                         builder.parquet_schema(),
-                        &row_groups,
                         file_metadata.as_ref(),
                         &file_metrics,
-                    )?;
-                    if let Some(row_selection) = pruned {
-                        builder = builder.with_row_selection(row_selection);
-                    }
+                    );
                 }
+            }
+
+            let row_group_indexes = access_plan.row_group_indexes();
+            if let Some(row_selection) =
+                access_plan.into_overall_row_selection(rg_metadata)
+            {
+                builder = builder.with_row_selection(row_selection);
             }
 
             if let Some(limit) = limit {
@@ -189,7 +198,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_groups.indexes())
+                .with_row_groups(row_group_indexes)
                 .build()?;
 
             let adapted = stream

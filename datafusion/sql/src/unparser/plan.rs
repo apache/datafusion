@@ -108,7 +108,7 @@ impl Unparser<'_> {
         &self,
         plan: &LogicalPlan,
         query: &mut Option<QueryBuilder>,
-    ) -> Result<ast::SetExpr> {
+    ) -> Result<SetExpr> {
         let mut select_builder = SelectBuilder::default();
         select_builder.push_from(TableWithJoinsBuilder::default());
         let mut relation_builder = RelationBuilder::default();
@@ -128,7 +128,7 @@ impl Unparser<'_> {
         twj.relation(relation_builder);
         select_builder.push_from(twj);
 
-        Ok(ast::SetExpr::Select(Box::new(select_builder.build()?)))
+        Ok(SetExpr::Select(Box::new(select_builder.build()?)))
     }
 
     /// Reconstructs a SELECT SQL statement from a logical plan by unprojecting column expressions
@@ -388,11 +388,12 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
+                let Ok(Some(relation)) = right_relation.build() else {
+                    return internal_err!("Failed to build right relation");
+                };
+
                 let ast_join = ast::Join {
-                    relation: match right_relation.build()? {
-                        Some(relation) => relation,
-                        None => return internal_err!("Failed to build right relation"),
-                    },
+                    relation,
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
                 };
@@ -419,11 +420,12 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
+                let Ok(Some(relation)) = right_relation.build() else {
+                    return internal_err!("Failed to build right relation");
+                };
+
                 let ast_join = ast::Join {
-                    relation: match right_relation.build()? {
-                        Some(relation) => relation,
-                        None => return internal_err!("Failed to build right relation"),
-                    },
+                    relation,
                     join_operator: self.join_operator_to_sql(
                         JoinType::Inner,
                         ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
@@ -466,7 +468,7 @@ impl Unparser<'_> {
                     .map(|input| self.select_to_sql_expr(input, &mut None))
                     .collect::<Result<Vec<_>>>()?;
 
-                let union_expr = ast::SetExpr::SetOperation {
+                let union_expr = SetExpr::SetOperation {
                     op: ast::SetOperator::Union,
                     set_quantifier: ast::SetQuantifier::All,
                     left: Box::new(input_exprs[0].clone()),
