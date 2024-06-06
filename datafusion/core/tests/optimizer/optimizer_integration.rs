@@ -29,16 +29,16 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    avg, col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    avg, col, lit, table_scan, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF, TableSource, WindowUDF
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::expr_fn::sum;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::common_subexpr_eliminate::{expr_to_identifier, ExprMask};
 use datafusion_optimizer::optimizer::Optimizer;
+use datafusion_optimizer::push_down_filter::PushDownFilter;
 use datafusion_optimizer::simplify_expressions::GuaranteeRewriter;
-use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;

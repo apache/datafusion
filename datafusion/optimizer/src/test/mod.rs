@@ -24,8 +24,6 @@ use datafusion_common::{assert_contains, Result};
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 
-pub mod user_defined;
-
 pub fn test_table_scan_fields() -> Vec<Field> {
     vec![
         Field::new("a", DataType::UInt32, false),
