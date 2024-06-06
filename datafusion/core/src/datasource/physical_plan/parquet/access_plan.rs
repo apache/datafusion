@@ -20,8 +20,8 @@ use parquet::file::metadata::RowGroupMetaData;
 
 /// A selection of rows and row groups within a ParquetFile to decode.
 ///
-/// A `ParquetAccessPlan` is used to limits the row groups and data pages a `ParquetExec`
-/// will read and decode and this improve performance.
+/// A `ParquetAccessPlan` is used to limit the row groups and data pages a `ParquetExec`
+/// will read and decode to improve performance.
 ///
 /// Note that page level pruning based on ArrowPredicate is applied after all of
 /// these selections
@@ -39,11 +39,13 @@ use parquet::file::metadata::RowGroupMetaData;
 /// let mut access_plan = ParquetAccessPlan::new_all(4);
 /// access_plan.skip(0); // skip row group
 /// // Use parquet reader RowSelector to specify scanning rows 100-200 and 350-400
+/// // in a row group that has 1000 rows
 /// let row_selection = RowSelection::from(vec![
 ///    RowSelector::skip(100),
 ///    RowSelector::select(100),
 ///    RowSelector::skip(150),
 ///    RowSelector::select(50),
+///    RowSelector::skip(600),  // skip last 600 rows
 /// ]);
 /// access_plan.scan_selection(1, row_selection);
 /// access_plan.skip(2); // skip row group 2
@@ -158,7 +160,7 @@ impl ParquetAccessPlan {
         }
     }
 
-    /// Return the overall `RowSelection` for all scanned row groups
+    /// Return an overall `RowSelection`, if needed
     ///
     /// This is used to compute the row selection for the parquet reader. See
     /// [`ArrowReaderBuilder::with_row_selection`] for more details.
@@ -174,27 +176,53 @@ impl ParquetAccessPlan {
     ///
     /// If there are no [`RowGroupAccess::Selection`]s, the overall row
     /// selection is `None` because each row group is either entirely skipped or
-    /// scanned, as specified by [`Self::row_group_indexes`].
+    /// scanned, which is covered by [`Self::row_group_indexes`].
     ///
-    /// # Example
+    /// If there are any [`RowGroupAccess::Selection`], an overall row selection
+    /// is returned for *all* the rows in the row groups that are not skipped.
+    /// Thus it includes a `Select` selection for any [`RowGroupAccess::Scan`].
+    ///
+    /// # Example: No Selections
+    ///
+    /// Given an access plan like this
+    ///
+    /// ```text
+    ///   RowGroupAccess::Scan (scan all row group 0)
+    ///   RowGroupAccess::Skip (skip row group 1)
+    ///   RowGroupAccess::Scan (scan all row group 2)
+    ///   RowGroupAccess::Scan (scan all row group 3)
+    /// ```
+    ///
+    /// The overall row selection would be `None` because there are no
+    /// [`RowGroupAccess::Selection`]s. The row group indexes
+    /// returned by [`Self::row_group_indexes`] would be `0, 2, 3` .
+    ///
+    /// # Example: With Selections
     ///
     /// Given an access plan like this:
     ///
     /// ```text
-    ///   Scan (scan all row group 0)
-    ///   Skip (skip row group 1)
-    ///   Select 50-100 (scan rows 50-100 in row group 2)
+    ///   RowGroupAccess::Scan (scan all row group 0)
+    ///   RowGroupAccess::Skip (skip row group 1)
+    ///   RowGroupAccess::Select (skip 50, scan 50, skip 900) (scan rows 50-100 in row group 2)
+    ///   RowGroupAccess::Scan (scan all row group 3)
     /// ```
     ///
     /// Assuming each row group has 1000 rows, the resulting row selection would
-    /// be the rows to scan in row group 0 and 2:
+    /// be the rows to scan in row group 0, 2 and 4:
     ///
     /// ```text
-    ///  Select 1000 (scan all rows in row group 0)
-    ///  Select 50-100 (scan rows 50-100 in row group 2)
+    ///  RowSelection::Select(1000) (scan all rows in row group 0)
+    ///  RowSelection::Skip(50)     (skip first 50 rows in row group 2)
+    ///  RowSelection::Select(50)   (scan rows 50-100 in row group 2)
+    ///  RowSelection::Skip(900)    (skip last 900 rows in row group 2)
+    ///  RowSelection::Select(1000) (scan all rows in row group 3)
     /// ```
     ///
     /// Note there is no entry for the (entirely) skipped row group 1.
+    ///
+    /// The row group indexes returned by [`Self::row_group_indexes`] would
+    /// still be `0, 2, 3` .
     ///
     /// [`ArrowReaderBuilder::with_row_selection`]: parquet::arrow::arrow_reader::ArrowReaderBuilder::with_row_selection
     pub fn into_overall_row_selection(
