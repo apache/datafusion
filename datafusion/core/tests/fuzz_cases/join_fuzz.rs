@@ -401,6 +401,7 @@ impl JoinFuzzTestCase {
                 nlj_formatted.trim().lines().collect();
             nlj_formatted_sorted.sort_unstable();
 
+            assert_eq!(smj_formatted_sorted.len(), hj_formatted_sorted.len(), "SortMergeJoinExec and HashJoinExec produced different row counts");
             for (i, (smj_line, hj_line)) in smj_formatted_sorted
                 .iter()
                 .zip(&hj_formatted_sorted)
