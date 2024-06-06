@@ -280,8 +280,8 @@ impl JoinFuzzTestCase {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
         Schema::new(vec![
-            schema1.field_with_name("a").unwrap().to_owned(),
-            schema1.field_with_name("b").unwrap().to_owned(),
+            schema1.field_with_name("a").unwrap().to_owned().with_nullable(true),
+            schema1.field_with_name("b").unwrap().to_owned().with_nullable(true),
             schema2.field_with_name("a").unwrap().to_owned(),
             schema2.field_with_name("b").unwrap().to_owned(),
         ])
@@ -401,7 +401,11 @@ impl JoinFuzzTestCase {
                 nlj_formatted.trim().lines().collect();
             nlj_formatted_sorted.sort_unstable();
 
-            assert_eq!(smj_formatted_sorted.len(), hj_formatted_sorted.len(), "SortMergeJoinExec and HashJoinExec produced different row counts");
+            assert_eq!(
+                smj_formatted_sorted.len(),
+                hj_formatted_sorted.len(),
+                "SortMergeJoinExec and HashJoinExec produced different row counts"
+            );
             for (i, (smj_line, hj_line)) in smj_formatted_sorted
                 .iter()
                 .zip(&hj_formatted_sorted)
