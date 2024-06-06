@@ -204,14 +204,37 @@ impl PagePruningPredicate {
                     &selection,
                     predicate.predicate_expr(),
                 );
-                overall_selection = update_selection(overall_selection, selection)
+
+                overall_selection = update_selection(overall_selection, selection);
+
+                // if the overall selection has ruled out all rows, no need to
+                // continue with the other predicates
+                let selects_any = overall_selection
+                    .as_ref()
+                    .map(|selection| selection.selects_any())
+                    .unwrap_or(true);
+
+                if !selects_any {
+                    break;
+                }
             }
 
             if let Some(overall_selection) = overall_selection {
-                let rows_skipped = rows_skipped(&overall_selection);
-                trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
-                total_skip += rows_skipped;
-                access_plan.scan_selection(r, overall_selection)
+                if overall_selection.selects_any() {
+                    let rows_skipped = rows_skipped(&overall_selection);
+                    trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
+                    total_skip += rows_skipped;
+                    access_plan.scan_selection(r, overall_selection)
+                } else {
+                    // Selection skips all rows, so skip the entire row group
+                    let rows_skipped = groups[r].num_rows() as usize;
+                    access_plan.skip(r);
+                    total_skip += rows_skipped;
+                    trace!(
+                        "Overall selection from predicate is empty, \
+                        skipping all {rows_skipped} rows in row group {r}"
+                    );
+                }
             }
         }
 
