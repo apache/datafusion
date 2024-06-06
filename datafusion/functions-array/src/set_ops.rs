@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_union, array_intersect and array_distinct functions.
 
-use crate::make_array::make_array_inner;
+use crate::make_array::{empty_array_type, make_array_inner};
 use crate::utils::make_scalar_function;
 use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
@@ -135,7 +135,7 @@ impl ScalarUDFImpl for ArrayIntersect {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match (arg_types[0].clone(), arg_types[1].clone()) {
             (Null, Null) | (Null, _) => Ok(Null),
-            (_, Null) => Ok(List(Arc::new(Field::new("item", Null, true)))),
+            (_, Null) => Ok(empty_array_type()),
             (dt, _) => Ok(dt),
         }
     }
@@ -257,6 +257,17 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     } else if matches!(r.value_type(), Null) {
         let field = Arc::new(Field::new("item", l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
+    }
+
+    // Handle empty array at rhs case
+    // array_union(arr, []) -> arr;
+    // array_intersect(arr, []) -> [];
+    if r.value_length(0).is_zero() {
+        if set_op == SetOp::Union {
+            return Ok(Arc::new(l.clone()) as ArrayRef);
+        } else {
+            return Ok(Arc::new(r.clone()) as ArrayRef);
+        }
     }
 
     if l.value_type() != r.value_type() {
