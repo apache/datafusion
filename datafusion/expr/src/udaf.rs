@@ -17,6 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::expr::AggregateFunction;
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
@@ -27,6 +28,7 @@ use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, not_impl_err, Result};
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -139,8 +141,7 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        // TODO: Support dictinct, filter, order by and null_treatment
-        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+        Expr::AggregateFunction(AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,
@@ -604,5 +605,51 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+}
+
+pub trait AggregateUDFExprBuilder {
+    fn order_by(self, order_by: Vec<Expr>) -> Expr;
+    fn filter(self, filter: Box<Expr>) -> Expr;
+    fn null_treatment(self, null_treatment: NullTreatment) -> Expr;
+    fn distinct(self) -> Expr;
+}
+
+impl AggregateUDFExprBuilder for Expr {
+    fn order_by(self, order_by: Vec<Expr>) -> Expr {
+        match self {
+            Expr::AggregateFunction(mut udaf) => {
+                udaf.order_by = Some(order_by);
+                Expr::AggregateFunction(udaf)
+            }
+            _ => self,
+        }
+    }
+    fn filter(self, filter: Box<Expr>) -> Expr {
+        match self {
+            Expr::AggregateFunction(mut udaf) => {
+                udaf.filter = Some(filter);
+                Expr::AggregateFunction(udaf)
+            }
+            _ => self,
+        }
+    }
+    fn null_treatment(self, null_treatment: NullTreatment) -> Expr {
+        match self {
+            Expr::AggregateFunction(mut udaf) => {
+                udaf.null_treatment = Some(null_treatment);
+                Expr::AggregateFunction(udaf)
+            }
+            _ => self,
+        }
+    }
+    fn distinct(self) -> Expr {
+        match self {
+            Expr::AggregateFunction(mut udaf) => {
+                udaf.distinct = true;
+                Expr::AggregateFunction(udaf)
+            }
+            _ => self,
+        }
     }
 }
