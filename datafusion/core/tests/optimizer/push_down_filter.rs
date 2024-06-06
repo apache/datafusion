@@ -26,11 +26,12 @@ use async_trait::async_trait;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    and, col, in_list, in_subquery, lit, or, sum, BinaryExpr, ColumnarValue, Expr,
-    Extension, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF,
-    ScalarUDFImpl, Signature, TableProviderFilterPushDown, TableScan, TableSource,
-    TableType, UserDefinedLogicalNodeCore, Volatility,
+    and, col, in_list, in_subquery, lit, or, BinaryExpr, ColumnarValue, Expr, Extension,
+    JoinType, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF, ScalarUDFImpl,
+    Signature, TableProviderFilterPushDown, TableScan, TableSource, TableType,
+    UserDefinedLogicalNodeCore, Volatility,
 };
+use datafusion_functions_aggregate::expr_fn::sum;
 
 use datafusion_expr::logical_plan::table_scan;
 
@@ -43,15 +44,6 @@ use datafusion_optimizer::{
 use crate::optimizer::observe;
 
 use super::test_table_scan_with_name;
-
-// Test push down filter
-fn test_table_scan_fields() -> Vec<Field> {
-    vec![
-        Field::new("a", DataType::UInt32, false),
-        Field::new("b", DataType::UInt32, false),
-        Field::new("c", DataType::UInt32, false),
-    ]
-}
 
 /// some tests share a common table
 fn test_table_scan() -> Result<LogicalPlan> {
