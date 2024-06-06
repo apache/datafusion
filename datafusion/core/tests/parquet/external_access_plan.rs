@@ -18,14 +18,16 @@
 //! Tests for passing user provided [`ParquetAccessPlan`]` to `ParquetExec`]`
 use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{create_data_batch, Scenario};
+use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::prelude::SessionContext;
-use datafusion_common::assert_contains;
+use datafusion_common::{assert_contains, DFSchema};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::ExecutionPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -144,6 +146,40 @@ async fn skip_scan() {
 }
 
 #[tokio::test]
+async fn plan_and_filter() {
+    // show that row group pruning is applied even when an initial plan is supplied
+
+    // No rows match this predicate
+    let predicate = col("utf8").eq(lit("z"));
+
+    // user supplied access plan specifies to still read a row group
+    let access_plan = Some(ParquetAccessPlan::new(vec![
+        // Row group 0 has values a-d
+        RowGroupAccess::Skip,
+        // Row group 1 has values e-i
+        RowGroupAccess::Scan,
+    ]));
+
+    // initia
+    let parquet_metrics = TestFull {
+        access_plan,
+        expected_rows: 0,
+        predicate: Some(predicate),
+    }
+    .run()
+    .await
+    .unwrap();
+
+    // Verify that row group pruning still happenes for just that group
+    let row_groups_pruned_statistics =
+        metric_value(&parquet_metrics, "row_groups_pruned_statistics").unwrap();
+    assert_eq!(
+        row_groups_pruned_statistics, 1,
+        "metrics : {parquet_metrics:#?}",
+    );
+}
+
+#[tokio::test]
 async fn two_selections() {
     let plans = vec![
         ParquetAccessPlan::new(vec![
@@ -168,7 +204,7 @@ async fn two_selections() {
 
 #[tokio::test]
 async fn bad_row_groups() {
-    let err = Test {
+    let err = TestFull {
         access_plan: Some(ParquetAccessPlan::new(vec![
             // file has only 2 row groups, but specify 3
             RowGroupAccess::Scan,
@@ -176,6 +212,7 @@ async fn bad_row_groups() {
             RowGroupAccess::Scan,
         ])),
         expected_rows: 0,
+        predicate: None,
     }
     .run()
     .await
@@ -187,7 +224,7 @@ async fn bad_row_groups() {
 
 #[tokio::test]
 async fn bad_selection() {
-    let err = Test {
+    let err = TestFull {
         access_plan: Some(ParquetAccessPlan::new(vec![
             // specify fewer rows than are actually in the row group
             RowGroupAccess::Selection(RowSelection::from(vec![
@@ -198,6 +235,7 @@ async fn bad_selection() {
         ])),
         // expects that we hit an error, this should not be run
         expected_rows: 10000,
+        predicate: None,
     }
     .run()
     .await
@@ -225,11 +263,7 @@ fn select_two_rows() -> RowSelection {
     ])
 }
 
-/// Test for passing user defined ParquetAccessPlans:
-///
-/// 1. Creates a parquet file with 10 rows: rg0: 5 rows, rg1: 5 rows
-/// 2. Reads the parquet file with an optional user provided access plan
-/// 3. Verifies that the expected number of rows is read
+/// Test for passing user defined ParquetAccessPlans. See [`TestFull`] for details.
 #[derive(Debug)]
 struct Test {
     access_plan: Option<ParquetAccessPlan>,
@@ -241,13 +275,41 @@ impl Test {
     ///
     /// Returns the `MetricsSet` from the ParqeutExec
     async fn run_success(self) -> MetricsSet {
-        self.run().await.unwrap()
-    }
-
-    async fn run(self) -> Result<MetricsSet> {
         let Self {
             access_plan,
             expected_rows,
+        } = self;
+        TestFull {
+            access_plan,
+            expected_rows,
+            predicate: None,
+        }
+        .run()
+        .await
+        .unwrap()
+    }
+}
+
+/// Test for passing user defined ParquetAccessPlans:
+///
+/// 1. Creates a parquet file with 2 row groups, each with 5 rows
+/// 2. Reads the parquet file with an optional user provided access plan
+/// 3. Verifies that the expected number of rows is read
+/// 4. Returns the statistics from running the plan
+struct TestFull {
+    access_plan: Option<ParquetAccessPlan>,
+    expected_rows: usize,
+    predicate: Option<Expr>,
+}
+
+impl TestFull {
+    async fn run(self) -> Result<MetricsSet> {
+        let ctx = SessionContext::new();
+
+        let Self {
+            access_plan,
+            expected_rows,
+            predicate,
         } = self;
 
         let TestData {
@@ -268,16 +330,30 @@ impl Test {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let config = FileScanConfig::new(object_store_url, schema.clone())
             .with_file(partitioned_file);
-        let plan: Arc<dyn ExecutionPlan> = ParquetExec::builder(config).build_arc();
+
+        let mut builder = ParquetExec::builder(config);
+
+        // add the predicate, if requested
+        if let Some(predicate) = predicate {
+            let df_schema = DFSchema::try_from(schema.clone())?;
+            let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
+            builder = builder.with_predicate(predicate);
+        }
+
+        let plan: Arc<dyn ExecutionPlan> = builder.build_arc();
 
         // run the ParquetExec and collect the results
-        let ctx = SessionContext::new();
         let results =
             datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
 
         // calculate the total number of rows that came out
         let total_rows = results.iter().map(|b| b.num_rows()).sum::<usize>();
-        assert_eq!(total_rows, expected_rows);
+        assert_eq!(
+            total_rows,
+            expected_rows,
+            "results: \n{}",
+            pretty_format_batches(&results).unwrap()
+        );
 
         Ok(MetricsFinder::find_metrics(plan.as_ref()).unwrap())
     }
