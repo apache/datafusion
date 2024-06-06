@@ -29,7 +29,6 @@ use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Signature, TypeSignature,
@@ -374,7 +373,8 @@ impl LastValue {
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                    TypeSignature::Numeric(1),
+                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
                 ],
                 Volatility::Immutable,
             ),

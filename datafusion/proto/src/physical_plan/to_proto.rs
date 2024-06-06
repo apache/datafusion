@@ -29,7 +29,7 @@ use datafusion::physical_plan::expressions::{
     DistinctCount, DistinctSum, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
     Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
     OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop,
-    StringAgg, Sum, TryCastExpr, Variance, VariancePop, WindowShift,
+    StringAgg, Sum, TryCastExpr, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -281,8 +281,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Max
     } else if aggr_expr.downcast_ref::<Avg>().is_some() {
         protobuf::AggregateFunction::Avg
-    } else if aggr_expr.downcast_ref::<Variance>().is_some() {
-        protobuf::AggregateFunction::Variance
     } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
         protobuf::AggregateFunction::VariancePop
     } else if aggr_expr.downcast_ref::<Stddev>().is_some() {
