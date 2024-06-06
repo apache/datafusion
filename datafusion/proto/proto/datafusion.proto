@@ -407,15 +407,6 @@ message ListRange {
   LogicalExprNode stride = 3;
 }
 
-message GetIndexedField {
-  LogicalExprNode expr = 1;
-  oneof field {
-    NamedStructField named_struct_field = 2;
-    ListIndex list_index = 3;
-    ListRange list_range = 4;
-  }
-}
-
 message IsNull {
   LogicalExprNode expr = 1;
 }
@@ -488,7 +479,7 @@ enum AggregateFunction {
   COUNT = 4;
   APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
-  VARIANCE = 7;
+  // VARIANCE = 7;
   VARIANCE_POP = 8;
   // COVARIANCE = 9;
   // COVARIANCE_POP = 10;
@@ -871,7 +862,7 @@ message PhysicalWindowExprNode {
   oneof window_function {
     AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
-    // udaf = 3
+    string user_defined_aggr_function = 3;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;

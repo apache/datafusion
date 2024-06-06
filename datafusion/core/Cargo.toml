@@ -121,6 +121,7 @@ num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
+paste = "1.0.15"
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }

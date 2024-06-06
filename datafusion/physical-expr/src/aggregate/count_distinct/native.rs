@@ -33,6 +33,7 @@ use arrow_schema::DataType;
 
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 
@@ -115,18 +116,11 @@ where
     }
 
     fn size(&self) -> usize {
-        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
-            / 7)
-        .next_power_of_two();
+        let num_elements = self.values.len();
+        let fixed_size =
+            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
 
-        // Size of accumulator
-        // + size of entry * number of buckets
-        // + 1 byte for each bucket
-        // + fixed size of HashSet
-        std::mem::size_of_val(self)
-            + std::mem::size_of::<T::Native>() * estimated_buckets
-            + estimated_buckets
-            + std::mem::size_of_val(&self.values)
+        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
 }
 
@@ -202,17 +196,10 @@ where
     }
 
     fn size(&self) -> usize {
-        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
-            / 7)
-        .next_power_of_two();
+        let num_elements = self.values.len();
+        let fixed_size =
+            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
 
-        // Size of accumulator
-        // + size of entry * number of buckets
-        // + 1 byte for each bucket
-        // + fixed size of HashSet
-        std::mem::size_of_val(self)
-            + std::mem::size_of::<T::Native>() * estimated_buckets
-            + estimated_buckets
-            + std::mem::size_of_val(&self.values)
+        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
 }

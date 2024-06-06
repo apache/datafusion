@@ -2338,6 +2338,18 @@ select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
 statement ok
 drop table t;
 
+# variance_f64_1
+statement ok
+create table t (c double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var(c), arrow_typeof(var(c)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
 # aggregate stddev f64_1
 statement ok
 create table t (c1 double) as values (1), (2);
@@ -2458,7 +2470,161 @@ NULL Float64
 statement ok
 drop table t;
 
+# aggregate variance f64_1
+statement ok
+create table t (c1 double) as values (1), (2);
 
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0.25 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_2
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_3
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
+# variance_f64_2
+statement ok
+create table t (c double) as values (1.1), (2), (3);
+
+query RT
+select var(c), arrow_typeof(var(c)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_4
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# variance_1_input
+statement ok
+create table t (a double not null) as values (1);
+
+query RT
+select var(a), arrow_typeof(var(a)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# variance_i32_all_nulls
+statement ok
+create table t (a int) as values (null), (null);
+
+query RT
+select var(a), arrow_typeof(var(a)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# aggregate variance i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate single input
+statement ok
+create table t (c1 double) as values (1);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 with nulls
+statement ok
+create table t (c1 int) as values (1), (null), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2.1875 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 all nulls
+statement ok
+create table t (c1 int) as values (null), (null);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
 
 # simple_mean
 query R
@@ -3441,10 +3607,10 @@ NULL NULL NULL NULL NULL NULL NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -3552,10 +3718,10 @@ NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(date32), sum(date64) FROM t;
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -3649,10 +3815,10 @@ select * from t;
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
 
 # aggregate_times_count

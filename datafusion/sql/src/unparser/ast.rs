@@ -242,7 +242,7 @@ impl SelectBuilder {
             from: self
                 .from
                 .iter()
-                .map(|b| b.build())
+                .filter_map(|b| b.build().transpose())
                 .collect::<Result<Vec<_>, BuilderError>>()?,
             lateral_views: self.lateral_views.clone(),
             selection: self.selection.clone(),
@@ -314,18 +314,17 @@ impl TableWithJoinsBuilder {
         new
     }
 
-    pub fn build(&self) -> Result<ast::TableWithJoins, BuilderError> {
-        Ok(ast::TableWithJoins {
-            relation: match self.relation {
-                Some(ref value) => value.build()?,
-                None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from(
-                        "relation",
-                    )))
-                }
+    pub fn build(&self) -> Result<Option<ast::TableWithJoins>, BuilderError> {
+        match self.relation {
+            Some(ref value) => match value.build()? {
+                Some(relation) => Ok(Some(ast::TableWithJoins {
+                    relation,
+                    joins: self.joins.clone(),
+                })),
+                None => Ok(None),
             },
-            joins: self.joins.clone(),
-        })
+            None => Err(Into::into(UninitializedFieldError::from("relation"))),
+        }
     }
     fn create_empty() -> Self {
         Self {
@@ -350,6 +349,7 @@ pub(super) struct RelationBuilder {
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
+    Empty,
 }
 
 #[allow(dead_code)]
@@ -367,6 +367,11 @@ impl RelationBuilder {
         new.relation = Option::Some(TableFactorBuilder::Derived(value));
         new
     }
+    pub fn empty(&mut self) -> &mut Self {
+        let new = self;
+        new.relation = Some(TableFactorBuilder::Empty);
+        new
+    }
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
         let new = self;
         match new.relation {
@@ -376,14 +381,16 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Derived(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
         new
     }
-    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+    pub fn build(&self) -> Result<Option<ast::TableFactor>, BuilderError> {
         Ok(match self.relation {
-            Some(TableFactorBuilder::Table(ref value)) => value.build()?,
-            Some(TableFactorBuilder::Derived(ref value)) => value.build()?,
+            Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Empty) => None,
             None => {
                 return Result::Err(Into::into(UninitializedFieldError::from("relation")))
             }

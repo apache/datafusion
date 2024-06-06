@@ -49,8 +49,6 @@ pub enum AggregateFunction {
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
-    /// Variance (Sample)
-    Variance,
     /// Variance (Population)
     VariancePop,
     /// Standard Deviation (Sample)
@@ -111,7 +109,6 @@ impl AggregateFunction {
             ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
-            Variance => "VAR",
             VariancePop => "VAR_POP",
             Stddev => "STDDEV",
             StddevPop => "STDDEV_POP",
@@ -169,9 +166,7 @@ impl FromStr for AggregateFunction {
             "stddev" => AggregateFunction::Stddev,
             "stddev_pop" => AggregateFunction::StddevPop,
             "stddev_samp" => AggregateFunction::Stddev,
-            "var" => AggregateFunction::Variance,
             "var_pop" => AggregateFunction::VariancePop,
-            "var_samp" => AggregateFunction::Variance,
             "regr_slope" => AggregateFunction::RegrSlope,
             "regr_intercept" => AggregateFunction::RegrIntercept,
             "regr_count" => AggregateFunction::RegrCount,
@@ -235,7 +230,6 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Ok(DataType::Boolean)
             }
-            AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
             AggregateFunction::VariancePop => {
                 variance_return_type(&coerced_data_types[0])
             }
@@ -315,7 +309,6 @@ impl AggregateFunction {
             }
             AggregateFunction::Avg
             | AggregateFunction::Sum
-            | AggregateFunction::Variance
             | AggregateFunction::VariancePop
             | AggregateFunction::Stddev
             | AggregateFunction::StddevPop
