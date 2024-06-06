@@ -28,14 +28,17 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
 };
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, ExprSchemable, LogicalPlanBuilder,
-    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
+    LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_functions_array::range::range_udf;
+use parking_lot::Mutex;
+use sqlparser::ast::Ident;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -828,7 +831,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             name: definition.name,
             expr: definition
                 .params
-                .return_
+                .function_body
                 .expect("Expression has to be defined!"),
             return_type: definition
                 .return_type
@@ -852,15 +855,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let function_factory = Arc::new(CustomFunctionFactory::default());
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config)?;
-
-    let session_config = SessionConfig::new();
-    let state =
-        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-            .with_function_factory(function_factory.clone());
-
-    let ctx = SessionContext::new_with_state(state);
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
     let options = SQLOptions::new().with_allow_ddl(false);
 
     let sql = r#"
@@ -922,6 +917,95 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
         RETURN $1 + $3
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
+
+    Ok(())
+}
+
+/// Saves whatever is passed to it as a scalar function
+#[derive(Debug, Default)]
+struct RecordingFunctonFactory {
+    calls: Mutex<Vec<CreateFunction>>,
+}
+
+impl RecordingFunctonFactory {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// return all the calls made to the factory
+    fn calls(&self) -> Vec<CreateFunction> {
+        self.calls.lock().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl FunctionFactory for RecordingFunctonFactory {
+    async fn create(
+        &self,
+        _state: &SessionState,
+        statement: CreateFunction,
+    ) -> Result<RegisterFunction> {
+        self.calls.lock().push(statement);
+
+        let udf = range_udf();
+        Ok(RegisterFunction::Scalar(udf))
+    }
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<()> {
+    let function_factory = Arc::new(RecordingFunctonFactory::new());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    let sql = r#"
+      CREATE FUNCTION strlen(name TEXT)
+      RETURNS int LANGUAGE plrust AS
+      $$
+        Ok(Some(name.unwrap().len() as i32))
+      $$;
+    "#;
+
+    let body = "
+        Ok(Some(name.unwrap().len() as i32))
+      ";
+
+    match ctx.sql(sql).await {
+        Ok(_) => {}
+        Err(e) => {
+            panic!("Error creating function: {}", e);
+        }
+    }
+
+    // verify that the call was passed through
+    let calls = function_factory.calls();
+    let schema = DFSchema::try_from(Schema::empty())?;
+    assert_eq!(calls.len(), 1);
+    let call = &calls[0];
+    let expected = CreateFunction {
+        or_replace: false,
+        temporary: false,
+        name: "strlen".into(),
+        args: Some(vec![OperateFunctionArg {
+            name: Some(Ident {
+                value: "name".into(),
+                quote_style: None,
+            }),
+            data_type: DataType::Utf8,
+            default_expr: None,
+        }]),
+        return_type: Some(DataType::Int32),
+        params: CreateFunctionBody {
+            language: Some(Ident {
+                value: "plrust".into(),
+                quote_style: None,
+            }),
+            behavior: None,
+            function_body: Some(lit(body)),
+        },
+        schema: Arc::new(schema),
+    };
+
+    assert_eq!(call, &expected);
 
     Ok(())
 }
