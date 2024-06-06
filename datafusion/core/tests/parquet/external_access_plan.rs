@@ -170,7 +170,7 @@ async fn plan_and_filter() {
     .await
     .unwrap();
 
-    // Verify that row group pruning still happenes for just that group
+    // Verify that row group pruning still happens for just that group
     let row_groups_pruned_statistics =
         metric_value(&parquet_metrics, "row_groups_pruned_statistics").unwrap();
     assert_eq!(

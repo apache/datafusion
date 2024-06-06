@@ -55,6 +55,8 @@ use tempfile::NamedTempFile;
 
 mod arrow_statistics;
 mod custom_reader;
+// Don't run on windows as tempfiles don't seem to work the same
+#[cfg(not(target_os = "windows"))]
 mod external_access_plan;
 mod file_statistics;
 #[cfg(not(target_family = "windows"))]
