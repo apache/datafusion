@@ -21,6 +21,7 @@ use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_optimizer::{Optimizer, OptimizerContext, OptimizerRule};
 
+mod common_subexpr_eliminate;
 mod push_down_filter;
 mod user_defined;
 
