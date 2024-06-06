@@ -118,6 +118,7 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/governance
+   contributor-guide/inviting
    contributor-guide/specification/index
 
 .. _toc.subprojects:
