@@ -22,16 +22,15 @@ use arrow::array::{
     StringArray,
 };
 use arrow::datatypes::DataType;
-use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
+use arrow::{array::ArrayRef, datatypes::SchemaRef};
 use arrow_schema::Schema;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
-    errors::ParquetError,
     file::{
         metadata::{ParquetMetaData, RowGroupMetaData},
         page_index::index::Index,
@@ -42,10 +41,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
-use crate::datasource::physical_plan::parquet::row_groups::RowGroupSet;
 use crate::datasource::physical_plan::parquet::statistics::{
     from_bytes_to_i128, parquet_column,
 };
+use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
@@ -111,6 +110,7 @@ pub struct PagePruningPredicate {
 
 impl PagePruningPredicate {
     /// Create a new [`PagePruningPredicate`]
+    // TODO: this is infallaible -- it can not return an error
     pub fn try_new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         let predicates = split_conjunction(expr)
             .into_iter()
@@ -129,110 +129,140 @@ impl PagePruningPredicate {
         Ok(Self { predicates })
     }
 
-    /// Returns a [`RowSelection`] for the given file
-    pub fn prune(
+    /// Returns an updated [`ParquetAccessPlan`] by applying predicates to the
+    /// parquet page index, if any
+    pub fn prune_plan_with_page_index(
         &self,
+        mut access_plan: ParquetAccessPlan,
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
-        row_groups: &RowGroupSet,
         file_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
-    ) -> Result<Option<RowSelection>> {
+    ) -> ParquetAccessPlan {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return Ok(None);
+            return access_plan;
         }
 
         let page_index_predicates = &self.predicates;
         let groups = file_metadata.row_groups();
 
         if groups.is_empty() {
-            return Ok(None);
+            return access_plan;
         }
 
-        let file_offset_indexes = file_metadata.offset_index();
-        let file_page_indexes = file_metadata.column_index();
-        let (file_offset_indexes, file_page_indexes) = match (
-            file_offset_indexes,
-            file_page_indexes,
-        ) {
-            (Some(o), Some(i)) => (o, i),
-            _ => {
-                trace!(
+        let (Some(file_offset_indexes), Some(file_page_indexes)) =
+            (file_metadata.offset_index(), file_metadata.column_index())
+        else {
+            trace!(
                     "skip page pruning due to lack of indexes. Have offset: {}, column index: {}",
-                    file_offset_indexes.is_some(), file_page_indexes.is_some()
+                    file_metadata.offset_index().is_some(), file_metadata.column_index().is_some()
                 );
-                return Ok(None);
-            }
+            return access_plan;
         };
 
-        let mut row_selections = Vec::with_capacity(page_index_predicates.len());
-        for predicate in page_index_predicates {
-            // find column index in the parquet schema
-            let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
-            let mut selectors = Vec::with_capacity(row_groups.len());
-            for r in row_groups.iter() {
+        // track the total number of rows that should be skipped
+        let mut total_skip = 0;
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        for r in row_group_indexes {
+            // The selection for this particular row group
+            let mut overall_selection = None;
+            for predicate in page_index_predicates {
+                // find column index in the parquet schema
+                let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
                 let row_group_metadata = &groups[r];
 
-                let rg_offset_indexes = file_offset_indexes.get(r);
-                let rg_page_indexes = file_page_indexes.get(r);
-                if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) =
-                    (rg_page_indexes, rg_offset_indexes, col_idx)
-                {
-                    selectors.extend(
-                        prune_pages_in_one_row_group(
-                            row_group_metadata,
-                            predicate,
-                            rg_offset_indexes.get(col_idx),
-                            rg_page_indexes.get(col_idx),
-                            groups[r].column(col_idx).column_descr(),
-                            file_metrics,
-                        )
-                        .map_err(|e| {
-                            ArrowError::ParquetError(format!(
-                                "Fail in prune_pages_in_one_row_group: {e}"
-                            ))
-                        }),
-                    );
-                } else {
+                let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) = (
+                    file_page_indexes.get(r),
+                    file_offset_indexes.get(r),
+                    col_idx,
+                ) else {
                     trace!(
                         "Did not have enough metadata to prune with page indexes, \
-                         falling back to all rows",
+                     falling back to all rows",
                     );
-                    // fallback select all rows
-                    let all_selected =
-                        vec![RowSelector::select(groups[r].num_rows() as usize)];
-                    selectors.push(all_selected);
+                    continue;
+                };
+
+                let selection = prune_pages_in_one_row_group(
+                    row_group_metadata,
+                    predicate,
+                    rg_offset_indexes.get(col_idx),
+                    rg_page_indexes.get(col_idx),
+                    groups[r].column(col_idx).column_descr(),
+                    file_metrics,
+                );
+
+                let Some(selection) = selection else {
+                    trace!("No pages pruned in prune_pages_in_one_row_group");
+                    continue;
+                };
+
+                debug!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
+                    &selection,
+                    predicate.predicate_expr(),
+                );
+
+                overall_selection = update_selection(overall_selection, selection);
+
+                // if the overall selection has ruled out all rows, no need to
+                // continue with the other predicates
+                let selects_any = overall_selection
+                    .as_ref()
+                    .map(|selection| selection.selects_any())
+                    .unwrap_or(true);
+
+                if !selects_any {
+                    break;
                 }
             }
-            debug!(
-                "Use filter and page index create RowSelection {:?} from predicate: {:?}",
-                &selectors,
-                predicate.predicate_expr(),
-            );
-            row_selections.push(selectors.into_iter().flatten().collect::<Vec<_>>());
+
+            if let Some(overall_selection) = overall_selection {
+                if overall_selection.selects_any() {
+                    let rows_skipped = rows_skipped(&overall_selection);
+                    trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
+                    total_skip += rows_skipped;
+                    access_plan.scan_selection(r, overall_selection)
+                } else {
+                    // Selection skips all rows, so skip the entire row group
+                    let rows_skipped = groups[r].num_rows() as usize;
+                    access_plan.skip(r);
+                    total_skip += rows_skipped;
+                    trace!(
+                        "Overall selection from predicate is empty, \
+                        skipping all {rows_skipped} rows in row group {r}"
+                    );
+                }
+            }
         }
 
-        let final_selection = combine_multi_col_selection(row_selections);
-        let total_skip =
-            final_selection.iter().fold(
-                0,
-                |acc, x| {
-                    if x.skip {
-                        acc + x.row_count
-                    } else {
-                        acc
-                    }
-                },
-            );
         file_metrics.page_index_rows_filtered.add(total_skip);
-        Ok(Some(final_selection))
+        access_plan
     }
 
     /// Returns the number of filters in the [`PagePruningPredicate`]
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
+    }
+}
+
+/// returns the number of rows skipped in the selection
+/// TODO should this be upstreamed to RowSelection?
+fn rows_skipped(selection: &RowSelection) -> usize {
+    selection
+        .iter()
+        .fold(0, |acc, x| if x.skip { acc + x.row_count } else { acc })
+}
+
+fn update_selection(
+    current_selection: Option<RowSelection>,
+    row_selection: RowSelection,
+) -> Option<RowSelection> {
+    match current_selection {
+        None => Some(row_selection),
+        Some(current_selection) => Some(current_selection.intersection(&row_selection)),
     }
 }
 
@@ -282,22 +312,8 @@ fn find_column_index(
     parquet_column(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
 }
 
-/// Intersects the [`RowSelector`]s
-///
-/// For exampe, given:
-/// * `RowSelector1: [ Skip(0~199), Read(200~299)]`
-/// * `RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]`
-///
-/// The final selection is the intersection of these  `RowSelector`s:
-/// * `final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]`
-fn combine_multi_col_selection(row_selections: Vec<Vec<RowSelector>>) -> RowSelection {
-    row_selections
-        .into_iter()
-        .map(RowSelection::from)
-        .reduce(|s1, s2| s1.intersection(&s2))
-        .unwrap()
-}
-
+/// Returns a `RowSelection` for the pages in this RowGroup if any
+/// rows can be pruned based on the page index
 fn prune_pages_in_one_row_group(
     group: &RowGroupMetaData,
     predicate: &PruningPredicate,
@@ -305,63 +321,61 @@ fn prune_pages_in_one_row_group(
     col_page_indexes: Option<&Index>,
     col_desc: &ColumnDescriptor,
     metrics: &ParquetFileMetrics,
-) -> Result<Vec<RowSelector>> {
+) -> Option<RowSelection> {
     let num_rows = group.num_rows() as usize;
-    if let (Some(col_offset_indexes), Some(col_page_indexes)) =
+    let (Some(col_offset_indexes), Some(col_page_indexes)) =
         (col_offset_indexes, col_page_indexes)
-    {
-        let target_type = parquet_to_arrow_decimal_type(col_desc);
-        let pruning_stats = PagesPruningStatistics {
-            col_page_indexes,
-            col_offset_indexes,
-            target_type: &target_type,
-            num_rows_in_row_group: group.num_rows(),
-        };
+    else {
+        return None;
+    };
 
-        match predicate.prune(&pruning_stats) {
-            Ok(values) => {
-                let mut vec = Vec::with_capacity(values.len());
-                let row_vec = create_row_count_in_each_page(col_offset_indexes, num_rows);
-                assert_eq!(row_vec.len(), values.len());
-                let mut sum_row = *row_vec.first().unwrap();
-                let mut selected = *values.first().unwrap();
-                trace!("Pruned to {:?} using {:?}", values, pruning_stats);
-                for (i, &f) in values.iter().enumerate().skip(1) {
-                    if f == selected {
-                        sum_row += *row_vec.get(i).unwrap();
-                    } else {
-                        let selector = if selected {
-                            RowSelector::select(sum_row)
-                        } else {
-                            RowSelector::skip(sum_row)
-                        };
-                        vec.push(selector);
-                        sum_row = *row_vec.get(i).unwrap();
-                        selected = f;
-                    }
-                }
+    let target_type = parquet_to_arrow_decimal_type(col_desc);
+    let pruning_stats = PagesPruningStatistics {
+        col_page_indexes,
+        col_offset_indexes,
+        target_type: &target_type,
+        num_rows_in_row_group: group.num_rows(),
+    };
 
-                let selector = if selected {
-                    RowSelector::select(sum_row)
-                } else {
-                    RowSelector::skip(sum_row)
-                };
-                vec.push(selector);
-                return Ok(vec);
-            }
+    let values = match predicate.prune(&pruning_stats) {
+        Ok(values) => values,
+        Err(e) => {
             // stats filter array could not be built
             // return a result which will not filter out any pages
-            Err(e) => {
-                debug!("Error evaluating page index predicate values {e}");
-                metrics.predicate_evaluation_errors.add(1);
-                return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
-            }
+            debug!("Error evaluating page index predicate values {e}");
+            metrics.predicate_evaluation_errors.add(1);
+            return None;
+        }
+    };
+
+    let mut vec = Vec::with_capacity(values.len());
+    let row_vec = create_row_count_in_each_page(col_offset_indexes, num_rows);
+    assert_eq!(row_vec.len(), values.len());
+    let mut sum_row = *row_vec.first().unwrap();
+    let mut selected = *values.first().unwrap();
+    trace!("Pruned to {:?} using {:?}", values, pruning_stats);
+    for (i, &f) in values.iter().enumerate().skip(1) {
+        if f == selected {
+            sum_row += *row_vec.get(i).unwrap();
+        } else {
+            let selector = if selected {
+                RowSelector::select(sum_row)
+            } else {
+                RowSelector::skip(sum_row)
+            };
+            vec.push(selector);
+            sum_row = *row_vec.get(i).unwrap();
+            selected = f;
         }
     }
-    Err(DataFusionError::ParquetError(ParquetError::General(
-        "Got some error in prune_pages_in_one_row_group, plz try open the debuglog mode"
-            .to_string(),
-    )))
+
+    let selector = if selected {
+        RowSelector::select(sum_row)
+    } else {
+        RowSelector::skip(sum_row)
+    };
+    vec.push(selector);
+    Some(RowSelection::from(vec))
 }
 
 fn create_row_count_in_each_page(

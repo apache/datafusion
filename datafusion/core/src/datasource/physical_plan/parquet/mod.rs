@@ -47,6 +47,7 @@ use log::debug;
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::schema::types::ColumnDescriptor;
 
+mod access_plan;
 mod metrics;
 mod opener;
 mod page_filter;
@@ -59,6 +60,7 @@ mod writer;
 use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
+pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
@@ -152,8 +154,9 @@ pub use writer::plan_to_parquet;
 /// the file.
 ///
 /// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)
-/// via [`ParquetFileReaderFactory`] and applies any predicates and projections
-/// to determine what pages must be read.
+/// via [`ParquetFileReaderFactory`], creating a [`ParquetAccessPlan`] by
+/// applying predicates to metadata. The plan and projections are used to
+/// determine what pages must be read.
 ///
 /// * Step 4: The stream begins reading data, fetching the required pages
 /// and incrementally decoding them.
