@@ -42,6 +42,8 @@ use datafusion_optimizer::{
 
 use crate::optimizer::observe;
 
+use super::test_table_scan_with_name;
+
 // Test push down filter
 fn test_table_scan_fields() -> Vec<Field> {
     vec![
@@ -49,12 +51,6 @@ fn test_table_scan_fields() -> Vec<Field> {
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
     ]
-}
-
-/// some tests share a common table with different names
-fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
-    let schema = Schema::new(test_table_scan_fields());
-    table_scan(Some(name), &schema, None)?.build()
 }
 
 /// some tests share a common table
