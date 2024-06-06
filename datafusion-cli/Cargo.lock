@@ -363,9 +363,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.3"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb42b2197bf15ccb092b62c74515dbd8b86d0effd934795f6687c93b6e679a2c"
+checksum = "cd066d0b4ef8ecb03a55319dc13aa6910616d0f44008a045bb1835af830abff5"
 dependencies = [
  "bzip2",
  "flate2",
@@ -375,8 +375,8 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "xz2",
- "zstd 0.12.4",
- "zstd-safe 6.0.6",
+ "zstd 0.13.0",
+ "zstd-safe 7.0.0",
 ]
 
 [[package]]
@@ -443,7 +443,7 @@ dependencies = [
  "fastrand 1.9.0",
  "hex",
  "http 0.2.12",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "ring 0.16.20",
  "time",
  "tokio",
@@ -609,7 +609,7 @@ dependencies = [
  "fastrand 1.9.0",
  "http 0.2.12",
  "http-body 0.4.6",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "hyper-rustls 0.23.2",
  "lazy_static",
  "pin-project-lite",
@@ -631,7 +631,7 @@ dependencies = [
  "futures-core",
  "http 0.2.12",
  "http-body 0.4.6",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "once_cell",
  "percent-encoding",
  "pin-project-lite",
@@ -1988,7 +1988,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1788965e61b367cd03a62950836d5cd41560c3577d90e40e0819373194d1661c"
 dependencies = [
  "http 0.2.12",
- "hyper 0.14.28",
+ "hyper 0.14.29",
  "log",
  "rustls 0.20.9",
  "rustls-native-certs 0.6.3",
