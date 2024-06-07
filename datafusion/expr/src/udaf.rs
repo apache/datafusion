@@ -27,7 +27,7 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
@@ -608,48 +608,100 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     }
 }
 
-pub trait AggregateUDFExprBuilder {
-    fn order_by(self, order_by: Vec<Expr>) -> Expr;
-    fn filter(self, filter: Box<Expr>) -> Expr;
-    fn null_treatment(self, null_treatment: NullTreatment) -> Expr;
-    fn distinct(self) -> Expr;
+pub trait AggregateExt {
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
+    fn filter(self, filter: Box<Expr>) -> AggregateBuilder;
+    fn distinct(self) -> AggregateBuilder;
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder;
 }
 
-impl AggregateUDFExprBuilder for Expr {
-    fn order_by(self, order_by: Vec<Expr>) -> Expr {
+pub struct AggregateBuilder {
+    udaf: Option<AggregateFunction>,
+    order_by: Option<Vec<Expr>>,
+    filter: Option<Box<Expr>>,
+    distinct: bool,
+    null_treatment: Option<NullTreatment>,
+}
+
+impl AggregateBuilder {
+    fn new(udaf: Option<AggregateFunction>) -> Self {
+        Self {
+            udaf,
+            order_by: None,
+            filter: None,
+            distinct: false,
+            null_treatment: None,
+        }
+    }
+
+    pub fn build(self) -> Result<Expr> {
+        if let Some(mut udaf) = self.udaf {
+            udaf.order_by = self.order_by;
+            udaf.filter = self.filter;
+            udaf.distinct = self.distinct;
+            udaf.null_treatment = self.null_treatment;
+            return Ok(Expr::AggregateFunction(udaf));
+        }
+
+        plan_err!("Expect Expr::AggregateFunction")
+    }
+
+    pub fn order_by(mut self, order_by: Vec<Expr>) -> AggregateBuilder {
+        self.order_by = Some(order_by);
+        self
+    }
+
+    pub fn filter(mut self, filter: Box<Expr>) -> AggregateBuilder {
+        self.filter = Some(filter);
+        self
+    }
+
+    pub fn distinct(mut self) -> AggregateBuilder {
+        self.distinct = true;
+        self
+    }
+
+    pub fn null_treatment(mut self, null_treatment: NullTreatment) -> AggregateBuilder {
+        self.null_treatment = Some(null_treatment);
+        self
+    }
+}
+
+impl AggregateExt for Expr {
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder {
         match self {
             Expr::AggregateFunction(mut udaf) => {
                 udaf.order_by = Some(order_by);
-                Expr::AggregateFunction(udaf)
+                AggregateBuilder::new(Some(udaf))
             }
-            _ => self,
+            _ => AggregateBuilder::new(None),
         }
     }
-    fn filter(self, filter: Box<Expr>) -> Expr {
+    fn filter(self, filter: Box<Expr>) -> AggregateBuilder {
         match self {
             Expr::AggregateFunction(mut udaf) => {
                 udaf.filter = Some(filter);
-                Expr::AggregateFunction(udaf)
+                AggregateBuilder::new(Some(udaf))
             }
-            _ => self,
+            _ => AggregateBuilder::new(None),
         }
     }
-    fn null_treatment(self, null_treatment: NullTreatment) -> Expr {
-        match self {
-            Expr::AggregateFunction(mut udaf) => {
-                udaf.null_treatment = Some(null_treatment);
-                Expr::AggregateFunction(udaf)
-            }
-            _ => self,
-        }
-    }
-    fn distinct(self) -> Expr {
+    fn distinct(self) -> AggregateBuilder {
         match self {
             Expr::AggregateFunction(mut udaf) => {
                 udaf.distinct = true;
-                Expr::AggregateFunction(udaf)
+                AggregateBuilder::new(Some(udaf))
             }
-            _ => self,
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(mut udaf) => {
+                udaf.null_treatment = Some(null_treatment);
+                AggregateBuilder::new(Some(udaf))
+            }
+            _ => AggregateBuilder::new(None),
         }
     }
 }

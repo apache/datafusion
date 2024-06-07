@@ -24,7 +24,7 @@ use datafusion::{
 };
 
 use datafusion_common::Result;
-use datafusion_expr::{col, AggregateUDFExprBuilder};
+use datafusion_expr::{col, AggregateExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,7 +36,8 @@ async fn main() -> Result<()> {
     let first_value_udaf = state.aggregate_functions().get("first_value").unwrap();
     let first_value_builder = first_value_udaf
         .call(vec![col("a")])
-        .order_by(vec![col("b")]);
+        .order_by(vec![col("b")])
+        .build()?;
 
     let first_value_fn = first_value(col("a"), Some(vec![col("b")]));
     assert_eq!(first_value_builder, first_value_fn);
