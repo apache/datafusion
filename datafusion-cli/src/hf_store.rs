@@ -175,8 +175,8 @@ impl ParsedHFUrl {
     /// Parse a http style HuggingFace URL into a ParsedHFUrl struct.
     /// The URL should be in the format `https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
-    /// 
-    /// url: The HuggingFace URL to parse. 
+    ///
+    /// url: The HuggingFace URL to parse.
     fn parse_http_style(url: String) -> Result<Self> {
         let mut parsed_url = Self::default();
         let mut last_delim = 0;
@@ -212,14 +212,15 @@ impl ParsedHFUrl {
             return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
         }
 
-        parsed_url.repository = Some(url[start_delim..last_delim + next_slash.unwrap()].to_string());
+        parsed_url.repository =
+            Some(url[start_delim..last_delim + next_slash.unwrap()].to_string());
         last_delim += next_slash.unwrap();
-        
+
         let next_resolve = url[last_delim..].find("resolve");
         if next_resolve.is_none() {
             return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
         }
-        
+
         last_delim += next_resolve.unwrap() + "resolve".len();
 
         let next_slash = url[last_delim + 1..].find('/');
@@ -227,7 +228,8 @@ impl ParsedHFUrl {
             return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
         }
 
-        parsed_url.revision = Some(url[last_delim + 1..last_delim + 1 + next_slash.unwrap()].to_string());
+        parsed_url.revision =
+            Some(url[last_delim + 1..last_delim + 1 + next_slash.unwrap()].to_string());
         last_delim += 1 + next_slash.unwrap();
 
         // parse path.
@@ -572,7 +574,6 @@ impl ObjectStore for HFStore {
         &self,
         _prefix: Option<&Path>,
     ) -> ObjectStoreResult<ListResult> {
-
         Err(ObjectStoreError::NotImplemented)
     }
 
@@ -580,7 +581,6 @@ impl ObjectStore for HFStore {
         &self,
         prefix: Option<&Path>,
     ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
-
         let Some(prefix) = prefix else {
             return futures::stream::once(async {
                 Err(ObjectStoreError::Generic {
@@ -615,7 +615,6 @@ impl ObjectStore for HFStore {
                 });
             };
 
-
             let Ok(tree_result) =
                 serde_json::from_slice::<Vec<HFTreeEntry>>(bytes.to_byte_slice())
             else {
@@ -638,7 +637,9 @@ impl ObjectStore for HFStore {
             .into_iter()
             .map(|result| {
                 result.and_then(|mut meta| {
-                    let Ok(location) = ParsedHFUrl::parse_http_style(meta.location.to_string()) else {
+                    let Ok(location) =
+                        ParsedHFUrl::parse_http_style(meta.location.to_string())
+                    else {
                         return Err(ObjectStoreError::Generic {
                             store: STORE,
                             source: format!("Unable to parse location {}", meta.location)
@@ -714,28 +715,29 @@ mod tests {
     fn test_parse_hf_url_errors() {
         test_error(
             "datasets/datasets-examples/doc-formats-csv-1",
-            "Invalid HuggingFace URL: hf://datasets/datasets-examples/doc-formats-csv-1, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
+            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
         );
 
         test_error(
             "datadicts/datasets-examples/doc-formats-csv-1/data.csv",
-            "Invalid HuggingFace URL: hf://datadicts/datasets-examples/doc-formats-csv-1/data.csv, currently only 'datasets' or 'spaces' are supported",
+            "Invalid HuggingFace URL: datadicts/datasets-examples/doc-formats-csv-1/data.csv, currently only 'datasets' or 'spaces' are supported",
         );
 
         test_error(
             "datasets/datasets-examples/doc-formats-csv-1@~csv",
-            "Invalid HuggingFace URL: hf://datasets/datasets-examples/doc-formats-csv-1@~csv, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
+            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1@~csv, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
         );
 
         test_error(
             "datasets/datasets-examples/doc-formats-csv-1@~csv/",
-            "Invalid HuggingFace URL: hf://datasets/datasets-examples/doc-formats-csv-1@~csv/, please specify a path",
+            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1@~csv/, please specify a path",
         );
     }
 
     #[test]
     fn test_parse_http_url() {
-        let url = "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv".to_string();
+        let url = "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv"
+            .to_string();
 
         let parsed_url = ParsedHFUrl::parse_http_style(url).unwrap();
 
@@ -747,7 +749,6 @@ mod tests {
         assert_eq!(parsed_url.revision, Some("main".to_string()));
         assert_eq!(parsed_url.path, Some("data.csv".to_string()));
     }
-
 
     #[test]
     fn test_file_path() {
