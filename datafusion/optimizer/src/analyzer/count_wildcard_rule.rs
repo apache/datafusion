@@ -280,7 +280,7 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Error during planning: No function matches the given name and argument types 'SUM(Null)'."), "{err}");
+        assert!(err.contains("Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Null\")"), "{err}");
         Ok(())
     }
 
