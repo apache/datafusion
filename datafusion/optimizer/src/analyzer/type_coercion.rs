@@ -811,7 +811,6 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
-    use arrow_buffer::IntervalDayTime;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
@@ -1085,7 +1084,7 @@ mod test {
     fn binary_op_date32_op_interval() -> Result<()> {
         // CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("...")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
-            + lit(ScalarValue::new_interval_dt(123,  456))
+            + lit(ScalarValue::new_interval_dt(123, 456));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =

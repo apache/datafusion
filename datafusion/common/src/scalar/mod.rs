@@ -4816,7 +4816,6 @@ mod tests {
                 TimestampNanosecond,
                 Some("UTC".into())
             ),
-            // TODO: add them back
             make_test_case!(i32_vals, IntervalYearMonthArray, IntervalYearMonth),
             make_test_case!(interval_dt_vals, IntervalDayTimeArray, IntervalDayTime),
             make_test_case!(
