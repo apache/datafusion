@@ -2139,7 +2139,7 @@ fn union_with_incompatible_data_type() {
         .expect_err("query should have failed")
         .strip_backtrace();
     assert_eq!(
-       "Error during planning: UNION Column Int64(1) (type: Int64) is not compatible with column IntervalMonthDayNano(\"950737950189618795196236955648\") (type: Interval(MonthDayNano))",
+       "Error during planning: UNION Column Int64(1) (type: Int64) is not compatible with column IntervalMonthDayNano(\"IntervalMonthDayNano { months: 12, days: 1, nanoseconds: 0 }\") (type: Interval(MonthDayNano))",
        err
     );
 }
@@ -2829,7 +2829,7 @@ fn join_with_aliases() {
 fn negative_interval_plus_interval_in_projection() {
     let sql = "select -interval '2 days' + interval '5 days';";
     let expected =
-    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -2837,7 +2837,7 @@ fn negative_interval_plus_interval_in_projection() {
 fn complex_interval_expression_in_projection() {
     let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
     let expected =
-    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\") + IntervalMonthDayNano(\"79228162458924105372415295488\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -2845,7 +2845,7 @@ fn complex_interval_expression_in_projection() {
 fn negative_sum_intervals_in_projection() {
     let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
     let expected =
-    "Projection: (- IntervalMonthDayNano(\"36893488147419103232\") + IntervalMonthDayNano(\"92233720368547758080\") + (- IntervalMonthDayNano(\"73786976294838206464\") + IntervalMonthDayNano(\"129127208515966861312\")))\n  EmptyRelation";
+    "Projection: (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 4, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 7, nanoseconds: 0 }\")))\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -2853,8 +2853,7 @@ fn negative_sum_intervals_in_projection() {
 fn date_plus_interval_in_projection() {
     let sql = "select t_date32 + interval '5 days' FROM test";
     let expected =
-        "Projection: test.t_date32 + IntervalMonthDayNano(\"92233720368547758080\")\
-                            \n  TableScan: test";
+        "Projection: test.t_date32 + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  TableScan: test";
     quick_test(sql, expected);
 }
 
@@ -2866,7 +2865,7 @@ fn date_plus_interval_in_filter() {
                         AND cast('1999-12-31' as date) + interval '30 days'";
     let expected =
             "Projection: test.t_date64\
-            \n  Filter: test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalMonthDayNano(\"553402322211286548480\")\
+            \n  Filter: test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 30, nanoseconds: 0 }\")\
             \n    TableScan: test";
     quick_test(sql, expected);
 }
