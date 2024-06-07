@@ -1085,10 +1085,7 @@ mod test {
     fn binary_op_date32_op_interval() -> Result<()> {
         // CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("...")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
-            + lit(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 123,
-                milliseconds: 456,
-            })));
+            + lit(ScalarValue::new_interval_dt(123,  456))
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
