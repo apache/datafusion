@@ -141,7 +141,13 @@ impl Debug for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionState")
             .field("session_id", &self.session_id)
-            // TODO should we print out more?
+            .field("scalar_functions", &self.scalar_functions)
+            .field("aggregate_functions", &self.aggregate_functions)
+            .field("window_functions", &self.window_functions)
+            .field("config", &self.config)
+            .field("table_options", &self.table_options)
+            .field("execution_props", &self.execution_props)
+            .field("runtime_env", &self.runtime_env)
             .finish()
     }
 }
