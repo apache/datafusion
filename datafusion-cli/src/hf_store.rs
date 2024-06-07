@@ -607,7 +607,7 @@ impl ObjectStore for HFStore {
         let file_path_prefix = parsed_url.file_path_prefix();
 
         futures::stream::once(async move {
-            let result = self.store.get(&Path::from(tree_path)).await?;
+            let result = self.store.get(&Path::parse(tree_path)?).await?;
             let Ok(bytes) = result.bytes().await else {
                 return Err(ObjectStoreError::Generic {
                     store: STORE,
@@ -630,7 +630,7 @@ impl ObjectStore for HFStore {
                     .filter(|entry| entry.is_file())
                     .map(|entry| format!("{}/{}", file_path_prefix, entry.path.clone()))
                     .map(|meta_location| async {
-                        self.store.head(&Path::from(meta_location)).await
+                        self.store.head(&Path::parse(meta_location)?).await
                     }),
             )
             .await
@@ -646,9 +646,10 @@ impl ObjectStore for HFStore {
                                 .into(),
                         });
                     };
-                    meta.location = Path::from(location.hf_path());
+
+                    meta.location = Path::from_url_path(location.hf_path())?;
                     if let Some(e_tag) = meta.e_tag.as_deref() {
-                        meta.e_tag = Some(e_tag.replace("\"", ""));
+                        meta.e_tag = Some(e_tag.replace('"', ""));
                     }
 
                     Ok(meta)
