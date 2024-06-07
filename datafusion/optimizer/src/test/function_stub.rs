@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate function stubs to test SQL optimizers. 
+//! Aggregate function stubs to test SQL optimizers.
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
