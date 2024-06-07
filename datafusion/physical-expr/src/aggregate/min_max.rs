@@ -1123,30 +1123,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn float_max_with_nans() {
+    fn float_min_max_with_nans() {
         let pos_nan = f32::NAN;
         let zero = 0_f32;
+        let neg_inf = f32::NEG_INFINITY;
 
-        let vals_float = Float32Array::from_iter_values([zero, pos_nan].iter().copied());
+        let check = |acc: &mut dyn Accumulator, values: &[&[f32]], expected: f32| {
+            for batch in values.iter() {
+                let batch =
+                    Arc::new(Float32Array::from_iter_values(batch.iter().copied()));
+                acc.update_batch(&[batch]).unwrap();
+            }
+            let result = acc.evaluate().unwrap();
+            assert_eq!(result, ScalarValue::Float32(Some(expected)));
+        };
 
-        let vals: ArrayRef = Arc::new(vals_float.clone());
+        // This test checks both comparison between batches (which uses the min_max macro
+        // defined above) and within a batch (which uses the arrow min/max compute function
+        // and verifies both respect the total order comparison for floats)
 
-        // We accumulate the above two rows in two different ways.  First, we pass in both as a single batch
-        let mut accumulator = MaxAccumulator::try_new(&DataType::Float32).unwrap();
-        accumulator.update_batch(&[vals]).unwrap();
-        let single_batch_result = &accumulator.evaluate().unwrap();
+        let min = || MinAccumulator::try_new(&DataType::Float32).unwrap();
+        let max = || MaxAccumulator::try_new(&DataType::Float32).unwrap();
 
-        // Next we pass the two values in two different batches.
-        let vals_a: ArrayRef =
-            Arc::new(Float32Array::from_iter_values([pos_nan].iter().copied()));
-        let vals_b: ArrayRef =
-            Arc::new(Float32Array::from_iter_values([zero].iter().copied()));
-
-        let mut accumulator = MaxAccumulator::try_new(&DataType::Float32).unwrap();
-        accumulator.update_batch(&[vals_a]).unwrap();
-        accumulator.update_batch(&[vals_b]).unwrap();
-        let split_batch_result = &accumulator.evaluate().unwrap();
-
-        assert_eq!(single_batch_result, split_batch_result);
+        check(&mut min(), &[&[zero], &[pos_nan]], zero);
+        check(&mut min(), &[&[zero, pos_nan]], zero);
+        check(&mut min(), &[&[zero], &[neg_inf]], neg_inf);
+        check(&mut min(), &[&[zero, neg_inf]], neg_inf);
+        check(&mut max(), &[&[zero], &[pos_nan]], pos_nan);
+        check(&mut max(), &[&[zero, pos_nan]], pos_nan);
+        check(&mut max(), &[&[zero], &[neg_inf]], zero);
+        check(&mut max(), &[&[zero, neg_inf]], zero);
     }
 }
