@@ -163,6 +163,11 @@ async fn wildcard_select() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_with_alias() -> Result<()> {
+    roundtrip("SELECT a AS aliased_a FROM data").await
+}
+
+#[tokio::test]
 async fn select_with_filter() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a > 1").await
 }
