@@ -1194,6 +1194,8 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
+ "serde",
+ "serde_json",
  "tokio",
  "url",
 ]
