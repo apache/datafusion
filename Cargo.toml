@@ -67,7 +67,7 @@ ahash = { version = "0.8", default-features = false, features = [
 arrow = { version = "51.0.0", features = ["prettyprint"] }
 arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "51.0.0", default-features = false }
-arrow-flight = { version = "51.0.0", features = ["flight-sql-experimental"] }
+arrow-flight = { version = "52.0.0", features = ["flight-sql-experimental"] }
 arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
 arrow-ord = { version = "51.0.0", default-features = false }
 arrow-schema = { version = "51.0.0", default-features = false }
