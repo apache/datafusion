@@ -5334,3 +5334,34 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+
+# test building plan with aggreagte sum
+
+statement ok
+create table employee_csv(id int, first_name string, last_name varchar, state varchar, salary bigint) as values (1, 'jenson', 'huang', 'unemployed', 10);
+
+query TI
+select state, sum(salary) total_salary from employee_csv group by state;
+----
+unemployed 10
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select state, sum(salary) as total_salary from employee_csv group by state;
+----
+logical_plan
+01)Projection: employee_csv.state, SUM(employee_csv.salary) AS total_salary
+02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary)]]
+03)----TableScan: employee_csv projection=[state, salary]
+
+# fail if there is duplicate name
+query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+select state, sum(salary) as state from employee_csv group by state;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table employee_csv;
