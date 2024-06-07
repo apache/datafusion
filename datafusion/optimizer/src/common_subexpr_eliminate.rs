@@ -50,6 +50,8 @@ use indexmap::IndexMap;
 /// description here is not such a good choose.
 type Identifier = String;
 
+// TODO: Update this doc to describe new boolean field
+
 /// A cache that contains the postorder index and the identifier of expression tree nodes
 /// by the preorder index of the nodes.
 ///
@@ -653,8 +655,7 @@ struct ExprIdentifierVisitor<'a> {
 /// Record item that used when traversing a expression tree.
 enum VisitRecord {
     /// `usize` postorder index assigned in `f-down`(). Starts from 0.
-    /// `bool` entered an Aliased node
-    EnterMark(usize, bool),
+    EnterMark(usize),
     /// the node's children were skipped => jump to f_up on same node
     JumpMark,
     /// Accumulated identifier of sub expression.
@@ -664,13 +665,13 @@ enum VisitRecord {
 impl ExprIdentifierVisitor<'_> {
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier, bool)> {
+    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier)> {
         let mut desc = String::new();
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
-                VisitRecord::EnterMark(idx, aliased) => {
-                    return Some((idx, desc, aliased));
+                VisitRecord::EnterMark(idx) => {
+                    return Some((idx, desc));
                 }
                 VisitRecord::ExprItem(id) => {
                     desc.push('|');
@@ -697,19 +698,17 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_> {
             return Ok(TreeNodeRecursion::Jump);
         }
 
-        self.id_array.push((0, "".to_string(), false));
-
-        self.visit_stack.push(VisitRecord::EnterMark(
-            self.down_index,
-            matches!(expr, Expr::Alias(_)),
-        ));
+        self.id_array
+            .push((0, "".to_string(), matches!(expr, Expr::Alias(_))));
+        self.visit_stack
+            .push(VisitRecord::EnterMark(self.down_index));
         self.down_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
     }
 
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        let Some((down_index, sub_expr_id, aliased)) = self.pop_enter_mark() else {
+        let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
             return Ok(TreeNodeRecursion::Continue);
         };
 
@@ -718,7 +717,7 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_> {
         self.id_array[down_index].0 = self.up_index;
         if !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1.clone_from(&expr_id);
-            self.id_array[down_index].2 = aliased;
+            // self.id_array[down_index].2 is already set
 
             // TODO: can we capture the data type in the second traversal only for
             //  replaced expressions?
@@ -810,16 +809,14 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
             let expr_name = expr.display_name()?;
             self.common_exprs.insert(expr_id.clone(), expr);
-
-            // If not aliased, alias this `Column` expr to it original "expr name",
+            // Alias this `Column` expr to it original "expr name",
             // `projection_push_down` optimizer use "expr name" to eliminate useless
             // projections.
-            let new_expr = if self.aliased {
-                col(expr_id)
-            } else {
-                col(expr_id).alias(expr_name)
+            // TODO: do we really need to alias here?
+            let new_expr = match self.aliased {
+                true => col(expr_id),
+                false => col(expr_id).alias(expr_name),
             };
-
             Ok(Transformed::new(new_expr, true, TreeNodeRecursion::Jump))
         } else {
             Ok(Transformed::no(expr))
