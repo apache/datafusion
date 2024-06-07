@@ -1127,7 +1127,7 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
+            _ => Expr::Alias(Alias::new(self.unalias(), None::<&str>, name.into())),
         }
     }
 
