@@ -310,9 +310,9 @@ Import trait `AggregateUDFExprBuilder` and update the arguments directly in `Exp
 
 See datafusion-examples/examples/udaf_expr.rs for example usage.
 
-| Syntax                                                 | Equivalent to                       |
-| ------------------------------------------------------ | ----------------------------------- |
-| first_value_udaf.call(vec![expr]).order_by(vec![expr]) | first_value(expr, Some(vec![expr])) |
+| Syntax                                                                  | Equivalent to                       |
+| ----------------------------------------------------------------------- | ----------------------------------- |
+| first_value_udaf.call(vec![expr]).order_by(vec![expr]).build().unwrap() | first_value(expr, Some(vec![expr])) |
 
 ## Subquery Expressions
 
