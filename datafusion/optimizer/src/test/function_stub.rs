@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Aggregate function stubs to test SQL optimizers. 
+//!
+//! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
+
 use std::any::Any;
 
 use arrow::datatypes::{
@@ -65,6 +69,7 @@ pub(crate) fn sum(expr: Expr) -> Expr {
     ))
 }
 
+/// Stub `sum` used for optimizer testing
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
