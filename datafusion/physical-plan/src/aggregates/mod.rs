@@ -1947,8 +1947,13 @@ mod tests {
         for use_coalesce_batches in [false, true] {
             for is_first_acc in [false, true] {
                 for spill in [false, true] {
-                    first_last_multi_partitions(use_coalesce_batches, is_first_acc, spill)
-                        .await?
+                    first_last_multi_partitions(
+                        use_coalesce_batches,
+                        is_first_acc,
+                        spill,
+                        4200,
+                    )
+                    .await?
                 }
             }
         }
@@ -2036,9 +2041,10 @@ mod tests {
         use_coalesce_batches: bool,
         is_first_acc: bool,
         spill: bool,
+        max_memory: usize,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 4200)
+            new_spill_ctx(2, max_memory)
         } else {
             Arc::new(TaskContext::default())
         };
