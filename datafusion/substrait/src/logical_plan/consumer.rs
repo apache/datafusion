@@ -23,11 +23,13 @@ use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, BinaryExpr, Case, EmptyRelation, Expr,
     LogicalPlan, Operator, ScalarUDF, Values,
 };
+
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
@@ -1563,7 +1565,13 @@ fn from_substrait_literal(
                                 "Failed to parse interval day time value"
                             )
                         })?;
-                    ScalarValue::IntervalDayTime(Some(i64::from_le_bytes(value_slice)))
+                    let days = i32::from_le_bytes(value_slice[0..4].try_into().unwrap());
+                    let milliseconds =
+                        i32::from_le_bytes(value_slice[4..8].try_into().unwrap());
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days,
+                        milliseconds,
+                    }))
                 }
                 INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                     let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
@@ -1575,9 +1583,16 @@ fn from_substrait_literal(
                                 "Failed to parse interval month day nano value"
                             )
                         })?;
-                    ScalarValue::IntervalMonthDayNano(Some(i128::from_le_bytes(
-                        value_slice,
-                    )))
+                    let months =
+                        i32::from_le_bytes(value_slice[0..4].try_into().unwrap());
+                    let days = i32::from_le_bytes(value_slice[4..8].try_into().unwrap());
+                    let nanoseconds =
+                        i64::from_le_bytes(value_slice[8..16].try_into().unwrap());
+                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                        months,
+                        days,
+                        nanoseconds,
+                    }))
                 }
                 _ => {
                     return not_impl_err!(
