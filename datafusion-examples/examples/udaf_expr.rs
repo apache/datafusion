@@ -24,7 +24,7 @@ use datafusion::{
 };
 
 use datafusion_common::Result;
-use datafusion_expr::{col, AggregateExt};
+use datafusion_expr::{col, expr::AggregateFunction, AggregateExt, Expr};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,6 +40,15 @@ async fn main() -> Result<()> {
         .build()?;
 
     let first_value_fn = first_value(col("a"), Some(vec![col("b")]));
+    let first_value_manual = Expr::AggregateFunction(AggregateFunction::new_udf(
+        first_value_udaf.clone(),
+        vec![col("a")],
+        false,
+        None,
+        Some(vec![col("b")]),
+        None,
+    ));
     assert_eq!(first_value_builder, first_value_fn);
+    assert_eq!(first_value_builder, first_value_manual);
     Ok(())
 }

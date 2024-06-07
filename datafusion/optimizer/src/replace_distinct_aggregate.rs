@@ -102,6 +102,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                             .call(vec![e])
                             .order_by(order_by.clone())
                             .build()
+                            // guaranteed to be `Expr::AggregateFunction`
                             .unwrap()
                     } else {
                         first_value_udaf.call(vec![e])

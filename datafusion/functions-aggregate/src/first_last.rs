@@ -48,6 +48,7 @@ pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
             .call(vec![expression])
             .order_by(order_by)
             .build()
+            // guaranteed to be `Expr::AggregateFunction`
             .unwrap()
     } else {
         first_value_udaf().call(vec![expression])

@@ -670,36 +670,40 @@ impl AggregateBuilder {
 impl AggregateExt for Expr {
     fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder {
         match self {
-            Expr::AggregateFunction(mut udaf) => {
-                udaf.order_by = Some(order_by);
-                AggregateBuilder::new(Some(udaf))
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.order_by = Some(order_by);
+                builder
             }
             _ => AggregateBuilder::new(None),
         }
     }
     fn filter(self, filter: Box<Expr>) -> AggregateBuilder {
         match self {
-            Expr::AggregateFunction(mut udaf) => {
-                udaf.filter = Some(filter);
-                AggregateBuilder::new(Some(udaf))
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.filter = Some(filter);
+                builder
             }
             _ => AggregateBuilder::new(None),
         }
     }
     fn distinct(self) -> AggregateBuilder {
         match self {
-            Expr::AggregateFunction(mut udaf) => {
-                udaf.distinct = true;
-                AggregateBuilder::new(Some(udaf))
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.distinct = true;
+                builder
             }
             _ => AggregateBuilder::new(None),
         }
     }
     fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder {
         match self {
-            Expr::AggregateFunction(mut udaf) => {
-                udaf.null_treatment = Some(null_treatment);
-                AggregateBuilder::new(Some(udaf))
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.null_treatment = Some(null_treatment);
+                builder
             }
             _ => AggregateBuilder::new(None),
         }
