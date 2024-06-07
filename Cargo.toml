@@ -106,7 +106,7 @@ log = "^0.4"
 num_cpus = "1.13.0"
 object_store = { version = "0.9.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "52.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
 regex = "1.8"
 rstest = "0.21.0"
