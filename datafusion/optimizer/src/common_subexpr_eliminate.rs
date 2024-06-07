@@ -50,16 +50,14 @@ use indexmap::IndexMap;
 /// description here is not such a good choose.
 type Identifier = String;
 
-// TODO: Update this doc to describe new boolean field
-
-/// A cache that contains the postorder index and the identifier of expression tree nodes
-/// by the preorder index of the nodes.
+/// A cache that contains the postorder index, the identifier of expression tree nodes
+/// by the preorder index of the nodes, and whether the subtree is wrapped in an alias.
 ///
 /// This cache is filled by `ExprIdentifierVisitor` during the first traversal and is used
 /// by `CommonSubexprRewriter` during the second traversal.
 ///
 /// The purpose of this cache is to quickly find the identifier of a node during the
-/// second traversal.
+/// second traversal, and avoid assigning aliases to already aliased expressions.
 ///
 /// Elements in this array are added during `f_down` so the indexes represent the preorder
 /// index of expression nodes and thus element 0 belongs to the root of the expression
