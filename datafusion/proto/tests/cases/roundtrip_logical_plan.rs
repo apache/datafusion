@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::expr_fn::{
-    covar_pop, covar_samp, first_value, median, var_sample,
+    covar_pop, covar_samp, first_value, median, sum, var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};

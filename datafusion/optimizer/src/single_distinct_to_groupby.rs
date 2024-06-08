@@ -360,12 +360,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::function_stub::sum;
     use crate::test::*;
     use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
-        sum, AggregateFunction,
+        AggregateFunction,
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
