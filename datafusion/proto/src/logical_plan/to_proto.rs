@@ -110,7 +110,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
         match value {
             AggregateFunction::Min => Self::Min,
             AggregateFunction::Max => Self::Max,
-            AggregateFunction::Sum => Self::Sum,
             AggregateFunction::Avg => Self::Avg,
             AggregateFunction::BitAnd => Self::BitAnd,
             AggregateFunction::BitOr => Self::BitOr,
@@ -409,7 +408,6 @@ pub fn serialize_expr(
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
-                    AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
                     AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
                     AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
                     AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,

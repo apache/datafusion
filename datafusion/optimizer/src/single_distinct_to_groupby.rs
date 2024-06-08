@@ -28,7 +28,7 @@ use datafusion_common::{
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
-    aggregate_function::AggregateFunction::{Max, Min, Sum},
+    aggregate_function::AggregateFunction::{Max, Min},
     col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
@@ -87,7 +87,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-            } else if !matches!(fun, Sum | Min | Max) {
+            } else if !matches!(fun, Min | Max) {
                 return Ok(false);
             }
         } else if let Expr::AggregateFunction(AggregateFunction {
@@ -368,6 +368,7 @@ mod tests {
         count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
         AggregateFunction,
     };
+    use function_stub::sum_udaf;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
@@ -657,8 +658,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // SUM(a) FILTER (WHERE a > 5)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Sum,
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            sum_udaf(),
             vec![col("a")],
             false,
             Some(Box::new(col("a").gt(lit(5)))),
@@ -703,8 +704,8 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // SUM(a ORDER BY a)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Sum,
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            sum_udaf(),
             vec![col("a")],
             false,
             None,
