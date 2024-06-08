@@ -345,10 +345,10 @@ mod tests {
         let mut accum1 = agg1.accumulator(args1)?;
         let mut accum2 = agg2.accumulator(args2)?;
 
-        let value1 = vec![col("a", &schema)?
+        let value1 = vec![col("a", schema)?
             .evaluate(batch1)
             .and_then(|v| v.into_array(batch1.num_rows()))?];
-        let value2 = vec![col("a", &schema)?
+        let value2 = vec![col("a", schema)?
             .evaluate(batch2)
             .and_then(|v| v.into_array(batch2.num_rows()))?];
 
