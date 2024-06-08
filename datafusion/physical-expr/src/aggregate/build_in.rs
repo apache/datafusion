@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
@@ -104,9 +104,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Sum, _) => {
-            return internal_err!("Builtin Sum will be removed");
-        }
         (AggregateFunction::ApproxDistinct, _) => Arc::new(
             expressions::ApproxDistinct::new(input_phy_exprs[0].clone(), name, data_type),
         ),

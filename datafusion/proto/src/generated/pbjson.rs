@@ -534,7 +534,6 @@ impl serde::Serialize for AggregateFunction {
         let variant = match self {
             Self::Min => "MIN",
             Self::Max => "MAX",
-            Self::Sum => "SUM",
             Self::Avg => "AVG",
             Self::Count => "COUNT",
             Self::ApproxDistinct => "APPROX_DISTINCT",
@@ -574,7 +573,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
         const FIELDS: &[&str] = &[
             "MIN",
             "MAX",
-            "SUM",
             "AVG",
             "COUNT",
             "APPROX_DISTINCT",
@@ -643,7 +641,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                 match value {
                     "MIN" => Ok(AggregateFunction::Min),
                     "MAX" => Ok(AggregateFunction::Max),
-                    "SUM" => Ok(AggregateFunction::Sum),
                     "AVG" => Ok(AggregateFunction::Avg),
                     "COUNT" => Ok(AggregateFunction::Count),
                     "APPROX_DISTINCT" => Ok(AggregateFunction::ApproxDistinct),

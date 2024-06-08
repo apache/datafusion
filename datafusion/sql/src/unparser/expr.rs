@@ -967,6 +967,7 @@ mod tests {
         try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature,
         Volatility, WindowFrame, WindowFunctionDefinition,
     };
+    use datafusion_functions_aggregate::expr_fn::sum;
 
     use crate::unparser::dialect::CustomDialect;
 
@@ -1124,19 +1125,7 @@ mod tests {
                 Expr::Literal(ScalarValue::Date32(Some(-1))),
                 r#"CAST('1969-12-31' AS DATE)"#,
             ),
-            (
-                Expr::AggregateFunction(AggregateFunction {
-                    func_def: AggregateFunctionDefinition::BuiltIn(
-                        datafusion_expr::AggregateFunction::Sum,
-                    ),
-                    args: vec![col("a")],
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
-                }),
-                r#"SUM(a)"#,
-            ),
+            (sum(col("a")), r#"sum(a)"#),
             (
                 Expr::AggregateFunction(AggregateFunction {
                     func_def: AggregateFunctionDefinition::BuiltIn(

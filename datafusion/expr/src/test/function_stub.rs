@@ -15,23 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate function stubs to test SQL optimizers.
+//! Aggregate function stubs for test in expr / optimizer.
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
 use std::any::Any;
 
-use arrow::datatypes::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
-};
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{
+use crate::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
     Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
     Volatility,
 };
+use arrow::datatypes::{
+    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
+use datafusion_common::{exec_err, Result};
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -39,16 +39,16 @@ macro_rules! create_func {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::AggregateUDF>> =
+            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
             std::sync::OnceLock::new();
 
             /// AggregateFunction that returns a [AggregateUDF] for [$UDAF]
             ///
-            /// [AggregateUDF]: datafusion_expr::AggregateUDF
-            pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
+            /// [AggregateUDF]: crate::AggregateUDF
+            pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::default()))
+                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
                     })
                     .clone()
             }
@@ -58,7 +58,7 @@ macro_rules! create_func {
 
 create_func!(Sum, sum_udaf);
 
-pub(crate) fn sum(expr: Expr) -> Expr {
+pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
         vec![expr],
@@ -73,14 +73,12 @@ pub(crate) fn sum(expr: Expr) -> Expr {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["sum".to_string()],
         }
     }
 }
@@ -97,7 +95,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn name(&self) -> &str {
-        "SUM"
+        "sum"
     }
 
     fn signature(&self) -> &Signature {
@@ -162,7 +160,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {

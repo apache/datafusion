@@ -1918,7 +1918,7 @@ pub struct PartitionStats {
 pub enum AggregateFunction {
     Min = 0,
     Max = 1,
-    Sum = 2,
+    /// SUM = 2;
     Avg = 3,
     Count = 4,
     ApproxDistinct = 5,
@@ -1961,7 +1961,6 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Sum => "SUM",
             AggregateFunction::Avg => "AVG",
             AggregateFunction::Count => "COUNT",
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
@@ -1997,7 +1996,6 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "SUM" => Some(Self::Sum),
             "AVG" => Some(Self::Avg),
             "COUNT" => Some(Self::Count),
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
