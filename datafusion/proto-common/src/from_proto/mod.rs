@@ -25,8 +25,8 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-    UnionFields, UnionMode,
+    i256, DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    Schema, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
@@ -525,7 +525,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 }
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
-            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
             Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
             Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
@@ -573,6 +572,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(
+                IntervalDayTimeType::make_value(v.days, v.milliseconds),
+            )),
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),

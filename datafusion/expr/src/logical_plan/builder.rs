@@ -1719,7 +1719,7 @@ pub fn unnest_with_options(
 mod tests {
     use super::*;
     use crate::logical_plan::StringifiedPlan;
-    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
+    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use datafusion_common::SchemaError;
 
@@ -1773,28 +1773,6 @@ mod tests {
             err.strip_backtrace(),
             "Error during planning: table_name cannot be empty"
         );
-    }
-
-    #[test]
-    fn plan_builder_aggregate() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-                .aggregate(
-                    vec![col("state")],
-                    vec![sum(col("salary")).alias("total_salary")],
-                )?
-                .project(vec![col("state"), col("total_salary")])?
-                .limit(2, Some(10))?
-                .build()?;
-
-        let expected = "Limit: skip=2, fetch=10\
-                \n  Projection: employee_csv.state, total_salary\
-                \n    Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary) AS total_salary]]\
-                \n      TableScan: employee_csv projection=[state, salary]";
-
-        assert_eq!(expected, format!("{plan:?}"));
-
-        Ok(())
     }
 
     #[test]
@@ -2031,36 +2009,6 @@ mod tests {
             )) => {
                 assert_eq!(*"employee_csv", *table);
                 assert_eq!("id", &name);
-                Ok(())
-            }
-            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
-        }
-    }
-
-    #[test]
-    fn aggregate_non_unique_names() -> Result<()> {
-        let plan = table_scan(
-            Some("employee_csv"),
-            &employee_schema(),
-            // project state and salary by column index
-            Some(vec![3, 4]),
-        )?
-        // two columns with the same name => error
-        .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
-
-        match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                        },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("state", &name);
                 Ok(())
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),

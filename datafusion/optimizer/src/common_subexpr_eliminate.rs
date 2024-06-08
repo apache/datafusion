@@ -840,13 +840,15 @@ mod test {
     use arrow::datatypes::Schema;
 
     use datafusion_expr::logical_plan::{table_scan, JoinType};
-    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder, sum};
+
+    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
         SimpleAggregateUDF, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
+    use crate::test::function_stub::sum;
     use crate::test::*;
 
     use super::*;

@@ -41,61 +41,50 @@ pub(super) struct QueryBuilder {
 #[allow(dead_code)]
 impl QueryBuilder {
     pub fn with(&mut self, value: Option<ast::With>) -> &mut Self {
-        let new = self;
-        new.with = value;
-        new
+        self.with = value;
+        self
     }
     pub fn body(&mut self, value: Box<ast::SetExpr>) -> &mut Self {
-        let new = self;
-        new.body = Option::Some(value);
-        new
+        self.body = Some(value);
+        self
     }
     pub fn take_body(&mut self) -> Option<Box<ast::SetExpr>> {
         self.body.take()
     }
     pub fn order_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
-        let new = self;
-        new.order_by = value;
-        new
+        self.order_by = value;
+        self
     }
     pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.limit = value;
-        new
+        self.limit = value;
+        self
     }
     pub fn limit_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.limit_by = value;
-        new
+        self.limit_by = value;
+        self
     }
     pub fn offset(&mut self, value: Option<ast::Offset>) -> &mut Self {
-        let new = self;
-        new.offset = value;
-        new
+        self.offset = value;
+        self
     }
     pub fn fetch(&mut self, value: Option<ast::Fetch>) -> &mut Self {
-        let new = self;
-        new.fetch = value;
-        new
+        self.fetch = value;
+        self
     }
     pub fn locks(&mut self, value: Vec<ast::LockClause>) -> &mut Self {
-        let new = self;
-        new.locks = value;
-        new
+        self.locks = value;
+        self
     }
     pub fn for_clause(&mut self, value: Option<ast::ForClause>) -> &mut Self {
-        let new = self;
-        new.for_clause = value;
-        new
+        self.for_clause = value;
+        self
     }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         Ok(ast::Query {
             with: self.with.clone(),
             body: match self.body {
                 Some(ref value) => value.clone(),
-                None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from("body")))
-                }
+                None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
             order_by: self.order_by.clone(),
             limit: self.limit.clone(),
@@ -148,90 +137,74 @@ pub(super) struct SelectBuilder {
 #[allow(dead_code)]
 impl SelectBuilder {
     pub fn distinct(&mut self, value: Option<ast::Distinct>) -> &mut Self {
-        let new = self;
-        new.distinct = value;
-        new
+        self.distinct = value;
+        self
     }
     pub fn top(&mut self, value: Option<ast::Top>) -> &mut Self {
-        let new = self;
-        new.top = value;
-        new
+        self.top = value;
+        self
     }
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
-        let new = self;
-        new.projection = value;
-        new
+        self.projection = value;
+        self
     }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
     }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
-        let new = self;
-        new.into = value;
-        new
+        self.into = value;
+        self
     }
     pub fn from(&mut self, value: Vec<TableWithJoinsBuilder>) -> &mut Self {
-        let new = self;
-        new.from = value;
-        new
+        self.from = value;
+        self
     }
     pub fn push_from(&mut self, value: TableWithJoinsBuilder) -> &mut Self {
-        let new = self;
-        new.from.push(value);
-        new
+        self.from.push(value);
+        self
     }
     pub fn pop_from(&mut self) -> Option<TableWithJoinsBuilder> {
         self.from.pop()
     }
     pub fn lateral_views(&mut self, value: Vec<ast::LateralView>) -> &mut Self {
-        let new = self;
-        new.lateral_views = value;
-        new
+        self.lateral_views = value;
+        self
     }
     pub fn selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.selection = value;
-        new
+        self.selection = value;
+        self
     }
     pub fn group_by(&mut self, value: ast::GroupByExpr) -> &mut Self {
-        let new = self;
-        new.group_by = Option::Some(value);
-        new
+        self.group_by = Some(value);
+        self
     }
     pub fn cluster_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.cluster_by = value;
-        new
+        self.cluster_by = value;
+        self
     }
     pub fn distribute_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.distribute_by = value;
-        new
+        self.distribute_by = value;
+        self
     }
     pub fn sort_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.sort_by = value;
-        new
+        self.sort_by = value;
+        self
     }
     pub fn having(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.having = value;
-        new
+        self.having = value;
+        self
     }
     pub fn named_window(&mut self, value: Vec<ast::NamedWindowDefinition>) -> &mut Self {
-        let new = self;
-        new.named_window = value;
-        new
+        self.named_window = value;
+        self
     }
     pub fn qualify(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.qualify = value;
-        new
+        self.qualify = value;
+        self
     }
     pub fn value_table_mode(&mut self, value: Option<ast::ValueTableMode>) -> &mut Self {
-        let new = self;
-        new.value_table_mode = value;
-        new
+        self.value_table_mode = value;
+        self
     }
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
@@ -249,9 +222,7 @@ impl SelectBuilder {
             group_by: match self.group_by {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from(
-                        "group_by",
-                    )))
+                    return Err(Into::into(UninitializedFieldError::from("group_by")))
                 }
             },
             cluster_by: self.cluster_by.clone(),
@@ -261,6 +232,8 @@ impl SelectBuilder {
             named_window: self.named_window.clone(),
             qualify: self.qualify.clone(),
             value_table_mode: self.value_table_mode,
+            connect_by: None,
+            window_before_qualify: false,
         })
     }
     fn create_empty() -> Self {
@@ -298,20 +271,17 @@ pub(super) struct TableWithJoinsBuilder {
 #[allow(dead_code)]
 impl TableWithJoinsBuilder {
     pub fn relation(&mut self, value: RelationBuilder) -> &mut Self {
-        let new = self;
-        new.relation = Option::Some(value);
-        new
+        self.relation = Some(value);
+        self
     }
 
     pub fn joins(&mut self, value: Vec<ast::Join>) -> &mut Self {
-        let new = self;
-        new.joins = value;
-        new
+        self.joins = value;
+        self
     }
     pub fn push_join(&mut self, value: ast::Join) -> &mut Self {
-        let new = self;
-        new.joins.push(value);
-        new
+        self.joins.push(value);
+        self
     }
 
     pub fn build(&self) -> Result<Option<ast::TableWithJoins>, BuilderError> {
@@ -358,19 +328,16 @@ impl RelationBuilder {
         self.relation.is_some()
     }
     pub fn table(&mut self, value: TableRelationBuilder) -> &mut Self {
-        let new = self;
-        new.relation = Option::Some(TableFactorBuilder::Table(value));
-        new
+        self.relation = Some(TableFactorBuilder::Table(value));
+        self
     }
     pub fn derived(&mut self, value: DerivedRelationBuilder) -> &mut Self {
-        let new = self;
-        new.relation = Option::Some(TableFactorBuilder::Derived(value));
-        new
+        self.relation = Some(TableFactorBuilder::Derived(value));
+        self
     }
     pub fn empty(&mut self) -> &mut Self {
-        let new = self;
-        new.relation = Some(TableFactorBuilder::Empty);
-        new
+        self.relation = Some(TableFactorBuilder::Empty);
+        self
     }
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
         let new = self;
@@ -391,9 +358,7 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
-            None => {
-                return Result::Err(Into::into(UninitializedFieldError::from("relation")))
-            }
+            None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
     }
     fn create_empty() -> Self {
@@ -421,42 +386,34 @@ pub(super) struct TableRelationBuilder {
 #[allow(dead_code)]
 impl TableRelationBuilder {
     pub fn name(&mut self, value: ast::ObjectName) -> &mut Self {
-        let new = self;
-        new.name = Option::Some(value);
-        new
+        self.name = Some(value);
+        self
     }
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
-        let new = self;
-        new.alias = value;
-        new
+        self.alias = value;
+        self
     }
     pub fn args(&mut self, value: Option<Vec<ast::FunctionArg>>) -> &mut Self {
-        let new = self;
-        new.args = value;
-        new
+        self.args = value;
+        self
     }
     pub fn with_hints(&mut self, value: Vec<ast::Expr>) -> &mut Self {
-        let new = self;
-        new.with_hints = value;
-        new
+        self.with_hints = value;
+        self
     }
     pub fn version(&mut self, value: Option<ast::TableVersion>) -> &mut Self {
-        let new = self;
-        new.version = value;
-        new
+        self.version = value;
+        self
     }
     pub fn partitions(&mut self, value: Vec<ast::Ident>) -> &mut Self {
-        let new = self;
-        new.partitions = value;
-        new
+        self.partitions = value;
+        self
     }
     pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
         Ok(ast::TableFactor::Table {
             name: match self.name {
                 Some(ref value) => value.clone(),
-                None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from("name")))
-                }
+                None => return Err(Into::into(UninitializedFieldError::from("name"))),
             },
             alias: self.alias.clone(),
             args: self.args.clone(),
@@ -491,36 +448,27 @@ pub(super) struct DerivedRelationBuilder {
 #[allow(dead_code)]
 impl DerivedRelationBuilder {
     pub fn lateral(&mut self, value: bool) -> &mut Self {
-        let new = self;
-        new.lateral = Option::Some(value);
-        new
+        self.lateral = Some(value);
+        self
     }
     pub fn subquery(&mut self, value: Box<ast::Query>) -> &mut Self {
-        let new = self;
-        new.subquery = Option::Some(value);
-        new
+        self.subquery = Some(value);
+        self
     }
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
-        let new = self;
-        new.alias = value;
-        new
+        self.alias = value;
+        self
     }
     fn build(&self) -> Result<ast::TableFactor, BuilderError> {
         Ok(ast::TableFactor::Derived {
             lateral: match self.lateral {
                 Some(ref value) => *value,
-                None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from(
-                        "lateral",
-                    )))
-                }
+                None => return Err(Into::into(UninitializedFieldError::from("lateral"))),
             },
             subquery: match self.subquery {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Result::Err(Into::into(UninitializedFieldError::from(
-                        "subquery",
-                    )))
+                    return Err(Into::into(UninitializedFieldError::from("subquery")))
                 }
             },
             alias: self.alias.clone(),

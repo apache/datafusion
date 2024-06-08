@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         {"num":2,"str":"hello"}
         {"num":4,"str":"foo"}"#,
     );
-    object_store.put(&path, data).await.unwrap();
+    object_store.put(&path, data.into()).await.unwrap();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("num", DataType::Int64, false),

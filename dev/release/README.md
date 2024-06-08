@@ -96,7 +96,7 @@ pip3 install PyGitHub
 Run the following command to generate the changelog content.
 
 ```bash
-$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py 24.0.0 HEAD > dev/changelog/25.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
@@ -112,7 +112,6 @@ Generating changelog content
 This process is not fully automated, so there are some additional manual steps:
 
 - Add the ASF header to the generated file
-- Add a link to this changelog from the top-level `/datafusion/CHANGELOG.md`
 - Add the following content (copy from the previous version's changelog and update as appropriate:
 
 ```

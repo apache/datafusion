@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use crate::datasource::stream::{StreamConfig, StreamTable};
+use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -62,7 +62,8 @@ async fn register_current_csv(
 
     match infinite {
         true => {
-            let config = StreamConfig::new_file(schema, path.into());
+            let source = FileStreamProvider::new_file(schema, path.into());
+            let config = StreamConfig::new(Arc::new(source));
             ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
         }
         false => {

@@ -17,12 +17,12 @@
 
 //! Interval arithmetic library
 
+use crate::type_coercion::binary::get_result_type;
+use crate::Operator;
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
-
-use crate::type_coercion::binary::get_result_type;
-use crate::Operator;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
@@ -71,10 +71,10 @@ macro_rules! get_extreme_value {
                 ScalarValue::IntervalYearMonth(Some(i32::$extreme))
             }
             DataType::Interval(IntervalUnit::DayTime) => {
-                ScalarValue::IntervalDayTime(Some(i64::$extreme))
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime::$extreme))
             }
             DataType::Interval(IntervalUnit::MonthDayNano) => {
-                ScalarValue::IntervalMonthDayNano(Some(i128::$extreme))
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
             _ => unreachable!(),
         }
@@ -119,8 +119,14 @@ macro_rules! value_transition {
             IntervalYearMonth(Some(value)) if value == i32::$bound => {
                 IntervalYearMonth(None)
             }
-            IntervalDayTime(Some(value)) if value == i64::$bound => IntervalDayTime(None),
-            IntervalMonthDayNano(Some(value)) if value == i128::$bound => {
+            IntervalDayTime(Some(value))
+                if value == arrow_buffer::IntervalDayTime::$bound =>
+            {
+                IntervalDayTime(None)
+            }
+            IntervalMonthDayNano(Some(value))
+                if value == arrow_buffer::IntervalMonthDayNano::$bound =>
+            {
                 IntervalMonthDayNano(None)
             }
             _ => next_value_helper::<$direction>($value),
@@ -1013,6 +1019,25 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
+impl OneTrait for IntervalDayTime {
+    fn one() -> Self {
+        IntervalDayTime {
+            days: 0,
+            milliseconds: 1,
+        }
+    }
+}
+
+impl OneTrait for IntervalMonthDayNano {
+    fn one() -> Self {
+        IntervalMonthDayNano {
+            months: 0,
+            days: 0,
+            nanoseconds: 1,
+        }
+    }
+}
+
 /// This function either increments or decrements its argument, depending on
 /// the `INC` value (where a `true` value corresponds to the increment).
 fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
@@ -1075,11 +1100,15 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         IntervalYearMonth(Some(val)) => {
             IntervalYearMonth(Some(increment_decrement::<INC, i32>(val)))
         }
-        IntervalDayTime(Some(val)) => {
-            IntervalDayTime(Some(increment_decrement::<INC, i64>(val)))
-        }
+        IntervalDayTime(Some(val)) => IntervalDayTime(Some(increment_decrement::<
+            INC,
+            arrow_buffer::IntervalDayTime,
+        >(val))),
         IntervalMonthDayNano(Some(val)) => {
-            IntervalMonthDayNano(Some(increment_decrement::<INC, i128>(val)))
+            IntervalMonthDayNano(Some(increment_decrement::<
+                INC,
+                arrow_buffer::IntervalMonthDayNano,
+            >(val)))
         }
         _ => value, // Unbounded values return without change.
     }
