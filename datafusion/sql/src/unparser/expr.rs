@@ -1125,7 +1125,7 @@ mod tests {
                 Expr::Literal(ScalarValue::Date32(Some(-1))),
                 r#"CAST('1969-12-31' AS DATE)"#,
             ),
-            (sum(col("a")), r#"SUM(a)"#),
+            (sum(col("a")), r#"sum(a)"#),
             (
                 Expr::AggregateFunction(AggregateFunction {
                     func_def: AggregateFunctionDefinition::BuiltIn(

@@ -34,8 +34,8 @@ fn main() {
     let sql = "SELECT \
             c.id, c.first_name, c.last_name, \
             COUNT(*) as num_orders, \
-            SUM(o.price) AS total_price, \
-            SUM(o.price * s.sales_tax) AS state_tax \
+            sum(o.price) AS total_price, \
+            sum(o.price * s.sales_tax) AS state_tax \
         FROM customer c \
         JOIN state s ON c.state = s.id \
         JOIN orders o ON c.id = o.customer_id \
