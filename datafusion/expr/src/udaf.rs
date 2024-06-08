@@ -610,7 +610,7 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
 pub trait AggregateExt {
     fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
-    fn filter(self, filter: Box<Expr>) -> AggregateBuilder;
+    fn filter(self, filter: Expr) -> AggregateBuilder;
     fn distinct(self) -> AggregateBuilder;
     fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder;
 }
@@ -618,7 +618,7 @@ pub trait AggregateExt {
 pub struct AggregateBuilder {
     udaf: Option<AggregateFunction>,
     order_by: Option<Vec<Expr>>,
-    filter: Option<Box<Expr>>,
+    filter: Option<Expr>,
     distinct: bool,
     null_treatment: Option<NullTreatment>,
 }
@@ -637,7 +637,7 @@ impl AggregateBuilder {
     pub fn build(self) -> Result<Expr> {
         if let Some(mut udaf) = self.udaf {
             udaf.order_by = self.order_by;
-            udaf.filter = self.filter;
+            udaf.filter = self.filter.map(Box::new);
             udaf.distinct = self.distinct;
             udaf.null_treatment = self.null_treatment;
             return Ok(Expr::AggregateFunction(udaf));
@@ -651,7 +651,7 @@ impl AggregateBuilder {
         self
     }
 
-    pub fn filter(mut self, filter: Box<Expr>) -> AggregateBuilder {
+    pub fn filter(mut self, filter: Expr) -> AggregateBuilder {
         self.filter = Some(filter);
         self
     }
@@ -678,7 +678,7 @@ impl AggregateExt for Expr {
             _ => AggregateBuilder::new(None),
         }
     }
-    fn filter(self, filter: Box<Expr>) -> AggregateBuilder {
+    fn filter(self, filter: Expr) -> AggregateBuilder {
         match self {
             Expr::AggregateFunction(udaf) => {
                 let mut builder = AggregateBuilder::new(Some(udaf));

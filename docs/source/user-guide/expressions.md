@@ -306,9 +306,9 @@ select log(-1), log(0), sqrt(-1);
 
 ## Aggregate Function Builder
 
-Import trait `AggregateUDFExprBuilder` and update the arguments directly in `Expr`
+You can also use the `AggregateExt` trait to more easily build Aggregate arguments `Expr`.
 
-See datafusion-examples/examples/udaf_expr.rs for example usage.
+See `datafusion-examples/examples/expr_api.rs` for example usage.
 
 | Syntax                                                                  | Equivalent to                       |
 | ----------------------------------------------------------------------- | ----------------------------------- |
