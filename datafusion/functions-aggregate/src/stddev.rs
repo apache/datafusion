@@ -115,7 +115,10 @@ impl AggregateUDFImpl for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
-    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
         self.accumulator(args)
     }
 
@@ -198,7 +201,10 @@ impl AggregateUDFImpl for StddevPop {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
-    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
         self.accumulator(args)
     }
 
