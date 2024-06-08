@@ -1927,8 +1927,8 @@ pub enum AggregateFunction {
     VariancePop = 8,
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
-    // Stddev = 11,
-    // StddevPop = 12,
+    /// STDDEV = 11;
+    /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
     ApproxMedian = 15,
