@@ -628,8 +628,9 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 ///    .filter(col("y").gt(lit(5)))
 ///    .build()?;
 ///  // Create FIRST_VALUE(x ORDER BY y IGNORE NULLS)
+/// let sort_expr = col("y").sort(true, true);
 /// let agg = first_value(col("x"))
-///   .order_by(vec![col("y")])
+///   .order_by(vec![sort_expr])
 ///   .null_treatment(NullTreatment::IgnoreNulls)
 ///   .build()?;
 /// # Ok(())
@@ -637,6 +638,8 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 /// ```
 pub trait AggregateExt {
     /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
     fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
     /// Add `FILTER <filter>`
     fn filter(self, filter: Expr) -> AggregateBuilder;
@@ -649,6 +652,7 @@ pub trait AggregateExt {
 /// Implementation of [`AggregateExt`].
 ///
 /// See [`AggregateExec`] for usage and examples
+#[derive(Debug, Clone)]
 pub struct AggregateBuilder {
     udaf: Option<AggregateFunction>,
     order_by: Option<Vec<Expr>>,
@@ -677,20 +681,40 @@ impl AggregateBuilder {
     /// Returns an error of this builder  [`AggregateExt`] was used with an
     /// `Expr` variant other than [`Expr::AggregateFunction`]
     pub fn build(self) -> Result<Expr> {
-        let Some(mut udaf) = self.udaf else {
+        let Self {
+            udaf,
+            order_by,
+            filter,
+            distinct,
+            null_treatment,
+        } = self;
+
+        let Some(mut udaf) = udaf else {
             return plan_err!(
                 "AggregateExt can only be used with Expr::AggregateFunction"
             );
         };
 
-        udaf.order_by = self.order_by;
-        udaf.filter = self.filter.map(Box::new);
-        udaf.distinct = self.distinct;
-        udaf.null_treatment = self.null_treatment;
+        if let Some(order_by) = &order_by {
+            for expr in order_by.iter() {
+                if !matches!(expr, Expr::Sort(_)) {
+                    return plan_err!(
+                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
+                    );
+                }
+            }
+        }
+
+        udaf.order_by = order_by;
+        udaf.filter = filter.map(Box::new);
+        udaf.distinct = distinct;
+        udaf.null_treatment = null_treatment;
         Ok(Expr::AggregateFunction(udaf))
     }
 
     /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
     pub fn order_by(mut self, order_by: Vec<Expr>) -> AggregateBuilder {
         self.order_by = Some(order_by);
         self
