@@ -115,6 +115,10 @@ impl AggregateUDFImpl for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
+    }
+
     fn aliases(&self) -> &[String] {
         &self.alias
     }
@@ -194,6 +198,10 @@ impl AggregateUDFImpl for StddevPop {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if !arg_types[0].is_numeric() {
             return plan_err!("StddevPop requires numeric input types");
@@ -260,6 +268,10 @@ impl Accumulator for StddevAccumulator {
     fn size(&self) -> usize {
         std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
             + self.variance.size()
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.variance.supports_retract_batch()
     }
 }
 
