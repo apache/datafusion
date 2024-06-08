@@ -50,14 +50,14 @@ use indexmap::IndexMap;
 /// description here is not such a good choose.
 type Identifier = String;
 
-/// A cache that contains the postorder index, the identifier of expression tree nodes
-/// by the preorder index of the nodes, and whether the subtree is wrapped in an alias.
+/// A cache that contains the postorder index and the identifier of expression tree nodes
+/// by the preorder index of the nodes.
 ///
 /// This cache is filled by `ExprIdentifierVisitor` during the first traversal and is used
 /// by `CommonSubexprRewriter` during the second traversal.
 ///
 /// The purpose of this cache is to quickly find the identifier of a node during the
-/// second traversal, and avoid assigning aliases to already aliased expressions.
+/// second traversal.
 ///
 /// Elements in this array are added during `f_down` so the indexes represent the preorder
 /// index of expression nodes and thus element 0 belongs to the root of the expression
@@ -77,7 +77,7 @@ type Identifier = String;
 ///   (0, "b")
 /// ]
 /// ```
-type IdArray = Vec<(usize, Identifier, bool)>;
+type IdArray = Vec<(usize, Identifier)>;
 
 /// A map that contains statistics of expressions by their identifiers.
 /// It contains:
@@ -696,8 +696,7 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_> {
             return Ok(TreeNodeRecursion::Jump);
         }
 
-        self.id_array
-            .push((0, "".to_string(), matches!(expr, Expr::Alias(_))));
+        self.id_array.push((0, "".to_string()));
         self.visit_stack
             .push(VisitRecord::EnterMark(self.down_index));
         self.down_index += 1;
@@ -715,7 +714,6 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_> {
         self.id_array[down_index].0 = self.up_index;
         if !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1.clone_from(&expr_id);
-            // self.id_array[down_index].2 is already set
 
             // TODO: can we capture the data type in the second traversal only for
             //  replaced expressions?
@@ -786,10 +784,10 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
-        let (up_index, expr_id, aliased) = &self.id_array[self.down_index];
+        let (up_index, expr_id) = &self.id_array[self.down_index];
         self.down_index += 1;
 
-        self.aliased |= aliased;
+        self.aliased |= matches!(expr, Expr::Alias(_));
 
         // skip `Expr`s without identifier (empty identifier).
         if expr_id.is_empty() {
@@ -894,18 +892,18 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}", false),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}", false),
-            (3, "", false),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}", false),
-            (0, "", false),
-            (1, "", false),
-            (5, "", false),
-            (4, "", false),
-            (7, "", false)
+            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+            (3, ""),
+            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+            (0, ""),
+            (1, ""),
+            (5, ""),
+            (4, ""),
+            (7, "")
         ]
         .into_iter()
-        .map(|(number, id, aliased)| (number, id.into(), aliased))
+        .map(|(number, id)| (number, id.into()))
         .collect::<Vec<_>>();
         assert_eq!(expected, id_array);
 
@@ -920,18 +918,18 @@ mod test {
         )?;
 
         let expected = vec![
-            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}", false),
-            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}", false),
-            (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}", false),
-            (2, "{a + Int32(1)|{Int32(1)}|{a}}", false),
-            (0, "", false),
-            (1, "", false),
-            (5, "{AVG(c)|{c}}", false),
-            (4, "", false),
-            (7, "", false)
+            (8, "{(SUM(a + Int32(1)) - AVG(c)) * Int32(2)|{Int32(2)}|{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}}"),
+            (6, "{SUM(a + Int32(1)) - AVG(c)|{AVG(c)|{c}}|{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}}"),
+            (3, "{SUM(a + Int32(1))|{a + Int32(1)|{Int32(1)}|{a}}}"),
+            (2, "{a + Int32(1)|{Int32(1)}|{a}}"),
+            (0, ""),
+            (1, ""),
+            (5, "{AVG(c)|{c}}"),
+            (4, ""),
+            (7, "")
         ]
         .into_iter()
-        .map(|(number, id, aliased)| (number, id.into(), aliased))
+        .map(|(number, id)| (number, id.into()))
         .collect::<Vec<_>>();
         assert_eq!(expected, id_array);
 
