@@ -42,6 +42,7 @@ make_udaf_expr_and_func!(
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 pub struct Stddev {
     signature: Signature,
+    alias: Vec<String>
 }
 
 impl Debug for Stddev {
@@ -64,6 +65,7 @@ impl Stddev {
     pub fn new() -> Self {
         Self {
             signature: Signature::numeric(1, Volatility::Immutable),
+            alias: vec!["stddev_samp".to_string()]
         }
     }
 }
@@ -102,8 +104,15 @@ impl AggregateUDFImpl for Stddev {
         ])
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return internal_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.alias
     }
 }
 
@@ -166,7 +175,10 @@ impl AggregateUDFImpl for StddevPop {
         ])
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return internal_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
