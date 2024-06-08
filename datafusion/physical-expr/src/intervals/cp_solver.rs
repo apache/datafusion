@@ -723,6 +723,7 @@ mod tests {
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
     use arrow::datatypes::TimeUnit;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::Field;
     use datafusion_common::ScalarValue;
 
@@ -1390,9 +1391,17 @@ mod tests {
         )?;
         let right_child = Interval::try_new(
             // 1 day 321 ns
-            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 0,
+                days: 1,
+                nanoseconds: 321,
+            })),
             // 1 day 321 ns
-            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 0,
+                days: 1,
+                nanoseconds: 321,
+            })),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1415,9 +1424,17 @@ mod tests {
                 )?,
                 Interval::try_new(
                     // 1 day 321 ns in Duration type
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                        months: 0,
+                        days: 1,
+                        nanoseconds: 321,
+                    })),
                     // 1 day 321 ns in Duration type
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                        months: 0,
+                        days: 1,
+                        nanoseconds: 321,
+                    })),
                 )?
             ],
             result
@@ -1446,10 +1463,16 @@ mod tests {
             ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
         )?;
         let left_child = Interval::try_new(
-            // 2 days
-            ScalarValue::IntervalDayTime(Some(172_800_000)),
-            // 10 days
-            ScalarValue::IntervalDayTime(Some(864_000_000)),
+            // 2 days in millisecond
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 172_800_000,
+            })),
+            // 10 days in millisecond
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 864_000_000,
+            })),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1459,10 +1482,16 @@ mod tests {
         assert_eq!(
             vec![
                 Interval::try_new(
-                    // 2 days
-                    ScalarValue::IntervalDayTime(Some(172_800_000)),
+                    // 2 days in millisecond
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: 0,
+                        milliseconds: 172_800_000,
+                    })),
                     // 6 days
-                    ScalarValue::IntervalDayTime(Some(518_400_000)),
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: 0,
+                        milliseconds: 518_400_000,
+                    })),
                 )?,
                 Interval::try_new(
                     // 10.10.2020 - 10:11:12 AM

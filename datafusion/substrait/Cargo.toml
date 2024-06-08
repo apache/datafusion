@@ -32,6 +32,7 @@ rust-version = "1.73"
 workspace = true
 
 [dependencies]
+arrow-buffer = { workspace = true }
 async-recursion = "1.0"
 chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }

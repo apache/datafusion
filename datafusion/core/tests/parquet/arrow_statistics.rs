@@ -38,9 +38,7 @@ use arrow_array::{
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::parquet::{
-    RequestedStatistics, StatisticsConverter,
-};
+use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
@@ -188,41 +186,28 @@ impl<'a> Test<'a> {
             column_name,
         } = self;
 
-        let min = StatisticsConverter::try_new(
+        let converter = StatisticsConverter::try_new(
             column_name,
-            RequestedStatistics::Min,
             reader.schema(),
+            reader.parquet_schema(),
         )
-        .unwrap()
-        .extract(reader.metadata())
         .unwrap();
+
+        let row_groups = reader.metadata().row_groups();
+        let min = converter.row_group_mins(row_groups).unwrap();
 
         assert_eq!(
             &min, &expected_min,
             "{column_name}: Mismatch with expected minimums"
         );
 
-        let max = StatisticsConverter::try_new(
-            column_name,
-            RequestedStatistics::Max,
-            reader.schema(),
-        )
-        .unwrap()
-        .extract(reader.metadata())
-        .unwrap();
+        let max = converter.row_group_maxes(row_groups).unwrap();
         assert_eq!(
             &max, &expected_max,
             "{column_name}: Mismatch with expected maximum"
         );
 
-        let null_counts = StatisticsConverter::try_new(
-            column_name,
-            RequestedStatistics::NullCount,
-            reader.schema(),
-        )
-        .unwrap()
-        .extract(reader.metadata())
-        .unwrap();
+        let null_counts = converter.row_group_null_counts(row_groups).unwrap();
         let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
         assert_eq!(
             &null_counts, &expected_null_counts,
@@ -230,7 +215,10 @@ impl<'a> Test<'a> {
             Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
         );
 
-        let row_counts = StatisticsConverter::row_counts(reader.metadata()).unwrap();
+        let row_counts = StatisticsConverter::row_group_row_counts(
+            reader.metadata().row_groups().iter(),
+        )
+        .unwrap();
         assert_eq!(
             row_counts, expected_row_counts,
             "{column_name}: Mismatch with expected row counts. \
@@ -249,13 +237,13 @@ impl<'a> Test<'a> {
             column_name,
         } = self;
 
-        let min = StatisticsConverter::try_new(
+        let converter = StatisticsConverter::try_new(
             column_name,
-            RequestedStatistics::Min,
             reader.schema(),
+            reader.parquet_schema(),
         );
 
-        assert!(min.is_err());
+        assert!(converter.is_err());
     }
 }
 

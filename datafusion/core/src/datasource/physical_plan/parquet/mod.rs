@@ -64,7 +64,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
-pub use statistics::{RequestedStatistics, StatisticsConverter};
+pub use statistics::StatisticsConverter;
 pub use writer::plan_to_parquet;
 
 /// Execution plan for reading one or more Parquet files.

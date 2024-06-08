@@ -965,7 +965,7 @@ mod tests {
 
         let data = bytes::Bytes::from("a,b\n1,2\n3,4");
         let path = object_store::path::Path::from("a.csv");
-        store.put(&path, data).await.unwrap();
+        store.put(&path, data.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
         session_ctx.register_object_store(&url, Arc::new(store));
