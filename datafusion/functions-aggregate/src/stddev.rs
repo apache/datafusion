@@ -22,7 +22,7 @@ use std::fmt::{Debug, Formatter};
 
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
-use datafusion_common::ScalarValue;
+use datafusion_common::{plan_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -85,7 +85,11 @@ impl AggregateUDFImpl for Stddev {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Stddev requires numeric input types");
+        }
+
+        Ok(DataType::Float64)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
@@ -125,9 +129,17 @@ make_udaf_expr_and_func!(
 );
 
 /// STDDEV_POP population aggregate expression
-#[derive(Debug)]
 pub struct StddevPop {
     signature: Signature,
+}
+
+impl Debug for StddevPop {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StddevPop")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
 }
 
 impl Default for StddevPop {
@@ -137,7 +149,7 @@ impl Default for StddevPop {
 }
 
 impl StddevPop {
-    /// Create a new STDDEV aggregate function
+    /// Create a new STDDEV_POP aggregate function
     pub fn new() -> Self {
         Self {
             signature: Signature::numeric(1, Volatility::Immutable),
@@ -183,7 +195,11 @@ impl AggregateUDFImpl for StddevPop {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        if !arg_types[0].is_numeric() {
+            return plan_err!("StddevPop requires numeric input types");
+        }
+
+        Ok(DataType::Float64)
     }
 }
 
@@ -229,7 +245,6 @@ impl Accumulator for StddevAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let variance = self.variance.evaluate()?;
-        dbg!(variance.clone());
         match variance {
             ScalarValue::Float64(e) => {
                 if e.is_none() {

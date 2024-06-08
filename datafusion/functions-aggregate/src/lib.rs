@@ -91,6 +91,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_pop_udaf(),
         median::median_udaf(),
         variance::var_samp_udaf(),
+        stddev::stddev_udaf(),
+        stddev::stddev_pop_udaf(),
     ]
 }
 
