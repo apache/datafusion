@@ -127,7 +127,7 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let arr = match part.to_lowercase().trim_matches('\'').trim_matches('"') {
+        let arr = match part.to_lowercase().trim_matches(|c| c == '\'' || c == '"') {
             "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
             "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
             "month" => date_part_f64(array.as_ref(), DatePart::Month)?,

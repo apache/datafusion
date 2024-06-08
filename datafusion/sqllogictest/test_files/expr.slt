@@ -934,8 +934,6 @@ SELECT EXTRACT("doy" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query error
 SELECT EXTRACT('doy' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-252
 
 query R
 SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
@@ -970,10 +968,8 @@ SELECT EXTRACT("hour" FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 ----
 12
 
-query R
+query error
 SELECT EXTRACT('hour' FROM to_timestamp('2020-09-08T12:03:03+00:00'))
-----
-12
 
 query R
 SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
@@ -985,7 +981,7 @@ SELECT EXTRACT("minute" FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
 
-query erroe
+query error
 SELECT EXTRACT('minute' FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 
 query R
