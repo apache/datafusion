@@ -134,14 +134,14 @@ impl ScalarUDFImpl for DatePartFunc {
 
         let part_lower = part.to_lowercase();
 
-        let part = if let Some(part) = re.captures(part_lower.as_str()) {
-            part.get(1)
+        let part = match re.captures(part_lower.as_str()) {
+            Some(part) => part
+                .get(1)
                 .ok_or(DataFusionError::Internal(
                     "Error parsing date part".to_string(),
                 ))?
-                .as_str()
-        } else {
-            return exec_err!("Date part '{part_lower}' not supported");
+                .as_str(),
+            None => return exec_err!("Date part '{}' not supported", part_lower),
         };
 
         let arr = match part {
