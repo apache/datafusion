@@ -651,7 +651,7 @@ pub trait AggregateExt {
 
 /// Implementation of [`AggregateExt`].
 ///
-/// See [`AggregateExec`] for usage and examples
+/// See [`AggregateExt`] for usage and examples
 #[derive(Debug, Clone)]
 pub struct AggregateBuilder {
     udaf: Option<AggregateFunction>,

@@ -47,10 +47,10 @@ use datafusion_expr::{AggregateExt, ColumnarValue, ExprSchemable, Operator};
 /// The code in this example shows how to:
 /// 1. Create [`Expr`]s using different APIs: [`main`]`
 /// 2. Use the fluent API to easly create complex [`Expr`]s:  [`expr_fn_demo`]
-/// 2. Evaluate [`Expr`]s against data: [`evaluate_demo`]
-/// 3. Simplify expressions: [`simplify_demo`]
-/// 4. Analyze predicates for boundary ranges: [`range_analysis_demo`]
-/// 5. Get the types of the expressions: [`expression_type_demo`]
+/// 3. Evaluate [`Expr`]s against data: [`evaluate_demo`]
+/// 4. Simplify expressions: [`simplify_demo`]
+/// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
+/// 6. Get the types of the expressions: [`expression_type_demo`]
 #[tokio::main]
 async fn main() -> Result<()> {
     // The easiest way to do create expressions is to use the
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     ));
     assert_eq!(expr, expr2);
 
-    // See how to build aggregate functions with a fluent API
+    // See how to build aggregate functions with the expr_fn API
     expr_fn_demo()?;
 
     // See how to evaluate expressions
