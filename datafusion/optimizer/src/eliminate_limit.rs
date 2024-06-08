@@ -104,7 +104,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::push_down_limit::PushDownLimit;
-    use crate::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::sum;
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
     fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {

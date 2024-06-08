@@ -400,8 +400,8 @@ mod tests {
     use super::*;
     use crate::test::*;
 
-    use crate::test::function_stub::sum;
     use arrow::datatypes::DataType;
+    use datafusion_expr::test::function_stub::sum;
     use datafusion_expr::{col, lit, max, min, out_ref_col, scalar_subquery, Between};
 
     /// Test multiple correlated subqueries

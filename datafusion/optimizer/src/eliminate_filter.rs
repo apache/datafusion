@@ -95,8 +95,8 @@ mod tests {
     };
 
     use crate::eliminate_filter::EliminateFilter;
-    use crate::test::function_stub::sum;
     use crate::test::*;
+    use datafusion_expr::test::function_stub::sum;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateFilter::new()), plan, expected)

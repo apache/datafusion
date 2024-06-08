@@ -848,8 +848,8 @@ mod test {
     };
 
     use crate::optimizer::OptimizerContext;
-    use crate::test::function_stub::sum;
     use crate::test::*;
+    use datafusion_expr::test::function_stub::sum;
 
     use super::*;
 

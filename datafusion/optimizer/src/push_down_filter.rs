@@ -1097,9 +1097,9 @@ mod tests {
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-    use crate::test::function_stub::sum;
     use crate::test::*;
     use crate::OptimizerContext;
+    use datafusion_expr::test::function_stub::sum;
 
     use super::*;
 
