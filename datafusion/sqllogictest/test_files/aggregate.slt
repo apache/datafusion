@@ -231,8 +231,8 @@ explain with A as (
 ) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
 ----
 logical_plan
-01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))
-02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]]
+01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
 03)----SubqueryAlias: a
 04)------SubqueryAlias: a
 05)--------Union
@@ -247,11 +247,11 @@ logical_plan
 14)----------Projection: Int64(1) AS id, Int64(2) AS foo
 15)------------EmptyRelation
 physical_plan
-01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))@2 as SUM(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 06)----------UnionExec
 07)------------ProjectionExec: expr=[1 as id, 2 as foo]
 08)--------------PlaceholderRowExec
@@ -5352,8 +5352,8 @@ query TT
 explain select state, sum(salary) as total_salary from employee_csv group by state;
 ----
 logical_plan
-01)Projection: employee_csv.state, SUM(employee_csv.salary) AS total_salary
-02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary)]]
+01)Projection: employee_csv.state, sum(employee_csv.salary) AS total_salary
+02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
 03)----TableScan: employee_csv projection=[state, salary]
 
 # fail if there is duplicate name

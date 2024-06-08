@@ -58,8 +58,6 @@ pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
 pub use crate::aggregate::string_agg::StringAgg;
-pub use crate::aggregate::sum::Sum;
-pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::VariancePop;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::lead_lag::{lag, lead, WindowShift};

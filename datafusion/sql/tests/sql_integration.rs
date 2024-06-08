@@ -28,6 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
+    test::function_stub::sum_udaf,
     ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
@@ -200,9 +201,9 @@ fn cast_from_subquery() {
 #[test]
 fn try_cast_from_aggregation() {
     quick_test(
-        "SELECT TRY_CAST(SUM(age) AS FLOAT) FROM person",
-        "Projection: TRY_CAST(SUM(person.age) AS Float32)\
-            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+        "SELECT TRY_CAST(sum(age) AS FLOAT) FROM person",
+        "Projection: TRY_CAST(sum(person.age) AS Float32)\
+            \n  Aggregate: groupBy=[[]], aggr=[[sum(person.age)]]\
             \n    TableScan: person",
     );
 }
@@ -1267,9 +1268,9 @@ fn select_simple_aggregate() {
 #[test]
 fn test_sum_aggregate() {
     quick_test(
-        "SELECT SUM(age) from person",
-        "Projection: SUM(person.age)\
-            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+        "SELECT sum(age) from person",
+        "Projection: sum(person.age)\
+            \n  Aggregate: groupBy=[[]], aggr=[[sum(person.age)]]\
             \n    TableScan: person",
     );
 }
@@ -1374,16 +1375,16 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
-    let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
+    let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"SUM(person.age)\", \
+    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"sum(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
         person.salary, person.birth_date, person.\"😀\".", err.strip_backtrace());
 }
 
 #[test]
 fn select_simple_aggregate_with_groupby_and_column_in_aggregate_does_not_exist() {
-    let sql = "SELECT SUM(doesnotexist) FROM person GROUP BY first_name";
+    let sql = "SELECT sum(doesnotexist) FROM person GROUP BY first_name";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_field_not_found(err, "doesnotexist");
 }
@@ -2426,10 +2427,10 @@ fn over_order_by_two_sort_keys() {
 /// ```
 #[test]
 fn over_order_by_sort_keys_sorting() {
-    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
     let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n        TableScan: orders";
@@ -2449,10 +2450,10 @@ fn over_order_by_sort_keys_sorting() {
 /// ```
 #[test]
 fn over_order_by_sort_keys_sorting_prefix_compacting() {
-    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
     let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n        TableScan: orders";
@@ -2477,11 +2478,11 @@ fn over_order_by_sort_keys_sorting_prefix_compacting() {
 /// sort
 #[test]
 fn over_order_by_sort_keys_sorting_global_order_compacting() {
-    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
+    let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
     let expected = "\
         Sort: orders.order_id ASC NULLS LAST\
-        \n  Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n    WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n  Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n    WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n      WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n        WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n          TableScan: orders";
@@ -2663,7 +2664,7 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default();
+    let context = MockContextProvider::default().with_udaf(sum_udaf());
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2698,7 +2699,9 @@ fn logical_plan_with_dialect_and_options(
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
         ))
-        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64));
+        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64))
+        .with_udaf(sum_udaf());
+
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -3122,9 +3125,9 @@ fn rank_partition_grouping() {
             from
                 person
             group by rollup(state, last_name)";
-    let expected = "Projection: SUM(person.age) AS total_sum, person.state, person.last_name, GROUPING(person.state) + GROUPING(person.last_name) AS x, RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank\
-        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[SUM(person.age), GROUPING(person.state), GROUPING(person.last_name)]]\
+    let expected = "Projection: sum(person.age) AS total_sum, person.state, person.last_name, GROUPING(person.state) + GROUPING(person.last_name) AS x, RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank\
+        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[sum(person.age), GROUPING(person.state), GROUPING(person.last_name)]]\
         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -3183,10 +3186,10 @@ fn join_on_complex_condition() {
 #[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
-    let sql = "SELECT SUM(age) FILTER (WHERE age > 4) FROM person";
+    let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
-    let expected = "Projection: SUM(person.age) FILTER (WHERE person.age > Int64(4))\
-        \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE person.age > Int64(4))]]\
+    let expected = "Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))\
+        \n  Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]\
         \n    TableScan: person"
         .to_string();
     assert_eq!(plan.display_indent().to_string(), expected);
@@ -3202,8 +3205,8 @@ fn order_by_unaliased_name() {
         "select p.state z, sum(age) q from person p group by p.state order by p.state";
     let expected = "Projection: z, q\
         \n  Sort: p.state ASC NULLS LAST\
-        \n    Projection: p.state AS z, SUM(p.age) AS q, p.state\
-        \n      Aggregate: groupBy=[[p.state]], aggr=[[SUM(p.age)]]\
+        \n    Projection: p.state AS z, sum(p.age) AS q, p.state\
+        \n      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]\
         \n        SubqueryAlias: p\
         \n          TableScan: person";
     quick_test(sql, expected);
@@ -3492,7 +3495,7 @@ fn test_select_distinct_order_by() {
 
 #[rstest]
 #[case::select_cluster_by_unsupported(
-    "SELECT customer_name, SUM(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
+    "SELECT customer_name, sum(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
     "This feature is not implemented: CLUSTER BY"
 )]
 #[case::select_lateral_view_unsupported(
@@ -4123,17 +4126,17 @@ fn test_prepare_statement_to_plan_multi_params() {
 #[test]
 fn test_prepare_statement_to_plan_having() {
     let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS
-        SELECT id, SUM(age)
+        SELECT id, sum(age)
         FROM person \
         WHERE salary > $2
         GROUP BY id
-        HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4)\
+        HAVING sum(age) < $1 AND sum(age) > 10 OR sum(age) in ($3, $4)\
         ";
 
     let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Float64, Float64] \
-        \n  Projection: person.id, SUM(person.age)\
-        \n    Filter: SUM(person.age) < $1 AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([$3, $4])\
-        \n      Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n  Projection: person.id, sum(person.age)\
+        \n    Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])\
+        \n      Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]\
         \n        Filter: person.salary > $2\
         \n          TableScan: person";
 
@@ -4150,9 +4153,9 @@ fn test_prepare_statement_to_plan_having() {
         ScalarValue::Float64(Some(300.0)),
     ];
     let expected_plan =
-            "Projection: person.id, SUM(person.age)\
-        \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
-        \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+            "Projection: person.id, sum(person.age)\
+        \n  Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])\
+        \n    Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]\
         \n      Filter: person.salary > Float64(100)\
         \n        TableScan: person";
 

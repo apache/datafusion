@@ -43,8 +43,6 @@ pub(crate) mod groups_accumulator;
 pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
-pub(crate) mod sum;
-pub(crate) mod sum_distinct;
 pub(crate) mod variance;
 
 pub mod build_in;
