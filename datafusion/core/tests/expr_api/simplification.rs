@@ -19,6 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Int32Array};
+use arrow_buffer::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
@@ -281,7 +282,10 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
+        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+            days: 123,
+            milliseconds: 0,
+        })));
 
     let plan = LogicalPlanBuilder::from(table_scan.clone())
         .project(vec![date_plus_interval_expr])?
@@ -289,7 +293,7 @@ fn select_date_plus_interval() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+    let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
   TableScan: test"#;
     let actual = get_optimized_plan_formatted(plan, &time);
 

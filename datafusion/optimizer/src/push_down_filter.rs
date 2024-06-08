@@ -1090,13 +1090,14 @@ mod tests {
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, sum, ColumnarValue, Extension, ScalarUDF,
+        col, in_list, in_subquery, lit, ColumnarValue, Extension, ScalarUDF,
         ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
         Volatility,
     };
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::test::function_stub::sum;
     use crate::test::*;
     use crate::OptimizerContext;
 

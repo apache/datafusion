@@ -493,7 +493,8 @@ impl<'a> DFParser<'a> {
     pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
         let next_token = self.parser.next_token();
         match next_token.token {
-            Token::Word(Word { value, .. }) => Ok(Value::UnQuotedString(value)),
+            // e.g. things like "snappy" or "gzip" that may be keywords
+            Token::Word(word) => Ok(Value::SingleQuotedString(word.value)),
             Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
@@ -1139,7 +1140,7 @@ mod tests {
             unbounded: false,
             options: vec![
                 ("k1".into(), Value::SingleQuotedString("v1".into())),
-                ("k2".into(), Value::UnQuotedString("v2".into())),
+                ("k2".into(), Value::SingleQuotedString("v2".into())),
             ],
             constraints: vec![],
         });
@@ -1462,7 +1463,7 @@ mod tests {
             ),
             (
                 "format.compression".to_string(),
-                Value::UnQuotedString("snappy".to_string()),
+                Value::SingleQuotedString("snappy".to_string()),
             ),
         ];
 

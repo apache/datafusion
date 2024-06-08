@@ -103,16 +103,16 @@ def cli(args=None):
         args = sys.argv[1:]
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("project", help="The project name e.g. apache/datafusion")
-    parser.add_argument("tag1", help="The previous release tag")
-    parser.add_argument("tag2", help="The current release tag")
+    parser.add_argument("tag1", help="The previous release tag (e.g. 38.0.0)")
+    parser.add_argument("tag2", help="The current release tag (e.g. HEAD)")
     args = parser.parse_args()
 
     token = os.getenv("GITHUB_TOKEN")
+    project = "apache/datafusion"
 
     g = Github(token)
-    repo = g.get_repo(args.project)
-    generate_changelog(repo, args.project, args.tag1, args.tag2)
+    repo = g.get_repo(project)
+    generate_changelog(repo, project, args.tag1, args.tag2)
 
 if __name__ == "__main__":
     cli()

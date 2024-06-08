@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::IntervalUnit;
 use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
@@ -1949,7 +1950,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
         }
         ScalarValue::IntervalMonthDayNano(Some(i)) => {
             // treat `i128` as two contiguous `i64`
-            let bytes = i.to_le_bytes();
+            let bytes = i.to_byte_slice();
             let i64_param = Parameter {
                 parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
                     kind: Some(r#type::Kind::I64(r#type::I64 {
@@ -1971,7 +1972,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             )
         }
         ScalarValue::IntervalDayTime(Some(i)) => {
-            let bytes = i.to_le_bytes();
+            let bytes = i.to_byte_slice();
             (
                 LiteralType::UserDefined(UserDefined {
                     type_reference: INTERVAL_DAY_TIME_TYPE_REF,

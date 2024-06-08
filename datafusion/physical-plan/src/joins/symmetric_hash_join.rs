@@ -2290,8 +2290,8 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (12, 17),
+            (4, 5),
+            (12, 17),
         )]
         cardinality: (i32, i32),
         #[values(0, 1, 2)] case_expr: usize,
@@ -2375,8 +2375,8 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (12, 17),
+            (4, 5),
+            (12, 17),
         )]
         cardinality: (i32, i32),
     ) -> Result<()> {
@@ -2452,8 +2452,8 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (12, 17),
+            (4, 5),
+            (12, 17),
         )]
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,

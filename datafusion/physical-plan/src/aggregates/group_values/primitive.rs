@@ -23,6 +23,7 @@ use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -53,6 +54,7 @@ macro_rules! hash_integer {
 }
 hash_integer!(i8, i16, i32, i64, i128, i256);
 hash_integer!(u8, u16, u32, u64);
+hash_integer!(IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float {
     ($($t:ty),+) => {

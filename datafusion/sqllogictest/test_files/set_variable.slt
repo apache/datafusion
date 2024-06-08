@@ -216,19 +216,19 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET TIME ZONE = '+08:00:00'
 
-statement error Arrow error: Parser error: Invalid timezone "\+08:00:00": '\+08:00:00' is not a valid timezone
+statement error Arrow error: Parser error: Invalid timezone "\+08:00:00": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 
 statement ok
 SET TIME ZONE = '08:00'
 
-statement error Arrow error: Parser error: Invalid timezone "08:00": '08:00' is not a valid timezone
+statement error Arrow error: Parser error: Invalid timezone "08:00": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 
 statement ok
 SET TIME ZONE = '08'
 
-statement error Arrow error: Parser error: Invalid timezone "08": '08' is not a valid timezone
+statement error Arrow error: Parser error: Invalid timezone "08": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 
 statement ok
@@ -242,5 +242,5 @@ SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 statement ok
 SET TIME ZONE = 'Asia/Taipei2'
 
-statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": 'Asia/Taipei2' is not a valid timezone
+statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
 SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
