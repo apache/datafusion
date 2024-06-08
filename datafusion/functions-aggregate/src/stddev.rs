@@ -22,8 +22,8 @@ use std::fmt::{Debug, Formatter};
 
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
-use datafusion_common::{plan_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
+use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -42,7 +42,7 @@ make_udaf_expr_and_func!(
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 pub struct Stddev {
     signature: Signature,
-    alias: Vec<String>
+    alias: Vec<String>,
 }
 
 impl Debug for Stddev {
@@ -65,7 +65,7 @@ impl Stddev {
     pub fn new() -> Self {
         Self {
             signature: Signature::numeric(1, Volatility::Immutable),
-            alias: vec!["stddev_samp".to_string()]
+            alias: vec!["stddev_samp".to_string()],
         }
     }
 }

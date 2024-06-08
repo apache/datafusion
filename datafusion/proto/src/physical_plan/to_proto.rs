@@ -28,8 +28,8 @@ use datafusion::physical_plan::expressions::{
     CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
     DistinctCount, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min,
     NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank,
-    RankType, Regr, RegrType, RowNumber, StringAgg, TryCastExpr,
-    VariancePop, WindowShift,
+    RankType, Regr, RegrType, RowNumber, StringAgg, TryCastExpr, VariancePop,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};

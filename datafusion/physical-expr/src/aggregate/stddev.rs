@@ -19,8 +19,8 @@
 
 use arrow::array::ArrayRef;
 
-use datafusion_common::{internal_err, Result};
 use datafusion_common::ScalarValue;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::Accumulator;
 
 use crate::aggregate::stats::StatsType;
