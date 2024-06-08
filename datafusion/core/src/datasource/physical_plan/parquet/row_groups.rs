@@ -17,11 +17,9 @@
 
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::BooleanArray;
-use arrow_schema::FieldRef;
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, Result, ScalarValue};
 use parquet::basic::Type;
 use parquet::data_type::Decimal;
-use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
@@ -29,14 +27,13 @@ use parquet::{
     file::metadata::RowGroupMetaData,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::datasource::listing::FileRange;
-use crate::datasource::physical_plan::parquet::statistics::{
-    max_statistics, min_statistics, parquet_column,
-};
+use crate::datasource::physical_plan::parquet::statistics::parquet_column;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
-use super::{ParquetAccessPlan, ParquetFileMetrics};
+use super::{ParquetAccessPlan, ParquetFileMetrics, StatisticsConverter};
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
@@ -113,32 +110,37 @@ impl RowGroupAccessPlanFilter {
         metrics: &ParquetFileMetrics,
     ) {
         assert_eq!(groups.len(), self.access_plan.len());
-        for (idx, metadata) in groups.iter().enumerate() {
-            if !self.access_plan.should_scan(idx) {
-                continue;
-            }
-            let pruning_stats = RowGroupPruningStatistics {
-                parquet_schema,
-                row_group_metadata: metadata,
-                arrow_schema,
-            };
-            match predicate.prune(&pruning_stats) {
-                Ok(values) => {
-                    // NB: false means don't scan row group
-                    if !values[0] {
+        // Indexes of row groups still to scan
+        let row_group_indexes = self.access_plan.row_group_indexes();
+        let row_group_metadatas = row_group_indexes
+            .iter()
+            .map(|&i| &groups[i])
+            .collect::<Vec<_>>();
+
+        let pruning_stats = RowGroupPruningStatistics {
+            parquet_schema,
+            row_group_metadatas,
+            arrow_schema,
+        };
+
+        // try to prune the row groups in a single call
+        match predicate.prune(&pruning_stats) {
+            Ok(values) => {
+                // values[i] is false means the predicate could not be true for row group i
+                for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                    if !value {
+                        self.access_plan.skip(*idx);
                         metrics.row_groups_pruned_statistics.add(1);
-                        self.access_plan.skip(idx);
-                        continue;
+                    } else {
+                        metrics.row_groups_matched_statistics.add(1);
                     }
                 }
-                // stats filter array could not be built
-                // don't prune this row group
-                Err(e) => {
-                    log::debug!("Error evaluating row group predicate values {e}");
-                    metrics.predicate_evaluation_errors.add(1);
-                }
             }
-            metrics.row_groups_matched_statistics.add(1);
+            // stats filter array could not be built, so we can't prune
+            Err(e) => {
+                log::debug!("Error evaluating row group predicate values {e}");
+                metrics.predicate_evaluation_errors.add(1);
+            }
         }
     }
 
@@ -337,49 +339,55 @@ impl PruningStatistics for BloomFilterStatistics {
     }
 }
 
-/// Wraps [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
-///
-/// Note: This should be implemented for an array of [`RowGroupMetaData`] instead
-/// of per row-group
+/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
 struct RowGroupPruningStatistics<'a> {
     parquet_schema: &'a SchemaDescriptor,
-    row_group_metadata: &'a RowGroupMetaData,
+    row_group_metadatas: Vec<&'a RowGroupMetaData>,
     arrow_schema: &'a Schema,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
-    /// Lookups up the parquet column by name
-    fn column(&self, name: &str) -> Option<(&ColumnChunkMetaData, &FieldRef)> {
-        let (idx, field) = parquet_column(self.parquet_schema, self.arrow_schema, name)?;
-        Some((self.row_group_metadata.column(idx), field))
+    /// Return an iterator over the row group metadata
+    fn metadata_iter(&'a self) -> impl Iterator<Item = &'a RowGroupMetaData> + 'a {
+        self.row_group_metadatas.iter().copied()
+    }
+
+    fn statistics_converter<'b>(
+        &'a self,
+        column: &'b Column,
+    ) -> Result<StatisticsConverter<'a>> {
+        StatisticsConverter::try_new(&column.name, self.arrow_schema, self.parquet_schema)
     }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (column, field) = self.column(&column.name)?;
-        min_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_mins(self.metadata_iter()))
+            .ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (column, field) = self.column(&column.name)?;
-        max_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_maxes(self.metadata_iter()))
+            .ok()
     }
 
     fn num_containers(&self) -> usize {
-        1
+        self.row_group_metadatas.len()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let (c, _) = self.column(&column.name)?;
-        let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
-        scalar.to_array().ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_null_counts(self.metadata_iter()))
+            .ok()
     }
 
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let (c, _) = self.column(&column.name)?;
-        let scalar = ScalarValue::UInt64(Some(c.num_values() as u64));
-        scalar.to_array().ok()
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        // row counts are the same for all columns in a row group
+        StatisticsConverter::row_group_row_counts(self.metadata_iter())
+            .ok()
+            .map(|counts| Arc::new(counts) as ArrayRef)
     }
 
     fn contained(
@@ -406,6 +414,7 @@ mod tests {
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::{
         basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
