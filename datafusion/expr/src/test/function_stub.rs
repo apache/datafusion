@@ -73,14 +73,12 @@ pub fn sum(expr: Expr) -> Expr {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["sum".to_string()],
         }
     }
 }
@@ -97,7 +95,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn name(&self) -> &str {
-        "SUM"
+        "sum"
     }
 
     fn signature(&self) -> &Signature {
@@ -162,7 +160,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {

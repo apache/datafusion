@@ -561,6 +561,8 @@ mod tests {
         assert_eq!("Error during planning: The function MIN expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
 
         let fun = AggregateFunction::Avg;
+        // test input args is invalid data type for avg
+        let input_types = vec![DataType::Utf8];
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
