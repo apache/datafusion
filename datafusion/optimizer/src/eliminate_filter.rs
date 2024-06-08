@@ -91,10 +91,11 @@ mod tests {
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, sum, Expr, LogicalPlan,
+        col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
     };
 
     use crate::eliminate_filter::EliminateFilter;
+    use crate::test::function_stub::sum;
     use crate::test::*;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

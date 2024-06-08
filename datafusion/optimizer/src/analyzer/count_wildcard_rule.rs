@@ -117,13 +117,14 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::function_stub::sum;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        out_ref_col, scalar_subquery, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
@@ -275,11 +276,9 @@ mod tests {
     #[test]
     fn test_count_wildcard_on_non_count_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let err = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Error during planning: No function matches the given name and argument types 'SUM(Null)'."), "{err}");
+        let res = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())]);
+        assert!(res.is_err());
         Ok(())
     }
 

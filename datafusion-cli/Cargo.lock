@@ -1339,6 +1339,7 @@ dependencies = [
  "indexmap 2.2.6",
  "itertools",
  "log",
+ "paste",
  "regex-syntax",
 ]
 
