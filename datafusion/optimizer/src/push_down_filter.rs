@@ -80,8 +80,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// satisfies `filter(op(data)) = op(filter(data))`.
 ///
 /// The filter-commutative property is plan and column-specific. A filter on `a`
-/// can be pushed through a `Aggregate(group_by = [a], agg=[SUM(b))`. However, a
-/// filter on  `SUM(b)` can not be pushed through the same aggregate.
+/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b))`. However, a
+/// filter on  `sum(b)` can not be pushed through the same aggregate.
 ///
 /// # Handling Conjunctions
 ///
@@ -91,16 +91,16 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// For example, given the following plan:
 ///
 /// ```text
-/// Filter(a > 10 AND SUM(b) < 5)
-///   Aggregate(group_by = [a], agg = [SUM(b))
+/// Filter(a > 10 AND sum(b) < 5)
+///   Aggregate(group_by = [a], agg = [sum(b))
 /// ```
 ///
-/// The `a > 10` is commutative with the `Aggregate` but  `SUM(b) < 5` is not.
+/// The `a > 10` is commutative with the `Aggregate` but  `sum(b) < 5` is not.
 /// Therefore it is possible to only push part of the expression, resulting in:
 ///
 /// ```text
-/// Filter(SUM(b) < 5)
-///   Aggregate(group_by = [a], agg = [SUM(b))
+/// Filter(sum(b) < 5)
+///   Aggregate(group_by = [a], agg = [sum(b))
 ///     Filter(a > 10)
 /// ```
 ///
@@ -1097,9 +1097,9 @@ mod tests {
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-    use crate::test::function_stub::sum;
     use crate::test::*;
     use crate::OptimizerContext;
+    use datafusion_expr::test::function_stub::sum;
 
     use super::*;
 
@@ -1195,7 +1195,7 @@ mod tests {
             .build()?;
         // filter of key aggregation is commutative
         let expected = "\
-            Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS total_salary]]\
+            Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS total_salary]]\
             \n  TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1208,7 +1208,7 @@ mod tests {
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
         let expected = "Filter: test.b > Int64(10)\
-        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
         \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1220,7 +1220,7 @@ mod tests {
             .filter(col("test.b + test.a").gt(lit(10i64)))?
             .build()?;
         let expected =
-            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
         \n  TableScan: test, full_filters=[test.b + test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1235,7 +1235,7 @@ mod tests {
         // filter of aggregate is after aggregation since they are non-commutative
         let expected = "\
             Filter: b > Int64(10)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS b]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1454,30 +1454,30 @@ mod tests {
     /// and the other not.
     #[test]
     fn multi_filter() -> Result<()> {
-        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        // the aggregation allows one filter to pass (b), and the other one to not pass (sum(c))
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(col("b").gt(lit(10i64)))?
-            .filter(col("SUM(test.c)").gt(lit(10i64)))?
+            .filter(col("sum(test.c)").gt(lit(10i64)))?
             .build()?;
 
         // not part of the test, just good to know:
         assert_eq!(
             format!("{plan:?}"),
             "\
-            Filter: SUM(test.c) > Int64(10)\
+            Filter: sum(test.c) > Int64(10)\
             \n  Filter: b > Int64(10)\
-            \n    Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+            \n    Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
             \n      Projection: test.a AS b, test.c\
             \n        TableScan: test"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: SUM(test.c) > Int64(10)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+        Filter: sum(test.c) > Int64(10)\
+        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
         \n    Projection: test.a AS b, test.c\
         \n      TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
@@ -1487,14 +1487,14 @@ mod tests {
     /// and the other not.
     #[test]
     fn split_filter() -> Result<()> {
-        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        // the aggregation allows one filter to pass (b), and the other one to not pass (sum(c))
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(and(
-                col("SUM(test.c)").gt(lit(10i64)),
-                and(col("b").gt(lit(10i64)), col("SUM(test.c)").lt(lit(20i64))),
+                col("sum(test.c)").gt(lit(10i64)),
+                and(col("b").gt(lit(10i64)), col("sum(test.c)").lt(lit(20i64))),
             ))?
             .build()?;
 
@@ -1502,16 +1502,16 @@ mod tests {
         assert_eq!(
             format!("{plan:?}"),
             "\
-            Filter: SUM(test.c) > Int64(10) AND b > Int64(10) AND SUM(test.c) < Int64(20)\
-            \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+            Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)\
+            \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
             \n    Projection: test.a AS b, test.c\
             \n      TableScan: test"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: SUM(test.c) > Int64(10) AND SUM(test.c) < Int64(20)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)\
+        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
         \n    Projection: test.a AS b, test.c\
         \n      TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
@@ -2937,7 +2937,7 @@ Projection: a, b
 
     #[test]
     fn test_push_down_volatile_function_in_aggregate() -> Result<()> {
-        // SELECT t.a, t.r FROM (SELECT a, SUM(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
+        // SELECT t.a, t.r FROM (SELECT a, sum(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
@@ -2955,16 +2955,16 @@ Projection: a, b
         let expected_before = "Projection: t.a, t.r\
         \n  Filter: t.a > Int32(5) AND t.r > Float64(0.5)\
         \n    SubqueryAlias: t\
-        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
+        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1";
         assert_eq!(format!("{plan:?}"), expected_before);
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
         \n    Filter: r > Float64(0.5)\
-        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
+        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
         assert_optimized_plan_eq(plan, expected_after)
     }

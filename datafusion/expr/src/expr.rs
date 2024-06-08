@@ -2239,7 +2239,6 @@ mod test {
             "max",
             "count",
             "avg",
-            "sum",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();

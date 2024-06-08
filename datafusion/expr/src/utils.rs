@@ -1252,8 +1252,9 @@ impl AggregateOrderSensitivity {
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
-        Cast, WindowFrame, WindowFunctionDefinition,
+        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::sum_udaf, AggregateFunction, Cast, WindowFrame,
+        WindowFunctionDefinition,
     };
 
     #[test]
@@ -1291,7 +1292,7 @@ mod tests {
             None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
             vec![],
             vec![],
@@ -1338,7 +1339,7 @@ mod tests {
             None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
@@ -1381,7 +1382,7 @@ mod tests {
                 None,
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+                WindowFunctionDefinition::AggregateUDF(sum_udaf()),
                 vec![col("age")],
                 vec![],
                 vec![

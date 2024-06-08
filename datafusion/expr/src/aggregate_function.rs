@@ -35,8 +35,6 @@ use strum_macros::EnumIter;
 pub enum AggregateFunction {
     /// Count
     Count,
-    /// Sum
-    Sum,
     /// Minimum
     Min,
     /// Maximum
@@ -102,7 +100,6 @@ impl AggregateFunction {
         use AggregateFunction::*;
         match self {
             Count => "COUNT",
-            Sum => "SUM",
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
@@ -157,7 +154,6 @@ impl FromStr for AggregateFunction {
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
-            "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
             "string_agg" => AggregateFunction::StringAgg,
@@ -223,7 +219,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
             AggregateFunction::BitAnd
             | AggregateFunction::BitOr
             | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
@@ -308,7 +303,6 @@ impl AggregateFunction {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
             AggregateFunction::Avg
-            | AggregateFunction::Sum
             | AggregateFunction::VariancePop
             | AggregateFunction::Stddev
             | AggregateFunction::StddevPop

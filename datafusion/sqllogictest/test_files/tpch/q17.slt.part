@@ -36,8 +36,8 @@ where
 );
 ----
 logical_plan
-01)Projection: CAST(SUM(lineitem.l_extendedprice) AS Float64) / Float64(7) AS avg_yearly
-02)--Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice)]]
+01)Projection: CAST(sum(lineitem.l_extendedprice) AS Float64) / Float64(7) AS avg_yearly
+02)--Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
 03)----Projection: lineitem.l_extendedprice
 04)------Inner Join: part.p_partkey = __scalar_sq_1.l_partkey Filter: CAST(lineitem.l_quantity AS Decimal128(30, 15)) < __scalar_sq_1.Float64(0.2) * AVG(lineitem.l_quantity)
 05)--------Projection: lineitem.l_quantity, lineitem.l_extendedprice, part.p_partkey
@@ -51,10 +51,10 @@ logical_plan
 13)------------Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]
 14)--------------TableScan: lineitem projection=[l_partkey, l_quantity]
 physical_plan
-01)ProjectionExec: expr=[CAST(SUM(lineitem.l_extendedprice)@0 AS Float64) / 7 as avg_yearly]
-02)--AggregateExec: mode=Final, gby=[], aggr=[SUM(lineitem.l_extendedprice)]
+01)ProjectionExec: expr=[CAST(sum(lineitem.l_extendedprice)@0 AS Float64) / 7 as avg_yearly]
+02)--AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.l_extendedprice)]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[SUM(lineitem.l_extendedprice)]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.l_extendedprice)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@2, l_partkey@1)], filter=CAST(l_quantity@0 AS Decimal128(30, 15)) < Float64(0.2) * AVG(lineitem.l_quantity)@1, projection=[l_extendedprice@1]
 07)------------CoalesceBatchesExec: target_batch_size=8192
