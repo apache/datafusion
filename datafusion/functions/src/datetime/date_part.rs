@@ -32,11 +32,12 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use regex::Regex;
 
 #[derive(Debug)]
 pub struct DatePartFunc {
@@ -127,7 +128,23 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let arr = match part.to_lowercase().trim_matches(|c| c == '\'' || c == '"') {
+        let re = Regex::new(r#"^['"`]?([a-zA-Z]+)['"`]?$"#).map_err(|e| {
+            DataFusionError::Internal(format!("Error parsing date part: {}", e))
+        })?;
+
+        let part_lower = part.to_lowercase();
+
+        let part = if let Some(part) = re.captures(part_lower.as_str()) {
+            part.get(1)
+                .ok_or(DataFusionError::Internal(
+                    "Error parsing date part".to_string(),
+                ))?
+                .as_str()
+        } else {
+            return exec_err!("Date part '{part_lower}' not supported");
+        };
+
+        let arr = match part {
             "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
             "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
             "month" => date_part_f64(array.as_ref(), DatePart::Month)?,
