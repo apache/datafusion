@@ -608,13 +608,47 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     }
 }
 
+/// Extensions for configuring [`Expr::AggregateFunction`]
+///
+/// Adds methods to [`Expr`] that make it easy to set optional aggregate options
+/// such as `ORDER BY`, `FILTER` and `DISTINCT`
+///
+/// # Example
+/// ```no_run
+/// # use datafusion_common::Result;
+/// # use datafusion_expr::{AggregateUDF, col, Expr, lit};
+/// # use sqlparser::ast::NullTreatment;
+/// # fn count(arg: Expr) -> Expr { todo!{} }
+/// # fn first_value(arg: Expr) -> Expr { todo!{} }
+/// # fn main() -> Result<()> {
+/// use datafusion_expr::AggregateExt;
+///
+/// // Create COUNT(x FILTER y > 5)
+/// let agg = count(col("x"))
+///    .filter(col("y").gt(lit(5)))
+///    .build()?;
+///  // Create FIRST_VALUE(x ORDER BY y IGNORE NULLS)
+/// let agg = first_value(col("x"))
+///   .order_by(vec![col("y")])
+///   .null_treatment(NullTreatment::IgnoreNulls)
+///   .build()?;
+/// # Ok(())
+/// # }
+/// ```
 pub trait AggregateExt {
+    /// Add `ORDER BY <order_by>`
     fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
+    /// Add `FILTER <filter>`
     fn filter(self, filter: Expr) -> AggregateBuilder;
+    /// Add `DISTINCT`
     fn distinct(self) -> AggregateBuilder;
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
     fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder;
 }
 
+/// Implementation of [`AggregateExt`].
+///
+/// See [`AggregateExec`] for usage and examples
 pub struct AggregateBuilder {
     udaf: Option<AggregateFunction>,
     order_by: Option<Vec<Expr>>,
@@ -624,6 +658,8 @@ pub struct AggregateBuilder {
 }
 
 impl AggregateBuilder {
+    /// Create a new `AggregateBuilder`, see [`AggregateExt`]
+
     fn new(udaf: Option<AggregateFunction>) -> Self {
         Self {
             udaf,
@@ -634,33 +670,45 @@ impl AggregateBuilder {
         }
     }
 
+    /// Updates and returns the in progress [`Expr::AggregateFunction`]
+    ///
+    /// # Errors:
+    ///
+    /// Returns an error of this builder  [`AggregateExt`] was used with an
+    /// `Expr` variant other than [`Expr::AggregateFunction`]
     pub fn build(self) -> Result<Expr> {
-        if let Some(mut udaf) = self.udaf {
-            udaf.order_by = self.order_by;
-            udaf.filter = self.filter.map(Box::new);
-            udaf.distinct = self.distinct;
-            udaf.null_treatment = self.null_treatment;
-            return Ok(Expr::AggregateFunction(udaf));
-        }
+        let Some(mut udaf) = self.udaf else {
+            return plan_err!(
+                "AggregateExt can only be used with Expr::AggregateFunction"
+            );
+        };
 
-        plan_err!("Expect Expr::AggregateFunction")
+        udaf.order_by = self.order_by;
+        udaf.filter = self.filter.map(Box::new);
+        udaf.distinct = self.distinct;
+        udaf.null_treatment = self.null_treatment;
+        Ok(Expr::AggregateFunction(udaf))
     }
 
+    /// Add `ORDER BY <order_by>`
     pub fn order_by(mut self, order_by: Vec<Expr>) -> AggregateBuilder {
         self.order_by = Some(order_by);
         self
     }
 
+    /// Add `FILTER <filter>`
     pub fn filter(mut self, filter: Expr) -> AggregateBuilder {
         self.filter = Some(filter);
         self
     }
 
+    /// Add `DISTINCT`
     pub fn distinct(mut self) -> AggregateBuilder {
         self.distinct = true;
         self
     }
 
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
     pub fn null_treatment(mut self, null_treatment: NullTreatment) -> AggregateBuilder {
         self.null_treatment = Some(null_treatment);
         self
