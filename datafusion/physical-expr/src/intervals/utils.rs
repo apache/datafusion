@@ -24,14 +24,11 @@ use crate::{
     PhysicalExpr,
 };
 
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{DataType, SchemaRef};
-use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
-
-const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
-const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;
-const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
@@ -172,15 +169,9 @@ fn convert_duration_bound_to_interval(
 
 /// If both the month and day fields of [`ScalarValue::IntervalMonthDayNano`] are zero, this function returns the nanoseconds part.
 /// Otherwise, it returns an error.
-fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
-    let months = mdn >> 96;
-    let days = (mdn & MDN_DAY_MASK) >> 64;
-    let nanoseconds = mdn & MDN_NS_MASK;
-
-    if months == 0 && days == 0 {
-        nanoseconds
-            .try_into()
-            .map_err(|_| internal_datafusion_err!("Resulting duration exceeds i64::MAX"))
+fn interval_mdn_to_duration_ns(mdn: &IntervalMonthDayNano) -> Result<i64> {
+    if mdn.months == 0 && mdn.days == 0 {
+        Ok(mdn.nanoseconds)
     } else {
         internal_err!(
             "The interval cannot have a non-zero month or day value for duration convertibility"
@@ -190,12 +181,10 @@ fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
 
 /// If the day field of the [`ScalarValue::IntervalDayTime`] is zero, this function returns the milliseconds part.
 /// Otherwise, it returns an error.
-fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
-    let days = dt >> 32;
-    let milliseconds = dt & DT_MS_MASK;
-
-    if days == 0 {
-        Ok(milliseconds)
+fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
+    if dt.days == 0 {
+        // Safe to cast i32 to i64
+        Ok(dt.milliseconds as i64)
     } else {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"

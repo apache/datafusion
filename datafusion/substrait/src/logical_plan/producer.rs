@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use arrow_buffer::ToByteSlice;
+use datafusion::arrow::datatypes::IntervalUnit;
 use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
 };
@@ -30,20 +33,28 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion::common::{exec_err, internal_err, not_impl_err};
+use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
+use datafusion::common::{
+    exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+};
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, ScalarFunctionDefinition, Sort, WindowFunction,
+    InSubquery, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
-use prost_types::Any as ProtoAny;
+use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::user_defined::Val;
+use substrait::proto::expression::literal::UserDefined;
+use substrait::proto::expression::literal::{List, Struct};
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
+use substrait::proto::r#type::{parameter, Parameter};
+use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
     proto::{
@@ -81,10 +92,15 @@ use substrait::{
 };
 
 use crate::variation_const::{
-    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
-    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
-    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
-    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_DAY_TIME_TYPE_URL,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_URL,
+    INTERVAL_YEAR_MONTH_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_URL,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -162,6 +178,62 @@ pub fn to_substrait_rel(
                         names: scan.table_name.to_vec(),
                         advanced_extension: None,
                     })),
+                }))),
+            }))
+        }
+        LogicalPlan::EmptyRelation(e) => {
+            if e.produce_one_row {
+                return not_impl_err!(
+                    "Producing a row from empty relation is unsupported"
+                );
+            }
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(to_substrait_named_struct(&e.schema)?),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection: None,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values: vec![],
+                    })),
+                }))),
+            }))
+        }
+        LogicalPlan::Values(v) => {
+            let values = v
+                .values
+                .iter()
+                .map(|row| {
+                    let fields = row
+                        .iter()
+                        .map(|v| match v {
+                            Expr::Literal(sv) => to_substrait_literal(sv),
+                            Expr::Alias(alias) => match alias.expr.as_ref() {
+                                // The schema gives us the names, so we can skip aliases
+                                Expr::Literal(sv) => to_substrait_literal(sv),
+                                _ => Err(substrait_datafusion_err!(
+                                    "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
+                                )),
+                            },
+                            _ => Err(substrait_datafusion_err!(
+                                "Only literal types and aliases are supported in Virtual Tables, got: {}", v.variant_name()
+                            )),
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok(Struct { fields })
+                })
+                .collect::<Result<_>>()?;
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(to_substrait_named_struct(&v.schema)?),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection: None,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
                 }))),
             }))
         }
@@ -478,7 +550,7 @@ pub fn to_substrait_rel(
                 .serialize_logical_plan(extension_plan.node.as_ref())?;
             let detail = ProtoAny {
                 type_url: extension_plan.node.name().to_string(),
-                value: extension_bytes,
+                value: extension_bytes.into(),
             };
             let mut inputs_rel = extension_plan
                 .node
@@ -508,6 +580,63 @@ pub fn to_substrait_rel(
         }
         _ => not_impl_err!("Unsupported operator: {plan:?}"),
     }
+}
+
+fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
+    // Substrait wants a list of all field names, including nested fields from structs,
+    // also from within e.g. lists and maps. However, it does not want the list and map field names
+    // themselves - only proper structs fields are considered to have useful names.
+    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
+        match dtype {
+            DataType::Struct(fields) => {
+                let mut names = Vec::new();
+                for field in fields {
+                    names.push(field.name().to_string());
+                    names.extend(names_dfs(field.data_type())?);
+                }
+                Ok(names)
+            }
+            DataType::List(l) => names_dfs(l.data_type()),
+            DataType::LargeList(l) => names_dfs(l.data_type()),
+            DataType::Map(m, _) => match m.data_type() {
+                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                    let key_names =
+                        names_dfs(key_and_value.first().unwrap().data_type())?;
+                    let value_names =
+                        names_dfs(key_and_value.last().unwrap().data_type())?;
+                    Ok([key_names, value_names].concat())
+                }
+                _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+            },
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    let names = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let mut names = vec![f.name().to_string()];
+            names.extend(names_dfs(f.data_type())?);
+            Ok(names)
+        })
+        .flatten_ok()
+        .collect::<Result<_>>()?;
+
+    let field_types = r#type::Struct {
+        types: schema
+            .fields()
+            .iter()
+            .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
+            .collect::<Result<_>>()?,
+        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+        nullability: r#type::Nullability::Unspecified as i32,
+    };
+
+    Ok(NamedStruct {
+        names,
+        r#struct: Some(field_types),
+    })
 }
 
 fn to_substrait_join_expr(
@@ -722,7 +851,10 @@ pub fn to_substrait_agg_measure(
                             arguments,
                             sorts,
                             output_type: None,
-                            invocation: AggregationInvocation::All as i32,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
                             phase: AggregationPhase::Unspecified as i32,
                             args: vec![],
                             options: vec![],
@@ -732,9 +864,6 @@ pub fn to_substrait_agg_measure(
                             None => None
                         }
                     })
-                }
-                AggregateFunctionDefinition::Name(name) => {
-                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
                 }
             }
 
@@ -941,11 +1070,6 @@ pub fn to_substrait_rex(
                 });
             }
 
-            // function should be resolved during `AnalyzerRule`
-            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
-                return internal_err!("Function `Expr` with name should be resolved.");
-            }
-
             let function_anchor =
                 _register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
@@ -1092,7 +1216,7 @@ pub fn to_substrait_rex(
             Ok(Expression {
                 rex_type: Some(RexType::Cast(Box::new(
                     substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type)?),
+                        r#type: Some(to_substrait_type(data_type, true)?),
                         input: Some(Box::new(to_substrait_rex(
                             ctx,
                             expr,
@@ -1105,7 +1229,7 @@ pub fn to_substrait_rex(
                 ))),
             })
         }
-        Expr::Literal(value) => to_substrait_literal(value),
+        Expr::Literal(value) => to_substrait_literal_expr(value),
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)
         }
@@ -1299,180 +1423,227 @@ pub fn to_substrait_rex(
     }
 }
 
-fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
-    let default_nullability = r#type::Nullability::Required as i32;
+fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
+    let nullability = if nullable {
+        r#type::Nullability::Nullable as i32
+    } else {
+        r#type::Nullability::Required as i32
+    };
     match dt {
         DataType::Null => internal_err!("Null cast is not valid"),
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Int8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::UInt8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Int16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::UInt16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Int32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::UInt32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Int64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::UInt64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         // Float16 is not supported in Substrait
         DataType::Float32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Float64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp64(r#type::Fp64 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         // Timezone is ignored.
         DataType::Timestamp(unit, _) => {
             let type_variation_reference = match unit {
-                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_REF,
-                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_REF,
-                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_REF,
-                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_REF,
+                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_VARIATION_REF,
             };
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
                     type_variation_reference,
-                    nullability: default_nullability,
+                    nullability,
                 })),
             })
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
-                type_variation_reference: DATE_32_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DATE_32_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Date64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
-                type_variation_reference: DATE_64_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DATE_64_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
+        DataType::Interval(interval_unit) => {
+            // define two type parameters for convenience
+            let i32_param = Parameter {
+                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
+                    kind: Some(r#type::Kind::I32(r#type::I32 {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability: r#type::Nullability::Unspecified as i32,
+                    })),
+                })),
+            };
+            let i64_param = Parameter {
+                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
+                    kind: Some(r#type::Kind::I64(r#type::I64 {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability: r#type::Nullability::Unspecified as i32,
+                    })),
+                })),
+            };
+
+            let (type_parameters, type_reference) = match interval_unit {
+                IntervalUnit::YearMonth => {
+                    let type_parameters = vec![i32_param];
+                    (type_parameters, INTERVAL_YEAR_MONTH_TYPE_REF)
+                }
+                IntervalUnit::DayTime => {
+                    let type_parameters = vec![i64_param];
+                    (type_parameters, INTERVAL_DAY_TIME_TYPE_REF)
+                }
+                IntervalUnit::MonthDayNano => {
+                    // use 2 `i64` as `i128`
+                    let type_parameters = vec![i64_param.clone(), i64_param];
+                    (type_parameters, INTERVAL_MONTH_DAY_NANO_TYPE_REF)
+                }
+            };
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                    type_reference,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
+                    type_parameters,
+                })),
+            })
+        }
         DataType::Binary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
-                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::FixedSizeBinary(length) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::FixedBinary(r#type::FixedBinary {
                 length: *length,
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::LargeBinary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
-                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
-                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::LargeUtf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
-                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
             })),
         }),
         DataType::List(inner) => {
-            let inner_type = to_substrait_type(inner.data_type())?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
-                    type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
-                    nullability: default_nullability,
+                    type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                    nullability,
                 }))),
             })
         }
         DataType::LargeList(inner) => {
-            let inner_type = to_substrait_type(inner.data_type())?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
-                    type_variation_reference: LARGE_CONTAINER_TYPE_REF,
-                    nullability: default_nullability,
+                    type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                    nullability,
                 }))),
             })
         }
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| to_substrait_type(field.data_type()))
+                .map(|field| to_substrait_type(field.data_type(), field.is_nullable()))
                 .collect::<Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
                     types: field_types,
-                    type_variation_reference: DEFAULT_TYPE_REF,
-                    nullability: default_nullability,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability,
                 })),
             })
         }
         DataType::Decimal128(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                type_variation_reference: DECIMAL_128_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DECIMAL_128_TYPE_VARIATION_REF,
+                nullability,
                 scale: *s as i32,
                 precision: *p as i32,
             })),
         }),
         DataType::Decimal256(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                type_variation_reference: DECIMAL_256_TYPE_REF,
-                nullability: default_nullability,
+                type_variation_reference: DECIMAL_256_TYPE_VARIATION_REF,
+                nullability,
                 scale: *s as i32,
                 precision: *p as i32,
             })),
@@ -1531,8 +1702,9 @@ fn make_substrait_like_expr(
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extension_info)?;
-    let escape_char =
-        to_substrait_literal(&ScalarValue::Utf8(escape_char.map(|c| c.to_string())))?;
+    let escape_char = to_substrait_literal_expr(&ScalarValue::Utf8(
+        escape_char.map(|c| c.to_string()),
+    ))?;
     let arguments = vec![
         FunctionArgument {
             arg_type: Some(ArgType::Value(expr)),
@@ -1688,73 +1860,228 @@ fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
     ))
 }
 
-fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
+fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
+    if value.is_null() {
+        return Ok(Literal {
+            nullable: true,
+            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+            literal_type: Some(LiteralType::Null(to_substrait_type(
+                &value.data_type(),
+                true,
+            )?)),
+        });
+    }
     let (literal_type, type_variation_reference) = match value {
-        ScalarValue::Boolean(Some(b)) => (LiteralType::Boolean(*b), DEFAULT_TYPE_REF),
-        ScalarValue::Int8(Some(n)) => (LiteralType::I8(*n as i32), DEFAULT_TYPE_REF),
-        ScalarValue::UInt8(Some(n)) => {
-            (LiteralType::I8(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        ScalarValue::Boolean(Some(b)) => {
+            (LiteralType::Boolean(*b), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::Int16(Some(n)) => (LiteralType::I16(*n as i32), DEFAULT_TYPE_REF),
-        ScalarValue::UInt16(Some(n)) => {
-            (LiteralType::I16(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        ScalarValue::Int8(Some(n)) => {
+            (LiteralType::I8(*n as i32), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::Int32(Some(n)) => (LiteralType::I32(*n), DEFAULT_TYPE_REF),
-        ScalarValue::UInt32(Some(n)) => {
-            (LiteralType::I32(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        ScalarValue::UInt8(Some(n)) => (
+            LiteralType::I8(*n as i32),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Int16(Some(n)) => {
+            (LiteralType::I16(*n as i32), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::Int64(Some(n)) => (LiteralType::I64(*n), DEFAULT_TYPE_REF),
-        ScalarValue::UInt64(Some(n)) => {
-            (LiteralType::I64(*n as i64), UNSIGNED_INTEGER_TYPE_REF)
+        ScalarValue::UInt16(Some(n)) => (
+            LiteralType::I16(*n as i32),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Int32(Some(n)) => (LiteralType::I32(*n), DEFAULT_TYPE_VARIATION_REF),
+        ScalarValue::UInt32(Some(n)) => (
+            LiteralType::I32(*n as i32),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Int64(Some(n)) => (LiteralType::I64(*n), DEFAULT_TYPE_VARIATION_REF),
+        ScalarValue::UInt64(Some(n)) => (
+            LiteralType::I64(*n as i64),
+            UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Float32(Some(f)) => {
+            (LiteralType::Fp32(*f), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::Float32(Some(f)) => (LiteralType::Fp32(*f), DEFAULT_TYPE_REF),
-        ScalarValue::Float64(Some(f)) => (LiteralType::Fp64(*f), DEFAULT_TYPE_REF),
-        ScalarValue::TimestampSecond(Some(t), _) => {
-            (LiteralType::Timestamp(*t), TIMESTAMP_SECOND_TYPE_REF)
+        ScalarValue::Float64(Some(f)) => {
+            (LiteralType::Fp64(*f), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::TimestampMillisecond(Some(t), _) => {
-            (LiteralType::Timestamp(*t), TIMESTAMP_MILLI_TYPE_REF)
+        ScalarValue::TimestampSecond(Some(t), _) => (
+            LiteralType::Timestamp(*t),
+            TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMillisecond(Some(t), _) => (
+            LiteralType::Timestamp(*t),
+            TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMicrosecond(Some(t), _) => (
+            LiteralType::Timestamp(*t),
+            TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampNanosecond(Some(t), _) => (
+            LiteralType::Timestamp(*t),
+            TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Date32(Some(d)) => {
+            (LiteralType::Date(*d), DATE_32_TYPE_VARIATION_REF)
         }
-        ScalarValue::TimestampMicrosecond(Some(t), _) => {
-            (LiteralType::Timestamp(*t), TIMESTAMP_MICRO_TYPE_REF)
-        }
-        ScalarValue::TimestampNanosecond(Some(t), _) => {
-            (LiteralType::Timestamp(*t), TIMESTAMP_NANO_TYPE_REF)
-        }
-        ScalarValue::Date32(Some(d)) => (LiteralType::Date(*d), DATE_32_TYPE_REF),
         // Date64 literal is not supported in Substrait
-        ScalarValue::Binary(Some(b)) => {
-            (LiteralType::Binary(b.clone()), DEFAULT_CONTAINER_TYPE_REF)
+        ScalarValue::IntervalYearMonth(Some(i)) => {
+            let bytes = i.to_le_bytes();
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_YEAR_MONTH_TYPE_REF,
+                    type_parameters: vec![Parameter {
+                        parameter: Some(parameter::Parameter::DataType(
+                            substrait::proto::Type {
+                                kind: Some(r#type::Kind::I32(r#type::I32 {
+                                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                    nullability: r#type::Nullability::Required as i32,
+                                })),
+                            },
+                        )),
+                    }],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_YEAR_MONTH_TYPE_URL.to_string(),
+                        value: bytes.to_vec().into(),
+                    })),
+                }),
+                INTERVAL_YEAR_MONTH_TYPE_REF,
+            )
         }
-        ScalarValue::LargeBinary(Some(b)) => {
-            (LiteralType::Binary(b.clone()), LARGE_CONTAINER_TYPE_REF)
+        ScalarValue::IntervalMonthDayNano(Some(i)) => {
+            // treat `i128` as two contiguous `i64`
+            let bytes = i.to_byte_slice();
+            let i64_param = Parameter {
+                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
+                    kind: Some(r#type::Kind::I64(r#type::I64 {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability: r#type::Nullability::Required as i32,
+                    })),
+                })),
+            };
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                    type_parameters: vec![i64_param.clone(), i64_param],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
+                        value: bytes.to_vec().into(),
+                    })),
+                }),
+                INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+            )
         }
-        ScalarValue::FixedSizeBinary(_, Some(b)) => {
-            (LiteralType::FixedBinary(b.clone()), DEFAULT_TYPE_REF)
+        ScalarValue::IntervalDayTime(Some(i)) => {
+            let bytes = i.to_byte_slice();
+            (
+                LiteralType::UserDefined(UserDefined {
+                    type_reference: INTERVAL_DAY_TIME_TYPE_REF,
+                    type_parameters: vec![Parameter {
+                        parameter: Some(parameter::Parameter::DataType(
+                            substrait::proto::Type {
+                                kind: Some(r#type::Kind::I64(r#type::I64 {
+                                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                    nullability: r#type::Nullability::Required as i32,
+                                })),
+                            },
+                        )),
+                    }],
+                    val: Some(Val::Value(ProtoAny {
+                        type_url: INTERVAL_DAY_TIME_TYPE_URL.to_string(),
+                        value: bytes.to_vec().into(),
+                    })),
+                }),
+                INTERVAL_DAY_TIME_TYPE_REF,
+            )
         }
-        ScalarValue::Utf8(Some(s)) => {
-            (LiteralType::String(s.clone()), DEFAULT_CONTAINER_TYPE_REF)
-        }
-        ScalarValue::LargeUtf8(Some(s)) => {
-            (LiteralType::String(s.clone()), LARGE_CONTAINER_TYPE_REF)
-        }
+        ScalarValue::Binary(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::LargeBinary(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::FixedSizeBinary(_, Some(b)) => (
+            LiteralType::FixedBinary(b.clone()),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Utf8(Some(s)) => (
+            LiteralType::String(s.clone()),
+            DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::LargeUtf8(Some(s)) => (
+            LiteralType::String(s.clone()),
+            LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
                 value: v.unwrap().to_le_bytes().to_vec(),
                 precision: *p as i32,
                 scale: *s as i32,
             }),
-            DECIMAL_128_TYPE_REF,
+            DECIMAL_128_TYPE_VARIATION_REF,
         ),
-        _ => (try_to_substrait_null(value)?, DEFAULT_TYPE_REF),
+        ScalarValue::List(l) => (
+            convert_array_to_literal_list(l)?,
+            DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::LargeList(l) => (
+            convert_array_to_literal_list(l)?,
+            LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Struct(s) => (
+            LiteralType::Struct(Struct {
+                fields: s
+                    .columns()
+                    .iter()
+                    .map(|col| {
+                        to_substrait_literal(&ScalarValue::try_from_array(col, 0)?)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        _ => (
+            not_impl_err!("Unsupported literal: {value:?}")?,
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
     };
 
+    Ok(Literal {
+        nullable: false,
+        type_variation_reference,
+        literal_type: Some(literal_type),
+    })
+}
+
+fn convert_array_to_literal_list<T: OffsetSizeTrait>(
+    array: &GenericListArray<T>,
+) -> Result<LiteralType> {
+    assert_eq!(array.len(), 1);
+    let nested_array = array.value(0);
+
+    let values = (0..nested_array.len())
+        .map(|i| to_substrait_literal(&ScalarValue::try_from_array(&nested_array, i)?))
+        .collect::<Result<Vec<_>>>()?;
+
+    if values.is_empty() {
+        let et = match to_substrait_type(array.data_type(), array.is_nullable())? {
+            substrait::proto::Type {
+                kind: Some(r#type::Kind::List(lt)),
+            } => lt.as_ref().to_owned(),
+            _ => unreachable!(),
+        };
+        Ok(LiteralType::EmptyList(et))
+    } else {
+        Ok(LiteralType::List(List { values }))
+    }
+}
+
+fn to_substrait_literal_expr(value: &ScalarValue) -> Result<Expression> {
+    let literal = to_substrait_literal(value)?;
     Ok(Expression {
-        rex_type: Some(RexType::Literal(Literal {
-            nullable: true,
-            type_variation_reference,
-            literal_type: Some(literal_type),
-        })),
+        rex_type: Some(RexType::Literal(literal)),
     })
 }
 
@@ -1785,166 +2112,6 @@ fn to_substrait_unary_scalar_fn(
             ..Default::default()
         })),
     })
-}
-
-fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
-    let default_nullability = r#type::Nullability::Nullable as i32;
-    match v {
-        ScalarValue::Boolean(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Bool(r#type::Boolean {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Int8(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::UInt8(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Int16(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::UInt16(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Int32(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::UInt32(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Int64(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::UInt64(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Float32(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Float64(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Fp64(r#type::Fp64 {
-                type_variation_reference: DEFAULT_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::TimestampSecond(None, _) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference: TIMESTAMP_SECOND_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        ScalarValue::TimestampMillisecond(None, _) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference: TIMESTAMP_MILLI_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        ScalarValue::TimestampMicrosecond(None, _) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference: TIMESTAMP_MICRO_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        ScalarValue::TimestampNanosecond(None, _) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference: TIMESTAMP_NANO_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        ScalarValue::Date32(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Date(r#type::Date {
-                type_variation_reference: DATE_32_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Date64(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Date(r#type::Date {
-                type_variation_reference: DATE_64_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Binary(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Binary(r#type::Binary {
-                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::LargeBinary(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Binary(r#type::Binary {
-                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::FixedSizeBinary(_, None) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Binary(r#type::Binary {
-                    type_variation_reference: DEFAULT_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        ScalarValue::Utf8(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::String(r#type::String {
-                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::LargeUtf8(None) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::String(r#type::String {
-                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
-                nullability: default_nullability,
-            })),
-        })),
-        ScalarValue::Decimal128(None, p, s) => {
-            Ok(LiteralType::Null(substrait::proto::Type {
-                kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                    scale: *s as i32,
-                    precision: *p as i32,
-                    type_variation_reference: DEFAULT_TYPE_REF,
-                    nullability: default_nullability,
-                })),
-            }))
-        }
-        // TODO: Extend support for remaining data types
-        _ => not_impl_err!("Unsupported literal: {v:?}"),
-    }
 }
 
 /// Try to convert an [Expr] to a [FieldReference].
@@ -2021,7 +2188,12 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
-    use crate::logical_plan::consumer::from_substrait_literal;
+    use crate::logical_plan::consumer::{
+        from_substrait_literal_without_names, from_substrait_type_without_names,
+    };
+    use datafusion::arrow::array::GenericListArray;
+    use datafusion::arrow::datatypes::Field;
+    use datafusion::common::scalar::ScalarStructBuilder;
 
     use super::*;
 
@@ -2059,22 +2231,112 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Float32(Some(1.0))],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+            &[],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::List(Arc::new(GenericListArray::new_null(
+            Field::new_list_field(DataType::Float32, true).into(),
+            1,
+        ))))?;
+        round_trip_literal(ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[ScalarValue::Float32(Some(1.0))],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[],
+            &DataType::Float32,
+        )))?;
+        round_trip_literal(ScalarValue::LargeList(Arc::new(
+            GenericListArray::new_null(
+                Field::new_list_field(DataType::Float32, true).into(),
+                1,
+            ),
+        )))?;
+
+        let c0 = Field::new("c0", DataType::Boolean, false);
+        let c1 = Field::new("c1", DataType::Int32, false);
+        let c2 = Field::new("c2", DataType::Utf8, true);
+        round_trip_literal(
+            ScalarStructBuilder::new()
+                .with_scalar(c0.to_owned(), ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1.to_owned(), ScalarValue::Int32(Some(1)))
+                .with_scalar(c2.to_owned(), ScalarValue::Utf8(None))
+                .build()?,
+        )?;
+        round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
+
         Ok(())
     }
 
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {scalar:?}");
 
-        let substrait = to_substrait_literal(&scalar)?;
-        let Expression {
-            rex_type: Some(RexType::Literal(substrait_literal)),
-        } = substrait
-        else {
-            panic!("Expected Literal expression, got {substrait:?}");
-        };
-
-        let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
+        let substrait_literal = to_substrait_literal(&scalar)?;
+        let roundtrip_scalar = from_substrait_literal_without_names(&substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_types() -> Result<()> {
+        round_trip_type(DataType::Boolean)?;
+        round_trip_type(DataType::Int8)?;
+        round_trip_type(DataType::UInt8)?;
+        round_trip_type(DataType::Int16)?;
+        round_trip_type(DataType::UInt16)?;
+        round_trip_type(DataType::Int32)?;
+        round_trip_type(DataType::UInt32)?;
+        round_trip_type(DataType::Int64)?;
+        round_trip_type(DataType::UInt64)?;
+        round_trip_type(DataType::Float32)?;
+        round_trip_type(DataType::Float64)?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Second, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, None))?;
+        round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+        round_trip_type(DataType::Date32)?;
+        round_trip_type(DataType::Date64)?;
+        round_trip_type(DataType::Binary)?;
+        round_trip_type(DataType::FixedSizeBinary(10))?;
+        round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::Utf8)?;
+        round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Decimal128(10, 2))?;
+        round_trip_type(DataType::Decimal256(30, 2))?;
+
+        for nullable in [true, false] {
+            round_trip_type(DataType::List(
+                Field::new_list_field(DataType::Int32, nullable).into(),
+            ))?;
+            round_trip_type(DataType::LargeList(
+                Field::new_list_field(DataType::Int32, nullable).into(),
+            ))?;
+        }
+
+        round_trip_type(DataType::Struct(
+            vec![
+                Field::new("c0", DataType::Int32, true),
+                Field::new("c1", DataType::Utf8, false),
+            ]
+            .into(),
+        ))?;
+
+        Ok(())
+    }
+
+    fn round_trip_type(dt: DataType) -> Result<()> {
+        println!("Checking round trip of {dt:?}");
+
+        // As DataFusion doesn't consider nullability as a property of the type, but field,
+        // it doesn't matter if we set nullability to true or false here.
+        let substrait = to_substrait_type(&dt, true)?;
+        let roundtrip_dt = from_substrait_type_without_names(&substrait)?;
+        assert_eq!(dt, roundtrip_dt);
         Ok(())
     }
 }

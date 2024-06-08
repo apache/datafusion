@@ -30,13 +30,13 @@ crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
 datafusion = "latest_version"
-tokio = "1.0"
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
 ```
 
 ## Add latest non published DataFusion dependency
 
 DataFusion changes are published to `crates.io` according to [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
-In case if it is required to test out DataFusion changes which are merged but yet to be published, Cargo supports adding dependency directly to Github branch
+In case if it is required to test out DataFusion changes which are merged but yet to be published, Cargo supports adding dependency directly to GitHub branch
 
 ```toml
 datafusion = { git = "https://github.com/apache/datafusion", branch = "main"}

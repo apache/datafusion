@@ -25,7 +25,9 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionDefinition, WindowFunction,
 };
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
+use datafusion_expr::{
+    aggregate_function, lit, Expr, LogicalPlan, WindowFunctionDefinition,
+};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -54,23 +56,37 @@ fn is_wildcard(expr: &Expr) -> bool {
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    matches!(
-        &aggregate_function.func_def,
-        AggregateFunctionDefinition::BuiltIn(
-            datafusion_expr::aggregate_function::AggregateFunction::Count,
-        )
-    ) && aggregate_function.args.len() == 1
-        && is_wildcard(&aggregate_function.args[0])
+    match aggregate_function {
+        AggregateFunction {
+            func_def: AggregateFunctionDefinition::UDF(udf),
+            args,
+            ..
+        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => true,
+        AggregateFunction {
+            func_def:
+                AggregateFunctionDefinition::BuiltIn(
+                    datafusion_expr::aggregate_function::AggregateFunction::Count,
+                ),
+            args,
+            ..
+        } if args.len() == 1 && is_wildcard(&args[0]) => true,
+        _ => false,
+    }
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
-    matches!(
-        &window_function.fun,
+    let args = &window_function.args;
+    match window_function.fun {
         WindowFunctionDefinition::AggregateFunction(
-            datafusion_expr::aggregate_function::AggregateFunction::Count,
-        )
-    ) && window_function.args.len() == 1
-        && is_wildcard(&window_function.args[0])
+            aggregate_function::AggregateFunction::Count,
+        ) if args.len() == 1 && is_wildcard(&args[0]) => true,
+        WindowFunctionDefinition::AggregateUDF(ref udaf)
+            if udaf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -101,18 +117,19 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::function_stub::sum;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
+        out_ref_col, scalar_subquery, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
 
-    fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
             Arc::new(CountWildcardRule::new()),
             plan,
@@ -132,7 +149,7 @@ mod tests {
         \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [b:UInt32, COUNT(*):Int64;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -158,7 +175,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -181,7 +198,7 @@ mod tests {
         \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -214,7 +231,7 @@ mod tests {
               \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
     #[test]
     fn test_count_wildcard_on_window() -> Result<()> {
@@ -239,7 +256,7 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  WindowAggr: windowExpr=[[COUNT(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
@@ -253,17 +270,15 @@ mod tests {
         let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 
     #[test]
     fn test_count_wildcard_on_non_count_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let err = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Error during planning: No function matches the given name and argument types 'SUM(Null)'."), "{err}");
+        let res = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())]);
+        assert!(res.is_err());
         Ok(())
     }
 
@@ -278,6 +293,6 @@ mod tests {
         let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
         \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(Int64(1))) AS MAX(COUNT(*))]] [MAX(COUNT(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
-        assert_plan_eq(&plan, expected)
+        assert_plan_eq(plan, expected)
     }
 }

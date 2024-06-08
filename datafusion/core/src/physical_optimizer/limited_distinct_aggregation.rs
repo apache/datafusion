@@ -55,7 +55,7 @@ impl LimitedDistinctAggregation {
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::try_new(
             *aggr.mode(),
-            aggr.group_by().clone(),
+            aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
             aggr.input().clone(),
@@ -78,7 +78,7 @@ impl LimitedDistinctAggregation {
         let mut is_global_limit = false;
         if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
-            children = local_limit.children();
+            children = local_limit.children().into_iter().cloned().collect();
         } else if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>()
         {
             global_fetch = global_limit.fetch();
@@ -86,7 +86,7 @@ impl LimitedDistinctAggregation {
             global_skip = global_limit.skip();
             // the aggregate must read at least fetch+skip number of rows
             limit = global_fetch.unwrap() + global_skip;
-            children = global_limit.children();
+            children = global_limit.children().into_iter().cloned().collect();
             is_global_limit = true
         } else {
             return None;
@@ -116,7 +116,7 @@ impl LimitedDistinctAggregation {
                     if let Some(parent_aggr) =
                         match_aggr.as_any().downcast_ref::<AggregateExec>()
                     {
-                        if !parent_aggr.group_by().eq(aggr.group_by()) {
+                        if !parent_aggr.group_expr().eq(aggr.group_expr()) {
                             // a partial and final aggregation with different groupings disqualifies
                             // rewriting the child aggregation
                             rewrite_applicable = false;

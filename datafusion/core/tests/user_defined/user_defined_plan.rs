@@ -365,14 +365,18 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         write!(f, "TopK: k={}", self.k)
     }
 
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+    fn with_exprs_and_inputs(
+        &self,
+        mut exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
-        Self {
+        Ok(Self {
             k: self.k,
-            input: inputs[0].clone(),
-            expr: exprs[0].clone(),
-        }
+            input: inputs.swap_remove(0),
+            expr: exprs.swap_remove(0),
+        })
     }
 }
 
@@ -468,8 +472,8 @@ impl ExecutionPlan for TopKExec {
         vec![Distribution::SinglePartition]
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn with_new_children(

@@ -27,7 +27,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
+use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
@@ -62,6 +62,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         object_meta: meta,
         partition_values: vec![],
         range: None,
+        statistics: None,
         extensions: None,
     };
 
@@ -69,23 +70,12 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    let parquet_exec = ParquetExec::new(
-        FileScanConfig {
-            object_store_url,
-            file_groups: vec![vec![partitioned_file]],
-            file_schema: schema.clone(),
-            statistics: Statistics::new_unknown(&schema),
-            // file has 10 cols so index 12 should be month
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
-        Some(predicate),
-        None,
-        Default::default(),
-    );
-    parquet_exec.with_enable_page_index(true)
+    ParquetExec::builder(
+        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),
+    )
+    .with_predicate(predicate)
+    .build()
+    .with_enable_page_index(true)
 }
 
 #[tokio::test]

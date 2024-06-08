@@ -22,11 +22,10 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
 };
 use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::{collect, InputOrderMode};
@@ -34,13 +33,14 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::aggregates::coerce_types;
+use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
@@ -276,7 +276,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 };
 
                 let extended_schema =
-                    schema_add_window_fields(&args, &schema, &window_fn, fn_name)?;
+                    schema_add_window_field(&args, &schema, &window_fn, fn_name)?;
 
                 let window_expr = create_window_expr(
                     &window_fn,
@@ -343,7 +343,7 @@ fn get_random_function(
     window_fn_map.insert(
         "sum",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![arg.clone()],
         ),
     );
@@ -468,6 +468,14 @@ fn get_random_function(
             let dt = a.data_type(schema.as_ref()).unwrap();
             let sig = f.signature();
             let coerced = coerce_types(f, &[dt], &sig).unwrap();
+            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+        }
+    } else if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn {
+        if !args.is_empty() {
+            // Do type coercion first argument
+            let a = args[0].clone();
+            let dt = a.data_type(schema.as_ref()).unwrap();
+            let coerced = data_types_with_aggregate_udf(&[dt], udf).unwrap();
             args[0] = cast(a, schema, coerced[0].clone()).unwrap();
         }
     }
@@ -683,7 +691,7 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let extended_schema = schema_add_window_fields(&args, &schema, &window_fn, &fn_name)?;
+    let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
 
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(
@@ -752,32 +760,6 @@ async fn run_window_test(
         }
     }
     Ok(())
-}
-
-// The planner has fully updated schema before calling the `create_window_expr`
-// Replicate the same for this test
-fn schema_add_window_fields(
-    args: &[Arc<dyn PhysicalExpr>],
-    schema: &Arc<Schema>,
-    window_fn: &WindowFunctionDefinition,
-    fn_name: &str,
-) -> Result<Arc<Schema>> {
-    let data_types = args
-        .iter()
-        .map(|e| e.clone().as_ref().data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
-    let mut window_fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect_vec();
-    window_fields.extend_from_slice(&[Field::new(
-        fn_name,
-        window_expr_return_type,
-        true,
-    )]);
-    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Return randomly sized record batches with:

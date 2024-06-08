@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::stream::{StreamConfig, StreamTable};
+use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
 
 use super::*;
@@ -166,12 +166,14 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
         Field::new("a1", DataType::UInt32, false),
         Field::new("a2", DataType::UInt32, false),
     ]));
-    let left = StreamConfig::new_file(schema.clone(), left_file_path);
+    let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
+    let left = StreamConfig::new(Arc::new(left_source));
     ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
 
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
-    let right = StreamConfig::new_file(schema, right_file_path);
+    let right_source = FileStreamProvider::new_file(schema, right_file_path);
+    let right = StreamConfig::new(Arc::new(right_source));
     ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
     let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
     let dataframe = ctx.sql(sql).await?;
@@ -216,11 +218,13 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
         Field::new("a1", DataType::UInt32, false),
         Field::new("a2", DataType::UInt32, false),
     ]));
-    let left = StreamConfig::new_file(schema.clone(), left_file_path);
+    let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
+    let left = StreamConfig::new(Arc::new(left_source));
     ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
-    let right = StreamConfig::new_file(schema.clone(), right_file_path);
+    let right_source = FileStreamProvider::new_file(schema.clone(), right_file_path);
+    let right = StreamConfig::new(Arc::new(right_source));
     ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
     let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
     match df.create_physical_plan().await {

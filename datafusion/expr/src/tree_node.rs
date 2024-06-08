@@ -19,19 +19,19 @@
 
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
-    Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
+    Cast, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, Sort,
+    TryCast, Unnest, WindowFunction,
 };
-use crate::{Expr, GetFieldAccess};
+use crate::Expr;
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, map_until_stop_and_collect, Result};
+use datafusion_common::{map_until_stop_and_collect, Result};
 
 impl TreeNode for Expr {
-    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
-        &self,
+    fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
+        &'n self,
         f: F,
     ) -> Result<TreeNodeRecursion> {
         let children = match self {
@@ -51,16 +51,6 @@ impl TreeNode for Expr {
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = expr.as_ref();
-                match field {
-                    GetFieldAccess::ListIndex {key} => vec![key.as_ref(), expr],
-                    GetFieldAccess::ListRange {start, stop, stride} => {
-                        vec![start.as_ref(), stop.as_ref(),stride.as_ref(), expr]
-                    }
-                    GetFieldAccess::NamedStructField { .. } => vec![expr],
-                }
-            }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
             Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
@@ -281,14 +271,11 @@ impl TreeNode for Expr {
                 nulls_first,
             }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                transform_vec(args, &mut f)?.map_data(|new_args| {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        func, new_args,
+                    )))
                 })?
             }
             Expr::WindowFunction(WindowFunction {
@@ -345,14 +332,11 @@ impl TreeNode for Expr {
                         Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                             fun,
                             new_args,
-                            false,
+                            distinct,
                             new_filter,
                             new_order_by,
                             null_treatment,
                         )))
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 },
             )?,
@@ -380,51 +364,40 @@ impl TreeNode for Expr {
             .update_data(|(new_expr, new_list)| {
                 Expr::InList(InList::new(new_expr, new_list, negated))
             }),
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                transform_box(expr, &mut f)?.update_data(|be| {
-                    Expr::GetIndexedField(GetIndexedField::new(be, field))
-                })
-            }
         })
     }
 }
 
-fn transform_box<F>(be: Box<Expr>, f: &mut F) -> Result<Transformed<Box<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+fn transform_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    be: Box<Expr>,
+    f: &mut F,
+) -> Result<Transformed<Box<Expr>>> {
     Ok(f(*be)?.update_data(Box::new))
 }
 
-fn transform_option_box<F>(
+fn transform_option_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     obe: Option<Box<Expr>>,
     f: &mut F,
-) -> Result<Transformed<Option<Box<Expr>>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+) -> Result<Transformed<Option<Box<Expr>>>> {
     obe.map_or(Ok(Transformed::no(None)), |be| {
         Ok(transform_box(be, f)?.update_data(Some))
     })
 }
 
 /// &mut transform a Option<`Vec` of `Expr`s>
-pub fn transform_option_vec<F>(
+pub fn transform_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     ove: Option<Vec<Expr>>,
     f: &mut F,
-) -> Result<Transformed<Option<Vec<Expr>>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+) -> Result<Transformed<Option<Vec<Expr>>>> {
     ove.map_or(Ok(Transformed::no(None)), |ve| {
         Ok(transform_vec(ve, f)?.update_data(Some))
     })
 }
 
 /// &mut transform a `Vec` of `Expr`s
-fn transform_vec<F>(ve: Vec<Expr>, f: &mut F) -> Result<Transformed<Vec<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Transformed<Expr>>,
-{
+fn transform_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    ve: Vec<Expr>,
+    f: &mut F,
+) -> Result<Transformed<Vec<Expr>>> {
     ve.into_iter().map_until_stop_and_collect(f)
 }

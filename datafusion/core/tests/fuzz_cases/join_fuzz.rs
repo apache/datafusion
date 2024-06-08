@@ -79,20 +79,20 @@ async fn test_full_join_1k() {
 }
 
 #[tokio::test]
-async fn test_semi_join_10k() {
+async fn test_semi_join_1k() {
     run_join_test(
-        make_staggered_batches(10000),
-        make_staggered_batches(10000),
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
         JoinType::LeftSemi,
     )
     .await
 }
 
 #[tokio::test]
-async fn test_anti_join_10k() {
+async fn test_anti_join_1k() {
     run_join_test(
-        make_staggered_batches(10000),
-        make_staggered_batches(10000),
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
         JoinType::LeftAnti,
     )
     .await

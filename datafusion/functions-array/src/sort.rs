@@ -25,12 +25,11 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArraySort,
     array_sort,
     array desc null_first,
@@ -48,7 +47,7 @@ impl ArraySort {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec!["array_sort".to_string(), "list_sort".to_string()],
+            aliases: vec!["list_sort".to_string()],
         }
     }
 }
@@ -121,6 +120,9 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let list_array = as_list_array(&args[0])?;
     let row_count = list_array.len();
+    if row_count == 0 {
+        return Ok(args[0].clone());
+    }
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];

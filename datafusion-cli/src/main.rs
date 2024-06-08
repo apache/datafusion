@@ -177,18 +177,14 @@ async fn main_inner() -> Result<()> {
     let rt_config =
         // set memory pool size
         if let Some(memory_limit) = args.memory_limit {
+            // unwrap is safe here because is_valid_memory_pool_size already checked the value
             let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
             // set memory pool type
-            if let Some(mem_pool_type) = args.mem_pool_type {
-                match mem_pool_type {
-                    PoolType::Greedy => rt_config
-                        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
-                    PoolType::Fair => rt_config
-                        .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
-                }
-            } else {
-                rt_config
-                .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+            match args.mem_pool_type {
+                Some(PoolType::Fair) => rt_config
+                    .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
+                _ => rt_config
+                    .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             }
         } else {
             rt_config
@@ -304,7 +300,7 @@ enum ByteUnit {
 }
 
 impl ByteUnit {
-    fn multiplier(&self) -> usize {
+    fn multiplier(&self) -> u64 {
         match self {
             ByteUnit::Byte => 1,
             ByteUnit::KiB => 1 << 10,
@@ -349,8 +345,12 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
         let unit = byte_suffixes()
             .get(suffix)
             .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
+        let memory_pool_size = usize::try_from(unit.multiplier())
+            .ok()
+            .and_then(|multiplier| num.checked_mul(multiplier))
+            .ok_or_else(|| format!("Memory pool size '{}' is too large", size))?;
 
-        Ok(num * unit.multiplier())
+        Ok(memory_pool_size)
     } else {
         Err(format!("Invalid memory pool size '{}'", size))
     }

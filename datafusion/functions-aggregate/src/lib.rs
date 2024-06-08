@@ -55,7 +55,11 @@
 #[macro_use]
 pub mod macros;
 
+pub mod covariance;
 pub mod first_last;
+pub mod median;
+pub mod sum;
+pub mod variance;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -65,12 +69,31 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::covariance::covar_pop;
+    pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
+    pub use super::first_last::last_value;
+    pub use super::median::median;
+    pub use super::sum::sum;
+    pub use super::variance::var_sample;
+}
+
+/// Returns all default aggregate functions
+pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
+    vec![
+        first_last::first_value_udaf(),
+        first_last::last_value_udaf(),
+        covariance::covar_samp_udaf(),
+        sum::sum_udaf(),
+        covariance::covar_pop_udaf(),
+        median::median_udaf(),
+        variance::var_samp_udaf(),
+    ]
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<AggregateUDF>> = vec![first_last::first_value_udaf()];
+    let functions: Vec<Arc<AggregateUDF>> = all_default_aggregate_functions();
 
     functions.into_iter().try_for_each(|udf| {
         let existing_udaf = registry.register_udaf(udf)?;
@@ -81,4 +104,36 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::all_default_aggregate_functions;
+    use datafusion_common::Result;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_no_duplicate_name() -> Result<()> {
+        let mut names = HashSet::new();
+        for func in all_default_aggregate_functions() {
+            // TODO: remove this
+            // sum is in intermidiate migration state, skip this
+            if func.name().to_lowercase() == "sum" {
+                continue;
+            }
+            assert!(
+                names.insert(func.name().to_string().to_lowercase()),
+                "duplicate function name: {}",
+                func.name()
+            );
+            for alias in func.aliases() {
+                assert!(
+                    names.insert(alias.to_string().to_lowercase()),
+                    "duplicate function name: {}",
+                    alias
+                );
+            }
+        }
+        Ok(())
+    }
 }

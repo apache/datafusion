@@ -41,7 +41,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::{not_impl_err, FileType};
+use datafusion_common::not_impl_err;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
@@ -104,9 +104,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
-
-    /// Returns the FileType corresponding to this FileFormat
-    fn file_type(&self) -> FileType;
 }
 
 #[cfg(test)]
@@ -124,10 +121,9 @@ pub(crate) mod test_util {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, PutOptions,
-        PutResult,
+        Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        PutMultipartOpts, PutOptions, PutPayload, PutResult,
     };
-    use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
         state: &SessionState,
@@ -150,22 +146,18 @@ pub(crate) mod test_util {
             object_meta: meta,
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         }]];
 
         let exec = format
             .create_physical_plan(
                 state,
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection,
-                    limit,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_groups(file_groups)
+                    .with_statistics(statistics)
+                    .with_projection(projection)
+                    .with_limit(limit),
                 None,
             )
             .await?;
@@ -192,25 +184,17 @@ pub(crate) mod test_util {
         async fn put_opts(
             &self,
             _location: &Path,
-            _bytes: Bytes,
+            _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             unimplemented!()
         }
 
-        async fn put_multipart(
+        async fn put_multipart_opts(
             &self,
             _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            unimplemented!()
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }
 
@@ -236,6 +220,7 @@ pub(crate) mod test_util {
                     version: None,
                 },
                 range: Default::default(),
+                attributes: Attributes::default(),
             })
         }
 

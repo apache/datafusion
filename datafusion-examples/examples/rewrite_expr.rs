@@ -51,7 +51,7 @@ pub fn main() -> Result<()> {
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
     let analyzed_plan =
-        analyzer.execute_and_check(&logical_plan, config.options(), |_, _| {})?;
+        analyzer.execute_and_check(logical_plan, config.options(), |_, _| {})?;
     println!(
         "Analyzed Logical Plan:\n\n{}\n",
         analyzed_plan.display_indent()
@@ -227,15 +227,15 @@ impl ContextProvider for MyContextProvider {
         &self.options
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         Vec::new()
     }
 }

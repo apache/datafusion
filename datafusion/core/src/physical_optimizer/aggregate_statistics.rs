@@ -30,6 +30,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -57,13 +58,9 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
-                    take_optimizable_column_count(&**expr, &stats)
+                    take_optimizable_column_and_table_count(&**expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((num_rows, name)) =
-                    take_optimizable_table_count(&**expr, &stats)
-                {
-                    projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
                 } else if let Some((max, name)) = take_optimizable_max(&**expr, &stats) {
@@ -126,7 +123,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                         return Some(child);
                     }
                 }
-                if let [ref childrens_child] = child.children().as_slice() {
+                if let [childrens_child] = child.children().as_slice() {
                     child = Arc::clone(childrens_child);
                 } else {
                     break;
@@ -137,43 +134,48 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
     None
 }
 
-/// If this agg_expr is a count that is exactly defined in the statistics, return it.
-fn take_optimizable_table_count(
-    agg_expr: &dyn AggregateExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
-        &stats.num_rows,
-        agg_expr.as_any().downcast_ref::<expressions::Count>(),
-    ) {
-        // TODO implementing Eq on PhysicalExpr would help a lot here
-        if casted_expr.expressions().len() == 1 {
-            if let Some(lit_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-            {
-                if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                    return Some((
-                        ScalarValue::Int64(Some(num_rows as i64)),
-                        casted_expr.name().to_owned(),
-                    ));
-                }
-            }
-        }
-    }
-    None
-}
-
 /// If this agg_expr is a count that can be exactly derived from the statistics, return it.
-fn take_optimizable_column_count(
+fn take_optimizable_column_and_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
+    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if agg_expr.fun().name() == "COUNT" && !agg_expr.is_distinct() {
+            if let Precision::Exact(num_rows) = stats.num_rows {
+                let exprs = agg_expr.expressions();
+                if exprs.len() == 1 {
+                    // TODO optimize with exprs other than Column
+                    if let Some(col_expr) =
+                        exprs[0].as_any().downcast_ref::<expressions::Column>()
+                    {
+                        let current_val = &col_stats[col_expr.index()].null_count;
+                        if let &Precision::Exact(val) = current_val {
+                            return Some((
+                                ScalarValue::Int64(Some((num_rows - val) as i64)),
+                                agg_expr.name().to_string(),
+                            ));
+                        }
+                    } else if let Some(lit_expr) =
+                        exprs[0].as_any().downcast_ref::<expressions::Literal>()
+                    {
+                        if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                            return Some((
+                                ScalarValue::Int64(Some(num_rows as i64)),
+                                agg_expr.name().to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // TODO: Remove this after revmoing Builtin Count
+    else if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
         &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
+        // TODO implementing Eq on PhysicalExpr would help a lot here
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
             if let Some(col_expr) = casted_expr.expressions()[0]
@@ -185,6 +187,16 @@ fn take_optimizable_column_count(
                     return Some((
                         ScalarValue::Int64(Some((num_rows - val) as i64)),
                         casted_expr.name().to_string(),
+                    ));
+                }
+            } else if let Some(lit_expr) = casted_expr.expressions()[0]
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+            {
+                if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                    return Some((
+                        ScalarValue::Int64(Some(num_rows as i64)),
+                        casted_expr.name().to_owned(),
                     ));
                 }
             }

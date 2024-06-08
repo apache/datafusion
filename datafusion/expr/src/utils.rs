@@ -18,20 +18,20 @@
 //! Expression utilities
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
-use crate::logical_plan::Aggregate;
 use crate::signature::{Signature, TypeSignature};
 use crate::{
-    and, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
-    Operator, TryCast,
+    and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
@@ -248,7 +248,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
 
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
-pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
             return plan_err!(
@@ -257,7 +257,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
         }
         Ok(grouping_set.distinct_expr())
     } else {
-        Ok(group_expr.to_vec())
+        Ok(group_expr.iter().collect())
     }
 }
 
@@ -303,7 +303,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
-            | Expr::GetIndexedField { .. }
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
@@ -725,53 +724,17 @@ pub fn from_plan(
     plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
 }
 
-/// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Vec<Column> {
-    agg.aggr_expr
-        .iter()
-        .chain(&agg.group_expr)
-        .flat_map(find_columns_referenced_by_expr)
-        .collect()
-}
-
-fn exprlist_to_fields_aggregate(
-    exprs: &[Expr],
-    agg: &Aggregate,
-) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    let agg_cols = agg_cols(agg);
-    let mut fields = vec![];
-    for expr in exprs {
-        match expr {
-            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                // resolve against schema of input to aggregate
-                fields.push(expr.to_field(agg.input.schema())?);
-            }
-            _ => fields.push(expr.to_field(&agg.schema)?),
-        }
-    }
-    Ok(fields)
-}
-
 /// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields(
-    exprs: &[Expr],
+pub fn exprlist_to_fields<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
-    // because it will contain columns representing complex expressions (such a column named
-    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
-    // look at the input to the aggregate instead.
-    let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs, agg)),
-        _ => None,
-    };
-    if let Some(fields) = fields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        let input_schema = &plan.schema();
-        exprs.iter().map(|e| e.to_field(input_schema)).collect()
-    }
+    // look for exact match in plan's output schema
+    let input_schema = &plan.schema();
+    exprs
+        .into_iter()
+        .map(|e| e.to_field(input_schema))
+        .collect()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
@@ -789,37 +752,21 @@ pub fn exprlist_to_fields(
 /// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
-pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
-    match e {
-        Expr::Column(_) => e,
-        Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(Alias {
-            expr,
-            relation,
-            name,
-        }) => columnize_expr(*expr, input_schema).alias_qualified(relation, name),
-        Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
-            expr: Box::new(columnize_expr(*expr, input_schema)),
-            data_type,
-        }),
-        Expr::TryCast(TryCast { expr, data_type }) => Expr::TryCast(TryCast::new(
-            Box::new(columnize_expr(*expr, input_schema)),
-            data_type,
+pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
+    let output_exprs = match input.columnized_output_exprs() {
+        Ok(exprs) if !exprs.is_empty() => exprs,
+        _ => return Ok(e),
+    };
+    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
+    e.transform_down(|node: Expr| match exprs_map.get(&node) {
+        Some(column) => Ok(Transformed::new(
+            Expr::Column(column.clone()),
+            true,
+            TreeNodeRecursion::Jump,
         )),
-        Expr::ScalarSubquery(_) => e.clone(),
-        _ => match e.display_name() {
-            Ok(name) => {
-                match input_schema.qualified_field_with_unqualified_name(&name) {
-                    Ok((qualifier, field)) => {
-                        Expr::Column(Column::from((qualifier, field)))
-                    }
-                    // expression not provided as input, do not convert to a column reference
-                    Err(_) => e,
-                }
-            }
-            Err(_) => e,
-        },
-    }
+        None => Ok(Transformed::no(node)),
+    })
+    .data()
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
@@ -925,7 +872,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
     columns: &HashSet<Column>,
-    schema: DFSchemaRef,
+    schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
         let exist = schema.is_column_from_schema(col);
@@ -949,8 +896,8 @@ pub fn check_all_columns_from_schema(
 pub fn find_valid_equijoin_key_pair(
     left_key: &Expr,
     right_key: &Expr,
-    left_schema: DFSchemaRef,
-    right_schema: DFSchemaRef,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
     let left_using_columns = left_key.to_columns()?;
     let right_using_columns = right_key.to_columns()?;
@@ -960,8 +907,8 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    if check_all_columns_from_schema(&left_using_columns, left_schema.clone())?
-        && check_all_columns_from_schema(&right_using_columns, right_schema.clone())?
+    if check_all_columns_from_schema(&left_using_columns, left_schema)?
+        && check_all_columns_from_schema(&right_using_columns, right_schema)?
     {
         return Ok(Some((left_key.clone(), right_key.clone())));
     } else if check_all_columns_from_schema(&right_using_columns, left_schema)?
@@ -1147,7 +1094,7 @@ fn split_binary_impl<'a>(
 /// assert_eq!(conjunction(split), Some(expr));
 /// ```
 pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    filters.into_iter().reduce(|accum, expr| accum.and(expr))
+    filters.into_iter().reduce(Expr::and)
 }
 
 /// Combines an array of filter expressions into a single filter
@@ -1155,12 +1102,41 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// logical OR.
 ///
 /// Returns None if the filters array is empty.
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{col, lit};
+/// # use datafusion_expr::utils::disjunction;
+/// // a=1 OR b=2
+/// let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
+///
+/// // [a=1, b=2]
+/// let split = vec![
+///   col("a").eq(lit(1)),
+///   col("b").eq(lit(2)),
+/// ];
+///
+/// // use disjuncton to join them together with `OR`
+/// assert_eq!(disjunction(split), Some(expr));
+/// ```
 pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    filters.into_iter().reduce(|accum, expr| accum.or(expr))
+    filters.into_iter().reduce(Expr::or)
 }
 
-/// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
-/// its predicate be all `predicates` ANDed.
+/// Returns a new [LogicalPlan] that filters the output of  `plan` with a
+/// [LogicalPlan::Filter] with all `predicates` ANDed.
+///
+/// # Example
+/// Before:
+/// ```text
+/// plan
+/// ```
+///
+/// After:
+/// ```text
+/// Filter(predicate)
+///   plan
+/// ```
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
     // reduce filters to a single filter with an AND
     let predicate = predicates
@@ -1241,12 +1217,43 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// Represents the sensitivity of an aggregate expression to ordering.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum AggregateOrderSensitivity {
+    /// Indicates that the aggregate expression is insensitive to ordering.
+    /// Ordering at the input is not important for the result of the aggregator.
+    Insensitive,
+    /// Indicates that the aggregate expression has a hard requirement on ordering.
+    /// The aggregator can not produce a correct result unless its ordering
+    /// requirement is satisfied.
+    HardRequirement,
+    /// Indicates that ordering is beneficial for the aggregate expression in terms
+    /// of evaluation efficiency. The aggregator can produce its result efficiently
+    /// when its required ordering is satisfied; however, it can still produce the
+    /// correct result (albeit less efficiently) when its required ordering is not met.
+    Beneficial,
+}
+
+impl AggregateOrderSensitivity {
+    pub fn is_insensitive(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::Insensitive)
+    }
+
+    pub fn is_beneficial(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::Beneficial)
+    }
+
+    pub fn hard_requires(&self) -> bool {
+        self.eq(&AggregateOrderSensitivity::HardRequirement)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
-        WindowFrame, WindowFunctionDefinition,
+        Cast, WindowFrame, WindowFunctionDefinition,
     };
 
     #[test]

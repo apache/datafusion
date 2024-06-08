@@ -30,6 +30,21 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::array::*;
+use arrow::compute::{self, concat_batches, take, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::error::ArrowError;
+use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
+
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -41,20 +56,6 @@ use crate::{
     ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
-use arrow::array::*;
-use arrow::compute::{self, concat_batches, take, SortOptions};
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use arrow::error::ArrowError;
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
-
-use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -297,8 +298,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.left.clone(), self.right.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.left, &self.right]
     }
 
     fn with_new_children(
@@ -486,11 +487,14 @@ struct StreamedBatch {
     /// The join key arrays of streamed batch which are used to compare with buffered batches
     /// and to produce output. They are produced by evaluating `on` expressions.
     pub join_arrays: Vec<ArrayRef>,
-
     /// Chunks of indices from buffered side (may be nulls) joined to streamed
     pub output_indices: Vec<StreamedJoinedChunk>,
     /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
+    /// Indices that found a match for the given join filter
+    /// Used for semi joins to keep track the streaming index which got a join filter match
+    /// and already emitted to the output.
+    pub join_filter_matched_idxs: HashSet<u64>,
 }
 
 impl StreamedBatch {
@@ -502,6 +506,7 @@ impl StreamedBatch {
             join_arrays,
             output_indices: vec![],
             buffered_batch_idx: None,
+            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -512,6 +517,7 @@ impl StreamedBatch {
             join_arrays: vec![],
             output_indices: vec![],
             buffered_batch_idx: None,
+            join_filter_matched_idxs: HashSet::new(),
         }
     }
 
@@ -990,7 +996,22 @@ impl SMJStream {
             }
             Ordering::Equal => {
                 if matches!(self.join_type, JoinType::LeftSemi) {
-                    join_streamed = !self.streamed_joined;
+                    // if the join filter is specified then its needed to output the streamed index
+                    // only if it has not been emitted before
+                    // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
+                    // filter match and prevents the same index to go into output more than once
+                    if self.filter.is_some() {
+                        join_streamed = !self
+                            .streamed_batch
+                            .join_filter_matched_idxs
+                            .contains(&(self.streamed_batch.idx as u64))
+                            && !self.streamed_joined;
+                        // if the join filter specified there can be references to buffered columns
+                        // so buffered columns are needed to access them
+                        join_buffered = join_streamed;
+                    } else {
+                        join_streamed = !self.streamed_joined;
+                    }
                 }
                 if matches!(
                     self.join_type,
@@ -999,6 +1020,15 @@ impl SMJStream {
                     join_streamed = true;
                     join_buffered = true;
                 };
+
+                if matches!(self.join_type, JoinType::LeftAnti) && self.filter.is_some() {
+                    join_streamed = !self
+                        .streamed_batch
+                        .join_filter_matched_idxs
+                        .contains(&(self.streamed_batch.idx as u64))
+                        && !self.streamed_joined;
+                    join_buffered = join_streamed;
+                }
             }
             Ordering::Greater => {
                 if matches!(self.join_type, JoinType::Full) {
@@ -1134,17 +1164,15 @@ impl SMJStream {
                 .collect::<Result<Vec<_>, ArrowError>>()?;
 
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
-
             let mut buffered_columns =
                 if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                     vec![]
                 } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                    self.buffered_data.batches[buffered_idx]
-                        .batch
-                        .columns()
-                        .iter()
-                        .map(|column| take(column, &buffered_indices, None))
-                        .collect::<Result<Vec<_>, ArrowError>>()?
+                    get_buffered_columns(
+                        &self.buffered_data,
+                        buffered_idx,
+                        &buffered_indices,
+                    )?
                 } else {
                     self.buffered_schema
                         .fields()
@@ -1161,6 +1189,18 @@ impl SMJStream {
             let filter_columns = if chunk.buffered_batch_idx.is_some() {
                 if matches!(self.join_type, JoinType::Right) {
                     get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+                } else if matches!(
+                    self.join_type,
+                    JoinType::LeftSemi | JoinType::LeftAnti
+                ) {
+                    // unwrap is safe here as we check is_some on top of if statement
+                    let buffered_columns = get_buffered_columns(
+                        &self.buffered_data,
+                        chunk.buffered_batch_idx.unwrap(),
+                        &buffered_indices,
+                    )?;
+
+                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
                 } else {
                     get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
                 }
@@ -1195,7 +1235,24 @@ impl SMJStream {
                         .into_array(filter_batch.num_rows())?;
 
                     // The selection mask of the filter
-                    let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                    let mut mask =
+                        datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                    let maybe_filtered_join_mask: Option<(BooleanArray, Vec<u64>)> =
+                        get_filtered_join_mask(
+                            self.join_type,
+                            streamed_indices,
+                            mask,
+                            &self.streamed_batch.join_filter_matched_idxs,
+                            &self.buffered_data.scanning_offset,
+                        );
+
+                    if let Some(ref filtered_join_mask) = maybe_filtered_join_mask {
+                        mask = &filtered_join_mask.0;
+                        self.streamed_batch
+                            .join_filter_matched_idxs
+                            .extend(&filtered_join_mask.1);
+                    }
 
                     // Push the filtered batch to the output
                     let filtered_batch =
@@ -1323,7 +1380,9 @@ impl SMJStream {
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.
-        if record_batch.num_rows() > self.output_size {
+        // If `record_batch` is empty, we should reset `self.output_size` to 0. It could be happened
+        // when the join filter is applied and all rows are filtered out.
+        if record_batch.num_rows() == 0 || record_batch.num_rows() > self.output_size {
             self.output_size = 0;
         } else {
             self.output_size -= record_batch.num_rows();
@@ -1361,6 +1420,105 @@ fn get_filter_column(
     }
 
     filter_columns
+}
+
+/// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]`
+#[inline(always)]
+fn get_buffered_columns(
+    buffered_data: &BufferedData,
+    buffered_batch_idx: usize,
+    buffered_indices: &UInt64Array,
+) -> Result<Vec<ArrayRef>, ArrowError> {
+    buffered_data.batches[buffered_batch_idx]
+        .batch
+        .columns()
+        .iter()
+        .map(|column| take(column, &buffered_indices, None))
+        .collect::<Result<Vec<_>, ArrowError>>()
+}
+
+/// Calculate join filter bit mask considering join type specifics
+/// `streamed_indices` - array of streamed datasource JOINED row indices
+/// `mask` - array booleans representing computed join filter expression eval result:
+///      true = the row index matches the join filter
+///      false = the row index doesn't match the join filter
+/// `streamed_indices` have the same length as `mask`
+/// `matched_indices` array of streaming indices that already has a join filter match
+/// `scanning_buffered_offset` current buffered offset across batches
+fn get_filtered_join_mask(
+    join_type: JoinType,
+    streamed_indices: UInt64Array,
+    mask: &BooleanArray,
+    matched_indices: &HashSet<u64>,
+    scanning_buffered_offset: &usize,
+) -> Option<(BooleanArray, Vec<u64>)> {
+    let mut seen_as_true: bool = false;
+    let streamed_indices_length = streamed_indices.len();
+    let mut corrected_mask: BooleanBuilder =
+        BooleanBuilder::with_capacity(streamed_indices_length);
+
+    let mut filter_matched_indices: Vec<u64> = vec![];
+
+    #[allow(clippy::needless_range_loop)]
+    match join_type {
+        // for LeftSemi Join the filter mask should be calculated in its own way:
+        // if we find at least one matching row for specific streaming index
+        // we don't need to check any others for the same index
+        JoinType::LeftSemi => {
+            // have we seen a filter match for a streaming index before
+            for i in 0..streamed_indices_length {
+                // LeftSemi respects only first true values for specific streaming index,
+                // others true values for the same index must be false
+                if mask.value(i) && !seen_as_true {
+                    seen_as_true = true;
+                    corrected_mask.append_value(true);
+                    filter_matched_indices.push(streamed_indices.value(i));
+                } else {
+                    corrected_mask.append_value(false);
+                }
+
+                // if switched to next streaming index(e.g. from 0 to 1, or from 1 to 2), we reset seen_as_true flag
+                if i < streamed_indices_length - 1
+                    && streamed_indices.value(i) != streamed_indices.value(i + 1)
+                {
+                    seen_as_true = false;
+                }
+            }
+            Some((corrected_mask.finish(), filter_matched_indices))
+        }
+        // LeftAnti semantics: return true if for every x in the collection the join matching filter is false.
+        // `filter_matched_indices` needs to be set once per streaming index
+        // to prevent duplicates in the output
+        JoinType::LeftAnti => {
+            // have we seen a filter match for a streaming index before
+            for i in 0..streamed_indices_length {
+                if mask.value(i) && !seen_as_true {
+                    seen_as_true = true;
+                    filter_matched_indices.push(streamed_indices.value(i));
+                }
+
+                // Reset `seen_as_true` flag and calculate mask for the current streaming index
+                // - if within the batch it switched to next streaming index(e.g. from 0 to 1, or from 1 to 2)
+                // - if it is at the end of the all buffered batches for the given streaming index, 0 index comes last
+                if (i < streamed_indices_length - 1
+                    && streamed_indices.value(i) != streamed_indices.value(i + 1))
+                    || (i == streamed_indices_length - 1
+                        && *scanning_buffered_offset == 0)
+                {
+                    corrected_mask.append_value(
+                        !matched_indices.contains(&streamed_indices.value(i))
+                            && !seen_as_true,
+                    );
+                    seen_as_true = false;
+                } else {
+                    corrected_mask.append_value(false);
+                }
+            }
+
+            Some((corrected_mask.finish(), filter_matched_indices))
+        }
+        _ => None,
+    }
 }
 
 /// Buffered data contains all buffered batches with one unique join key
@@ -1517,9 +1675,10 @@ fn compare_join_arrays(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
@@ -1583,9 +1742,10 @@ fn is_join_arrays_equal(
             },
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
-            _ => {
+            dt => {
                 return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator"
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
                 );
             }
         }
@@ -1600,23 +1760,28 @@ fn is_join_arrays_equal(
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::Column;
-    use crate::joins::utils::JoinOn;
-    use crate::joins::SortMergeJoinExec;
-    use crate::memory::MemoryExec;
-    use crate::test::build_table_i32;
-    use crate::{common, ExecutionPlan};
-
     use arrow::array::{Date32Array, Date64Array, Int32Array};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::{BooleanArray, UInt64Array};
+    use hashbrown::HashSet;
+
+    use datafusion_common::JoinType::{LeftAnti, LeftSemi};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType, Result,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_execution::TaskContext;
+
+    use crate::expressions::Column;
+    use crate::joins::sort_merge_join::get_filtered_join_mask;
+    use crate::joins::utils::JoinOn;
+    use crate::joins::SortMergeJoinExec;
+    use crate::memory::MemoryExec;
+    use crate::test::build_table_i32;
+    use crate::{common, ExecutionPlan};
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -2637,6 +2802,161 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn left_semi_join_filtered_mask() -> Result<()> {
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 0, 1, 1]),
+                &BooleanArray::from(vec![true, true, false, false]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![true, false, false, false]), vec![0]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![true, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![true, true]), vec![0, 1]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![false, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![false, true]), vec![1]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![true, false]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![true, false]), vec![0]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &BooleanArray::from(vec![false, true, true, true, true, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((
+                BooleanArray::from(vec![false, true, false, true, false, false]),
+                vec![0, 1]
+            ))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &BooleanArray::from(vec![false, false, false, false, false, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((
+                BooleanArray::from(vec![false, false, false, false, false, true]),
+                vec![1]
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_anti_join_filtered_mask() -> Result<()> {
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 0, 1, 1]),
+                &BooleanArray::from(vec![true, true, false, false]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![false, false, false, true]), vec![0]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![true, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![false, false]), vec![0, 1]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![false, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![true, false]), vec![1]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 1]),
+                &BooleanArray::from(vec![true, false]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((BooleanArray::from(vec![false, true]), vec![0]))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &BooleanArray::from(vec![false, true, true, true, true, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((
+                BooleanArray::from(vec![false, false, false, false, false, false]),
+                vec![0, 1]
+            ))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftAnti,
+                UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &BooleanArray::from(vec![false, false, false, false, false, true]),
+                &HashSet::new(),
+                &0,
+            ),
+            Some((
+                BooleanArray::from(vec![false, false, true, false, false, false]),
+                vec![1]
+            ))
+        );
+
+        Ok(())
+    }
+
     /// Returns the column names on the schema
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()

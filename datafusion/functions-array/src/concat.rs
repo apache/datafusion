@@ -27,8 +27,6 @@ use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{
     type_coercion::binary::get_wider_type, ColumnarValue, ScalarUDFImpl, Signature,
     Volatility,
@@ -36,7 +34,7 @@ use datafusion_expr::{
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayAppend,
     array_append,
     array element,                                // arg name
@@ -61,7 +59,6 @@ impl ArrayAppend {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
-                String::from("array_append"),
                 String::from("list_append"),
                 String::from("array_push_back"),
                 String::from("list_push_back"),
@@ -96,7 +93,7 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPrepend,
     array_prepend,
     element array,
@@ -121,7 +118,6 @@ impl ArrayPrepend {
         Self {
             signature: Signature::element_and_array(Volatility::Immutable),
             aliases: vec![
-                String::from("array_prepend"),
                 String::from("list_prepend"),
                 String::from("array_push_front"),
                 String::from("list_push_front"),
@@ -156,7 +152,7 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayConcat,
     array_concat,
     "Concatenates arrays.",
@@ -180,7 +176,6 @@ impl ArrayConcat {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
             aliases: vec![
-                String::from("array_concat"),
                 String::from("array_cat"),
                 String::from("list_concat"),
                 String::from("list_cat"),

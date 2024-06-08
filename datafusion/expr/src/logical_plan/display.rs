@@ -30,7 +30,7 @@ use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::DataFusionError;
+use datafusion_common::{Column, DataFusionError};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -58,12 +58,12 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
+impl<'n, 'a, 'b> TreeNodeVisitor<'n> for IndentVisitor<'a, 'b> {
     type Node = LogicalPlan;
 
     fn f_down(
         &mut self,
-        plan: &LogicalPlan,
+        plan: &'n LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         if self.indent > 0 {
             writeln!(self.f)?;
@@ -84,7 +84,7 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
 
     fn f_up(
         &mut self,
-        _plan: &LogicalPlan,
+        _plan: &'n LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         self.indent -= 1;
         Ok(TreeNodeRecursion::Continue)
@@ -180,12 +180,12 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
+impl<'n, 'a, 'b> TreeNodeVisitor<'n> for GraphvizVisitor<'a, 'b> {
     type Node = LogicalPlan;
 
     fn f_down(
         &mut self,
-        plan: &LogicalPlan,
+        plan: &'n LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.graphviz_builder.next_id();
 
@@ -638,22 +638,37 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "DescribeTable"
                 })
             }
-            LogicalPlan::Unnest(Unnest { columns, .. }) => {
+            LogicalPlan::Unnest(Unnest {
+                input: plan,
+                list_type_columns: list_col_indices,
+                struct_type_columns: struct_col_indices,
+                ..
+            }) => {
+                let input_columns = plan.schema().columns();
+                let list_type_columns = list_col_indices
+                    .iter()
+                    .map(|i| &input_columns[*i])
+                    .collect::<Vec<&Column>>();
+                let struct_type_columns = struct_col_indices
+                    .iter()
+                    .map(|i| &input_columns[*i])
+                    .collect::<Vec<&Column>>();
                 json!({
                     "Node Type": "Unnest",
-                    "Column": expr_vec_fmt!(columns),
+                    "ListColumn": expr_vec_fmt!(list_type_columns),
+                    "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
             }
         }
     }
 }
 
-impl<'a, 'b> TreeNodeVisitor for PgJsonVisitor<'a, 'b> {
+impl<'n, 'a, 'b> TreeNodeVisitor<'n> for PgJsonVisitor<'a, 'b> {
     type Node = LogicalPlan;
 
     fn f_down(
         &mut self,
-        node: &LogicalPlan,
+        node: &'n LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.next_id;
         self.next_id += 1;

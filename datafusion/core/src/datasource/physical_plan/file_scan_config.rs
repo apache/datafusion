@@ -22,7 +22,9 @@ use std::{
     borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
 };
 
-use super::{get_projected_output_ordering, FileGroupPartitioner};
+use super::{
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -33,7 +35,7 @@ use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
 use log::warn;
 
@@ -62,12 +64,41 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::Schema;
+/// use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # let file_schema = Arc::new(Schema::empty());
+/// // create FileScan config for reading data from file://
+/// let object_store_url = ObjectStoreUrl::local_filesystem();
+/// let config = FileScanConfig::new(object_store_url, file_schema)
+///   .with_limit(Some(1000))            // read only the first 1000 records
+///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
+///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
+///   .with_file(PartitionedFile::new("file1.parquet", 1234))
+///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
+///   // in a  single row group
+///   .with_file_group(vec![
+///    PartitionedFile::new("file2.parquet", 56),
+///    PartitionedFile::new("file3.parquet", 78),
+///   ]);
+/// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
     /// [`RuntimeEnv::object_store`]
     ///
+    /// This `ObjectStoreUrl` should be the prefix of the absolute url for files
+    /// as `file://` or `s3://my_bucket`. It should not include the path to the
+    /// file itself. The relevant URL prefix must be registered via
+    /// [`RuntimeEnv::register_object_store`]
+    ///
     /// [`ObjectStore`]: object_store::ObjectStore
+    /// [`RuntimeEnv::register_object_store`]: datafusion_execution::runtime_env::RuntimeEnv::register_object_store
     /// [`RuntimeEnv::object_store`]: datafusion_execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
     /// Schema before `projection` is applied. It contains the all columns that may
@@ -85,6 +116,7 @@ pub struct FileScanConfig {
     /// sequentially, one after the next.
     pub file_groups: Vec<Vec<PartitionedFile>>,
     /// Estimated overall statistics of the files, taking `filters` into account.
+    /// Defaults to [`Statistics::new_unknown`].
     pub statistics: Statistics,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
@@ -99,6 +131,86 @@ pub struct FileScanConfig {
 }
 
 impl FileScanConfig {
+    /// Create a new `FileScanConfig` with default settings for scanning files.
+    ///
+    /// See example on [`FileScanConfig`]
+    ///
+    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group]` and
+    /// [`Self::with_file_groups`].
+    ///
+    /// # Parameters:
+    /// * `object_store_url`: See [`Self::object_store_url`]
+    /// * `file_schema`: See [`Self::file_schema`]
+    pub fn new(object_store_url: ObjectStoreUrl, file_schema: SchemaRef) -> Self {
+        let statistics = Statistics::new_unknown(&file_schema);
+        Self {
+            object_store_url,
+            file_schema,
+            file_groups: vec![],
+            statistics,
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![],
+        }
+    }
+
+    /// Set the statistics of the files
+    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+        self.statistics = statistics;
+        self
+    }
+
+    /// Set the projection of the files
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set the limit of the files
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Add a file as a single group
+    ///
+    /// See [Self::file_groups] for more information.
+    pub fn with_file(self, file: PartitionedFile) -> Self {
+        self.with_file_group(vec![file])
+    }
+
+    /// Add the file groups
+    ///
+    /// See [Self::file_groups] for more information.
+    pub fn with_file_groups(
+        mut self,
+        mut file_groups: Vec<Vec<PartitionedFile>>,
+    ) -> Self {
+        self.file_groups.append(&mut file_groups);
+        self
+    }
+
+    /// Add a new file group
+    ///
+    /// See [Self::file_groups] for more information
+    pub fn with_file_group(mut self, file_group: Vec<PartitionedFile>) -> Self {
+        self.file_groups.push(file_group);
+        self
+    }
+
+    /// Set the partitioning columns of the files
+    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Set the output ordering of the files
+    pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
+        self.output_ordering = output_ordering;
+        self
+    }
+
     /// Project the schema and the statistics on the given column indices
     pub fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
@@ -138,12 +250,14 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let table_schema = Arc::new(
+        let projected_schema = Arc::new(
             Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
         );
+
         let projected_output_ordering =
-            get_projected_output_ordering(self, &table_schema);
-        (table_schema, table_stats, projected_output_ordering)
+            get_projected_output_ordering(self, &projected_schema);
+
+        (projected_schema, table_stats, projected_output_ordering)
     }
 
     #[allow(unused)] // Only used by avro
@@ -193,6 +307,71 @@ impl FileScanConfig {
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
             .repartition_file_groups(&file_groups)
+    }
+
+    /// Attempts to do a bin-packing on files into file groups, such that any two files
+    /// in a file group are ordered and non-overlapping with respect to their statistics.
+    /// It will produce the smallest number of file groups possible.
+    pub fn split_groups_by_statistics(
+        table_schema: &SchemaRef,
+        file_groups: &[Vec<PartitionedFile>],
+        sort_order: &[PhysicalSortExpr],
+    ) -> Result<Vec<Vec<PartitionedFile>>> {
+        let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
+        // First Fit:
+        // * Choose the first file group that a file can be placed into.
+        // * If it fits into no existing file groups, create a new one.
+        //
+        // By sorting files by min values and then applying first-fit bin packing,
+        // we can produce the smallest number of file groups such that
+        // files within a group are in order and non-overlapping.
+        //
+        // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
+        // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
+
+        if flattened_files.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let statistics = MinMaxStatistics::new_from_files(
+            sort_order,
+            table_schema,
+            None,
+            flattened_files.iter().copied(),
+        )
+        .map_err(|e| {
+            e.context("construct min/max statistics for split_groups_by_statistics")
+        })?;
+
+        let indices_sorted_by_min = statistics.min_values_sorted();
+        let mut file_groups_indices: Vec<Vec<usize>> = vec![];
+
+        for (idx, min) in indices_sorted_by_min {
+            let file_group_to_insert = file_groups_indices.iter_mut().find(|group| {
+                // If our file is non-overlapping and comes _after_ the last file,
+                // it fits in this file group.
+                min > statistics.max(
+                    *group
+                        .last()
+                        .expect("groups should be nonempty at construction"),
+                )
+            });
+            match file_group_to_insert {
+                Some(group) => group.push(idx),
+                None => file_groups_indices.push(vec![idx]),
+            }
+        }
+
+        // Assemble indices back into groups of PartitionedFiles
+        Ok(file_groups_indices
+            .into_iter()
+            .map(|file_group_indices| {
+                file_group_indices
+                    .into_iter()
+                    .map(|idx| flattened_files[idx].clone())
+                    .collect()
+            })
+            .collect())
     }
 }
 
@@ -770,6 +949,277 @@ mod tests {
         assert_eq!(projection.fields(), schema.fields());
     }
 
+    #[test]
+    fn test_split_groups_by_statistics() -> Result<()> {
+        use chrono::TimeZone;
+        use datafusion_common::DFSchema;
+        use datafusion_expr::execution_props::ExecutionProps;
+        use object_store::{path::Path, ObjectMeta};
+
+        struct File {
+            name: &'static str,
+            date: &'static str,
+            statistics: Vec<Option<(f64, f64)>>,
+        }
+        impl File {
+            fn new(
+                name: &'static str,
+                date: &'static str,
+                statistics: Vec<Option<(f64, f64)>>,
+            ) -> Self {
+                Self {
+                    name,
+                    date,
+                    statistics,
+                }
+            }
+        }
+
+        struct TestCase {
+            name: &'static str,
+            file_schema: Schema,
+            files: Vec<File>,
+            sort: Vec<datafusion_expr::Expr>,
+            expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
+        }
+
+        use datafusion_expr::col;
+        let cases = vec![
+            TestCase {
+                name: "test sort",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
+            },
+            // same input but file '2' is in the middle
+            // test that we still order correctly
+            TestCase {
+                name: "test sort with files ordered differently",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
+            },
+            TestCase {
+                name: "reverse sort",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(false, true)],
+                expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
+            },
+            // reject nullable sort columns
+            TestCase {
+                name: "no nullable sort columns",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    true, // should fail because nullable
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
+            },
+            TestCase {
+                name: "all three non-overlapping",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 0.99))]),
+                    File::new("2", "2023-01-02", vec![Some((1.00, 1.49))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0", "1", "2"]]),
+            },
+            TestCase {
+                name: "all three overlapping",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 0.49))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0"], vec!["1"], vec!["2"]]),
+            },
+            TestCase {
+                name: "empty input",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![]),
+            },
+            TestCase {
+                name: "one file missing statistics",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![None]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found"),
+            },
+        ];
+
+        for case in cases {
+            let table_schema = Arc::new(Schema::new(
+                case.file_schema
+                    .fields()
+                    .clone()
+                    .into_iter()
+                    .cloned()
+                    .chain(Some(Arc::new(Field::new(
+                        "date".to_string(),
+                        DataType::Utf8,
+                        false,
+                    ))))
+                    .collect::<Vec<_>>(),
+            ));
+            let sort_order = case
+                .sort
+                .into_iter()
+                .map(|expr| {
+                    crate::physical_planner::create_physical_sort_expr(
+                        &expr,
+                        &DFSchema::try_from(table_schema.as_ref().clone())?,
+                        &ExecutionProps::default(),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let partitioned_files =
+                case.files.into_iter().map(From::from).collect::<Vec<_>>();
+            let result = FileScanConfig::split_groups_by_statistics(
+                &table_schema,
+                &[partitioned_files.clone()],
+                &sort_order,
+            );
+            let results_by_name = result
+                .as_ref()
+                .map(|file_groups| {
+                    file_groups
+                        .iter()
+                        .map(|file_group| {
+                            file_group
+                                .iter()
+                                .map(|file| {
+                                    partitioned_files
+                                        .iter()
+                                        .find_map(|f| {
+                                            if f.object_meta == file.object_meta {
+                                                Some(
+                                                    f.object_meta
+                                                        .location
+                                                        .as_ref()
+                                                        .rsplit('/')
+                                                        .next()
+                                                        .unwrap()
+                                                        .trim_end_matches(".parquet"),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string().leak() as &'static str);
+
+            assert_eq!(results_by_name, case.expected_result, "{}", case.name);
+        }
+
+        return Ok(());
+
+        impl From<File> for PartitionedFile {
+            fn from(file: File) -> Self {
+                PartitionedFile {
+                    object_meta: ObjectMeta {
+                        location: Path::from(format!(
+                            "data/date={}/{}.parquet",
+                            file.date, file.name
+                        )),
+                        last_modified: chrono::Utc.timestamp_nanos(0),
+                        size: 0,
+                        e_tag: None,
+                        version: None,
+                    },
+                    partition_values: vec![ScalarValue::from(file.date)],
+                    range: None,
+                    statistics: Some(Statistics {
+                        num_rows: Precision::Absent,
+                        total_byte_size: Precision::Absent,
+                        column_statistics: file
+                            .statistics
+                            .into_iter()
+                            .map(|stats| {
+                                stats
+                                    .map(|(min, max)| ColumnStatistics {
+                                        min_value: Precision::Exact(ScalarValue::from(
+                                            min,
+                                        )),
+                                        max_value: Precision::Exact(ScalarValue::from(
+                                            max,
+                                        )),
+                                        ..Default::default()
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .collect::<Vec<_>>(),
+                    }),
+                    extensions: None,
+                }
+            }
+        }
+    }
+
     // sets default for configs that play no role in projections
     fn config_for_projection(
         file_schema: SchemaRef,
@@ -777,16 +1227,10 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
-        FileScanConfig {
-            file_schema,
-            file_groups: vec![vec![]],
-            limit: None,
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            projection,
-            statistics,
-            table_partition_cols,
-            output_ordering: vec![],
-        }
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), file_schema)
+            .with_projection(projection)
+            .with_statistics(statistics)
+            .with_table_partition_cols(table_partition_cols)
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>

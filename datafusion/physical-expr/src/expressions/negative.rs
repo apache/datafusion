@@ -22,7 +22,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -32,6 +31,7 @@ use arrow::{
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
@@ -89,8 +89,8 @@ impl PhysicalExpr for NegativeExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.arg.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.arg]
     }
 
     fn with_new_children(
@@ -134,8 +134,11 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        -children[0]
+    fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+        Ok(ExprProperties {
+            sort_properties: -children[0].sort_properties,
+            range: children[0].range.clone().arithmetic_negate()?,
+        })
     }
 }
 

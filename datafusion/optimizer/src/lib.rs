@@ -35,6 +35,7 @@ pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
 pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
+pub mod eliminate_group_by_constant;
 pub mod eliminate_join;
 pub mod eliminate_limit;
 pub mod eliminate_nested_union;
@@ -62,6 +63,7 @@ pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
 
+pub(crate) mod join_key_set;
 mod plan_signature;
 
 #[cfg(test)]

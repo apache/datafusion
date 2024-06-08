@@ -33,6 +33,7 @@ use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
@@ -258,6 +259,7 @@ macro_rules! is_equal {
 }
 is_equal!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
 is_equal!(bool, str, [u8]);
+is_equal!(IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! is_equal_float {
     ($($t:ty),+) => {
@@ -372,10 +374,10 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
-        children.push(self.expr.clone());
-        children.extend(self.list.clone());
+        children.push(&self.expr);
+        children.extend(&self.list);
         children
     }
 

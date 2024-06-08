@@ -22,7 +22,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -30,6 +29,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
@@ -74,7 +75,7 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
 
@@ -90,8 +91,11 @@ impl PhysicalExpr for Literal {
         self.hash(&mut s);
     }
 
-    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
-        SortProperties::Singleton
+    fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
+        Ok(ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::try_new(self.value().clone(), self.value().clone())?,
+        })
     }
 }
 
@@ -115,6 +119,7 @@ pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_int32_array;

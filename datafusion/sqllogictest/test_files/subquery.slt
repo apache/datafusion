@@ -66,7 +66,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS customer (
         c_acctbal DECIMAL(15, 2),
         c_mktsegment VARCHAR,
         c_comment VARCHAR,
-) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/customer.csv';
+) STORED AS CSV LOCATION '../core/tests/tpch-csv/customer.csv' OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS orders (
@@ -79,7 +79,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS orders (
         o_clerk VARCHAR,
         o_shippriority INTEGER,
         o_comment VARCHAR,
-) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/orders.csv';
+) STORED AS CSV LOCATION '../core/tests/tpch-csv/orders.csv' OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
@@ -99,7 +99,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
         l_shipinstruct VARCHAR,
         l_shipmode VARCHAR,
         l_comment VARCHAR,
-) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/lineitem.csv';
+) STORED AS CSV LOCATION '../core/tests/tpch-csv/lineitem.csv' OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 # in_subquery_to_join_with_correlated_outer_filter
 query ITI rowsort
@@ -252,23 +252,21 @@ logical_plan
 03)----TableScan: t1 projection=[t1_id]
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: SUM(t2.t2_int), t2.t2_id
-06)--------Aggregate: groupBy=[[t2.t2_id, Utf8("a")]], aggr=[[SUM(CAST(t2.t2_int AS Int64))]]
+06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(CAST(t2.t2_int AS Int64))]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
+01)ProjectionExec: expr=[t1_id@1 as t1_id, SUM(t2.t2_int)@0 as t2_sum]
 02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@1)], projection=[t1_id@0, SUM(t2.t2_int)@1]
-04)------CoalesceBatchesExec: target_batch_size=2
-05)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-06)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-07)------CoalesceBatchesExec: target_batch_size=2
-08)--------RepartitionExec: partitioning=Hash([t2_id@1], 4), input_partitions=4
-09)----------ProjectionExec: expr=[SUM(t2.t2_int)@2 as SUM(t2.t2_int), t2_id@0 as t2_id]
-10)------------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id, Utf8("a")@1 as Utf8("a")], aggr=[SUM(t2.t2_int)], ordering_mode=PartiallySorted([1])
-11)--------------CoalesceBatchesExec: target_batch_size=2
-12)----------------RepartitionExec: partitioning=Hash([t2_id@0, Utf8("a")@1], 4), input_partitions=4
-13)------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id, a as Utf8("a")], aggr=[SUM(t2.t2_int)], ordering_mode=PartiallySorted([1])
-14)--------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+03)----HashJoinExec: mode=Partitioned, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[SUM(t2.t2_int)@0, t1_id@2]
+04)------ProjectionExec: expr=[SUM(t2.t2_int)@1 as SUM(t2.t2_int), t2_id@0 as t2_id]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]
+06)----------CoalesceBatchesExec: target_batch_size=2
+07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]
+09)----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+10)------CoalesceBatchesExec: target_batch_size=2
+11)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+12)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_id, 'a') as t2_sum from t1
@@ -768,8 +766,8 @@ logical_plan
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: COUNT(*), t2.t2_int, __always_true
-06)--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)------Projection: COUNT(*), t2.t2_int, Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 07)----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
@@ -790,8 +788,8 @@ logical_plan
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: COUNT(*), t2.t2_int, __always_true
-06)--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)------Projection: COUNT(*), t2.t2_int, Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 07)----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
@@ -811,8 +809,8 @@ logical_plan
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: COUNT(*) AS _cnt, t2.t2_int, __always_true
-06)--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)------Projection: COUNT(*) AS _cnt, t2.t2_int, Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 07)----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
@@ -832,8 +830,8 @@ logical_plan
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: COUNT(*) + Int64(2) AS _cnt, t2.t2_int, __always_true
-06)--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)------Projection: COUNT(*) + Int64(2) AS _cnt, t2.t2_int, Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 07)----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
@@ -855,8 +853,8 @@ logical_plan
 04)------Left Join: t1.t1_id = __scalar_sq_1.t2_id
 05)--------TableScan: t1 projection=[t1_id, t1_int]
 06)--------SubqueryAlias: __scalar_sq_1
-07)----------Projection: COUNT(*), t2.t2_id, __always_true
-08)------------Aggregate: groupBy=[[t2.t2_id, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+07)----------Projection: COUNT(*), t2.t2_id, Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_id]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 09)--------------TableScan: t2 projection=[t2_id]
 
 query I rowsort
@@ -878,9 +876,8 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int
 06)--------Filter: COUNT(*) > Int64(1)
-07)----------Projection: t2.t2_int, COUNT(*)
-08)------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
-09)--------------TableScan: t2 projection=[t2_int]
+07)----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+08)------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
@@ -900,8 +897,8 @@ logical_plan
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int, COUNT(*), __always_true
-06)--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+05)------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int, COUNT(*), Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 07)----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
@@ -924,8 +921,8 @@ logical_plan
 05)--------Aggregate: groupBy=[[t1.t1_int]], aggr=[[]]
 06)----------TableScan: t1 projection=[t1_int]
 07)--------SubqueryAlias: __scalar_sq_1
-08)----------Projection: COUNT(*), t2.t2_int, __always_true
-09)------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+08)----------Projection: COUNT(*), t2.t2_int, Boolean(true) AS __always_true
+09)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 10)--------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
@@ -945,8 +942,8 @@ logical_plan
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
 06)--------SubqueryAlias: __scalar_sq_1
-07)----------Projection: COUNT(*) AS cnt, t2.t2_int, __always_true
-08)------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+07)----------Projection: COUNT(*) AS cnt, t2.t2_int, Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 09)--------------TableScan: t2 projection=[t2_int]
 
 
@@ -975,8 +972,8 @@ logical_plan
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
 06)--------SubqueryAlias: __scalar_sq_1
-07)----------Projection: COUNT(*) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, COUNT(*), __always_true
-08)------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+07)----------Projection: COUNT(*) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, COUNT(*), Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 09)--------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
@@ -1004,8 +1001,8 @@ logical_plan
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
 06)--------SubqueryAlias: __scalar_sq_1
-07)----------Projection: CASE WHEN COUNT(*) = Int64(1) THEN Int64(NULL) ELSE COUNT(*) END AS cnt, t2.t2_int, __always_true
-08)------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+07)----------Projection: CASE WHEN COUNT(*) = Int64(1) THEN Int64(NULL) ELSE COUNT(*) END AS cnt, t2.t2_int, Boolean(true) AS __always_true
+08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
 09)--------------TableScan: t2 projection=[t2_int]
 
 
@@ -1072,8 +1069,8 @@ query TT
 explain select a/2, a/2 + 1 from t
 ----
 logical_plan
-01)Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
-02)--Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
+01)Projection: {t.a / Int64(2)|{Int64(2)}|{t.a}} AS t.a / Int64(2), {t.a / Int64(2)|{Int64(2)}|{t.a}} AS t.a / Int64(2) + Int64(1)
+02)--Projection: t.a / Int64(2) AS {t.a / Int64(2)|{Int64(2)}|{t.a}}
 03)----TableScan: t projection=[a]
 
 statement ok
@@ -1083,8 +1080,8 @@ query TT
 explain select a/2, a/2 + 1 from t
 ----
 logical_plan
-01)Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
-02)--Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
+01)Projection: {t.a / Int64(2)|{Int64(2)}|{t.a}} AS t.a / Int64(2), {t.a / Int64(2)|{Int64(2)}|{t.a}} AS t.a / Int64(2) + Int64(1)
+02)--Projection: t.a / Int64(2) AS {t.a / Int64(2)|{Int64(2)}|{t.a}}
 03)----TableScan: t projection=[a]
 
 ###

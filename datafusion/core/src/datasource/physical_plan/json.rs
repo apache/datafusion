@@ -138,7 +138,7 @@ impl ExecutionPlan for NdJsonExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
     }
 
@@ -154,7 +154,7 @@ impl ExecutionPlan for NdJsonExec {
         target_partitions: usize,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if self.file_compression_type == FileCompressionType::GZIP {
+        if self.file_compression_type.is_compressed() {
             return Ok(None);
         }
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
@@ -383,7 +383,6 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::assert_batches_eq;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::file_compression_type::FileTypeExt;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
@@ -393,18 +392,15 @@ mod tests {
         CsvReadOptions, NdJsonReadOptions, SessionConfig, SessionContext,
     };
     use crate::test::partitioned_file_groups;
+    use crate::{assert_batches_eq, assert_batches_sorted_eq};
 
     use arrow::array::Array;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::FileType;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs::File;
-    use std::io;
     use tempfile::TempDir;
     use url::Url;
 
@@ -450,7 +446,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
-        ctx.runtime_env().register_object_store(&url, store.clone());
+        ctx.register_object_store(&url, store.clone());
         let filename = "1.json";
         let tmp_dir = TempDir::new()?;
         let file_groups = partitioned_file_groups(
@@ -525,16 +521,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -603,16 +592,9 @@ mod tests {
         let missing_field_idx = file_schema.fields.len() - 1;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -650,16 +632,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();
@@ -702,16 +677,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![3, 0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![3, 0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();
@@ -756,7 +724,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
@@ -849,7 +817,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
@@ -892,36 +860,65 @@ mod tests {
 
         Ok(())
     }
-    fn compress_file(path: &str, output_path: &str) -> io::Result<()> {
-        let input_file = File::open(path)?;
-        let mut reader = BufReader::new(input_file);
 
-        let output_file = File::create(output_path)?;
-        let writer = std::io::BufWriter::new(output_file);
-
-        let mut encoder = GzEncoder::new(writer, Compression::default());
-        io::copy(&mut reader, &mut encoder)?;
-
-        encoder.finish()?;
-        Ok(())
-    }
+    #[rstest(
+        file_compression_type,
+        case::uncompressed(FileCompressionType::UNCOMPRESSED),
+        case::gzip(FileCompressionType::GZIP),
+        case::bzip2(FileCompressionType::BZIP2),
+        case::xz(FileCompressionType::XZ),
+        case::zstd(FileCompressionType::ZSTD)
+    )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
-    async fn test_disable_parallel_for_json_gz() -> Result<()> {
+    async fn test_json_with_repartitioing(
+        file_compression_type: FileCompressionType,
+    ) -> Result<()> {
         let config = SessionConfig::new()
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(4);
         let ctx = SessionContext::new_with_config(config);
-        let path = format!("{TEST_DATA_BASE}/1.json");
-        let compressed_path = format!("{}.gz", &path);
-        compress_file(&path, &compressed_path)?;
+
+        let tmp_dir = TempDir::new()?;
+        let (store_url, file_groups, _) =
+            prepare_store(&ctx.state(), file_compression_type, tmp_dir.path()).await;
+
+        // It's important to have less than `target_partitions` amount of file groups, to
+        // trigger repartitioning.
+        assert_eq!(
+            file_groups.len(),
+            1,
+            "Expected prepared store with single file group"
+        );
+
+        let path = file_groups
+            .first()
+            .unwrap()
+            .first()
+            .unwrap()
+            .object_meta
+            .location
+            .as_ref();
+
+        let url: &Url = store_url.as_ref();
+        let path_buf = Path::new(url.path()).join(path);
+        let path = path_buf.to_str().unwrap();
+        let ext = FileType::JSON
+            .get_ext_with_compression(file_compression_type.to_owned())
+            .unwrap();
+
         let read_option = NdJsonReadOptions::default()
-            .file_compression_type(FileCompressionType::GZIP)
-            .file_extension("gz");
-        let df = ctx.read_json(compressed_path.clone(), read_option).await?;
+            .file_compression_type(file_compression_type)
+            .file_extension(ext.as_str());
+
+        let df = ctx.read_json(path, read_option).await?;
         let res = df.collect().await;
-        fs::remove_file(&compressed_path)?;
-        assert_batches_eq!(
+
+        // Output sort order is nondeterministic due to multiple
+        // target partitions. To handle it, assert compares sorted
+        // result.
+        assert_batches_sorted_eq!(
             &[
                 "+-----+------------------+---------------+------+",
                 "| a   | b                | c             | d    |",

@@ -20,17 +20,16 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::utils::scatter;
+
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
-
-use crate::sort_properties::SortProperties;
-use crate::utils::scatter;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
 /// for examples of creating `PhysicalExpr` from `Expr`
@@ -66,7 +65,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     }
 
     /// Get a list of child PhysicalExpr that provide the input for this expr.
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
     fn with_new_children(
@@ -113,8 +112,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     ///
     /// If the expression is `a + b`, the current `interval` is `[4, 5]` and the
     /// inputs `a` and `b` are respectively given as `[0, 2]` and `[-∞, 4]`, then
-    /// propagation would would return `[0, 2]` and `[2, 4]` as `b` must be at
-    /// least `2` to make the output at least `4`.
+    /// propagation would return `[0, 2]` and `[2, 4]` as `b` must be at least
+    /// `2` to make the output at least `4`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
@@ -155,17 +154,13 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
-    /// The order information of a PhysicalExpr can be estimated from its children.
-    /// This is especially helpful for projection expressions. If we can ensure that the
-    /// order of a PhysicalExpr to project matches with the order of SortExec, we can
-    /// eliminate that SortExecs.
-    ///
-    /// By recursively calling this function, we can obtain the overall order
-    /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
-    /// the propagation of unordered columns and literals, the `SortProperties`
-    /// struct is used.
-    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
-        SortProperties::Unordered
+    /// Calculates the properties of this [`PhysicalExpr`] based on its
+    /// children's properties (i.e. order and range), recursively aggregating
+    /// the information from its children. In cases where the [`PhysicalExpr`]
+    /// has no children (e.g., `Literal` or `Column`), these properties should
+    /// be specified externally, as the function defaults to unknown properties.
+    fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
+        Ok(ExprProperties::new_unknown())
     }
 }
 
@@ -188,7 +183,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         Ok(expr.with_new_children(children)?)
     } else {

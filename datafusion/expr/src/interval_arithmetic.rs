@@ -17,12 +17,12 @@
 
 //! Interval arithmetic library
 
+use crate::type_coercion::binary::get_result_type;
+use crate::Operator;
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
-
-use crate::type_coercion::binary::get_result_type;
-use crate::Operator;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
@@ -71,10 +71,10 @@ macro_rules! get_extreme_value {
                 ScalarValue::IntervalYearMonth(Some(i32::$extreme))
             }
             DataType::Interval(IntervalUnit::DayTime) => {
-                ScalarValue::IntervalDayTime(Some(i64::$extreme))
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime::$extreme))
             }
             DataType::Interval(IntervalUnit::MonthDayNano) => {
-                ScalarValue::IntervalMonthDayNano(Some(i128::$extreme))
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
             _ => unreachable!(),
         }
@@ -119,8 +119,14 @@ macro_rules! value_transition {
             IntervalYearMonth(Some(value)) if value == i32::$bound => {
                 IntervalYearMonth(None)
             }
-            IntervalDayTime(Some(value)) if value == i64::$bound => IntervalDayTime(None),
-            IntervalMonthDayNano(Some(value)) if value == i128::$bound => {
+            IntervalDayTime(Some(value))
+                if value == arrow_buffer::IntervalDayTime::$bound =>
+            {
+                IntervalDayTime(None)
+            }
+            IntervalMonthDayNano(Some(value))
+                if value == arrow_buffer::IntervalMonthDayNano::$bound =>
+            {
                 IntervalMonthDayNano(None)
             }
             _ => next_value_helper::<$direction>($value),
@@ -273,19 +279,34 @@ impl Interval {
                 unreachable!();
             };
             // Standardize boolean interval endpoints:
-            Self {
+            return Self {
                 lower: ScalarValue::Boolean(Some(lower_bool.unwrap_or(false))),
                 upper: ScalarValue::Boolean(Some(upper_bool.unwrap_or(true))),
-            }
+            };
         }
-        // Standardize floating-point endpoints:
-        else if lower.data_type() == DataType::Float32 {
-            handle_float_intervals!(Float32, f32, lower, upper)
-        } else if lower.data_type() == DataType::Float64 {
-            handle_float_intervals!(Float64, f64, lower, upper)
-        } else {
+        match lower.data_type() {
+            // Standardize floating-point endpoints:
+            DataType::Float32 => handle_float_intervals!(Float32, f32, lower, upper),
+            DataType::Float64 => handle_float_intervals!(Float64, f64, lower, upper),
+            // Unsigned null values for lower bounds are set to zero:
+            DataType::UInt8 if lower.is_null() => Self {
+                lower: ScalarValue::UInt8(Some(0)),
+                upper,
+            },
+            DataType::UInt16 if lower.is_null() => Self {
+                lower: ScalarValue::UInt16(Some(0)),
+                upper,
+            },
+            DataType::UInt32 if lower.is_null() => Self {
+                lower: ScalarValue::UInt32(Some(0)),
+                upper,
+            },
+            DataType::UInt64 if lower.is_null() => Self {
+                lower: ScalarValue::UInt64(Some(0)),
+                upper,
+            },
             // Other data types do not require standardization:
-            Self { lower, upper }
+            _ => Self { lower, upper },
         }
     }
 
@@ -297,6 +318,12 @@ impl Interval {
         ScalarValue: From<Option<T>>,
     {
         Self::try_new(ScalarValue::from(lower), ScalarValue::from(upper))
+    }
+
+    /// Creates a singleton zero interval if the datatype supported.
+    pub fn make_zero(data_type: &DataType) -> Result<Self> {
+        let zero_endpoint = ScalarValue::new_zero(data_type)?;
+        Ok(Self::new(zero_endpoint.clone(), zero_endpoint))
     }
 
     /// Creates an unbounded interval from both sides if the datatype supported.
@@ -369,7 +396,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
@@ -402,7 +429,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
@@ -435,7 +462,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt(self)
     }
 
@@ -446,7 +473,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt_eq(self)
     }
 
@@ -457,7 +484,7 @@ impl Interval {
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub(crate) fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
             internal_err!(
@@ -480,7 +507,7 @@ impl Interval {
 
     /// Compute the logical conjunction of this (boolean) interval with the
     /// given boolean interval.
-    pub(crate) fn and<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn and<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
             (
@@ -501,8 +528,31 @@ impl Interval {
         }
     }
 
+    /// Compute the logical disjunction of this boolean interval with the
+    /// given boolean interval.
+    pub fn or<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        let rhs = other.borrow();
+        match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
+            (
+                &ScalarValue::Boolean(Some(self_lower)),
+                &ScalarValue::Boolean(Some(self_upper)),
+                &ScalarValue::Boolean(Some(other_lower)),
+                &ScalarValue::Boolean(Some(other_upper)),
+            ) => {
+                let lower = self_lower || other_lower;
+                let upper = self_upper || other_upper;
+
+                Ok(Self {
+                    lower: ScalarValue::Boolean(Some(lower)),
+                    upper: ScalarValue::Boolean(Some(upper)),
+                })
+            }
+            _ => internal_err!("Incompatible data types for logical conjunction"),
+        }
+    }
+
     /// Compute the logical negation of this (boolean) interval.
-    pub(crate) fn not(&self) -> Result<Self> {
+    pub fn not(&self) -> Result<Self> {
         if self.data_type().ne(&DataType::Boolean) {
             internal_err!("Cannot apply logical negation to a non-boolean interval")
         } else if self == &Self::CERTAINLY_TRUE {
@@ -761,6 +811,18 @@ impl Interval {
         }
         .map(|result| result + 1)
     }
+
+    /// Reflects an [`Interval`] around the point zero.
+    ///
+    /// This method computes the arithmetic negation of the interval, reflecting
+    /// it about the origin of the number line. This operation swaps and negates
+    /// the lower and upper bounds of the interval.
+    pub fn arithmetic_negate(self) -> Result<Self> {
+        Ok(Self {
+            lower: self.upper().clone().arithmetic_negate()?,
+            upper: self.lower().clone().arithmetic_negate()?,
+        })
+    }
 }
 
 impl Display for Interval {
@@ -957,6 +1019,25 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
+impl OneTrait for IntervalDayTime {
+    fn one() -> Self {
+        IntervalDayTime {
+            days: 0,
+            milliseconds: 1,
+        }
+    }
+}
+
+impl OneTrait for IntervalMonthDayNano {
+    fn one() -> Self {
+        IntervalMonthDayNano {
+            months: 0,
+            days: 0,
+            nanoseconds: 1,
+        }
+    }
+}
+
 /// This function either increments or decrements its argument, depending on
 /// the `INC` value (where a `true` value corresponds to the increment).
 fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
@@ -1019,11 +1100,15 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         IntervalYearMonth(Some(val)) => {
             IntervalYearMonth(Some(increment_decrement::<INC, i32>(val)))
         }
-        IntervalDayTime(Some(val)) => {
-            IntervalDayTime(Some(increment_decrement::<INC, i64>(val)))
-        }
+        IntervalDayTime(Some(val)) => IntervalDayTime(Some(increment_decrement::<
+            INC,
+            arrow_buffer::IntervalDayTime,
+        >(val))),
         IntervalMonthDayNano(Some(val)) => {
-            IntervalMonthDayNano(Some(increment_decrement::<INC, i128>(val)))
+            IntervalMonthDayNano(Some(increment_decrement::<
+                INC,
+                arrow_buffer::IntervalMonthDayNano,
+            >(val)))
         }
         _ => value, // Unbounded values return without change.
     }
@@ -1885,10 +1970,10 @@ mod tests {
 
         let unbounded_cases = vec![
             (DataType::Boolean, Boolean(Some(false)), Boolean(Some(true))),
-            (DataType::UInt8, UInt8(None), UInt8(None)),
-            (DataType::UInt16, UInt16(None), UInt16(None)),
-            (DataType::UInt32, UInt32(None), UInt32(None)),
-            (DataType::UInt64, UInt64(None), UInt64(None)),
+            (DataType::UInt8, UInt8(Some(0)), UInt8(None)),
+            (DataType::UInt16, UInt16(Some(0)), UInt16(None)),
+            (DataType::UInt32, UInt32(Some(0)), UInt32(None)),
+            (DataType::UInt64, UInt64(Some(0)), UInt64(None)),
             (DataType::Int8, Int8(None), Int8(None)),
             (DataType::Int16, Int16(None), Int16(None)),
             (DataType::Int32, Int32(None), Int32(None)),
@@ -1995,6 +2080,10 @@ mod tests {
                 Interval::make(Some(1000_i64), Some(1500_i64))?,
             ),
             (
+                Interval::make(Some(0_u8), Some(0_u8))?,
+                Interval::make::<u8>(None, None)?,
+            ),
+            (
                 Interval::try_new(
                     prev_value(ScalarValue::Float32(Some(0.0_f32))),
                     ScalarValue::Float32(Some(0.0_f32)),
@@ -2035,6 +2124,10 @@ mod tests {
             (
                 Interval::make(Some(-1000_i64), Some(1000_i64))?,
                 Interval::make(None, Some(-1500_i64))?,
+            ),
+            (
+                Interval::make::<u64>(None, None)?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
             ),
             (
                 Interval::make(Some(0.0_f32), Some(0.0_f32))?,

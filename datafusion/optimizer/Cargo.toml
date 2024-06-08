@@ -46,12 +46,15 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
+paste = "1.0.14"
 regex-syntax = "0.8.0"
+
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 ctor = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }

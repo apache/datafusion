@@ -17,22 +17,19 @@
 
 //! math expressions
 
-use arrow::array::Decimal128Array;
-use arrow::array::Decimal256Array;
-use arrow::array::Int16Array;
-use arrow::array::Int32Array;
-use arrow::array::Int64Array;
-use arrow::array::Int8Array;
-use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, not_impl_err};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::error::ArrowError;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
+
+use arrow::array::{
+    ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array,
+};
+use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
@@ -170,7 +167,21 @@ impl ScalarUDFImpl for AbsFunc {
         let input_data_type = args[0].data_type();
         let abs_fun = create_abs_function(input_data_type)?;
 
-        let arr = abs_fun(&args)?;
-        Ok(ColumnarValue::Array(arr))
+        abs_fun(&args).map(ColumnarValue::Array)
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // Non-decreasing for x ≥ 0 and symmetrically non-increasing for x ≤ 0.
+        let arg = &input[0];
+        let range = &arg.range;
+        let zero_point = Interval::make_zero(&range.lower().data_type())?;
+
+        if range.gt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+            Ok(arg.sort_properties)
+        } else if range.lt_eq(&zero_point)? == Interval::CERTAINLY_TRUE {
+            Ok(-arg.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 }

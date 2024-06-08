@@ -35,16 +35,15 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{get_arg_name, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayElement,
     array_element,
     array element,
@@ -52,15 +51,9 @@ make_udf_function!(
     array_element_udf
 );
 
-make_udf_function!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array.",
-    array_slice_udf
-);
+create_func!(ArraySlice, array_slice_udf);
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopFront,
     array_pop_front,
     array,
@@ -68,7 +61,7 @@ make_udf_function!(
     array_pop_front_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPopBack,
     array_pop_back,
     array,
@@ -87,7 +80,6 @@ impl ArrayElement {
         Self {
             signature: Signature::array_and_index(Volatility::Immutable),
             aliases: vec![
-                String::from("array_element"),
                 String::from("array_extract"),
                 String::from("list_element"),
                 String::from("list_extract"),
@@ -102,6 +94,14 @@ impl ScalarUDFImpl for ArrayElement {
     }
     fn name(&self) -> &str {
         "array_element"
+    }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}[{}]",
+            get_arg_name(args, 0),
+            get_arg_name(args, 1)
+        ))
     }
 
     fn signature(&self) -> &Signature {
@@ -224,6 +224,15 @@ where
     Ok(arrow::array::make_array(data))
 }
 
+#[doc = "returns a slice of the array."]
+pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
+    let args = match stride {
+        Some(stride) => vec![array, begin, end, stride],
+        None => vec![array, begin, end],
+    };
+    array_slice_udf().call(args)
+}
+
 #[derive(Debug)]
 pub(super) struct ArraySlice {
     signature: Signature,
@@ -234,7 +243,7 @@ impl ArraySlice {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_slice"), String::from("list_slice")],
+            aliases: vec![String::from("list_slice")],
         }
     }
 }
@@ -243,6 +252,18 @@ impl ScalarUDFImpl for ArraySlice {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}[{}]",
+            get_arg_name(args, 0),
+            (1..args.len())
+                .map(|i| get_arg_name(args, i))
+                .collect::<Vec<String>>()
+                .join(":")
+        ))
+    }
+
     fn name(&self) -> &str {
         "array_slice"
     }
@@ -416,19 +437,16 @@ where
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
-            // array_slice with stride in duckdb, return empty array if stride is not supported and from > to.
-            if stride.is_none() && from > to {
-                // return empty array
-                offsets.push(offsets[row_index]);
-                continue;
-            }
+            // Default stride is 1 if not provided
             let stride = stride.unwrap_or(1);
             if stride.is_zero() {
                 return exec_err!(
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if from <= to && stride.is_negative() {
+            } else if (from <= to && stride.is_negative())
+                || (from > to && stride.is_positive())
+            {
                 // return empty array
                 offsets.push(offsets[row_index]);
                 continue;
@@ -503,10 +521,7 @@ impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_pop_front"),
-                String::from("list_pop_front"),
-            ],
+            aliases: vec![String::from("list_pop_front")],
         }
     }
 }
@@ -581,10 +596,7 @@ impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_pop_back"),
-                String::from("list_pop_back"),
-            ],
+            aliases: vec![String::from("list_pop_back")],
         }
     }
 }

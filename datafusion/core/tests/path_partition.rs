@@ -38,17 +38,17 @@ use datafusion::{
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use futures::stream;
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use object_store::{
-    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, PutOptions, PutResult,
+    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
+    ObjectStore, PutOptions, PutResult,
 };
-use tokio::io::AsyncWrite;
+use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
 
 #[tokio::test]
@@ -202,7 +202,9 @@ fn extract_as_utf(v: &ScalarValue) -> Option<String> {
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -238,7 +240,9 @@ async fn csv_filter_with_file_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_filter_with_file_nonstring_col() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -274,7 +278,9 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -310,7 +316,9 @@ async fn csv_projection_on_partition() -> Result<()> {
 
 #[tokio::test]
 async fn csv_grouping_by_partition() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_str("datafusion.catalog.has_header", "true"),
+    );
 
     register_partitioned_aggregate_csv(
         &ctx,
@@ -525,7 +533,7 @@ fn register_partitioned_aggregate_csv(
     let csv_file_path = format!("{testdata}/csv/aggregate_test_100.csv");
     let file_schema = test_util::aggr_test_schema();
     let url = Url::parse("mirror://").unwrap();
-    ctx.runtime_env().register_object_store(
+    ctx.register_object_store(
         &url,
         MirroringObjectStore::new_arc(csv_file_path, store_paths),
     );
@@ -558,7 +566,7 @@ async fn register_partitioned_alltypes_parquet(
     let testdata = parquet_test_data();
     let parquet_file_path = format!("{testdata}/{source_file}");
     let url = Url::parse("mirror://").unwrap();
-    ctx.runtime_env().register_object_store(
+    ctx.register_object_store(
         &url,
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
     );
@@ -623,24 +631,17 @@ impl ObjectStore for MirroringObjectStore {
     async fn put_opts(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _put_payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         unimplemented!()
     }
 
-    async fn put_multipart(
+    async fn put_multipart_opts(
         &self,
         _location: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        unimplemented!()
-    }
-
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
+        _opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         unimplemented!()
     }
 
@@ -665,6 +666,7 @@ impl ObjectStore for MirroringObjectStore {
             range: 0..meta.size,
             payload: GetResultPayload::File(file, path),
             meta,
+            attributes: Attributes::default(),
         })
     }
 

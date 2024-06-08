@@ -15,13 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData},
-    compute::{and_kleene, is_not_null, SlicesIterator},
-};
-use datafusion_common::Result;
+use std::sync::Arc;
 
+use crate::expressions::{self, CastExpr};
+use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::PhysicalSortExpr;
+use crate::tree_node::ExprContext;
+
+use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
+use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
+use arrow::datatypes::Schema;
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::Expr;
+
+/// Represents a [`PhysicalExpr`] node with associated properties (order and
+/// range) in a context where properties are tracked.
+pub type ExprPropertiesNode = ExprContext<ExprProperties>;
+
+impl ExprPropertiesNode {
+    /// Constructs a new `ExprPropertiesNode` with unknown properties for a
+    /// given physical expression. This node initializes with default properties
+    /// and recursively applies this to all child expressions.
+    pub fn new_unknown(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr
+            .children()
+            .into_iter()
+            .cloned()
+            .map(Self::new_unknown)
+            .collect();
+        Self {
+            expr,
+            data: ExprProperties::new_unknown(),
+            children,
+        }
+    }
+}
 
 /// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
 /// are taken, when the mask evaluates `false` values null values are filled.
@@ -79,14 +108,40 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .collect()
 }
 
+/// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
+/// If conversion is not supported yet, returns Error.
+pub fn limited_convert_logical_expr_to_physical_expr(
+    expr: &Expr,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    match expr {
+        Expr::Column(col) => expressions::column::col(&col.name, schema),
+        Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
+            limited_convert_logical_expr_to_physical_expr(
+                cast_expr.expr.as_ref(),
+                schema,
+            )?,
+            cast_expr.data_type.clone(),
+            None,
+        ))),
+        Expr::Alias(alias_expr) => limited_convert_logical_expr_to_physical_expr(
+            alias_expr.expr.as_ref(),
+            schema,
+        ),
+        _ => exec_err!(
+            "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
+
     use arrow::array::Int32Array;
     use datafusion_common::cast::{as_boolean_array, as_int32_array};
-
-    use super::*;
 
     #[test]
     fn scatter_int() -> Result<()> {

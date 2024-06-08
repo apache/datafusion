@@ -44,12 +44,13 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
-pub mod field_util;
 pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod registry;
 pub mod simplify;
+pub mod sort_properties;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
@@ -62,8 +63,8 @@ pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, ScalarFunctionDefinition, TryCast, WindowFunctionDefinition,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
+    Sort as SortExpr, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
@@ -77,11 +78,10 @@ pub use logical_plan::*;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
-    ArrayFunctionSignature, FuncMonotonicity, Signature, TypeSignature, Volatility,
-    TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl};
+pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

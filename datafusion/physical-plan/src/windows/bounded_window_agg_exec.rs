@@ -250,8 +250,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -1512,6 +1512,7 @@ mod tests {
             None,
             orderings,
             is_infinite,
+            None,
         )?) as _;
         Ok(source)
     }

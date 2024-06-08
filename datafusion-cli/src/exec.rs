@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::str::FromStr;
 
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
@@ -81,7 +82,7 @@ pub async fn exec_from_lines(
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
-                    query = "".to_owned();
+                    query = "".to_string();
                 } else {
                     query.push('\n');
                 }
@@ -203,7 +204,7 @@ pub async fn exec_from_repl(
     rl.save_history(".history")
 }
 
-async fn exec_and_print(
+pub(super) async fn exec_and_print(
     ctx: &mut SessionContext,
     print_options: &PrintOptions,
     sql: String,
@@ -235,8 +236,9 @@ async fn exec_and_print(
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
+            let schema = physical_plan.schema();
             let results = collect(physical_plan, task_ctx.clone()).await?;
-            adjusted.into_inner().print_batches(&results, now)?;
+            adjusted.into_inner().print_batches(schema, &results, now)?;
         }
     }
 
@@ -299,11 +301,13 @@ async fn create_plan(
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        // To support custom formats, treat error as None
+        let format = FileType::from_str(&cmd.file_type).ok();
         register_object_store_and_config_extensions(
             ctx,
             &cmd.location,
             &cmd.options,
-            None,
+            format,
         )
         .await?;
     }
@@ -378,7 +382,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let store = get_object_store(&ctx.state(), scheme, url, &table_options).await?;
 
     // Register the retrieved object store in the session context's runtime environment
-    ctx.runtime_env().register_object_store(url, store);
+    ctx.register_object_store(url, store);
 
     Ok(())
 }
@@ -397,11 +401,12 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            let format = FileType::from_str(&cmd.file_type).ok();
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.location,
                 &cmd.options,
-                None,
+                format,
             )
             .await?;
         } else {
@@ -596,6 +601,18 @@ mod tests {
         // Ensure that local files are also registered
         let sql =
             format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        create_external_table_test(location, &sql).await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_external_table_format_option() -> Result<()> {
+        let location = "path/to/file.cvs";
+
+        // Test with format options
+        let sql =
+            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())

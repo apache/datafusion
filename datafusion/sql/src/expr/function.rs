@@ -30,7 +30,9 @@ use datafusion_expr::{
     BuiltInWindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
+    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
+    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
+    NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
 use std::str::FromStr;
 use strum::IntoEnumIterator;
@@ -46,18 +48,18 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
         funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udwfs_names());
+        funcs.extend(ctx.udwf_names());
 
         funcs
     } else {
         // All scalar functions and aggregate functions
         let mut funcs = Vec::new();
 
-        funcs.extend(ctx.udfs_names());
+        funcs.extend(ctx.udf_names());
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs_names());
+        funcs.extend(ctx.udaf_names());
 
         funcs
     };
@@ -79,6 +81,120 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
         .expect("No candidates provided.") // Panic if `candidates` argument is empty
 }
 
+/// Arguments to for a function call extracted from the SQL AST
+#[derive(Debug)]
+struct FunctionArgs {
+    /// Function name
+    name: ObjectName,
+    /// Argument expressions
+    args: Vec<FunctionArg>,
+    /// ORDER BY clause, if any
+    order_by: Vec<OrderByExpr>,
+    /// OVER clause, if any
+    over: Option<WindowType>,
+    /// FILTER clause, if any
+    filter: Option<Box<SQLExpr>>,
+    /// NULL treatment clause, if any
+    null_treatment: Option<NullTreatment>,
+    /// DISTINCT
+    distinct: bool,
+}
+
+impl FunctionArgs {
+    fn try_new(function: SQLFunction) -> Result<Self> {
+        let SQLFunction {
+            name,
+            args,
+            over,
+            filter,
+            mut null_treatment,
+            within_group,
+        } = function;
+
+        // Handle no argument form (aka `current_time`  as opposed to `current_time()`)
+        let FunctionArguments::List(args) = args else {
+            return Ok(Self {
+                name,
+                args: vec![],
+                order_by: vec![],
+                over,
+                filter,
+                null_treatment,
+                distinct: false,
+            });
+        };
+
+        let FunctionArgumentList {
+            duplicate_treatment,
+            args,
+            clauses,
+        } = args;
+
+        let distinct = match duplicate_treatment {
+            Some(DuplicateTreatment::Distinct) => true,
+            Some(DuplicateTreatment::All) => false,
+            None => false,
+        };
+
+        // Pull out argument handling
+        let mut order_by = None;
+        for clause in clauses {
+            match clause {
+                FunctionArgumentClause::IgnoreOrRespectNulls(nt) => {
+                    if null_treatment.is_some() {
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated null treatment clause"
+                        );
+                    }
+                    null_treatment = Some(nt);
+                }
+                FunctionArgumentClause::OrderBy(oby) => {
+                    if order_by.is_some() {
+                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                    }
+                    order_by = Some(oby);
+                }
+                FunctionArgumentClause::Limit(limit) => {
+                    return not_impl_err!(
+                        "Calling {name}: LIMIT not supported in function arguments: {limit}"
+                    )
+                }
+                FunctionArgumentClause::OnOverflow(overflow) => {
+                    return not_impl_err!(
+                        "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
+                    )
+                }
+                FunctionArgumentClause::Having(having) => {
+                    return not_impl_err!(
+                        "Calling {name}: HAVING not supported in function arguments: {having}"
+                    )
+                }
+                FunctionArgumentClause::Separator(sep) => {
+                    return not_impl_err!(
+                        "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
+                    )
+                }
+            }
+        }
+
+        if !within_group.is_empty() {
+            return not_impl_err!("WITHIN GROUP is not supported yet: {within_group:?}");
+        }
+
+        let order_by = order_by.unwrap_or_default();
+
+        Ok(Self {
+            name,
+            args,
+            order_by,
+            over,
+            filter,
+            null_treatment,
+            distinct,
+        })
+    }
+}
+
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -86,16 +202,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let SQLFunction {
+        let function_args = FunctionArgs::try_new(function)?;
+        let FunctionArgs {
             name,
             args,
+            order_by,
             over,
-            distinct,
             filter,
             null_treatment,
-            special: _, // true if not called with trailing parens
-            order_by,
-        } = function;
+            distinct,
+        } = function_args;
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
@@ -150,6 +266,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
+                None,
             )?;
 
             let func_deps = schema.functional_dependencies();
@@ -219,16 +336,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                let order_by =
-                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
+                let order_by = self.order_by_to_sort_expr(
+                    &order_by,
+                    schema,
+                    planner_context,
+                    true,
+                    None,
+                )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                // TODO: Support filter and distinct for UDAFs
+                let filter: Option<Box<Expr>> = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                     fm,
                     args,
-                    false,
-                    None,
+                    distinct,
+                    filter,
                     order_by,
                     null_treatment,
                 )));
@@ -236,8 +361,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
-                let order_by =
-                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
+                let order_by = self.order_by_to_sort_expr(
+                    &order_by,
+                    schema,
+                    planner_context,
+                    true,
+                    None,
+                )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
                 let filter: Option<Box<Expr>> = filter
@@ -283,22 +413,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         name: &str,
     ) -> Result<WindowFunctionDefinition> {
-        expr::find_df_window_func(name)
-            // next check user defined aggregates
-            .or_else(|| {
-                self.context_provider
-                    .get_aggregate_meta(name)
-                    .map(WindowFunctionDefinition::AggregateUDF)
-            })
-            // next check user defined window functions
-            .or_else(|| {
-                self.context_provider
-                    .get_window_meta(name)
-                    .map(WindowFunctionDefinition::WindowUDF)
-            })
-            .ok_or_else(|| {
-                plan_datafusion_err!("There is no window function named {name}")
-            })
+        // check udaf first
+        let udaf = self.context_provider.get_aggregate_meta(name);
+        // Skip first value and last value, since we expect window builtin first/last value not udaf version
+        if udaf.as_ref().is_some_and(|udaf| {
+            udaf.name() != "first_value" && udaf.name() != "last_value"
+        }) {
+            Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
+        } else {
+            expr::find_df_window_func(name)
+                .or_else(|| {
+                    self.context_provider
+                        .get_window_meta(name)
+                        .map(WindowFunctionDefinition::WindowUDF)
+                })
+                .ok_or_else(|| {
+                    plan_datafusion_err!("There is no window function named {name}")
+                })
+        }
     }
 
     fn sql_fn_arg_to_logical_expr(
@@ -344,10 +476,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match arg.get_type(schema)? {
             DataType::List(_)
             | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _) => Ok(()),
-            DataType::Struct(_) => {
-                not_impl_err!("unnest() does not support struct yet")
-            }
+            | DataType::FixedSizeList(_, _)
+            | DataType::Struct(_) => Ok(()),
             DataType::Null => {
                 not_impl_err!("unnest() does not support null yet")
             }

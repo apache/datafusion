@@ -31,10 +31,11 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::Expr;
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
-    WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, SortExpr, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -42,6 +43,7 @@ use datafusion_physical_expr::{
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
+use itertools::Itertools;
 
 mod bounded_window_agg_exec;
 mod window_agg_exec;
@@ -51,6 +53,36 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 pub use window_agg_exec::WindowAggExec;
+
+/// Build field from window function and add it into schema
+pub fn schema_add_window_field(
+    args: &[Arc<dyn PhysicalExpr>],
+    schema: &Schema,
+    window_fn: &WindowFunctionDefinition,
+    fn_name: &str,
+) -> Result<Arc<Schema>> {
+    let data_types = args
+        .iter()
+        .map(|e| e.clone().as_ref().data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+    // Skip extending schema for UDAF
+    if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
+        Ok(Arc::new(Schema::new(window_fields)))
+    } else {
+        window_fields.extend_from_slice(&[Field::new(
+            fn_name,
+            window_expr_return_type,
+            false,
+        )]);
+        Ok(Arc::new(Schema::new(window_fields)))
+    }
+}
 
 /// Create a physical expression for window function
 #[allow(clippy::too_many_arguments)]
@@ -92,17 +124,32 @@ pub fn create_window_expr(
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
             // TODO: Ordering not supported for Window UDFs yet
-            let sort_exprs = &[];
-            let ordering_req = &[];
+            // Convert `Vec<PhysicalSortExpr>` into `Vec<Expr::Sort>`
+            let sort_exprs = order_by
+                .iter()
+                .map(|PhysicalSortExpr { expr, options }| {
+                    let field_name = expr.to_string();
+                    let field_name = field_name.split('@').next().unwrap_or(&field_name);
+                    Expr::Sort(SortExpr {
+                        expr: Box::new(Expr::Column(Column::new(
+                            None::<String>,
+                            field_name,
+                        ))),
+                        asc: !options.descending,
+                        nulls_first: options.nulls_first,
+                    })
+                })
+                .collect::<Vec<_>>();
 
             let aggregate = udaf::create_aggregate_expr(
                 fun.as_ref(),
                 args,
-                sort_exprs,
-                ordering_req,
+                &sort_exprs,
+                order_by,
                 input_schema,
                 name,
                 ignore_nulls,
+                false,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,
@@ -624,6 +671,7 @@ mod tests {
             None,
             Some(sort_exprs),
             infinite_source,
+            None,
         )?))
     }
 

@@ -591,7 +591,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
 
         let expected_err =
-            "Arrow error: Parser error: Invalid timezone \"ZZ\": 'ZZ' is not a valid timezone";
+            "Arrow error: Parser error: Invalid timezone \"ZZ\": failed to parse timezone";
         match to_timestamp(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -669,6 +669,10 @@ mod tests {
             1599572549000000000,
             parse_timestamp_formatted("09-08-2020 13/42/29", "%m-%d-%Y %H/%M/%S")
                 .unwrap()
+        );
+        assert_eq!(
+            1642896000000000000,
+            parse_timestamp_formatted("2022-01-23", "%Y-%m-%d").unwrap()
         );
     }
 

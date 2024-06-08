@@ -36,8 +36,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test_sort_unprojected_col
 query I
@@ -164,7 +164,7 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
@@ -374,11 +374,11 @@ select * from t SORT BY time;
 
 
 # distinct on a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT value FROM t ORDER BY time;
 
 # distinct on an expression of a column not in the select list should not work
-statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
 SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
 
 # distinct on a column that is in the select list but aliasted should work
@@ -422,11 +422,11 @@ CREATE EXTERNAL TABLE multiple_ordered_table (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC)
 WITH ORDER (b ASC)
 WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT (b+a+c) AS result
@@ -465,11 +465,11 @@ ORDER BY db15;
 ----
 logical_plan
 01)Sort: db15 ASC NULLS LAST
-02)--Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
+02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
 03)----TableScan: csv_with_timestamps projection=[ts]
 physical_plan
 01)SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
+02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0, 1659537600000000000) as db15]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
 
@@ -511,10 +511,10 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER(c11)
 WITH ORDER(c12 DESC)
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT ATAN(c11) as atan_c11
@@ -627,7 +627,8 @@ CREATE EXTERNAL TABLE IF NOT EXISTS orders (
         o_clerk VARCHAR,
         o_shippriority INTEGER,
         o_comment VARCHAR,
-) STORED AS CSV  WITH ORDER (o_orderkey ASC) DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/orders.csv';
+) STORED AS CSV  WITH ORDER (o_orderkey ASC) LOCATION '../core/tests/tpch-csv/orders.csv'
+OPTIONS ('format.delimiter' ',', 'format.has_header' 'true');
 
 query TT
 EXPLAIN SELECT o_orderkey, o_orderstatus FROM orders ORDER BY o_orderkey ASC
@@ -680,7 +681,7 @@ logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -699,7 +700,7 @@ logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
+01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -754,34 +755,34 @@ logical_plan
 02)--Union
 03)----SubqueryAlias: u
 04)------Projection: Int64(0) AS m, m0.t
-05)--------Aggregate: groupBy=[[Int64(0), m0.t]], aggr=[[]]
+05)--------Aggregate: groupBy=[[m0.t]], aggr=[[]]
 06)----------SubqueryAlias: m0
 07)------------Projection: column1 AS t
 08)--------------Values: (Int64(0)), (Int64(1)), (Int64(2))
 09)----SubqueryAlias: v
 10)------Projection: Int64(1) AS m, m1.t
-11)--------Aggregate: groupBy=[[Int64(1), m1.t]], aggr=[[]]
+11)--------Aggregate: groupBy=[[m1.t]], aggr=[[]]
 12)----------SubqueryAlias: m1
 13)------------Projection: column1 AS t
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
-04)------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+04)------ProjectionExec: expr=[0 as m, t@0 as t]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2
+07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 10)------------------ProjectionExec: expr=[column1@0 as t]
 11)--------------------ValuesExec
-12)------ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]
-13)--------AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[], ordering_mode=PartiallySorted([0])
+12)------ProjectionExec: expr=[1 as m, t@0 as t]
+13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 14)----------CoalesceBatchesExec: target_batch_size=8192
-15)------------RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2
+15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-17)----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
+17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 18)------------------ProjectionExec: expr=[column1@0 as t]
 19)--------------------ValuesExec
 
@@ -888,6 +889,246 @@ select column2, column1 from foo ORDER BY column2 desc, column1 desc;
 [1] 4
 [0] 2
 
+# Test issue: https://github.com/apache/datafusion/issues/10013
+# There is both a HAVING clause and an ORDER BY clause in the query.
+query I
+SELECT
+   SUM(column1)
+FROM foo
+HAVING SUM(column1) > 0
+ORDER BY SUM(column1)
+----
+16
+
+# ORDER BY with a GROUP BY clause
+query I
+SELECT SUM(column1) 
+  FROM foo 
+GROUP BY column2 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+3
+3
+4
+
+# ORDER BY with a GROUP BY clause and a HAVING clause
+query I
+SELECT 
+  SUM(column1) 
+FROM foo 
+GROUP BY column2 
+HAVING SUM(column1) < 3 
+ORDER BY SUM(column1) 
+----
+0
+2
+2
+2
+
+# ORDER BY without a HAVING clause
+query I
+SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
+----
+16
+
+# Order by unprojected aggregate expressions is not supported
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+SELECT column2 FROM foo ORDER BY SUM(column1)
+
+statement ok
+create table ambiguity_test(a int, b int) as values (1,20), (2,10);
+
+# Order-by expressions prioritize referencing columns from the select list.
+query II
+select a as b, b as c2 from ambiguity_test order by b
+----
+1 20
+2 10
+
 # Cleanup
 statement ok
 drop table foo;
+
+statement ok
+drop table ambiguity_test;
+
+# Casting from numeric to string types breaks the ordering
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query T
+SELECT CAST(c as VARCHAR) as c_str
+FROM ordered_table
+ORDER BY c_str
+limit 5;
+----
+0
+1
+10
+11
+12
+
+query TT
+EXPLAIN SELECT CAST(c as VARCHAR) as c_str
+FROM ordered_table
+ORDER BY c_str
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: c_str ASC NULLS LAST, fetch=5
+03)----Projection: CAST(ordered_table.c AS Utf8) AS c_str
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
+03)----SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+
+# Casting from numeric to numeric types preserves the ordering
+query I
+SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+0
+1
+2
+3
+4
+
+query TT
+EXPLAIN SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: c_bigint ASC NULLS LAST, fetch=5
+03)----Projection: CAST(ordered_table.c AS Int64) AS c_bigint
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
+03)----ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table ordered_table; 
+
+
+# ABS(x) breaks the ordering if x's range contains both negative and positive values.
+# Since x is defined as INT, its range is assumed to be from NEG_INF to INF.
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT ABS(c) as abs_c
+FROM ordered_table
+ORDER BY abs_c
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: abs_c ASC NULLS LAST, fetch=5
+03)----Projection: abs(ordered_table.c) AS abs_c
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
+03)----SortExec: TopK(fetch=5), expr=[abs_c@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[abs(c@0) as abs_c]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table ordered_table; 
+
+# ABS(x) preserves the ordering if x's range falls into positive values.
+# Since x is defined as INT UNSIGNED, its range is assumed to be from 0 to INF.
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT UNSIGNED,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT ABS(c) as abs_c
+FROM ordered_table
+ORDER BY abs_c
+limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Sort: abs_c ASC NULLS LAST, fetch=5
+03)----Projection: abs(ordered_table.c) AS abs_c
+04)------TableScan: ordered_table projection=[c]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
+03)----ProjectionExec: expr=[abs(c@0) as abs_c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+# Boolean to integer casts preserve the order.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite (
+  ts INTEGER,
+  inc_col INTEGER,
+  desc_col INTEGER,
+)
+STORED AS CSV
+WITH ORDER (inc_col ASC)
+WITH ORDER (desc_col DESC)
+LOCATION '../core/tests/data/window_1.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT CAST((inc_col>desc_col) as integer) as c from annotated_data_finite order by c;
+----
+logical_plan
+01)Sort: c ASC NULLS LAST
+02)--Projection: CAST(annotated_data_finite.inc_col > annotated_data_finite.desc_col AS Int32) AS c
+03)----TableScan: annotated_data_finite projection=[inc_col, desc_col]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], has_header=true

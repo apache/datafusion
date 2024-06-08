@@ -17,6 +17,12 @@
 
 //! Math function: `log()`.
 
+use std::any::Any;
+use std::sync::Arc;
+
+use super::power::PowerFunc;
+
+use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
@@ -24,17 +30,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    lit, ColumnarValue, Expr, FuncMonotonicity, ScalarFunctionDefinition,
-};
-
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{lit, ColumnarValue, Expr, ScalarUDF, TypeSignature::*};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
-
-use super::power::PowerFunc;
 
 #[derive(Debug)]
 pub struct LogFunc {
@@ -83,8 +81,23 @@ impl ScalarUDFImpl for LogFunc {
         }
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true), Some(false)]))
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        match (input[0].sort_properties, input[1].sort_properties) {
+            (first @ SortProperties::Ordered(value), SortProperties::Ordered(base))
+                if !value.descending && base.descending
+                    || value.descending && !base.descending =>
+            {
+                Ok(first)
+            }
+            (
+                first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
+                SortProperties::Singleton,
+            ) => Ok(first),
+            (SortProperties::Singleton, second @ SortProperties::Ordered(_)) => {
+                Ok(-second)
+            }
+            _ => Ok(SortProperties::Unordered),
+        }
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
@@ -178,8 +191,8 @@ impl ScalarUDFImpl for LogFunc {
                     &info.get_data_type(&base)?,
                 )?)))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, mut args })
-                if is_pow(&func_def) && args.len() == 2 && base == args[0] =>
+            Expr::ScalarFunction(ScalarFunction { func, mut args })
+                if is_pow(&func) && args.len() == 2 && base == args[0] =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
@@ -192,7 +205,7 @@ impl ScalarUDFImpl for LogFunc {
                 } else {
                     let args = match num_args {
                         1 => vec![number],
-                        2 => vec![number, base],
+                        2 => vec![base, number],
                         _ => {
                             return internal_err!(
                                 "Unexpected number of arguments in log::simplify"
@@ -207,23 +220,20 @@ impl ScalarUDFImpl for LogFunc {
 }
 
 /// Returns true if the function is `PowerFunc`
-fn is_pow(func_def: &ScalarFunctionDefinition) -> bool {
-    if let ScalarFunctionDefinition::UDF(fun) = func_def {
-        fun.as_ref()
-            .inner()
-            .as_any()
-            .downcast_ref::<PowerFunc>()
-            .is_some()
-    } else {
-        false
-    }
+fn is_pow(func: &ScalarUDF) -> bool {
+    func.inner().as_any().downcast_ref::<PowerFunc>().is_some()
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use std::collections::HashMap;
 
     use super::*;
+
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::DFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
     fn test_log_f64() {
@@ -283,5 +293,45 @@ mod tests {
                 panic!("Expected an array value")
             }
         }
+    }
+    #[test]
+    // Test log() simplification errors
+    fn test_log_simplify_errors() {
+        let props = ExecutionProps::new();
+        let schema =
+            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
+        let context = SimplifyContext::new(&props).with_schema(schema);
+        // Expect 0 args to error
+        let _ = LogFunc::new().simplify(vec![], &context).unwrap_err();
+        // Expect 3 args to error
+        let _ = LogFunc::new()
+            .simplify(vec![lit(1), lit(2), lit(3)], &context)
+            .unwrap_err();
+    }
+
+    #[test]
+    // Test that non-simplifiable log() expressions are unchanged after simplification
+    fn test_log_simplify_original() {
+        let props = ExecutionProps::new();
+        let schema =
+            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
+        let context = SimplifyContext::new(&props).with_schema(schema);
+        // One argument with no simplifications
+        let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], lit(2));
+        // Two arguments with no simplifications
+        let result = LogFunc::new()
+            .simplify(vec![lit(2), lit(3)], &context)
+            .unwrap();
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], lit(2));
+        assert_eq!(args[1], lit(3));
     }
 }

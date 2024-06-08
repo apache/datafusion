@@ -22,8 +22,8 @@ CREATE EXTERNAL TABLE case_insensitive_test (
   c INT
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/example.csv'
+OPTIONS ('format.has_header' 'true');
 
 # normalized column identifiers
 query II

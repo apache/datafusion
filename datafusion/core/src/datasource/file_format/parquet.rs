@@ -30,8 +30,9 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig};
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -47,7 +48,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, FileType,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -74,6 +75,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
+use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::path::Path;
@@ -252,17 +254,22 @@ impl FileFormat for ParquetFormat {
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut builder =
+            ParquetExecBuilder::new_with_options(conf, self.options.clone());
+
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
+        if self.enable_pruning() {
+            if let Some(predicate) = filters.cloned() {
+                builder = builder.with_predicate(predicate);
+            }
+        }
+        if let Some(metadata_size_hint) = self.metadata_size_hint() {
+            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        }
 
-        Ok(Arc::new(ParquetExec::new(
-            conf,
-            predicate,
-            self.metadata_size_hint(),
-            self.options.clone(),
-        )))
+        Ok(builder.build_arc())
     }
 
     async fn create_writer_physical_plan(
@@ -285,10 +292,6 @@ impl FileFormat for ParquetFormat {
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::PARQUET
     }
 }
 
@@ -474,7 +477,8 @@ async fn fetch_statistics(
     let mut null_counts = vec![Precision::Exact(0); num_fields];
     let mut has_statistics = false;
 
-    let schema_adapter = SchemaAdapter::new(table_schema.clone());
+    let schema_adapter =
+        DefaultSchemaAdapterFactory::default().create(table_schema.clone());
 
     let (mut max_values, mut min_values) = create_max_min_accs(&table_schema);
 
@@ -536,7 +540,7 @@ async fn fetch_statistics(
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    ///
+    /// Underlying parquet options
     parquet_options: TableParquetOptions,
     /// File metadata from successfully produced parquet files. The Mutex is only used
     /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
@@ -1111,7 +1115,6 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_schema::Field;
     use async_trait::async_trait;
-    use bytes::Bytes;
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_nanosecond_array,
@@ -1125,7 +1128,8 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::{
-        GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOpts, PutOptions,
+        PutPayload, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -1248,25 +1252,17 @@ mod tests {
         async fn put_opts(
             &self,
             _location: &Path,
-            _bytes: Bytes,
+            _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn put_multipart(
+        async fn put_multipart_opts(
             &self,
             _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
 

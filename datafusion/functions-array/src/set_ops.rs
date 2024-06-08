@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_union, array_intersect and array_distinct functions.
 
-use crate::make_array::make_array_inner;
+use crate::make_array::{empty_array_type, make_array_inner};
 use crate::utils::make_scalar_function;
 use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
@@ -27,8 +27,6 @@ use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
 use std::any::Any;
@@ -37,7 +35,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayUnion,
     array_union,
     array1 array2,
@@ -45,7 +43,7 @@ make_udf_function!(
     array_union_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayIntersect,
     array_intersect,
     first_array second_array,
@@ -53,7 +51,7 @@ make_udf_function!(
     array_intersect_udf
 );
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayDistinct,
     array_distinct,
     array,
@@ -71,7 +69,7 @@ impl ArrayUnion {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("array_union"), String::from("list_union")],
+            aliases: vec![String::from("list_union")],
         }
     }
 }
@@ -116,10 +114,7 @@ impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![
-                String::from("array_intersect"),
-                String::from("list_intersect"),
-            ],
+            aliases: vec![String::from("list_intersect")],
         }
     }
 }
@@ -140,7 +135,7 @@ impl ScalarUDFImpl for ArrayIntersect {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match (arg_types[0].clone(), arg_types[1].clone()) {
             (Null, Null) | (Null, _) => Ok(Null),
-            (_, Null) => Ok(List(Arc::new(Field::new("item", Null, true)))),
+            (_, Null) => Ok(empty_array_type()),
             (dt, _) => Ok(dt),
         }
     }
@@ -164,7 +159,7 @@ impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec!["array_distinct".to_string(), "list_distinct".to_string()],
+            aliases: vec!["list_distinct".to_string()],
         }
     }
 }
@@ -262,6 +257,17 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     } else if matches!(r.value_type(), Null) {
         let field = Arc::new(Field::new("item", l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
+    }
+
+    // Handle empty array at rhs case
+    // array_union(arr, []) -> arr;
+    // array_intersect(arr, []) -> [];
+    if r.value_length(0).is_zero() {
+        if set_op == SetOp::Union {
+            return Ok(Arc::new(l.clone()) as ArrayRef);
+        } else {
+            return Ok(Arc::new(r.clone()) as ArrayRef);
+        }
     }
 
     if l.value_type() != r.value_type() {

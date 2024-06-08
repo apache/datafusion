@@ -46,7 +46,7 @@ The `example usage`_ section in the user guide and the `datafusion-examples`_ co
 Please see the `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
 
 .. _example usage: user-guide/example-usage.html
-.. _datafusion-examples: https://github.com/apache/datafusion/tree/master/datafusion-examples
+.. _datafusion-examples: https://github.com/apache/datafusion/tree/main/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
 .. _communication: contributor-guide/communication.html
 
@@ -66,10 +66,11 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    :maxdepth: 1
    :caption: Links
 
-   Github and Issue Tracker <https://github.com/apache/datafusion>
+   GitHub and Issue Tracker <https://github.com/apache/datafusion>
    crates.io <https://crates.io/crates/datafusion>
    API Docs <https://docs.rs/datafusion/latest/datafusion/>
    Code of conduct <https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md>
+   Download <download>
 
 .. _toc.guide:
 .. toctree::
@@ -110,8 +111,22 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 
    contributor-guide/index
    contributor-guide/communication
+   contributor-guide/getting_started
    contributor-guide/architecture
+   contributor-guide/testing
+   contributor-guide/howtos
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/governance
+   contributor-guide/inviting
    contributor-guide/specification/index
+
+.. _toc.subprojects:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: DataFusion Subprojects
+
+   DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Python <https://datafusion.apache.org/python/>

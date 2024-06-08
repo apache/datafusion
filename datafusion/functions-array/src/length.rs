@@ -27,12 +27,11 @@ use core::any::type_name;
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayLength,
     array_length,
     array,
@@ -49,7 +48,7 @@ impl ArrayLength {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_length"), String::from("list_length")],
+            aliases: vec![String::from("list_length")],
         }
     }
 }

@@ -18,8 +18,8 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use crate::{
-    Expr, PartitionEvaluator, PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
-    WindowFrame,
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -170,6 +170,13 @@ impl WindowUDF {
         self.inner.return_type(args)
     }
 
+    /// Do the function rewrite
+    ///
+    /// See [`WindowUDFImpl::simplify`] for more details.
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.inner.simplify()
+    }
+
     /// Return a `PartitionEvaluator` for evaluating this window function
     pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
@@ -265,6 +272,29 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    /// Optionally apply per-UDWF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization. The default implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// Example:
+    /// [`simplify_udwf_expression.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simplify_udwf_expression.rs>
+    ///
+    /// # Returns
+    /// [None] if simplify is not defined or,
+    ///
+    /// Or, a closure with two arguments:
+    /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
+    fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        None
     }
 }
 

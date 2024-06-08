@@ -47,7 +47,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=4
 02)--SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
+03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
@@ -102,7 +102,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=4
 02)--SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
+03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
@@ -121,7 +121,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=4
 02)--SortPreservingMergeExec: [MIN(traces.timestamp)@1 DESC], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[MIN(traces.timestamp)@1 DESC]
+03)----SortExec: TopK(fetch=4), expr=[MIN(traces.timestamp)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
@@ -140,7 +140,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=4
 02)--SortPreservingMergeExec: [MAX(traces.timestamp)@1 ASC NULLS LAST], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 ASC NULLS LAST]
+03)----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
@@ -159,7 +159,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=4
 02)--SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST]
+03)----SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4

@@ -25,12 +25,11 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayResize,
     array_resize,
     array size value,
@@ -48,7 +47,7 @@ impl ArrayResize {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec!["array_resize".to_string(), "list_resize".to_string()],
+            aliases: vec!["list_resize".to_string()],
         }
     }
 }
@@ -112,15 +111,12 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// array_resize keep the original array and append the default element to the end
-fn general_list_resize<O: OffsetSizeTrait>(
+fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
     field: &FieldRef,
     default_element: Option<ArrayRef>,
-) -> Result<ArrayRef>
-where
-    O: TryInto<i64>,
-{
+) -> Result<ArrayRef> {
     let data_type = array.value_type();
 
     let values = array.values();

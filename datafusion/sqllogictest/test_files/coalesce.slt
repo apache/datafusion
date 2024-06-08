@@ -1,0 +1,432 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# Test coalesce function
+query I
+select coalesce(1, 2, 3);
+----
+1
+
+# test with first null
+query ?T
+select coalesce(null, 3, 2, 1), arrow_typeof(coalesce(null, 3, 2, 1));
+----
+3 Int64
+
+# test with null values
+query ?
+select coalesce(null, null);
+----
+NULL
+
+# cast to float
+query IT
+select
+  coalesce(1, 2.0),
+  arrow_typeof(coalesce(1, 2.0))
+;
+----
+1 Float64
+
+query RT
+select
+  coalesce(2.0, 1),
+  arrow_typeof(coalesce(2.0, 1))
+;
+----
+2 Float64
+
+query IT
+select
+  coalesce(1, arrow_cast(2.0, 'Float32')),
+  arrow_typeof(coalesce(1, arrow_cast(2.0, 'Float32')))
+;
+----
+1 Float32
+
+# test with empty args
+query error
+select coalesce();
+
+# test with different types
+query I
+select coalesce(arrow_cast(1, 'Int32'), arrow_cast(1, 'Int64'));
+----
+1
+
+# test with nulls
+query ?T
+select coalesce(null, null, null), arrow_typeof(coalesce(null, null));
+----
+NULL Null
+
+# i32 and u32, cast to wider type i64
+query IT
+select
+  coalesce(arrow_cast(2, 'Int32'), arrow_cast(3, 'UInt32')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int32'), arrow_cast(3, 'UInt32')));
+----
+2 Int64
+
+query IT
+select
+  coalesce(arrow_cast(2, 'Int16'), arrow_cast(3, 'UInt16')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int16'), arrow_cast(3, 'UInt16')));
+----
+2 Int32
+
+query IT
+select
+  coalesce(arrow_cast(2, 'Int8'), arrow_cast(3, 'UInt8')),
+  arrow_typeof(coalesce(arrow_cast(2, 'Int8'), arrow_cast(3, 'UInt8')));
+----
+2 Int16
+
+# i64 and u32, cast to wider type i64
+query IT
+select
+  coalesce(2, arrow_cast(3, 'UInt32')),
+  arrow_typeof(coalesce(2, arrow_cast(3, 'UInt32')));
+----
+2 Int64
+
+# TODO: Got types (i64, u64), casting to decimal or double or even i128 if supported
+query IT
+select
+  coalesce(2, arrow_cast(3, 'UInt64')),
+  arrow_typeof(coalesce(2, arrow_cast(3, 'UInt64')));
+----
+2 Int64
+
+statement ok
+create table t1 (a bigint, b int, c int) as values (null, null, 1), (null, 2, null);
+
+# Follow Postgres and DuckDB behavior, since a is bigint, although the value is null, all args are coerced to bigint
+query IT
+select
+  coalesce(a, b, c),
+  arrow_typeof(coalesce(a, b, c))
+from t1;
+----
+1 Int64
+2 Int64
+
+# b, c has the same type int, so the result is int
+query IT
+select
+  coalesce(b, c),
+  arrow_typeof(coalesce(b, c))
+from t1;
+----
+1 Int32
+2 Int32
+
+statement ok
+drop table t1;
+
+# test multi rows
+statement ok
+CREATE TABLE t1(
+  c1 int,
+  c2 int
+) as VALUES
+(1, 2),
+(NULL, 2),
+(1, NULL),
+(NULL, NULL);
+
+query I
+SELECT COALESCE(c1, c2) FROM t1
+----
+1
+2
+1
+NULL
+
+statement ok
+drop table t1;
+
+# Decimal128(7, 2) and int64 are coerced to common wider type Decimal128(22, 2)
+query RT
+select
+  coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0),
+  arrow_typeof(coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0))
+----
+2 Decimal128(22, 2)
+
+query RT
+select
+  coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0),
+  arrow_typeof(coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0));
+----
+2 Decimal256(22, 2)
+
+# coalesce string
+query T?
+select
+  coalesce('', 'test'),
+  coalesce(null, 'test');
+----
+(empty) test
+
+# coalesce utf8 and large utf8
+query TT
+select
+  coalesce('a', arrow_cast('b', 'LargeUtf8')),
+  arrow_typeof(coalesce('a', arrow_cast('b', 'LargeUtf8')))
+;
+----
+a LargeUtf8
+
+# coalesce array
+query ?T
+select
+  coalesce(array[1, 2], array[3, 4]),
+  arrow_typeof(coalesce(array[1, 2], array[3, 4]));
+----
+[1, 2] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+query ?T
+select
+  coalesce(null, array[3, 4]),
+  arrow_typeof(coalesce(array[1, 2], array[3, 4]));
+----
+[3, 4] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# coalesce with array
+query ?T
+select
+  coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]),
+  arrow_typeof(coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]));
+----
+[1, 2] List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# test dict(int32, utf8)
+statement ok
+create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
+
+query ?
+select coalesce(column1, 'none_set') from test1;
+----
+foo
+none_set
+
+query ?
+select coalesce(null, column1, 'none_set') from test1;
+----
+foo
+none_set
+
+# explicitly cast to Utf8
+query T
+select coalesce(arrow_cast(column1, 'Utf8'), 'none_set') from test1;
+----
+foo
+none_set
+
+statement ok
+drop table test1
+
+# test dict coercion with value
+statement ok
+create table t(c varchar) as values ('a'), (null);
+
+query TT
+select 
+  coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')),
+  arrow_typeof(coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')))
+from t;
+----
+a Dictionary(Int32, Utf8)
+b Dictionary(Int32, Utf8)
+
+statement ok
+drop table t;
+
+# test dict coercion with dict
+statement ok
+create table t as values 
+  (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), 
+  (null);
+
+query ?T
+select 
+  coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')),
+  arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')))
+from t;
+----
+foo Dictionary(Int64, LargeUtf8)
+bar Dictionary(Int64, LargeUtf8)
+
+query ?T
+select 
+  coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')),
+  arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')))
+from t;
+----
+foo Dictionary(Int32, LargeUtf8)
+bar Dictionary(Int32, LargeUtf8)
+
+query ?T
+select 
+  coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')),
+  arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')))
+from t;
+----
+foo Dictionary(Int64, Utf8)
+bar Dictionary(Int64, Utf8)
+
+statement ok
+drop table t;
+
+# test dict(int32, int8)
+query I
+select coalesce(34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+query ?
+select coalesce(arrow_cast(123, 'Dictionary(Int32, Int8)'), 34);
+----
+123
+
+query ?
+select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
+----
+34
+
+# numeric string coercion
+query RT
+select coalesce(2.0, 1, '3'), arrow_typeof(coalesce(2.0, 1, '3'));
+----
+2 Float64
+
+# explicitly cast to Int8, and it will implicitly cast to Int64
+query IT
+select
+  coalesce(arrow_cast(123, 'Int8'), 34),
+  arrow_typeof(coalesce(arrow_cast(123, 'Int8'), 34));
+----
+123 Int64
+
+statement ok
+CREATE TABLE test(
+  c1 INT,
+  c2 INT
+) as VALUES
+(0, 1),
+(NULL, 1),
+(1, 0),
+(NULL, 1),
+(NULL, NULL);
+
+# coalesce result
+query I rowsort
+SELECT COALESCE(c1, c2) FROM test
+----
+0
+1
+1
+1
+NULL
+
+# numeric string is coerced to numeric in both Postgres and DuckDB
+query I
+SELECT COALESCE(c1, c2, '-1') FROM test;
+----
+0
+1
+1
+1
+-1
+
+statement ok
+drop table test
+
+statement ok
+CREATE TABLE test(
+  c1 BIGINT,
+  c2 BIGINT,
+) as VALUES
+(1, 2),
+(NULL, 2),
+(1, NULL),
+(NULL, NULL);
+
+# coalesce sum with default value
+query I
+SELECT SUM(COALESCE(c1, c2, 0)) FROM test
+----
+4
+
+# coalesce mul with default value
+query I
+SELECT COALESCE(c1 * c2, 0) FROM test
+----
+2
+0
+0
+0
+
+statement ok
+drop table test
+
+# coalesce date32
+
+statement ok
+CREATE TABLE test(
+  d1_date DATE,
+  d2_date DATE,
+  d3_date DATE
+) as VALUES
+  ('2022-12-12','2022-12-12','2022-12-12'),
+  (NULL,'2022-12-11','2022-12-12'),
+  ('2022-12-12','2022-12-10','2022-12-12'),
+  ('2022-12-12',NULL,'2022-12-12'),
+  ('2022-12-12','2022-12-8','2022-12-12'),
+  ('2022-12-12','2022-12-7',NULL),
+  ('2022-12-12',NULL,'2022-12-12'),
+  (NULL,'2022-12-5','2022-12-12')
+;
+
+query D
+SELECT COALESCE(d1_date, d2_date, d3_date) FROM test
+----
+2022-12-12
+2022-12-11
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-05
+
+query T
+SELECT arrow_typeof(COALESCE(d1_date, d2_date, d3_date)) FROM test
+----
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+
+statement ok
+drop table test

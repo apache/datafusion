@@ -312,10 +312,10 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
     }
     let mut visitor = Visitor { expected_sort };
 
-    impl TreeNodeVisitor for Visitor {
+    impl<'n> TreeNodeVisitor<'n> for Visitor {
         type Node = Arc<dyn ExecutionPlan>;
 
-        fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
             if let Some(exec) = node.as_any().downcast_ref::<AggregateExec>() {
                 if self.expected_sort {
                     assert!(matches!(

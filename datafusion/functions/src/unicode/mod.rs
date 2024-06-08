@@ -47,25 +47,66 @@ make_udf_function!(reverse::ReverseFunc, REVERSE, reverse);
 make_udf_function!(rpad::RPadFunc, RPAD, rpad);
 make_udf_function!(strpos::StrposFunc, STRPOS, strpos);
 make_udf_function!(substr::SubstrFunc, SUBSTR, substr);
+make_udf_function!(substr::SubstrFunc, SUBSTRING, substring);
 make_udf_function!(substrindex::SubstrIndexFunc, SUBSTR_INDEX, substr_index);
 make_udf_function!(translate::TranslateFunc, TRANSLATE, translate);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
+    export_functions!((
+        character_length,
+        "the number of characters in the `string`",
+        string
+    ),(
+        lpad,
+        "fill up a string to the length by prepending the characters",
+        args,
+    ),(
+        rpad,
+        "fill up a string to the length by appending the characters",
+        args,
+    ),(
+        reverse,
+        "reverses the `string`",
+        string
+    ),(
+        substr,
+        "substring from the `position` to the end",
+        string position
+    ),(
+        substr_index,
+        "Returns the substring from str before count occurrences of the delimiter",
+        string delimiter count
+    ),(
+        strpos,
+        "finds the position from where the `substring` matches the `string`",
+        string substring
+    ),(
+        substring,
+        "substring from the `position` with `length` characters",
+        string position length
+    ),(
+        translate,
+        "replaces the characters in `from` with the counterpart in `to`",
+        string from to
+    ),(
+        right,
+        "returns the last `n` characters in the `string`",
+        string n
+    ),(
+        left,
+        "returns the first `n` characters in the `string`",
+        string n
+    ),(
+        find_in_set,
+        "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings",
+        string strlist
+    ));
+
     #[doc = "the number of characters in the `string`"]
     pub fn char_length(string: Expr) -> Expr {
         character_length(string)
-    }
-
-    #[doc = "the number of characters in the `string`"]
-    pub fn character_length(string: Expr) -> Expr {
-        super::character_length().call(vec![string])
-    }
-
-    #[doc = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings"]
-    pub fn find_in_set(string: Expr, strlist: Expr) -> Expr {
-        super::find_in_set().call(vec![string, strlist])
     }
 
     #[doc = "finds the position from where the `substring` matches the `string`"]
@@ -78,59 +119,9 @@ pub mod expr_fn {
         character_length(string)
     }
 
-    #[doc = "returns the first `n` characters in the `string`"]
-    pub fn left(string: Expr, n: Expr) -> Expr {
-        super::left().call(vec![string, n])
-    }
-
-    #[doc = "fill up a string to the length by prepending the characters"]
-    pub fn lpad(args: Vec<Expr>) -> Expr {
-        super::lpad().call(args)
-    }
-
     #[doc = "finds the position from where the `substring` matches the `string`"]
     pub fn position(string: Expr, substring: Expr) -> Expr {
         strpos(string, substring)
-    }
-
-    #[doc = "reverses the `string`"]
-    pub fn reverse(string: Expr) -> Expr {
-        super::reverse().call(vec![string])
-    }
-
-    #[doc = "returns the last `n` characters in the `string`"]
-    pub fn right(string: Expr, n: Expr) -> Expr {
-        super::right().call(vec![string, n])
-    }
-
-    #[doc = "fill up a string to the length by appending the characters"]
-    pub fn rpad(args: Vec<Expr>) -> Expr {
-        super::rpad().call(args)
-    }
-
-    #[doc = "finds the position from where the `substring` matches the `string`"]
-    pub fn strpos(string: Expr, substring: Expr) -> Expr {
-        super::strpos().call(vec![string, substring])
-    }
-
-    #[doc = "substring from the `position` to the end"]
-    pub fn substr(string: Expr, position: Expr) -> Expr {
-        super::substr().call(vec![string, position])
-    }
-
-    #[doc = "substring from the `position` with `length` characters"]
-    pub fn substring(string: Expr, position: Expr, length: Expr) -> Expr {
-        super::substr().call(vec![string, position, length])
-    }
-
-    #[doc = "Returns the substring from str before count occurrences of the delimiter"]
-    pub fn substr_index(string: Expr, delimiter: Expr, count: Expr) -> Expr {
-        super::substr_index().call(vec![string, delimiter, count])
-    }
-
-    #[doc = "replaces the characters in `from` with the counterpart in `to`"]
-    pub fn translate(string: Expr, from: Expr, to: Expr) -> Expr {
-        super::translate().call(vec![string, from, to])
     }
 }
 

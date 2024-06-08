@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -186,7 +187,7 @@ fn between_date32_plus_interval() -> Result<()> {
     let expected =
         "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n  Projection: \
-        \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
+        \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
@@ -200,7 +201,7 @@ fn between_date64_plus_interval() -> Result<()> {
     let expected =
         "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n  Projection: \
-        \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
+        \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
@@ -275,6 +276,47 @@ fn test_same_name_but_not_ambiguous() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[test]
+fn eliminate_nested_filters() {
+    let sql = "\
+        SELECT col_int32 FROM test \
+        WHERE (1=1) AND (col_int32 > 0) \
+        AND (1=1) AND (1=0 OR 1=1)";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Filter: test.col_int32 > Int32(0)\
+        \n  TableScan: test projection=[col_int32]";
+
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn test_propagate_empty_relation_inner_join_and_unions() {
+    let sql = "\
+        SELECT A.col_int32 FROM test AS A \
+        INNER JOIN ( \
+          SELECT col_int32 FROM test WHERE 1 = 0 \
+        ) AS B ON A.col_int32 = B.col_int32 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 1 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 0 = 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE test.col_int32 < 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 0";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Union\
+        \n  TableScan: test projection=[col_int32]\
+        \n  TableScan: test projection=[col_int32]\
+        \n  Filter: test.col_int32 < Int32(0)\
+        \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -288,7 +330,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
     optimizer.optimize(plan, &config, observe)
 }
 
@@ -354,15 +396,15 @@ impl ContextProvider for MyContextProvider {
         &self.options
     }
 
-    fn udfs_names(&self) -> Vec<String> {
+    fn udf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udafs_names(&self) -> Vec<String> {
+    fn udaf_names(&self) -> Vec<String> {
         Vec::new()
     }
 
-    fn udwfs_names(&self) -> Vec<String> {
+    fn udwf_names(&self) -> Vec<String> {
         Vec::new()
     }
 }

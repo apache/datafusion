@@ -73,7 +73,7 @@ impl TopKAggregation {
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::try_new(
             *aggr.mode(),
-            aggr.group_by().clone(),
+            aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
             aggr.input().clone(),
@@ -88,7 +88,7 @@ impl TopKAggregation {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
-        let child = children.iter().exactly_one().ok()?;
+        let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;

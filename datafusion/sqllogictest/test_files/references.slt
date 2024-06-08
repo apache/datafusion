@@ -39,8 +39,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query I
 SELECT COUNT(*) FROM aggregate_test_100;
@@ -105,7 +105,7 @@ logical_plan
 02)--Projection: test....., test..... AS c3
 03)----TableScan: test projection=[....]
 physical_plan
-01)SortExec: expr=[....@0 ASC NULLS LAST]
+01)SortExec: expr=[....@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[....@0 as ...., ....@0 as c3]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 

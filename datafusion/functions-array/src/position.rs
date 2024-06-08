@@ -19,8 +19,6 @@
 
 use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -37,7 +35,7 @@ use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPosition,
     array_position,
     array element index,
@@ -57,7 +55,6 @@ impl ArrayPosition {
                 Volatility::Immutable,
             ),
             aliases: vec![
-                String::from("array_position"),
                 String::from("list_position"),
                 String::from("array_indexof"),
                 String::from("list_indexof"),
@@ -168,7 +165,7 @@ fn generic_position<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(UInt64Array::from(data)))
 }
 
-make_udf_function!(
+make_udf_expr_and_func!(
     ArrayPositions,
     array_positions,
     array element, // arg name
@@ -185,10 +182,7 @@ impl ArrayPositions {
     pub fn new() -> Self {
         Self {
             signature: Signature::array_and_element(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_positions"),
-                String::from("list_positions"),
-            ],
+            aliases: vec![String::from("list_positions")],
         }
     }
 }

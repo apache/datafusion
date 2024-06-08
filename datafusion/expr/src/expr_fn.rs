@@ -19,10 +19,11 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast,
+    Placeholder, TryCast, Unnest,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
+    StateFieldsArgs,
 };
 use crate::{
     aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
@@ -167,18 +168,6 @@ pub fn max(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the sum() aggregate function
-pub fn sum(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Sum,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an expression to represent the array_agg() aggregate function
 pub fn array_agg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -287,18 +276,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
 pub fn approx_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ApproxDistinct,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate the median for `expr`.
-pub fn median(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
         None,
@@ -486,6 +463,13 @@ pub fn case(expr: Expr) -> CaseBuilder {
 /// Create a CASE WHEN statement with boolean WHEN expressions and no base expression.
 pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
+}
+
+/// Create a Unnest expression
+pub fn unnest(expr: Expr) -> Expr {
+    Expr::Unnest(Unnest {
+        expr: Box::new(expr),
+    })
 }
 
 /// Convenience method to create a new user defined scalar function (UDF) with a
@@ -690,12 +674,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_fields(
-        &self,
-        _name: &str,
-        _value_type: DataType,
-        _ordering_fields: Vec<Field>,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(self.state_fields.clone())
     }
 }

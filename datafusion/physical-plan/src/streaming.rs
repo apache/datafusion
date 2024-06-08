@@ -31,6 +31,8 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
+use crate::limit::LimitStream;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
@@ -58,7 +60,9 @@ pub struct StreamingTableExec {
     projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
+    limit: Option<usize>,
     cache: PlanProperties,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl StreamingTableExec {
@@ -69,6 +73,7 @@ impl StreamingTableExec {
         projection: Option<&Vec<usize>>,
         projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
+        limit: Option<usize>,
     ) -> Result<Self> {
         for x in partitions.iter() {
             let partition_schema = x.schema();
@@ -99,7 +104,9 @@ impl StreamingTableExec {
             projection: projection.cloned().map(Into::into),
             projected_output_ordering,
             infinite,
+            limit,
             cache,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -125,6 +132,10 @@ impl StreamingTableExec {
 
     pub fn is_infinite(&self) -> bool {
         self.infinite
+    }
+
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -180,6 +191,9 @@ impl DisplayAs for StreamingTableExec {
                 if self.infinite {
                     write!(f, ", infinite_source=true")?;
                 }
+                if let Some(fetch) = self.limit {
+                    write!(f, ", fetch={fetch}")?;
+                }
 
                 display_orderings(f, &self.projected_output_ordering)?;
 
@@ -203,7 +217,7 @@ impl ExecutionPlan for StreamingTableExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -224,7 +238,7 @@ impl ExecutionPlan for StreamingTableExec {
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.partitions[partition].execute(ctx);
-        Ok(match self.projection.clone() {
+        let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 self.projected_schema.clone(),
                 stream.map(move |x| {
@@ -232,6 +246,108 @@ impl ExecutionPlan for StreamingTableExec {
                 }),
             )),
             None => stream,
+        };
+        Ok(match self.limit {
+            None => projected_stream,
+            Some(fetch) => {
+                let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                Box::pin(LimitStream::new(
+                    projected_stream,
+                    0,
+                    Some(fetch),
+                    baseline_metrics,
+                ))
+            }
         })
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::collect_partitioned;
+    use crate::streaming::PartitionStream;
+    use crate::test::{make_partition, TestPartitionStream};
+    use arrow::record_batch::RecordBatch;
+
+    #[tokio::test]
+    async fn test_no_limit() {
+        let exec = TestBuilder::new()
+            // make 2 batches, each with 100 rows
+            .with_batches(vec![make_partition(100), make_partition(100)])
+            .build();
+
+        let counts = collect_num_rows(Arc::new(exec)).await;
+        assert_eq!(counts, vec![200]);
+    }
+
+    #[tokio::test]
+    async fn test_limit() {
+        let exec = TestBuilder::new()
+            // make 2 batches, each with 100 rows
+            .with_batches(vec![make_partition(100), make_partition(100)])
+            // limit to only the first 75 rows back
+            .with_limit(Some(75))
+            .build();
+
+        let counts = collect_num_rows(Arc::new(exec)).await;
+        assert_eq!(counts, vec![75]);
+    }
+
+    /// Runs the provided execution plan and returns a vector of the number of
+    /// rows in each partition
+    async fn collect_num_rows(exec: Arc<dyn ExecutionPlan>) -> Vec<usize> {
+        let ctx = Arc::new(TaskContext::default());
+        let partition_batches = collect_partitioned(exec, ctx).await.unwrap();
+        partition_batches
+            .into_iter()
+            .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
+            .collect()
+    }
+
+    #[derive(Default)]
+    struct TestBuilder {
+        schema: Option<SchemaRef>,
+        partitions: Vec<Arc<dyn PartitionStream>>,
+        projection: Option<Vec<usize>>,
+        projected_output_ordering: Vec<LexOrdering>,
+        infinite: bool,
+        limit: Option<usize>,
+    }
+
+    impl TestBuilder {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        /// Set the batches for the stream
+        fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+            let stream = TestPartitionStream::new_with_batches(batches);
+            self.schema = Some(stream.schema().clone());
+            self.partitions = vec![Arc::new(stream)];
+            self
+        }
+
+        /// Set the limit for the stream
+        fn with_limit(mut self, limit: Option<usize>) -> Self {
+            self.limit = limit;
+            self
+        }
+
+        fn build(self) -> StreamingTableExec {
+            StreamingTableExec::try_new(
+                self.schema.unwrap(),
+                self.partitions,
+                self.projection.as_ref(),
+                self.projected_output_ordering,
+                self.infinite,
+                self.limit,
+            )
+            .unwrap()
+        }
     }
 }

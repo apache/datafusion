@@ -82,8 +82,8 @@ impl BuiltInWindowFunction {
             Ntile => "NTILE",
             Lag => "LAG",
             Lead => "LEAD",
-            FirstValue => "FIRST_VALUE",
-            LastValue => "LAST_VALUE",
+            FirstValue => "first_value",
+            LastValue => "last_value",
             NthValue => "NTH_VALUE",
         }
     }

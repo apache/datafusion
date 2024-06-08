@@ -30,7 +30,10 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::functions_aggregate::expr_fn::first_value;
+use datafusion::execution::FunctionRegistry;
+use datafusion::functions_aggregate::expr_fn::{
+    covar_pop, covar_samp, first_value, median, sum, var_sample,
+};
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
@@ -56,11 +59,11 @@ use datafusion_proto::bytes::{
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
+use datafusion_proto::logical_plan::{
+    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
 
-use datafusion::execution::FunctionRegistry;
 use prost::Message;
 
 #[cfg(feature = "json")]
@@ -235,10 +238,10 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';";
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')";
 
     let plan = ctx.state().create_logical_plan(query).await?;
 
@@ -265,10 +268,10 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';",
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')",
     )
     .await?;
 
@@ -344,7 +347,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut parquet_format = table_options.parquet;
 
-    parquet_format.global.bloom_filter_enabled = true;
+    parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = "PARQUET_2_0".to_string();
     parquet_format.global.write_batch_size = 111;
@@ -522,6 +525,31 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_unnest() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            true,
+        ),
+    ]);
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+    let query = "SELECT unnest(b) FROM t1";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_expr_api() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
@@ -580,7 +608,13 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),
             lit(2),
+            Some(lit(1)),
+        ),
+        array_slice(
+            make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),
+            lit(2),
+            None,
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
@@ -614,6 +648,11 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         first_value(vec![lit(1)], false, None, None, None),
+        covar_samp(lit(1.5), lit(2.2)),
+        covar_pop(lit(1.5), lit(2.2)),
+        sum(lit(1)),
+        median(lit(2)),
+        var_sample(lit(2.2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -718,14 +757,18 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         write!(f, "TopK: k={}", self.k)
     }
 
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+    fn with_exprs_and_inputs(
+        &self,
+        mut exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
-        Self {
+        Ok(Self {
             k: self.k,
-            input: inputs[0].clone(),
-            expr: exprs[0].clone(),
-        }
+            input: inputs.swap_remove(0),
+            expr: exprs.swap_remove(0),
+        })
     }
 }
 
@@ -1094,9 +1137,58 @@ fn round_trip_scalar_values() {
             )
             .build()
             .unwrap(),
+        ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
+                Field::new("b", DataType::Boolean, false),
+                ScalarValue::from(false),
+            )
+            .with_scalar(
+                Field::new(
+                    "c",
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Utf8),
+                    ),
+                    false,
+                ),
+                ScalarValue::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new("value".into()),
+                ),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
+        ])))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+            Field::new(
+                "c",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Binary),
+                ),
+                false,
+            ),
+            Field::new(
+                "d",
+                DataType::new_list(
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Binary),
+                    ),
+                    false,
+                ),
+                false,
+            ),
         ])))
         .unwrap(),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
@@ -1331,13 +1423,11 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: datafusion_proto::generated::datafusion::Schema =
-        schema.try_into().unwrap();
+    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto =
-        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
     // assert

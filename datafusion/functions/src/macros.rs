@@ -36,25 +36,31 @@
 ///    ]
 /// }
 /// ```
+///
+/// Exported functions accept:
+/// - `Vec<Expr>` argument (single argument followed by a comma)
+/// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 macro_rules! export_functions {
-    ($(($FUNC:ident,  $($arg:ident)*, $DOC:expr)),*) => {
-        pub mod expr_fn {
-            $(
-                #[doc = $DOC]
-                /// Return $name(arg)
-                pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-                    super::$FUNC().call(vec![$($arg),*],)
-                }
-            )*
-        }
+    ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
+        $(
+            // switch to single-function cases below
+            export_functions!(single $FUNC, $DOC, $($arg)*);
+        )*
+    };
 
-        /// Return a list of all functions in this package
-        pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
-            vec![
-                $(
-                    $FUNC(),
-                )*
-            ]
+    // single vector argument (a single argument followed by a comma)
+    (single $FUNC:ident, $DOC:expr, $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            super::$FUNC().call($arg)
+        }
+    };
+
+    // variadic arguments (zero or more arguments, without commas)
+    (single $FUNC:ident, $DOC:expr, $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            super::$FUNC().call(vec![$($arg),*])
         }
     };
 }
@@ -89,7 +95,6 @@ macro_rules! make_udf_function {
 /// The rationale for providing stub functions is to help users to configure datafusion
 /// properly (so they get an error telling them why a function is not available)
 /// instead of getting a cryptic "no function found" message at runtime.
-
 macro_rules! make_stub_package {
     ($name:ident, $feature:literal) => {
         #[cfg(not(feature = $feature))]
@@ -115,7 +120,6 @@ macro_rules! make_stub_package {
 /// $ARGS_TYPE: the type of array to cast the argument to
 /// $RETURN_TYPE: the type of array to return
 /// $FUNC: the function to apply to each element of $ARG
-///
 macro_rules! make_function_scalar_inputs_return_type {
     ($ARG: expr, $NAME:expr, $ARG_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
         let arg = downcast_arg!($ARG, $NAME, $ARG_TYPE);
@@ -156,20 +160,20 @@ macro_rules! downcast_arg {
 /// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
-/// $MONOTONIC_FUNC: the monotonicity of the function
+/// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $MONOTONICITY:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
+            use std::any::Any;
+            use std::sync::Arc;
+
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
-            use datafusion_expr::{
-                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-            };
-            use std::any::Any;
-            use std::sync::Arc;
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -211,8 +215,11 @@ macro_rules! make_math_unary_udf {
                     }
                 }
 
-                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-                    Ok($MONOTONICITY)
+                fn output_ordering(
+                    &self,
+                    input: &[ExprProperties],
+                ) -> Result<SortProperties> {
+                    $OUTPUT_ORDERING(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -260,21 +267,21 @@ macro_rules! make_math_unary_udf {
 /// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $BINARY_FUNC: the binary function to apply to the argument
-/// $MONOTONIC_FUNC: the monotonicity of the function
+/// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $MONOTONICITY:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
+            use std::any::Any;
+            use std::sync::Arc;
+
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature::*;
-            use datafusion_expr::{
-                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
-            };
-            use std::any::Any;
-            use std::sync::Arc;
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -318,8 +325,11 @@ macro_rules! make_math_binary_udf {
                     }
                 }
 
-                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-                    Ok($MONOTONICITY)
+                fn output_ordering(
+                    &self,
+                    input: &[ExprProperties],
+                ) -> Result<SortProperties> {
+                    $OUTPUT_ORDERING(input)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

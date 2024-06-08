@@ -26,16 +26,15 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
+use datafusion_common::internal_err;
 use datafusion_common::{plan_err, utils::array_into_list_array, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::Expr;
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::TypeSignature;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::make_scalar_function;
 
-make_udf_function!(
+make_udf_expr_and_func!(
     MakeArray,
     make_array,
     "Returns an Arrow array using the specified input expressions.",
@@ -58,10 +57,10 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::VariadicEqual, TypeSignature::Any(0)],
+                vec![TypeSignature::UserDefined, TypeSignature::Any(0)],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("make_array"), String::from("make_list")],
+            aliases: vec![String::from("make_list")],
         }
     }
 }
@@ -81,11 +80,7 @@ impl ScalarUDFImpl for MakeArray {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.len() {
-            0 => Ok(DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Null,
-                true,
-            )))),
+            0 => Ok(empty_array_type()),
             _ => {
                 let mut expr_type = DataType::Null;
                 for arg_type in arg_types {
@@ -93,6 +88,10 @@ impl ScalarUDFImpl for MakeArray {
                         expr_type = arg_type.clone();
                         break;
                     }
+                }
+
+                if expr_type.is_null() {
+                    expr_type = DataType::Int64;
                 }
 
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
@@ -111,6 +110,30 @@ impl ScalarUDFImpl for MakeArray {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let new_type = arg_types.iter().skip(1).try_fold(
+            arg_types.first().unwrap().clone(),
+            |acc, x| {
+                // The coerced types found by `comparison_coercion` are not guaranteed to be
+                // coercible for the arguments. `comparison_coercion` returns more loose
+                // types that can be coerced to both `acc` and `x` for comparison purpose.
+                // See `maybe_data_types` for the actual coercion.
+                let coerced_type = comparison_coercion(&acc, x);
+                if let Some(coerced_type) = coerced_type {
+                    Ok(coerced_type)
+                } else {
+                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                }
+            },
+        )?;
+        Ok(vec![new_type; arg_types.len()])
+    }
+}
+
+// Empty array is a special case that is useful for many other array functions
+pub(super) fn empty_array_type() -> DataType {
+    DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -129,7 +152,9 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         Null => {
-            let array = new_null_array(&Null, arrays.iter().map(|a| a.len()).sum());
+            let length = arrays.iter().map(|a| a.len()).sum();
+            // By default Int64
+            let array = new_null_array(&DataType::Int64, length);
             Ok(Arc::new(array_into_list_array(array)))
         }
         LargeList(..) => array_array::<i64>(arrays, data_type),

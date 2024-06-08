@@ -495,7 +495,7 @@ statement error Did you mean 'STDDEV'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
-statement error Did you mean 'COVAR'?
+statement error DataFusion error: Error during planning: Invalid function 'covaria'.\nDid you mean 'covar'?
 SELECT COVARIA(1,1);
 
 # Window function
@@ -549,8 +549,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 # sqrt_f32_vs_f64
@@ -1158,4 +1158,3 @@ drop table uuid_table
 
 statement ok
 drop table t
-

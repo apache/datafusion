@@ -77,7 +77,7 @@ unicode_expressions = [
 ]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { workspace = true }
 apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
@@ -105,13 +105,14 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-array = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
 half = { workspace = true }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -120,6 +121,7 @@ num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
+paste = "1.0.15"
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
@@ -132,6 +134,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
@@ -145,7 +148,7 @@ postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"
-regex = "1.5.4"
+regex = { workspace = true }
 rstest = { workspace = true }
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
@@ -155,7 +158,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] 
 tokio-postgres = "0.7.7"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.28.0", features = ["fs"] }
+nix = { version = "0.29.0", features = ["fs"] }
 
 [[bench]]
 harness = false
@@ -209,3 +212,7 @@ name = "sort"
 [[bench]]
 harness = false
 name = "topk_aggregate"
+
+[[bench]]
+harness = false
+name = "parquet_statistic"

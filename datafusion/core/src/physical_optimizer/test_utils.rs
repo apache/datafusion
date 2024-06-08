@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use crate::datasource::stream::{StreamConfig, StreamTable};
+use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -41,7 +41,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, Statistics};
+use datafusion_common::JoinType;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
@@ -62,7 +62,8 @@ async fn register_current_csv(
 
     match infinite {
         true => {
-            let config = StreamConfig::new_file(schema, path.into());
+            let source = FileStreamProvider::new_file(schema, path.into());
+            let config = StreamConfig::new(Arc::new(source));
             ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
         }
         false => {
@@ -274,21 +275,11 @@ pub fn sort_preserving_merge_exec(
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    Arc::new(ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-        },
-        None,
-        None,
-        Default::default(),
-    ))
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100)),
+    )
+    .build_arc()
 }
 
 // Created a sorted parquet exec
@@ -298,21 +289,12 @@ pub fn parquet_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(ParquetExec::new(
-        FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema: schema.clone(),
-            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::new_unknown(schema),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![sort_exprs],
-        },
-        None,
-        None,
-        Default::default(),
-    ))
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+    )
+    .build_arc()
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {

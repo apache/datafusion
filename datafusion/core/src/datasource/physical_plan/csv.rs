@@ -173,7 +173,7 @@ impl ExecutionPlan for CsvExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
     }
@@ -561,7 +561,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.projection = Some(vec![0, 2, 4]);
 
         let csv = CsvExec::new(
@@ -610,7 +610,8 @@ mod tests {
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
@@ -626,7 +627,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.projection = Some(vec![4, 0, 2]);
 
         let csv = CsvExec::new(
@@ -675,7 +676,8 @@ mod tests {
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
@@ -691,7 +693,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.limit = Some(5);
 
         let csv = CsvExec::new(
@@ -754,7 +756,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
         config.limit = Some(5);
 
         let csv = CsvExec::new(
@@ -807,7 +809,7 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)?;
+        let mut config = partitioned_csv_config(file_schema, file_groups);
 
         // Add partition columns
         config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
@@ -893,7 +895,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
-        ctx.runtime_env().register_object_store(&url, store.clone());
+        ctx.register_object_store(&url, store.clone());
 
         let task_ctx = ctx.task_ctx();
 
@@ -912,7 +914,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = partitioned_csv_config(file_schema, file_groups).unwrap();
+        let config = partitioned_csv_config(file_schema, file_groups);
         let csv = CsvExec::new(
             config,
             true,
@@ -963,12 +965,10 @@ mod tests {
 
         let data = bytes::Bytes::from("a,b\n1,2\n3,4");
         let path = object_store::path::Path::from("a.csv");
-        store.put(&path, data).await.unwrap();
+        store.put(&path, data.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
-        session_ctx
-            .runtime_env()
-            .register_object_store(&url, Arc::new(store));
+        session_ctx.register_object_store(&url, Arc::new(store));
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new())
@@ -997,7 +997,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
@@ -1017,7 +1017,9 @@ mod tests {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_target_partitions(8),
+            SessionConfig::new()
+                .with_target_partitions(8)
+                .set_str("datafusion.catalog.has_header", "false"),
         );
 
         let schema = populate_csv_partitions(&tmp_dir, 8, ".csv")?;
@@ -1035,7 +1037,7 @@ mod tests {
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
 
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
@@ -1045,7 +1047,9 @@ mod tests {
             .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().set_str("datafusion.catalog.has_header", "false"),
+        );
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::UInt32, false),
@@ -1074,7 +1078,7 @@ mod tests {
             panic!("Did not find part_0 in csv output files!")
         }
         // register each partition as well as the top level dir
-        let csv_read_option = CsvReadOptions::new().schema(&schema);
+        let csv_read_option = CsvReadOptions::new().schema(&schema).has_header(false);
         ctx.register_csv(
             "part0",
             &format!("{out_dir}/{part_0_name}"),

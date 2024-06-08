@@ -20,20 +20,18 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
-use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
-    Operator, ScalarFunctionDefinition, TryCast,
-};
+use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
 
+use crate::scalar_function;
 use crate::{
     expressions::{self, binary, like, Column, Literal},
-    udf, PhysicalExpr,
+    PhysicalExpr,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -286,40 +284,17 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => match field {
-            GetFieldAccess::NamedStructField { name: _ } => {
-                internal_err!(
-                    "NamedStructField should be rewritten in OperatorToFunction"
-                )
-            }
-            GetFieldAccess::ListIndex { key: _ } => {
-                internal_err!("ListIndex should be rewritten in OperatorToFunction")
-            }
-            GetFieldAccess::ListRange {
-                start: _,
-                stop: _,
-                stride: _,
-            } => {
-                internal_err!("ListRange should be rewritten in OperatorToFunction")
-            }
-        },
-
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            match func_def {
-                ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
-                    fun.clone().as_ref(),
-                    &physical_args,
-                    input_schema,
-                    args,
-                    input_dfschema,
-                ),
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
-            }
+            scalar_function::create_physical_expr(
+                func.clone().as_ref(),
+                &physical_args,
+                input_schema,
+                args,
+                input_dfschema,
+            )
         }
         Expr::Between(Between {
             expr,

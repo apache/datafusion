@@ -19,7 +19,6 @@
 
 use crate::array_has::array_has_all;
 use crate::concat::{array_append, array_concat, array_prepend};
-use crate::extract::{array_element, array_slice};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::list_ndims;
@@ -27,15 +26,14 @@ use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::{BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Operator};
-use datafusion_functions::expr_fn::get_field;
+use datafusion_expr::{BinaryExpr, Expr, Operator};
 
 /// Rewrites expressions into function calls to array functions
 pub(crate) struct ArrayFunctionRewriter {}
 
 impl FunctionRewrite for ArrayFunctionRewriter {
     fn name(&self) -> &str {
-        "FunctionRewrite"
+        "ArrayFunctionRewriter"
     }
 
     fn rewrite(
@@ -148,31 +146,6 @@ impl FunctionRewrite for ArrayFunctionRewriter {
                 Transformed::yes(array_prepend(*left, *right))
             }
 
-            Expr::GetIndexedField(GetIndexedField {
-                expr,
-                field: GetFieldAccess::NamedStructField { name },
-            }) => {
-                let name = Expr::Literal(name);
-                Transformed::yes(get_field(*expr, name))
-            }
-
-            // expr[idx] ==> array_element(expr, idx)
-            Expr::GetIndexedField(GetIndexedField {
-                expr,
-                field: GetFieldAccess::ListIndex { key },
-            }) => Transformed::yes(array_element(*expr, *key)),
-
-            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
-            Expr::GetIndexedField(GetIndexedField {
-                expr,
-                field:
-                    GetFieldAccess::ListRange {
-                        start,
-                        stop,
-                        stride,
-                    },
-            }) => Transformed::yes(array_slice(*expr, *start, *stop, *stride)),
-
             _ => Transformed::no(expr),
         };
         Ok(transformed)
@@ -182,20 +155,20 @@ impl FunctionRewrite for ArrayFunctionRewriter {
 /// Returns true if expr is a function call to the specified named function.
 /// Returns false otherwise.
 fn is_func(expr: &Expr, func_name: &str) -> bool {
-    let Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) = expr else {
+    let Expr::ScalarFunction(ScalarFunction { func, args: _ }) = expr else {
         return false;
     };
 
-    func_def.name() == func_name
+    func.name() == func_name
 }
 
 /// Returns true if expr is a function call with one of the specified names
 fn is_one_of_func(expr: &Expr, func_names: &[&str]) -> bool {
-    let Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) = expr else {
+    let Expr::ScalarFunction(ScalarFunction { func, args: _ }) = expr else {
         return false;
     };
 
-    func_names.contains(&func_def.name())
+    func_names.contains(&func.name())
 }
 
 /// returns Some(col) if this is Expr::Column

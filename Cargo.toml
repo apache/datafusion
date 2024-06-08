@@ -32,6 +32,8 @@ members = [
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
+    "datafusion/proto-common",
+    "datafusion/proto-common/gen",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
@@ -44,14 +46,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
+authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
-homepage = "https://github.com/apache/datafusion"
+homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 rust-version = "1.73"
-version = "37.1.0"
+version = "39.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -59,51 +61,69 @@ version = "37.1.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
-arrow = { version = "51.0.0", features = ["prettyprint"] }
-arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "51.0.0", default-features = false }
-arrow-flight = { version = "51.0.0", features = ["flight-sql-experimental"] }
-arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
-arrow-ord = { version = "51.0.0", default-features = false }
-arrow-schema = { version = "51.0.0", default-features = false }
-arrow-string = { version = "51.0.0", default-features = false }
+ahash = { version = "0.8", default-features = false, features = [
+    "runtime-rng",
+] }
+arrow = { version = "52.0.0", features = [
+    "prettyprint",
+] }
+arrow-array = { version = "52.0.0", default-features = false, features = [
+    "chrono-tz",
+] }
+arrow-buffer = { version = "52.0.0", default-features = false }
+arrow-flight = { version = "52.0.0", features = [
+    "flight-sql-experimental",
+] }
+arrow-ipc = { version = "52.0.0", default-features = false, features = [
+    "lz4",
+] }
+arrow-ord = { version = "52.0.0", default-features = false }
+arrow-schema = { version = "52.0.0", default-features = false }
+arrow-string = { version = "52.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
-dashmap = "5.4.0"
-datafusion = { path = "datafusion/core", version = "37.1.0", default-features = false }
-datafusion-common = { path = "datafusion/common", version = "37.1.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "37.1.0" }
-datafusion-execution = { path = "datafusion/execution", version = "37.1.0" }
-datafusion-expr = { path = "datafusion/expr", version = "37.1.0" }
-datafusion-functions = { path = "datafusion/functions", version = "37.1.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "37.1.0" }
-datafusion-functions-array = { path = "datafusion/functions-array", version = "37.1.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "37.1.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "37.1.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "37.1.0", default-features = false }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "37.1.0" }
-datafusion-proto = { path = "datafusion/proto", version = "37.1.0" }
-datafusion-sql = { path = "datafusion/sql", version = "37.1.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "37.1.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "37.1.0" }
+dashmap = "5.5.0"
+datafusion = { path = "datafusion/core", version = "39.0.0", default-features = false }
+datafusion-common = { path = "datafusion/common", version = "39.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "39.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "39.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "39.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "39.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "39.0.0" }
+datafusion-functions-array = { path = "datafusion/functions-array", version = "39.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "39.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "39.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "39.0.0", default-features = false }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "39.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "39.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "39.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "39.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "39.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "39.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.2.1", default-features = false }
+hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.9.1", default-features = false }
+object_store = { version = "0.10.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "52.0.0", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+] }
 rand = "0.8"
-rstest = "0.19.0"
+regex = "1.8"
+rstest = "0.21.0"
 serde_json = "1"
-sqlparser = { git = "https://github.com/duongcongtoai/sqlparser-rs", rev = "62f1e02f4a7d5160e8538b34f30e311905b4a72a", features = ["visitor"] }
+sqlparser = { version = "0.47", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
