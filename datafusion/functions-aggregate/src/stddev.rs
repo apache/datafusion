@@ -22,7 +22,7 @@ use std::fmt::{Debug, Formatter};
 
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -110,7 +110,7 @@ impl AggregateUDFImpl for Stddev {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return internal_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+            return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
         }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
@@ -196,7 +196,7 @@ impl AggregateUDFImpl for StddevPop {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return internal_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+            return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
         }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
