@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::{internal_err, Result};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
 
@@ -182,6 +183,11 @@ impl ParquetAccessPlan {
     /// is returned for *all* the rows in the row groups that are not skipped.
     /// Thus it includes a `Select` selection for any [`RowGroupAccess::Scan`].
     ///
+    /// # Errors
+    ///
+    /// Returns an error if any specified row selection does not specify
+    /// the same number of rows as in it's corresponding `row_group_metadata`.
+    ///
     /// # Example: No Selections
     ///
     /// Given an access plan like this
@@ -228,7 +234,7 @@ impl ParquetAccessPlan {
     pub fn into_overall_row_selection(
         self,
         row_group_meta_data: &[RowGroupMetaData],
-    ) -> Option<RowSelection> {
+    ) -> Result<Option<RowSelection>> {
         assert_eq!(row_group_meta_data.len(), self.row_groups.len());
         // Intuition: entire row groups are filtered out using
         // `row_group_indexes` which come from Skip and Scan. An overall
@@ -239,7 +245,32 @@ impl ParquetAccessPlan {
             .iter()
             .any(|rg| matches!(rg, RowGroupAccess::Selection(_)))
         {
-            return None;
+            return Ok(None);
+        }
+
+        // validate all Selections
+        for (idx, (rg, rg_meta)) in self
+            .row_groups
+            .iter()
+            .zip(row_group_meta_data.iter())
+            .enumerate()
+        {
+            let RowGroupAccess::Selection(selection) = rg else {
+                continue;
+            };
+            let rows_in_selection = selection
+                .iter()
+                .map(|selection| selection.row_count)
+                .sum::<usize>();
+
+            let row_group_row_count = rg_meta.num_rows();
+            if rows_in_selection as i64 != row_group_row_count {
+                return internal_err!(
+                    "Invalid ParquetAccessPlan Selection. Row group {idx} has {row_group_row_count} rows \
+                    but selection only specifies {rows_in_selection} rows. \
+                    Selection: {selection:?}"
+                );
+            }
         }
 
         let total_selection: RowSelection = self
@@ -261,7 +292,7 @@ impl ParquetAccessPlan {
             })
             .collect();
 
-        Some(total_selection)
+        Ok(Some(total_selection))
     }
 
     /// Return an iterator over the row group indexes that should be scanned
@@ -305,6 +336,7 @@ impl ParquetAccessPlan {
 #[cfg(test)]
 mod test {
     use super::*;
+    use datafusion_common::assert_contains;
     use parquet::basic::LogicalType;
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
@@ -320,7 +352,9 @@ mod test {
         ]);
 
         let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+        let row_selection = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap();
 
         // scan all row groups, no selection
         assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
@@ -337,7 +371,9 @@ mod test {
         ]);
 
         let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+        let row_selection = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap();
 
         // skip all row groups, no selection
         assert_eq!(row_group_indexes, vec![] as Vec<usize>);
@@ -348,14 +384,22 @@ mod test {
         let access_plan = ParquetAccessPlan::new(vec![
             RowGroupAccess::Scan,
             RowGroupAccess::Selection(
-                vec![RowSelector::select(5), RowSelector::skip(7)].into(),
+                // select / skip all 20 rows in row group 1
+                vec![
+                    RowSelector::select(5),
+                    RowSelector::skip(7),
+                    RowSelector::select(8),
+                ]
+                .into(),
             ),
             RowGroupAccess::Skip,
             RowGroupAccess::Skip,
         ]);
 
         let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+        let row_selection = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap();
 
         assert_eq!(row_group_indexes, vec![0, 1]);
         assert_eq!(
@@ -366,7 +410,8 @@ mod test {
                     RowSelector::select(10),
                     // selectors from the second row group
                     RowSelector::select(5),
-                    RowSelector::skip(7)
+                    RowSelector::skip(7),
+                    RowSelector::select(8)
                 ]
                 .into()
             )
@@ -379,13 +424,21 @@ mod test {
             RowGroupAccess::Skip,
             RowGroupAccess::Scan,
             RowGroupAccess::Selection(
-                vec![RowSelector::select(5), RowSelector::skip(7)].into(),
+                // specify all 30 rows in row group 1
+                vec![
+                    RowSelector::select(5),
+                    RowSelector::skip(7),
+                    RowSelector::select(18),
+                ]
+                .into(),
             ),
             RowGroupAccess::Scan,
         ]);
 
         let row_group_indexes = access_plan.row_group_indexes();
-        let row_selection = access_plan.into_overall_row_selection(row_group_metadata());
+        let row_selection = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap();
 
         assert_eq!(row_group_indexes, vec![1, 2, 3]);
         assert_eq!(
@@ -397,12 +450,60 @@ mod test {
                     // selectors from the third row group
                     RowSelector::select(5),
                     RowSelector::skip(7),
+                    RowSelector::select(18),
                     // select the entire fourth row group
                     RowSelector::select(40),
                 ]
                 .into()
             )
         );
+    }
+
+    #[test]
+    fn test_invalid_too_few() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            // select 12 rows, but row group 1 has 20
+            RowGroupAccess::Selection(
+                vec![RowSelector::select(5), RowSelector::skip(7)].into(),
+            ),
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let err = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
+        assert_contains!(err, "Internal error: Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 12 rows");
+    }
+
+    #[test]
+    fn test_invalid_too_many() {
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            // select 22 rows, but row group 1 has only 20
+            RowGroupAccess::Selection(
+                vec![
+                    RowSelector::select(10),
+                    RowSelector::skip(2),
+                    RowSelector::select(10),
+                ]
+                .into(),
+            ),
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+        ]);
+
+        let row_group_indexes = access_plan.row_group_indexes();
+        let err = access_plan
+            .into_overall_row_selection(row_group_metadata())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(row_group_indexes, vec![0, 1, 2, 3]);
+        assert_contains!(err, "Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 22 rows");
     }
 
     static ROW_GROUP_METADATA: OnceLock<Vec<RowGroupMetaData>> = OnceLock::new();
