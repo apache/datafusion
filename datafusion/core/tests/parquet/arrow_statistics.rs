@@ -163,7 +163,7 @@ impl TestReader {
     }
 }
 
-/// Defines a test case for statistics extraction
+/// Defines a test case for row group statistics extraction
 struct Test<'a> {
     /// The parquet file reader
     reader: &'a ParquetRecordBatchReaderBuilder<File>,
@@ -186,43 +186,14 @@ impl<'a> Test<'a> {
             column_name,
         } = self;
 
-        let converter = StatisticsConverter::try_new(
+        run_test(
+            reader,
+            expected_min,
+            expected_max,
+            expected_null_counts,
+            expected_row_counts,
             column_name,
-            reader.schema(),
-            reader.parquet_schema(),
-        )
-        .unwrap();
-
-        let row_groups = reader.metadata().row_groups();
-        let min = converter.row_group_mins(row_groups).unwrap();
-
-        assert_eq!(
-            &min, &expected_min,
-            "{column_name}: Mismatch with expected minimums"
-        );
-
-        let max = converter.row_group_maxes(row_groups).unwrap();
-        assert_eq!(
-            &max, &expected_max,
-            "{column_name}: Mismatch with expected maximum"
-        );
-
-        let null_counts = converter.row_group_null_counts(row_groups).unwrap();
-        let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
-        assert_eq!(
-            &null_counts, &expected_null_counts,
-            "{column_name}: Mismatch with expected null counts. \
-            Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
-        );
-
-        let row_counts = StatisticsConverter::row_group_row_counts(
-            reader.metadata().row_groups().iter(),
-        )
-        .unwrap();
-        assert_eq!(
-            row_counts, expected_row_counts,
-            "{column_name}: Mismatch with expected row counts. \
-            Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
+            false,
         );
     }
 
@@ -244,6 +215,110 @@ impl<'a> Test<'a> {
         );
 
         assert!(converter.is_err());
+    }
+}
+
+/// Defines a test case for row group and data page statistics extraction
+///
+/// This is a temporary structure until we are done with XXX while the the types
+/// supported by data pages statistics are different than the types supported by
+/// row groups
+struct TestBoth<'a> {
+    /// The parquet file reader
+    reader: &'a ParquetRecordBatchReaderBuilder<File>,
+    expected_min: ArrayRef,
+    expected_max: ArrayRef,
+    expected_null_counts: UInt64Array,
+    expected_row_counts: UInt64Array,
+    /// Which column to extract statistics from
+    column_name: &'static str,
+}
+
+impl<'a> TestBoth<'a> {
+    fn run(self) {
+        let Self {
+            reader,
+            expected_min,
+            expected_max,
+            expected_null_counts,
+            expected_row_counts,
+            column_name,
+        } = self;
+        run_test(
+            reader,
+            expected_min,
+            expected_max,
+            expected_null_counts,
+            expected_row_counts,
+            column_name,
+            true,
+        );
+    }
+}
+
+fn run_test(
+    reader: &ParquetRecordBatchReaderBuilder<File>,
+    expected_min: ArrayRef,
+    expected_max: ArrayRef,
+    expected_null_counts: UInt64Array,
+    expected_row_counts: UInt64Array,
+    column_name: &'static str,
+    // Note the row groups and data pages have the same statistics
+    test_data_page_statistics: bool,
+) {
+    let converter = StatisticsConverter::try_new(
+        column_name,
+        reader.schema(),
+        reader.parquet_schema(),
+    )
+    .unwrap();
+
+    let row_groups = reader.metadata().row_groups();
+    let min = converter.row_group_mins(row_groups).unwrap();
+
+    assert_eq!(
+        &min, &expected_min,
+        "{column_name}: Mismatch with expected row group minimums"
+    );
+
+    let max = converter.row_group_maxes(row_groups).unwrap();
+    assert_eq!(
+        &max, &expected_max,
+        "{column_name}: Mismatch with expected row group maximums"
+    );
+
+    let null_counts = converter.row_group_null_counts(row_groups).unwrap();
+    let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
+    assert_eq!(
+        &null_counts, &expected_null_counts,
+        "{column_name}: Mismatch with expected row group null counts. \
+        Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
+    );
+
+    let row_counts =
+        StatisticsConverter::row_group_row_counts(reader.metadata().row_groups().iter())
+            .unwrap();
+    assert_eq!(
+        row_counts, expected_row_counts,
+        "{column_name}: Mismatch with expected row group row counts. \
+        Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
+    );
+
+    if test_data_page_statistics {
+        // one Vec<Index> for each row group
+        let column_index = reader.metadata().column_index()
+            .expect("File should have column indexes");
+
+        let row_group_indexes: Vec<usize> = row_groups.iter().enumerate().map(|(i, _)| i).collect();
+
+        let mins  =   converter.data_page_mins(column_index, &row_group_indexes).unwrap();
+
+
+        assert_eq!(
+            &mins, &expected_min,
+            "{column_name}: Mismatch with expected data page minimums"
+        );
+        // TODO maxes, null count, row count
     }
 }
 
@@ -1724,7 +1799,7 @@ async fn test_boolean() {
     .build()
     .await;
 
-    Test {
+    TestBoth {
         reader: &reader,
         expected_min: Arc::new(BooleanArray::from(vec![false, false])),
         expected_max: Arc::new(BooleanArray::from(vec![true, false])),

@@ -31,9 +31,9 @@ use arrow_array::{
     UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
-use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, plan_err, not_impl_err, Result};
 use half::f16;
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::{ParquetColumnIndex, RowGroupMetaData};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -766,15 +766,97 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Arc::new(UInt64Array::from_iter(null_counts)))
     }
 
-    /// Returns a null array of data_type with one element per row group
-    fn make_null_array<I>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    /// Extract the minimum values from Data page statistics
+    ///
+    /// In Parquet files, in addition to the Column Chunk level statistics
+    /// (stored for each column for each row group) there are also optional
+    /// statistics stored for each data page, part of the [Parquet Page Index].
+    /// Since a single Column Chunk is stored as one or more pages, page level statistics
+    /// can prune at a finer granularity.
+    ///
+    /// However since they are stored in a separate metadata structure
+    /// ([`Index`]) there is different code to extract them as arrow statistics
+    ///
+    /// Parameters:
+    ///
+    /// * `page_index`: The parquet page index, likely read from
+    /// [`ParquetMetadata::page_index()`]
+    ///
+    /// * row_group_indexes: The indexes of the row groups (indexes in
+    /// `page_index`) to extract the statistics from. This is an interator over `&usize` to
+    /// permit passing in  `&Vec<usize>` or similar
+    ///
+    /// # Return Value
+    ///
+    /// The returned array contains 1 value for each `NativeIndex` in the underlying
+    /// `Index`es, in the same order as they appear in `metadatas`.
+    ///
+    /// For example, if there are two `Index`es in `metadatas`:
+    /// 1. the first having `3` `PageIndex` entries
+    /// 2. the second having `2` `PageIndex` entries
+    ///
+    /// The returned array would have 5 rows
+    ///
+    /// Each value is either
+    /// * the minimum value for the page
+    /// * a null value, if the statistics can not be extracted
+    ///
+    /// Note that a null value does NOT mean the min value was actually
+    /// `null` it means it the requested statistic is unknown
+    ///
+    /// # Errors
+    ///
+    /// Reasons for not being able to extract the statistics include:
+    /// * the column is not present in the parquet file
+    /// * statistics for the pages are not present in the row group
+    /// * the stored statistic value can not be converted to the requested type
+    ///
+    /// # Example
+    /// ```no_run
+    /// tood
+    /// ```
+    pub fn data_page_mins<I>(&self, page_index: &ParquetColumnIndex, row_group_indexes: I) -> Result<ArrayRef>
     where
-        I: IntoIterator<Item = &'a RowGroupMetaData>,
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indexes));
+        };
+
+        // iterator over &Index
+        let indexes = row_group_indexes.into_iter()
+            .map(|idx| &page_index[*idx]);
+
+        // Get an iterator of the native index type depending on data type
+        match data_type {
+            DataType::Boolean => {},
+            _ => return not_impl_err!("Datatype not yet implemented")
+        }
+
+
+
+        // then convert the iterator of NativeIndex to an ArrowArrayRef
+
+        todo!()
+        /*        let iter = metadatas
+                .into_iter()
+                .map(|x| x.column(parquet_index).statistics());
+                min_statistics(data_type, iter)
+        */
+    }
+
+    /// Returns a null array of data_type with one element per entry in the metadatas
+    fn make_null_array<I, A>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    where
+        I: IntoIterator<Item = A>,
     {
         // column was in the arrow schema but not in the parquet schema, so return a null array
         let num_row_groups = metadatas.into_iter().count();
         new_null_array(data_type, num_row_groups)
     }
+
 }
 
 #[cfg(test)]
