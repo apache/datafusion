@@ -815,10 +815,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             let expr_name = expr.display_name()?;
             self.common_exprs.insert(expr_id.clone(), expr);
 
-            // Alias this `Column` expr to it original "expr name",
-            // `projection_push_down` optimizer use "expr name" to eliminate useless
-            // projections.
-            // TODO: do we really need to alias here?
+            // alias the expressions without an `Alias` ancestor node
             let rewritten = if self.alias_counter > 0 {
                 col(expr_id)
             } else {
