@@ -104,7 +104,7 @@ fn expr_fn_demo() -> Result<()> {
         .build()?; // build the aggregate
     assert_eq!(
         agg.to_string(),
-        "first_value(price) FILTER (WHERE quantity > Int32(100)) ORDER BY [ts DESC NULLS LAST   ]"
+        "first_value(price) FILTER (WHERE quantity > Int32(100)) ORDER BY [ts DESC NULLS LAST]"
     );
 
     Ok(())
