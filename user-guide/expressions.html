@@ -539,6 +539,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#aggregate-function-builder">
+   Aggregate Function Builder
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#subquery-expressions">
    Subquery Expressions
   </a>
@@ -1304,6 +1309,23 @@ but these operators always return a <code class="docutils literal notranslate"><
 </tr>
 <tr class="row-even"><td><p>sum(expr)</p></td>
 <td><p>Сalculates the sum of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="aggregate-function-builder">
+<h2>Aggregate Function Builder<a class="headerlink" href="#aggregate-function-builder" title="Link to this heading">¶</a></h2>
+<p>You can also use the <code class="docutils literal notranslate"><span class="pre">AggregateExt</span></code> trait to more easily build Aggregate arguments <code class="docutils literal notranslate"><span class="pre">Expr</span></code>.</p>
+<p>See <code class="docutils literal notranslate"><span class="pre">datafusion-examples/examples/expr_api.rs</span></code> for example usage.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Equivalent to</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>first_value_udaf.call(vec![expr]).order_by(vec![expr]).build().unwrap()</p></td>
+<td><p>first_value(expr, Some(vec![expr]))</p></td>
 </tr>
 </tbody>
 </table>
