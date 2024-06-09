@@ -73,6 +73,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::approx_median::approx_median;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
@@ -96,6 +97,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         variance::var_samp_udaf(),
         stddev::stddev_udaf(),
         stddev::stddev_pop_udaf(),
+        approx_median::approx_median_udaf(),
     ]
 }
 

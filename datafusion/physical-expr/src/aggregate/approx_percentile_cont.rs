@@ -21,16 +21,13 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 
-use datafusion_common::{
-    DataFusionError, not_impl_err, plan_err, Result,
-    ScalarValue,
-};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, ColumnarValue};
 use datafusion_functions_aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
 
-use crate::{AggregateExpr, PhysicalExpr};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
@@ -250,4 +247,3 @@ impl PartialEq<dyn Any> for ApproxPercentileCont {
             .unwrap_or(false)
     }
 }
-

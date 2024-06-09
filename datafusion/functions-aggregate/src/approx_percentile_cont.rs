@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -24,9 +23,11 @@ use arrow::{
     datatypes::DataType,
 };
 
-use datafusion_common::{downcast_value, internal_err, ScalarValue, DataFusionError};
+use datafusion_common::{downcast_value, internal_err, DataFusionError, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr_common::aggregate::tdigest::{DEFAULT_MAX_SIZE, TDigest, TryIntoF64};
+use datafusion_physical_expr_common::aggregate::tdigest::{
+    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
+};
 
 #[derive(Debug)]
 pub struct ApproxPercentileAccumulator {
@@ -215,7 +216,6 @@ impl Accumulator for ApproxPercentileAccumulator {
             - std::mem::size_of_val(&self.return_type)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

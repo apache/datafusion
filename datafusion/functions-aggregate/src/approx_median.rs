@@ -17,17 +17,19 @@
 
 //! Defines physical expressions for APPROX_MEDIAN that can be evaluated MEDIAN at runtime during query execution
 
-
 use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::Float64;
 
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::{
+    is_approx_percentile_cont_supported_arg_type, NUMERICS,
+};
 use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
@@ -42,7 +44,7 @@ make_udaf_expr_and_func!(
 
 /// APPROX_MEDIAN aggregate expression
 pub struct ApproxMedian {
-    signature: Signature
+    signature: Signature,
 }
 
 impl Debug for ApproxMedian {
@@ -64,7 +66,7 @@ impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
         }
     }
 }
@@ -74,7 +76,6 @@ impl AggregateUDFImpl for ApproxMedian {
     fn as_any(&self) -> &dyn Any {
         self
     }
-
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
@@ -116,7 +117,7 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     fn signature(&self) -> &Signature {
-       &self.signature
+        &self.signature
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -125,7 +126,16 @@ impl AggregateUDFImpl for ApproxMedian {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
+            return not_impl_err!(
+                "APPROX_MEDIAN(DISTINCT) aggregations are not available"
+            );
+        }
+
+        if is_approx_percentile_cont_supported_arg_type(acc_args.input_type) {
+            return plan_err!(
+                "The function APPROX_MEDIAN does not support inputs of type {:?}.",
+                acc_args.input_type
+            );
         }
 
         Ok(Box::new(ApproxPercentileAccumulator::new(0.5_f64, Float64)))
@@ -136,9 +146,7 @@ impl PartialEq<dyn Any> for ApproxMedian {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| {
-                self.signature == x.signature
-            })
+            .map(|x| self.signature == x.signature)
             .unwrap_or(false)
     }
 }

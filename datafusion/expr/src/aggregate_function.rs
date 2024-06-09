@@ -73,8 +73,6 @@ pub enum AggregateFunction {
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
     ApproxPercentileContWithWeight,
-    /// ApproxMedian
-    ApproxMedian,
     /// Grouping
     Grouping,
     /// Bit And
@@ -115,7 +113,6 @@ impl AggregateFunction {
             RegrSXY => "REGR_SXY",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
-            ApproxMedian => "APPROX_MEDIAN",
             Grouping => "GROUPING",
             BitAnd => "BIT_AND",
             BitOr => "BIT_OR",
@@ -165,7 +162,6 @@ impl FromStr for AggregateFunction {
             "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
             "approx_distinct" => AggregateFunction::ApproxDistinct,
-            "approx_median" => AggregateFunction::ApproxMedian,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
@@ -241,7 +237,6 @@ impl AggregateFunction {
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
@@ -291,9 +286,7 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
-            AggregateFunction::Avg
-            | AggregateFunction::VariancePop
-            | AggregateFunction::ApproxMedian => {
+            AggregateFunction::Avg | AggregateFunction::VariancePop => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
