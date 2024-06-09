@@ -37,9 +37,9 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_functions_aggregate::approx_median::approx_median_udaf;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
-use datafusion_functions_aggregate::approx_median::approx_median_udaf;
 
 mod cases;
 mod common;
