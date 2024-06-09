@@ -50,13 +50,11 @@ use datafusion_common::{
 };
 use datafusion_expr::lit;
 use datafusion_expr::{
-    avg, max, min, stddev, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown,
+    avg, max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown,
     UNNAMED_TABLE,
 };
 use datafusion_expr::{case, is_null};
-use datafusion_functions_aggregate::expr_fn::count;
-use datafusion_functions_aggregate::expr_fn::median;
-use datafusion_functions_aggregate::expr_fn::sum;
+use datafusion_functions_aggregate::expr_fn::{count, median, stddev, sum};
 
 use async_trait::async_trait;
 
@@ -1819,7 +1817,7 @@ mod tests {
 
         assert_batches_sorted_eq!(
             ["+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
-                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | SUM(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
+                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
                 "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",
@@ -2394,7 +2392,7 @@ mod tests {
         assert_batches_sorted_eq!(
             [
                 "+----+-----------------------------+",
-                "| c1 | SUM(aggregate_test_100.c12) |",
+                "| c1 | sum(aggregate_test_100.c12) |",
                 "+----+-----------------------------+",
                 "| a  | 10.238448667882977          |",
                 "| b  | 7.797734760124923           |",
@@ -2410,7 +2408,7 @@ mod tests {
         assert_batches_sorted_eq!(
             [
                 "+----+---------------------+",
-                "| c1 | SUM(test_table.c12) |",
+                "| c1 | sum(test_table.c12) |",
                 "+----+---------------------+",
                 "| a  | 10.238448667882977  |",
                 "| b  | 7.797734760124923   |",

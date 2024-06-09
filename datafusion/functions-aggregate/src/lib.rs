@@ -59,6 +59,7 @@ pub mod count;
 pub mod covariance;
 pub mod first_last;
 pub mod median;
+pub mod stddev;
 pub mod sum;
 pub mod variance;
 
@@ -77,6 +78,8 @@ pub mod expr_fn {
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
     pub use super::median::median;
+    pub use super::stddev::stddev;
+    pub use super::stddev::stddev_pop;
     pub use super::sum::sum;
     pub use super::variance::var_sample;
 }
@@ -92,6 +95,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         median::median_udaf(),
         count::count_udaf(),
         variance::var_samp_udaf(),
+        stddev::stddev_udaf(),
+        stddev::stddev_pop_udaf(),
     ]
 }
 

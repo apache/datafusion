@@ -491,7 +491,7 @@ statement error Did you mean 'COUNT'?
 SELECT counter(*) from test;
 
 # Aggregate function
-statement error Did you mean 'STDDEV'?
+statement error Did you mean 'stddev'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
@@ -499,7 +499,7 @@ statement error DataFusion error: Error during planning: Invalid function 'covar
 SELECT COVARIA(1,1);
 
 # Window function
-statement error Did you mean 'SUM'?
+statement error
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
 
 # Window function

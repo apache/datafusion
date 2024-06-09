@@ -1920,7 +1920,7 @@ pub struct PartitionStats {
 pub enum AggregateFunction {
     Min = 0,
     Max = 1,
-    Sum = 2,
+    /// SUM = 2;
     Avg = 3,
     Count = 4,
     ApproxDistinct = 5,
@@ -1929,8 +1929,8 @@ pub enum AggregateFunction {
     VariancePop = 8,
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
-    Stddev = 11,
-    StddevPop = 12,
+    /// STDDEV = 11;
+    /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
     ApproxMedian = 15,
@@ -1963,14 +1963,11 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Sum => "SUM",
             AggregateFunction::Avg => "AVG",
             AggregateFunction::Count => "COUNT",
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::Stddev => "STDDEV",
-            AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             AggregateFunction::ApproxMedian => "APPROX_MEDIAN",
@@ -2001,14 +1998,11 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "SUM" => Some(Self::Sum),
             "AVG" => Some(Self::Avg),
             "COUNT" => Some(Self::Count),
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "VARIANCE_POP" => Some(Self::VariancePop),
-            "STDDEV" => Some(Self::Stddev),
-            "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
             "APPROX_MEDIAN" => Some(Self::ApproxMedian),

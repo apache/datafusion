@@ -33,7 +33,7 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -558,17 +558,6 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     get_statistics!(Max, data_type, iterator)
 }
 
-/// What type of statistics should be extracted?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RequestedStatistics {
-    /// Minimum Value
-    Min,
-    /// Maximum Value
-    Max,
-    /// Null Count, returned as a [`UInt64Array`])
-    NullCount,
-}
-
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow arrays, with proper type
@@ -582,40 +571,46 @@ pub enum RequestedStatistics {
 /// corresponding Arrow  value. For example, Decimals are stored as binary in
 /// parquet files.
 ///
-/// The parquet_schema and arrow _schema do not have to be identical (for
+/// The parquet_schema and arrow_schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
 /// may have additional columns). The function [`parquet_column`] is used to
 /// match the column in the parquet file to the column in the arrow schema.
-///
-/// # Multiple parquet files
-///
-/// This API is designed to support efficiently extracting statistics from
-/// multiple parquet files (hence why the parquet schema is passed in as an
-/// argument). This is useful when building an index for a directory of parquet
-/// files.
-///
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
-    /// The name of the column to extract statistics for
-    column_name: &'a str,
-    /// The type of statistics to extract
-    statistics_type: RequestedStatistics,
-    /// The arrow schema of the query
-    arrow_schema: &'a Schema,
+    /// the index of the matched column in the parquet schema
+    parquet_index: Option<usize>,
     /// The field (with data type) of the column in the arrow schema
     arrow_field: &'a Field,
 }
 
 impl<'a> StatisticsConverter<'a> {
-    /// Returns a [`UInt64Array`] with counts for each row group
+    /// Returns a [`UInt64Array`] with row counts for each row group
+    ///
+    /// # Return Value
     ///
     /// The returned array has no nulls, and has one value for each row group.
     /// Each value is the number of rows in the row group.
-    pub fn row_counts(metadata: &ParquetMetaData) -> Result<UInt64Array> {
-        let row_groups = metadata.row_groups();
-        let mut builder = UInt64Array::builder(row_groups.len());
-        for row_group in row_groups {
-            let row_count = row_group.num_rows();
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
+    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
+    /// // Given the metadata for a parquet file
+    /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// // get the row counts for each row group
+    /// let row_counts = StatisticsConverter::row_group_row_counts(metadata
+    ///   .row_groups()
+    ///   .iter()
+    /// );
+    /// ```
+    pub fn row_group_row_counts<I>(metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let mut builder = UInt64Array::builder(10);
+        for metadata in metadatas.into_iter() {
+            let row_count = metadata.num_rows();
             let row_count: u64 = row_count.try_into().map_err(|e| {
                 internal_datafusion_err!(
                     "Parquet row count {row_count} too large to convert to u64: {e}"
@@ -626,11 +621,21 @@ impl<'a> StatisticsConverter<'a> {
         Ok(builder.finish())
     }
 
-    /// create an new statistics converter
-    pub fn try_new(
-        column_name: &'a str,
-        statistics_type: RequestedStatistics,
+    /// Create a new `StatisticsConverter` to extract statistics for a column
+    ///
+    /// Note if there is no corresponding column in the parquet file, the returned
+    /// arrays will be null. This can happen if the column is in the arrow
+    /// schema but not in the parquet schema due to schema evolution.
+    ///
+    /// See example on [`Self::row_group_mins`] for usage
+    ///
+    /// # Errors
+    ///
+    /// * If the column is not found in the arrow schema
+    pub fn try_new<'b>(
+        column_name: &'b str,
         arrow_schema: &'a Schema,
+        parquet_schema: &'a SchemaDescriptor,
     ) -> Result<Self> {
         // ensure the requested column is in the arrow schema
         let Some((_idx, arrow_field)) = arrow_schema.column_with_name(column_name) else {
@@ -639,67 +644,136 @@ impl<'a> StatisticsConverter<'a> {
                 column_name
             );
         };
-        Ok(Self {
-            column_name,
-            statistics_type,
+
+        // find the column in the parquet schema, if not, return a null array
+        let parquet_index = match parquet_column(
+            parquet_schema,
             arrow_schema,
+            column_name,
+        ) {
+            Some((parquet_idx, matched_field)) => {
+                // sanity check that matching field matches the arrow field
+                if matched_field.as_ref() != arrow_field {
+                    return internal_err!(
+                        "Matched column '{:?}' does not match original matched column '{:?}'",
+                        matched_field,
+                        arrow_field
+                    );
+                }
+                Some(parquet_idx)
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            parquet_index,
             arrow_field,
         })
     }
 
-    /// extract the statistics from a parquet file, given the parquet file's metadata
+    /// Extract the minimum values from row group statistics in [`RowGroupMetaData`]
     ///
-    /// The returned array contains 1 value for each row group in the parquet
-    /// file in order
+    /// # Return Value
+    ///
+    /// The returned array contains 1 value for each row group, in the same order as `metadatas`
     ///
     /// Each value is either
-    /// * the requested statistics type for the column
+    /// * the minimum value for the column
     /// * a null value, if the statistics can not be extracted
     ///
-    /// Note that a null value does NOT mean the min or max value was actually
+    /// Note that a null value does NOT mean the min value was actually
     /// `null` it means it the requested statistic is unknown
+    ///
+    /// # Errors
     ///
     /// Reasons for not being able to extract the statistics include:
     /// * the column is not present in the parquet file
     /// * statistics for the column are not present in the row group
     /// * the stored statistic value can not be converted to the requested type
-    pub fn extract(&self, metadata: &ParquetMetaData) -> Result<ArrayRef> {
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
+    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
+    /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
+    /// // get the minimum value for the column "foo" in the parquet file
+    /// let min_values: ArrayRef = converter
+    ///   .row_group_mins(metadata.row_groups().iter())
+    ///  .unwrap();
+    /// ```
+    pub fn row_group_mins<I>(&self, metadatas: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
         let data_type = self.arrow_field.data_type();
-        let num_row_groups = metadata.row_groups().len();
 
-        let parquet_schema = metadata.file_metadata().schema_descr();
-        let row_groups = metadata.row_groups();
-
-        // find the column in the parquet schema, if not, return a null array
-        let Some((parquet_idx, matched_field)) =
-            parquet_column(parquet_schema, self.arrow_schema, self.column_name)
-        else {
-            // column was in the arrow schema but not in the parquet schema, so return a null array
-            return Ok(new_null_array(data_type, num_row_groups));
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, metadatas));
         };
 
-        // sanity check that matching field matches the arrow field
-        if matched_field.as_ref() != self.arrow_field {
-            return internal_err!(
-                "Matched column '{:?}' does not match original matched column '{:?}'",
-                matched_field,
-                self.arrow_field
-            );
-        }
+        let iter = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics());
+        min_statistics(data_type, iter)
+    }
 
-        // Get an iterator over the column statistics
-        let iter = row_groups
-            .iter()
-            .map(|x| x.column(parquet_idx).statistics());
+    /// Extract the maximum values from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_maxes<I>(&self, metadatas: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let data_type = self.arrow_field.data_type();
 
-        match self.statistics_type {
-            RequestedStatistics::Min => min_statistics(data_type, iter),
-            RequestedStatistics::Max => max_statistics(data_type, iter),
-            RequestedStatistics::NullCount => {
-                let null_counts = iter.map(|stats| stats.map(|s| s.null_count()));
-                Ok(Arc::new(UInt64Array::from_iter(null_counts)))
-            }
-        }
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, metadatas));
+        };
+
+        let iter = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics());
+        max_statistics(data_type, iter)
+    }
+
+    /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, metadatas));
+        };
+
+        let null_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s.map(|s| s.null_count()));
+        Ok(Arc::new(UInt64Array::from_iter(null_counts)))
+    }
+
+    /// Returns a null array of data_type with one element per row group
+    fn make_null_array<I>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        // column was in the arrow schema but not in the parquet schema, so return a null array
+        let num_row_groups = metadatas.into_iter().count();
+        new_null_array(data_type, num_row_groups)
     }
 }
 

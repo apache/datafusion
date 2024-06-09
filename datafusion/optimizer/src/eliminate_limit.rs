@@ -100,11 +100,11 @@ mod tests {
     use datafusion_expr::{
         col,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
-        sum,
     };
     use std::sync::Arc;
 
     use crate::push_down_limit::PushDownLimit;
+    use datafusion_expr::test::function_stub::sum;
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
     fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -162,7 +162,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -196,7 +196,7 @@ mod tests {
         let expected = "Limit: skip=2, fetch=1\
         \n  Sort: test.a, fetch=3\
         \n    Limit: skip=0, fetch=2\
-        \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+        \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
         \n        TableScan: test";
         assert_optimized_plan_eq_with_pushdown(plan, expected)
     }
@@ -214,7 +214,7 @@ mod tests {
         let expected = "Limit: skip=0, fetch=1\
             \n  Sort: test.a\
             \n    Limit: skip=0, fetch=2\
-            \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+            \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n        TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -232,7 +232,7 @@ mod tests {
         let expected = "Limit: skip=3, fetch=1\
         \n  Sort: test.a\
         \n    Limit: skip=2, fetch=1\
-        \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+        \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
         \n        TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -267,7 +267,7 @@ mod tests {
             .limit(0, None)?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n  TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
