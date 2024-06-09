@@ -509,6 +509,10 @@ SELECT approx_median(c12) FROM aggregate_test_100
 ----
 0.555006541052
 
+# csv_query_approx_median_4
+statement error
+SELECT approx_median(c1) FROM aggregate_test_100
+
 # csv_query_median_1
 query I
 SELECT median(c2) FROM aggregate_test_100
@@ -627,6 +631,11 @@ query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
 0.0003 Decimal128(10, 4)
+
+query RT
+select approx_median(c), arrow_typeof(approx_median(c)) from t;
+----
+0.0003 Float64(10, 4)
 
 statement ok
 drop table t;
