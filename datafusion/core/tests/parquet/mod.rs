@@ -16,6 +16,7 @@
 // under the License.
 
 //! Parquet integration tests
+use crate::parquet::utils::MetricsFinder;
 use arrow::array::Decimal128Array;
 use arrow::datatypes::{
     i256, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
@@ -41,8 +42,8 @@ use arrow_array::{
 use arrow_schema::IntervalUnit;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
-    datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
-    physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
+    datasource::{provider_as_source, TableProvider},
+    physical_plan::metrics::MetricsSet,
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -51,8 +52,12 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
+
 mod arrow_statistics;
 mod custom_reader;
+// Don't run on windows as tempfiles don't seem to work the same
+#[cfg(not(target_os = "windows"))]
+mod external_access_plan;
 mod file_statistics;
 #[cfg(not(target_family = "windows"))]
 mod filter_pushdown;
@@ -60,6 +65,7 @@ mod page_pruning;
 mod row_group_pruning;
 mod schema;
 mod schema_coercion;
+mod utils;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -303,25 +309,8 @@ impl ContextWithParquet {
             .expect("Running");
 
         // find the parquet metrics
-        struct MetricsFinder {
-            metrics: Option<MetricsSet>,
-        }
-        impl ExecutionPlanVisitor for MetricsFinder {
-            type Error = std::convert::Infallible;
-            fn pre_visit(
-                &mut self,
-                plan: &dyn ExecutionPlan,
-            ) -> Result<bool, Self::Error> {
-                if plan.as_any().downcast_ref::<ParquetExec>().is_some() {
-                    self.metrics = plan.metrics();
-                }
-                // stop searching once we have found the metrics
-                Ok(self.metrics.is_none())
-            }
-        }
-        let mut finder = MetricsFinder { metrics: None };
-        accept(physical_plan.as_ref(), &mut finder).unwrap();
-        let parquet_metrics = finder.metrics.unwrap();
+        let parquet_metrics =
+            MetricsFinder::find_metrics(physical_plan.as_ref()).unwrap();
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
