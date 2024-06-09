@@ -22,6 +22,9 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
+use substrait::proto::expression::literal::IntervalDayToSecond;
+use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use url::Url;
 
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
@@ -408,7 +411,6 @@ pub async fn from_substrait_rel(
                     };
                     aggr_expr.push(agg_func?.as_ref().clone());
                 }
-
                 input.aggregate(group_expr, aggr_expr)?.build()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
@@ -569,7 +571,80 @@ pub async fn from_substrait_rel(
 
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            _ => not_impl_err!("Only NamedTable and VirtualTable reads are supported"),
+            Some(ReadType::LocalFiles(lf)) => {
+                fn extract_filename(name: &str) -> Option<String> {
+                    let corrected_url =
+                        if name.starts_with("file://") && !name.starts_with("file:///") {
+                            name.replacen("file://", "file:///", 1)
+                        } else {
+                            name.to_string()
+                        };
+
+                    Url::parse(&corrected_url).ok().and_then(|url| {
+                        let path = url.path();
+                        std::path::Path::new(path)
+                            .file_name()
+                            .map(|filename| filename.to_string_lossy().to_string())
+                    })
+                }
+
+                // we could use the file name to check the original table provider
+                // TODO: currently does not support multiple local files
+                let filename: Option<String> =
+                    lf.items.first().and_then(|x| match x.path_type.as_ref() {
+                        Some(UriFile(name)) => extract_filename(name),
+                        _ => None,
+                    });
+
+                if lf.items.len() > 1 || filename.is_none() {
+                    return not_impl_err!(
+                        "Only NamedTable and VirtualTable reads are supported"
+                    );
+                }
+                let name = filename.unwrap();
+                // directly use unwrap here since we could determine it is a valid one
+                let table_reference = TableReference::Bare { table: name.into() };
+                let t = ctx.table(table_reference).await?;
+                let t = t.into_optimized_plan()?;
+                match &read.projection {
+                    Some(MaskExpression { select, .. }) => match &select.as_ref() {
+                        Some(projection) => {
+                            let column_indices: Vec<usize> = projection
+                                .struct_items
+                                .iter()
+                                .map(|item| item.field as usize)
+                                .collect();
+                            match &t {
+                                LogicalPlan::TableScan(scan) => {
+                                    let fields = column_indices
+                                        .iter()
+                                        .map(|i| {
+                                            scan.projected_schema.qualified_field(*i)
+                                        })
+                                        .map(|(qualifier, field)| {
+                                            (qualifier.cloned(), Arc::new(field.clone()))
+                                        })
+                                        .collect();
+                                    let mut scan = scan.clone();
+                                    scan.projection = Some(column_indices);
+                                    scan.projected_schema =
+                                        DFSchemaRef::new(DFSchema::new_with_metadata(
+                                            fields,
+                                            HashMap::new(),
+                                        )?);
+                                    Ok(LogicalPlan::TableScan(scan))
+                                }
+                                _ => plan_err!("unexpected plan for table"),
+                            }
+                        }
+                        _ => Ok(t),
+                    },
+                    _ => Ok(t),
+                }
+            }
+            _ => {
+                not_impl_err!("Only NamedTable and VirtualTable reads are supported")
+            }
         },
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => match set_op {
@@ -810,7 +885,7 @@ pub async fn from_substrait_agg_func(
             f.function_reference
         );
     };
-
+    let function_name = function_name.split(':').next().unwrap_or(function_name);
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         Ok(Arc::new(Expr::AggregateFunction(
@@ -818,6 +893,13 @@ pub async fn from_substrait_agg_func(
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
+        match &fun {
+            // deal with situation that count(*) got no arguments
+            aggregate_function::AggregateFunction::Count if args.is_empty() => {
+                args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
+            }
+            _ => {}
+        }
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
@@ -1253,6 +1335,8 @@ fn from_substrait_type(
             r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
                 s, dfs_names, name_idx,
             )?)),
+            r#type::Kind::Varchar(_) => Ok(DataType::Utf8),
+            r#type::Kind::FixedChar(_) => Ok(DataType::Utf8),
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
@@ -1540,6 +1624,13 @@ fn from_substrait_literal(
         }
         Some(LiteralType::Null(ntype)) => {
             from_substrait_null(ntype, dfs_names, name_idx)?
+        }
+        Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
+            days,
+            seconds,
+            microseconds,
+        })) => {
+            ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
         }
         Some(LiteralType::UserDefined(user_defined)) => {
             match user_defined.type_reference {
