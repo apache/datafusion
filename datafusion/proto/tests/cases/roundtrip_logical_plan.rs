@@ -65,6 +65,7 @@ use datafusion_proto::logical_plan::{
 use datafusion_proto::protobuf;
 
 use prost::Message;
+use datafusion::functions_aggregate::approx_median::approx_median;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -655,6 +656,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         var_sample(lit(2.2)),
         stddev(lit(2.2)),
         stddev_pop(lit(2.2)),
+        approx_median(lit(2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
