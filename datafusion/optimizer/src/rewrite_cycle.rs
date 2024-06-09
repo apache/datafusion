@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// An API for executing a sequence of [TreeNodeRewriter]s in multiple passes.
-///
-/// See [RewriteCycle] for more information.
-///
+/// [`RewriteCycle`] API for executing a sequence of [TreeNodeRewriter]s in multiple passes.
 use std::ops::ControlFlow;
 
 use datafusion_common::{
