@@ -25,9 +25,7 @@ use arrow_schema::DataType::{Float64, UInt64};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::{
-    is_approx_percentile_cont_supported_arg_type, NUMERICS,
-};
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
@@ -101,6 +99,9 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if !arg_types[0].is_numeric() {
+            return plan_err!("ApproxMedian requires numeric input types");
+        }
         Ok(arg_types[0].clone())
     }
 
@@ -108,13 +109,6 @@ impl AggregateUDFImpl for ApproxMedian {
         if acc_args.is_distinct {
             return not_impl_err!(
                 "APPROX_MEDIAN(DISTINCT) aggregations are not available"
-            );
-        }
-
-        if !is_approx_percentile_cont_supported_arg_type(acc_args.input_type) {
-            return plan_err!(
-                "The function APPROX_MEDIAN does not support inputs of type {:?}.",
-                acc_args.input_type
             );
         }
 
