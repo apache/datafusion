@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::{datatypes::DataType, datatypes::Field};
-use arrow_schema::DataType::Float64;
+use arrow_schema::DataType::{Float64, UInt64};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -81,32 +81,32 @@ impl AggregateUDFImpl for ApproxMedian {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "max_size"),
-                DataType::UInt64,
+                UInt64,
                 false,
             ),
             Field::new(
                 format_state_name(args.name, "sum"),
-                DataType::Float64,
+                Float64,
                 false,
             ),
             Field::new(
                 format_state_name(args.name, "count"),
-                DataType::Float64,
+                Float64,
                 false,
             ),
             Field::new(
                 format_state_name(args.name, "max"),
-                DataType::Float64,
+                Float64,
                 false,
             ),
             Field::new(
                 format_state_name(args.name, "min"),
-                DataType::Float64,
+                Float64,
                 false,
             ),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", DataType::Float64, true),
+                Field::new("item", Float64, true),
                 false,
             ),
         ])
@@ -131,14 +131,14 @@ impl AggregateUDFImpl for ApproxMedian {
             );
         }
 
-        if is_approx_percentile_cont_supported_arg_type(acc_args.input_type) {
+        if !is_approx_percentile_cont_supported_arg_type(acc_args.input_type) {
             return plan_err!(
                 "The function APPROX_MEDIAN does not support inputs of type {:?}.",
                 acc_args.input_type
             );
         }
 
-        Ok(Box::new(ApproxPercentileAccumulator::new(0.5_f64, Float64)))
+        Ok(Box::new(ApproxPercentileAccumulator::new(0.5_f64, acc_args.input_type.clone())))
     }
 }
 
