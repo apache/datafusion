@@ -28,8 +28,8 @@ use datafusion::physical_plan::expressions::{
     CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
     DistinctCount, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min,
     NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank,
-    RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, TryCastExpr,
-    VariancePop, WindowShift,
+    RankType, Regr, RegrType, RowNumber, StringAgg, TryCastExpr, VariancePop,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -278,10 +278,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Avg
     } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
         protobuf::AggregateFunction::VariancePop
-    } else if aggr_expr.downcast_ref::<Stddev>().is_some() {
-        protobuf::AggregateFunction::Stddev
-    } else if aggr_expr.downcast_ref::<StddevPop>().is_some() {
-        protobuf::AggregateFunction::StddevPop
     } else if aggr_expr.downcast_ref::<Correlation>().is_some() {
         protobuf::AggregateFunction::Correlation
     } else if let Some(regr_expr) = aggr_expr.downcast_ref::<Regr>() {

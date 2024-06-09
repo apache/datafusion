@@ -1927,8 +1927,8 @@ pub enum AggregateFunction {
     VariancePop = 8,
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
-    Stddev = 11,
-    StddevPop = 12,
+    /// STDDEV = 11;
+    /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
     ApproxMedian = 15,
@@ -1966,8 +1966,6 @@ impl AggregateFunction {
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::Stddev => "STDDEV",
-            AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             AggregateFunction::ApproxMedian => "APPROX_MEDIAN",
@@ -2003,8 +2001,6 @@ impl AggregateFunction {
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "VARIANCE_POP" => Some(Self::VariancePop),
-            "STDDEV" => Some(Self::Stddev),
-            "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
             "APPROX_MEDIAN" => Some(Self::ApproxMedian),

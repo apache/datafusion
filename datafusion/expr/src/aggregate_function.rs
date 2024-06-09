@@ -49,10 +49,6 @@ pub enum AggregateFunction {
     NthValue,
     /// Variance (Population)
     VariancePop,
-    /// Standard Deviation (Sample)
-    Stddev,
-    /// Standard Deviation (Population)
-    StddevPop,
     /// Correlation
     Correlation,
     /// Slope from linear regression
@@ -107,8 +103,6 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             VariancePop => "VAR_POP",
-            Stddev => "STDDEV",
-            StddevPop => "STDDEV_POP",
             Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
             RegrIntercept => "REGR_INTERCEPT",
@@ -159,9 +153,6 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "stddev" => AggregateFunction::Stddev,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "stddev_samp" => AggregateFunction::Stddev,
             "var_pop" => AggregateFunction::VariancePop,
             "regr_slope" => AggregateFunction::RegrSlope,
             "regr_intercept" => AggregateFunction::RegrIntercept,
@@ -231,8 +222,6 @@ impl AggregateFunction {
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
             }
-            AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
-            AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
             AggregateFunction::RegrSlope
             | AggregateFunction::RegrIntercept
             | AggregateFunction::RegrCount
@@ -304,8 +293,6 @@ impl AggregateFunction {
             }
             AggregateFunction::Avg
             | AggregateFunction::VariancePop
-            | AggregateFunction::Stddev
-            | AggregateFunction::StddevPop
             | AggregateFunction::ApproxMedian => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
