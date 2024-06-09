@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
+use datafusion_functions_aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
 use crate::expressions::ApproxPercentileCont;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{

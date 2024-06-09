@@ -24,7 +24,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use datafusion_common::{downcast_value, internal_err, ScalarValue};
+use datafusion_common::{downcast_value, internal_err, ScalarValue, DataFusionError};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr_common::aggregate::tdigest::{DEFAULT_MAX_SIZE, TDigest, TryIntoF64};
 
@@ -56,12 +56,14 @@ impl ApproxPercentileAccumulator {
         }
     }
 
-    pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
+    // public for approx_percentile_cont_with_weight
+    pub fn merge_digests(&mut self, digests: &[TDigest]) {
         let digests = digests.iter().chain(std::iter::once(&self.digest));
         self.digest = TDigest::merge_digests(digests)
     }
 
-    pub(crate) fn convert_to_float(values: &ArrayRef) -> datafusion_common::Result<Vec<f64>> {
+    // public for approx_percentile_cont_with_weight
+    pub fn convert_to_float(values: &ArrayRef) -> datafusion_common::Result<Vec<f64>> {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);

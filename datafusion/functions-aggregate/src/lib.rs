@@ -61,6 +61,8 @@ pub mod median;
 pub mod stddev;
 pub mod sum;
 pub mod variance;
+
+pub mod approx_median;
 pub mod approx_percentile_cont;
 
 use datafusion_common::Result;

@@ -27,7 +27,6 @@ use datafusion_common::{
 };
 use datafusion_expr::{Accumulator, ColumnarValue};
 use datafusion_functions_aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
-use datafusion_physical_expr_common::aggregate::tdigest::TDigest;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use crate::aggregate::utils::down_cast_any_ref;
