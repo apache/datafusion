@@ -787,16 +787,16 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
+        if matches!(expr, Expr::Alias(_)) {
+            self.alias_counter += 1;
+        }
+
         if expr.short_circuits() || expr.is_volatile()? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
         let (up_index, expr_id) = &self.id_array[self.down_index];
         self.down_index += 1;
-
-        if matches!(expr, Expr::Alias(_)) {
-            self.alias_counter += 1;
-        }
 
         // skip `Expr`s without identifier (empty identifier).
         if expr_id.is_empty() {
