@@ -769,12 +769,19 @@ struct CommonSubexprRewriter<'a> {
     common_exprs: &'a mut CommonExprs,
     // preorder index, starts from 0.
     down_index: usize,
-    // is subtree wrapped in an Alias
-    aliased: bool,
+    // how many aliases have we seen so far
+    alias_counter: usize,
 }
 
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     type Node = Expr;
+
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Self::Node>> {
+        if matches!(expr, Expr::Alias(_)) {
+            self.alias_counter -= 1
+        }
+        Ok(Transformed::no(expr))
+    }
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
@@ -787,7 +794,9 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         let (up_index, expr_id) = &self.id_array[self.down_index];
         self.down_index += 1;
 
-        self.aliased |= matches!(expr, Expr::Alias(_));
+        if matches!(expr, Expr::Alias(_)) {
+            self.alias_counter += 1;
+        }
 
         // skip `Expr`s without identifier (empty identifier).
         if expr_id.is_empty() {
@@ -805,15 +814,19 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
             let expr_name = expr.display_name()?;
             self.common_exprs.insert(expr_id.clone(), expr);
+
             // Alias this `Column` expr to it original "expr name",
             // `projection_push_down` optimizer use "expr name" to eliminate useless
             // projections.
             // TODO: do we really need to alias here?
-            let new_expr = match self.aliased {
-                true => col(expr_id),
-                false => col(expr_id).alias(expr_name),
+            let rewritten = if self.alias_counter > 0 {
+                col(expr_id)
+            } else {
+                self.alias_counter += 1;
+                col(expr_id).alias(expr_name)
             };
-            Ok(Transformed::new(new_expr, true, TreeNodeRecursion::Jump))
+
+            Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump))
         } else {
             Ok(Transformed::no(expr))
         }
@@ -833,7 +846,7 @@ fn replace_common_expr(
         id_array,
         common_exprs,
         down_index: 0,
-        aliased: false,
+        alias_counter: 0,
     })
     .data()
 }
@@ -960,6 +973,26 @@ mod test {
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b), SUM({test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}} AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
         \n  Projection: test.a * (Int32(1) - test.b) AS {test.a * (Int32(1) - test.b)|{Int32(1) - test.b|{test.b}|{Int32(1)}}|{test.a}}, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        Ok(())
+    }
+
+    #[test]
+    fn nested_aliases() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                (col("a") + col("b") - col("c")).alias("alias1") * (col("a") + col("b")),
+                col("a") + col("b"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: {test.a + test.b|{test.b}|{test.a}} - test.c AS alias1 * {test.a + test.b|{test.b}|{test.a}} AS test.a + test.b, {test.a + test.b|{test.b}|{test.a}} AS test.a + test.b\
+        \n  Projection: test.a + test.b AS {test.a + test.b|{test.b}|{test.a}}, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
