@@ -2085,6 +2085,7 @@ to_unixtime(expression[, ..., format_n])
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
+- [unnest](#unnest)
 - [range](#range)
 
 ### `array_append`
@@ -3345,6 +3346,30 @@ trim_array(array, n)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
+
+### `unnest`
+
+Transforms an array into rows.
+
+#### Arguments
+
+- **array**: Array expression to unnest.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select unnest(make_array(1, 2, 3, 4, 5));
++------------------------------------------------------------------+
+| unnest(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5))) |
++------------------------------------------------------------------+
+| 1                                                                |
+| 2                                                                |
+| 3                                                                |
+| 4                                                                |
+| 5                                                                |
++------------------------------------------------------------------+
+```
 
 ### `range`
 
