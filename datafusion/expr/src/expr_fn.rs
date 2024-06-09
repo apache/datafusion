@@ -383,18 +383,6 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     })
 }
 
-/// Create an expression to represent the stddev() aggregate function
-pub fn stddev(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Stddev,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create a grouping set
 pub fn grouping_set(exprs: Vec<Vec<Expr>>) -> Expr {
     Expr::GroupingSet(GroupingSet::GroupingSets(exprs))

@@ -32,7 +32,7 @@ use datafusion::logical_expr::{
 
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
+    Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -1030,7 +1030,15 @@ pub async fn from_substrait_rex(
         },
         Some(RexType::WindowFunction(window)) => {
             let fun = match extensions.get(&window.function_reference) {
-                Some(function_name) => Ok(find_df_window_func(function_name)),
+                Some(function_name) => {
+                    // check udaf
+                    match ctx.udaf(function_name) {
+                        Ok(udaf) => {
+                            Ok(Some(WindowFunctionDefinition::AggregateUDF(udaf)))
+                        }
+                        Err(_) => Ok(find_df_window_func(function_name)),
+                    }
+                }
                 None => not_impl_err!(
                     "Window function not found: function anchor = {:?}",
                     &window.function_reference

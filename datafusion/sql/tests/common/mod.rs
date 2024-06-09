@@ -44,6 +44,11 @@ impl MockContextProvider {
         self.udfs.insert(udf.name().to_string(), Arc::new(udf));
         self
     }
+
+    pub(crate) fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+        self.udafs.insert(udaf.name().to_string(), udaf);
+        self
+    }
 }
 
 impl ContextProvider for MockContextProvider {

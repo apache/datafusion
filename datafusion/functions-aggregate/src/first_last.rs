@@ -31,20 +31,29 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateExt, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{
     limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
 };
 
-make_udaf_expr_and_func!(
-    FirstValue,
-    first_value,
-    "Returns the first value in a group of values.",
-    first_value_udaf
-);
+create_func!(FirstValue, first_value_udaf);
+
+/// Returns the first value in a group of values.
+pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
+    if let Some(order_by) = order_by {
+        first_value_udaf()
+            .call(vec![expression])
+            .order_by(order_by)
+            .build()
+            // guaranteed to be `Expr::AggregateFunction`
+            .unwrap()
+    } else {
+        first_value_udaf().call(vec![expression])
+    }
+}
 
 pub struct FirstValue {
     signature: Signature,

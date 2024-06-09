@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
@@ -104,9 +104,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Sum, _) => {
-            return internal_err!("Builtin Sum will be removed");
-        }
         (AggregateFunction::ApproxDistinct, _) => Arc::new(
             expressions::ApproxDistinct::new(input_phy_exprs[0].clone(), name, data_type),
         ),
@@ -165,22 +162,6 @@ pub fn create_aggregate_expr(
         ),
         (AggregateFunction::VariancePop, true) => {
             return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::Stddev, true) => {
-            return not_impl_err!("STDDEV(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::StddevPop, true) => {
-            return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::Correlation, false) => {
             Arc::new(expressions::Correlation::new(
@@ -359,13 +340,13 @@ pub fn create_aggregate_expr(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
-    use expressions::{StddevPop, VariancePop};
+    use expressions::VariancePop;
 
     use super::*;
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
-        Max, Min, Stddev,
+        Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
@@ -751,82 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stddev_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Stddev];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Stddev {
-                    assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_stddev_pop_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::StddevPop];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::StddevPop {
-                    assert!(result_agg_phy_exprs.as_any().is::<StddevPop>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_median_expr() -> Result<()> {
         let funcs = vec![AggregateFunction::ApproxMedian];
         let data_types = vec![
@@ -939,32 +844,6 @@ mod tests {
     #[test]
     fn test_avg_no_utf8() {
         let observed = AggregateFunction::Avg.return_type(&[DataType::Utf8]);
-        assert!(observed.is_err());
-    }
-
-    #[test]
-    fn test_stddev_return_type() -> Result<()> {
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::Float32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::Float64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::Int32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::UInt32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::Int64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_stddev_no_utf8() {
-        let observed = AggregateFunction::Stddev.return_type(&[DataType::Utf8]);
         assert!(observed.is_err());
     }
 

@@ -109,7 +109,7 @@ impl RowGroupPruningTest {
         assert_eq!(
             output.predicate_evaluation_errors(),
             self.expected_errors,
-            "mismatched predicate_evaluation"
+            "mismatched predicate_evaluation error"
         );
         assert_eq!(
             output.row_groups_matched_statistics(),
