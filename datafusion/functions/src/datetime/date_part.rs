@@ -129,8 +129,8 @@ impl ScalarUDFImpl for DatePartFunc {
 
         let arr = match part
             .to_lowercase()
-            .replacen("\'", "", 2)
-            .replacen("\"", "", 2)
+            .replacen('\'', "", 2)
+            .replacen('\"', "", 2)
             .as_str()
         {
             "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
