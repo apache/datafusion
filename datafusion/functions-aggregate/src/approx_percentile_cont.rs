@@ -215,6 +215,10 @@ impl Accumulator for ApproxPercentileAccumulator {
             + self.return_type.size()
             - std::mem::size_of_val(&self.return_type)
     }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
