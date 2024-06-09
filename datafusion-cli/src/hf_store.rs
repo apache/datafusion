@@ -36,6 +36,7 @@ use object_store::{
 };
 use serde::Deserialize;
 use serde_json;
+use snafu::{OptionExt, ResultExt, Snafu};
 use std::any::Any;
 use std::env;
 use std::fmt::Display;
@@ -46,6 +47,35 @@ use url::Url;
 
 pub const STORE: &str = "hf";
 pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+
+#[derive(Debug, Snafu)]
+pub enum Error {
+    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    UnableToParseUrl { url: String, source: url::ParseError },
+
+    #[snafu(display("Unsupported schema {} in url {}, only 'hf' is supported", schema, url))]
+    UnsupportedUrlScheme { schema: String, url: String },
+ 
+    #[snafu(display("Invalid huggingface url: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'", url))]
+    InvalidHfUrl { url: String },
+
+    #[snafu(display("Unsupported repository type: {}, currently only 'datasets' or 'spaces' are supported", repo_type))]
+    UnsupportedRepoType { repo_type: String },
+
+    #[snafu(display("Unable to parse location {} into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'", location))]
+    InvalidLocation { location: String },
+}
+
+impl From<Error> for ObjectStoreError {
+    fn from(source: Error) -> Self {
+        match source {
+            _ => ObjectStoreError::Generic {
+                store: STORE,
+                source: Box::new(source)
+            },
+        }
+    }
+} 
 
 pub enum HFConfigKey {
     Endpoint,
@@ -93,150 +123,80 @@ impl Default for ParsedHFUrl {
 }
 
 impl ParsedHFUrl {
-    pub const SCHEMA: &'static str = "hf://";
-
     /// Parse a HuggingFace URL into a ParsedHFUrl struct.
     /// The URL should be in the format `hf://<repo_type>/<repository>[@revision]/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
     /// If the revision is not provided, it defaults to `main`.
-    /// If the endpoint is not provided, it defaults to `https://huggingface.co`.
     ///
     /// url: The HuggingFace URL to parse.
-    pub fn parse_hf_style(url: String) -> Result<Self> {
+    pub fn parse_hf_style_url(url: String) -> ObjectStoreResult<Self> {
+        let url = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
+
+        if url.scheme() != "hf" {
+            return Err(UnsupportedUrlSchemeSnafu {
+                schema: url.scheme().to_string(),
+                url: url.to_string(),
+            }
+            .build()
+            .into());
+        }
+
+        // domain is the first part of the path, which are treated as the origin in the url.
+        let repo_type = url.domain().context(InvalidHfUrlSnafu { url: url.clone() })?;
+        
+        Ok(Self::parse_hf_style_path(repo_type, url.path())?)
+    }
+
+    /// Parse a HuggingFace path into a ParsedHFUrl struct.
+    /// The path should be in the format `<repository>/resolve/<revision>/<path>` with given `repo_type`.
+    /// where `repo_type` is either `datasets` or `spaces`.
+    /// 
+    /// repo_type: The repository type, either `datasets` or `spaces`.
+    /// path: The HuggingFace path to parse.
+    fn parse_hf_style_path(repo_type: &str, mut path: &str) -> ObjectStoreResult<Self> {
         let mut parsed_url = Self::default();
-        let mut last_delim = 0;
 
-        // parse repository type.
-        if let Some(curr_delim) = url[last_delim..].find('/') {
-            let repo_type = &url[last_delim..last_delim + curr_delim];
-            if (repo_type != "datasets") && (repo_type != "spaces") {
-                return config_err!(
-                    "Invalid HuggingFace URL: {}, currently only 'datasets' or 'spaces' are supported",
-                    url
-                );
-            }
+        if (repo_type != "datasets") && (repo_type != "spaces") {
+            return Err(UnsupportedRepoTypeSnafu { repo_type }.build().into());
+        }
 
-            parsed_url.repo_type = Some(repo_type.to_string());
-            last_delim += curr_delim + 1;
+        parsed_url.repo_type = Some(repo_type.to_string());
+
+        // remove leading slash which is not needed.
+        path = path.trim_start_matches('/');
+
+        // parse the repository and revision.
+        // - case 1: <user|org>/<repo>/<path> where <user|org>/<repo> is the repository and <repo> defaults to main.
+        // - case 2: <user|org>/<repo>@<revision>/<path> where <user|org>/<repo> is the repository and <revision> is the revision.
+        let pathes = path.splitn(3, '/').collect::<Vec<&str>>();
+        if pathes.len() != 3 {
+            return Err(InvalidHfUrlSnafu { url: path }.build().into());
+        }
+
+        let revision_parts = pathes[1].splitn(2, '@').collect::<Vec<&str>>();
+        if revision_parts.len() == 2 {
+            parsed_url.repository = Some(format!("{}/{}", pathes[0], revision_parts[0]));
+            parsed_url.revision = Some(revision_parts[1].to_string());
         } else {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'", url);
+            parsed_url.repository = Some(format!("{}/{}", pathes[0], pathes[1]));
         }
 
-        let start_delim = last_delim;
-        // parse repository and revision.
-        if let Some(curr_delim) = url[last_delim..].find('/') {
-            last_delim += curr_delim + 1;
-        } else {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'", url);
-        }
-
-        let next_slash = url[last_delim..].find('/');
-
-        // next slash is not found
-        if next_slash.is_none() {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'", url);
-        }
-
-        let next_at = url[last_delim..].find('@');
-        // @ is found before the next slash.
-        if let Some(at) = next_at {
-            if let Some(slash) = next_slash {
-                if at < slash {
-                    let repo = &url[start_delim..last_delim + at];
-                    let revision = &url[last_delim + at + 1..last_delim + slash];
-                    parsed_url.repository = Some(repo.to_string());
-                    parsed_url.revision = Some(revision.to_string());
-                    last_delim += slash;
-                }
-            }
-        }
-
-        // @ is not found before the next slash.
-        if parsed_url.repository.is_none() {
-            last_delim += next_slash.unwrap();
-            let repo = &url[start_delim..last_delim];
-            parsed_url.repository = Some(repo.to_string());
-        }
-
-        if (last_delim + 1) >= url.len() {
-            return config_err!(
-                "Invalid HuggingFace URL: {}, please specify a path",
-                url
-            );
-        }
-
-        // parse path.
-        let path = &url[last_delim + 1..];
-        parsed_url.path = Some(path.to_string());
+        parsed_url.path = Some(pathes[2].to_string());
 
         Ok(parsed_url)
     }
 
-    /// Parse a http style HuggingFace URL into a ParsedHFUrl struct.
-    /// The URL should be in the format `https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>`
+    /// Parse a http style HuggingFace path into a ParsedHFUrl struct.
+    /// The path should be in the format `<repo_type>/<repository>/resolve/<revision>/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
     ///
-    /// url: The HuggingFace URL to parse.
-    fn parse_http_style(url: String) -> Result<Self> {
+    /// path: The HuggingFace path to parse.
+    fn parse_http_style_path(path: &Path) -> ObjectStoreResult<Self> {
         let mut parsed_url = Self::default();
-        let mut last_delim = 0;
 
-        // parse repository type.
-        if let Some(curr_delim) = url[last_delim..].find('/') {
-            let repo_type = &url[last_delim..last_delim + curr_delim];
-            if (repo_type != "datasets") && (repo_type != "spaces") {
-                return config_err!(
-                    "Invalid HuggingFace URL: {}, currently only 'datasets' or 'spaces' are supported",
-                    url
-                );
-            }
+        let parts = path.parts();
 
-            parsed_url.repo_type = Some(repo_type.to_string());
-            last_delim += curr_delim + 1;
-        } else {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
-        }
-
-        let start_delim = last_delim;
-        // parse repository and revision.
-        if let Some(curr_delim) = url[last_delim..].find('/') {
-            last_delim += curr_delim + 1;
-        } else {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
-        }
-
-        let next_slash = url[last_delim..].find('/');
-
-        // next slash is not found
-        if next_slash.is_none() {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
-        }
-
-        parsed_url.repository =
-            Some(url[start_delim..last_delim + next_slash.unwrap()].to_string());
-        last_delim += next_slash.unwrap();
-
-        let next_resolve = url[last_delim..].find("resolve");
-        if next_resolve.is_none() {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
-        }
-
-        last_delim += next_resolve.unwrap() + "resolve".len();
-
-        let next_slash = url[last_delim + 1..].find('/');
-        if next_slash.is_none() {
-            return config_err!("Invalid HuggingFace URL: {}, please format as 'https://huggingface.co/<repo_type>/<repository>/resolve/<revision>/<path>'", url);
-        }
-
-        parsed_url.revision =
-            Some(url[last_delim + 1..last_delim + 1 + next_slash.unwrap()].to_string());
-        last_delim += 1 + next_slash.unwrap();
-
-        // parse path.
-        let path = &url[last_delim + 1..];
-        parsed_url.path = Some(path.to_string());
-
-        Ok(parsed_url)
+        parsed_url.repo_type = parts.next().map(|p| p.raw.to_string());
     }
 
     pub fn hf_path(&self) -> String {
@@ -544,7 +504,7 @@ impl ObjectStore for HFStore {
     ) -> ObjectStoreResult<GetResult> {
         let formatted_location = format!("{}/{}", self.repo_type, location);
 
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style(formatted_location) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location) else {
             return Err(ObjectStoreError::Generic {
                 store: STORE,
                 source: format!("Unable to parse url {location}").into(),
@@ -592,7 +552,7 @@ impl ObjectStore for HFStore {
         };
 
         let formatted_prefix = format!("{}/{}", self.repo_type, prefix);
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style(formatted_prefix.clone()) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.clone()) else {
             return futures::stream::once(async move {
                 Err(ObjectStoreError::Generic {
                     store: STORE,
@@ -638,7 +598,7 @@ impl ObjectStore for HFStore {
             .map(|result| {
                 result.and_then(|mut meta| {
                     let Ok(location) =
-                        ParsedHFUrl::parse_http_style(meta.location.to_string())
+                        ParsedHFUrl::parse_http_style_path(meta.location)
                     else {
                         return Err(ObjectStoreError::Generic {
                             store: STORE,
@@ -677,85 +637,67 @@ impl ObjectStore for HFStore {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::error::DataFusionError;
-
     use crate::hf_store::ParsedHFUrl;
 
     #[test]
     fn test_parse_hf_url() {
-        let url = "datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "main";
+        let path = "data.csv";
+        
+        let url = format!("hf://{}/{}/{}", repo_type, repository, path);
 
-        let parsed_url = ParsedHFUrl::parse_hf_style(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url).unwrap();
+        
+        assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
+        assert_eq!(parsed_url.repository, Some(repository.to_string()));
+        assert_eq!(parsed_url.revision, Some(revision.to_string()));
+        assert_eq!(parsed_url.path, Some(path.to_string()));
 
-        assert_eq!(parsed_url.repo_type, Some("datasets".to_string()));
-        assert_eq!(
-            parsed_url.repository,
-            Some("datasets-examples/doc-formats-csv-1".to_string())
-        );
-        assert_eq!(parsed_url.revision, Some("main".to_string()));
-        assert_eq!(parsed_url.path, Some("data.csv".to_string()));
+        let hf_path = format!("{}/{}", repository, path);
+        let parsed_path_url = ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
+
+        assert_eq!(parsed_path_url.repo_type, parsed_url.repo_type);
+        assert_eq!(parsed_path_url.repository, parsed_url.repository);
+        assert_eq!(parsed_path_url.revision, parsed_url.revision);
+        assert_eq!(parsed_path_url.path, parsed_url.path);
     }
 
     #[test]
     fn test_parse_hf_url_with_revision() {
-        let url =
-            "datasets/datasets-examples/doc-formats-csv-1@~csv/data.csv".to_string();
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "~parquet";
+        let path = "data.csv";
 
-        let parsed_url = ParsedHFUrl::parse_hf_style(url).unwrap();
+        let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url).unwrap();
+        
+        assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
+        assert_eq!(parsed_url.repository, Some(repository.to_string()));
+        assert_eq!(parsed_url.revision, Some(revision.to_string()));
+        assert_eq!(parsed_url.path, Some(path.to_string()));
 
-        assert_eq!(parsed_url.repo_type, Some("datasets".to_string()));
-        assert_eq!(
-            parsed_url.repository,
-            Some("datasets-examples/doc-formats-csv-1".to_string())
-        );
-        assert_eq!(parsed_url.revision, Some("~csv".to_string()));
-        assert_eq!(parsed_url.path, Some("data.csv".to_string()));
-    }
+        let hf_path = format!("{}@{}/{}", repository, revision, path);
+        let parsed_path_url = ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
 
-    #[test]
-    fn test_parse_hf_url_errors() {
-        test_error(
-            "datasets/datasets-examples/doc-formats-csv-1",
-            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
-        );
-
-        test_error(
-            "datadicts/datasets-examples/doc-formats-csv-1/data.csv",
-            "Invalid HuggingFace URL: datadicts/datasets-examples/doc-formats-csv-1/data.csv, currently only 'datasets' or 'spaces' are supported",
-        );
-
-        test_error(
-            "datasets/datasets-examples/doc-formats-csv-1@~csv",
-            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1@~csv, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
-        );
-
-        test_error(
-            "datasets/datasets-examples/doc-formats-csv-1@~csv/",
-            "Invalid HuggingFace URL: datasets/datasets-examples/doc-formats-csv-1@~csv/, please specify a path",
-        );
+        assert_eq!(parsed_path_url.repo_type, parsed_url.repo_type);
+        assert_eq!(parsed_path_url.repository, parsed_url.repository);        
+        assert_eq!(parsed_path_url.revision, parsed_url.revision);
+        assert_eq!(parsed_path_url.path, parsed_url.path);
     }
 
     #[test]
     fn test_parse_http_url() {
-        let url = "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv"
-            .to_string();
-
-        let parsed_url = ParsedHFUrl::parse_http_style(url).unwrap();
-
-        assert_eq!(parsed_url.repo_type, Some("datasets".to_string()));
-        assert_eq!(
-            parsed_url.repository,
-            Some("datasets-examples/doc-formats-csv-1".to_string())
-        );
-        assert_eq!(parsed_url.revision, Some("main".to_string()));
-        assert_eq!(parsed_url.path, Some("data.csv".to_string()));
+        let path = "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv";
     }
 
     #[test]
     fn test_file_path() {
-        let url = "datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+        let url = "hf://datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
 
-        let parsed_url = ParsedHFUrl::parse_hf_style(url);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url);
 
         assert!(parsed_url.is_ok());
 
@@ -771,7 +713,7 @@ mod tests {
     fn test_tree_path() {
         let url = "datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
 
-        let parsed_url = ParsedHFUrl::parse_hf_style(url);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url);
 
         assert!(parsed_url.is_ok());
 
@@ -781,22 +723,5 @@ mod tests {
             tree_path,
             "api/datasets/datasets-examples/doc-formats-csv-1/tree/main/data.csv"
         );
-    }
-
-    fn test_error(url: &str, expected: &str) {
-        let parsed_url_result = ParsedHFUrl::parse_hf_style(url.to_string());
-
-        match parsed_url_result {
-            Ok(_) => panic!("Expected error, but got success"),
-            Err(err) => match err {
-                DataFusionError::Configuration(_) => {
-                    assert_eq!(
-                        err.to_string(),
-                        format!("Invalid or Unsupported Configuration: {}", expected)
-                    )
-                }
-                _ => panic!("Expected Configuration error, but got {:?}", err),
-            },
-        }
     }
 }

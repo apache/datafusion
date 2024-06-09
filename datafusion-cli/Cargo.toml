@@ -58,6 +58,7 @@ regex = "1.8"
 rustyline = "11.0"
 serde = "1.0.117"
 serde_json = "1.0.117"
+snafu = "0.7"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = "2.2"
 

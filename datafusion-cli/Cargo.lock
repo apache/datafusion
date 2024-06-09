@@ -1196,6 +1196,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "snafu",
  "tokio",
  "url",
 ]
