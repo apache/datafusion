@@ -79,31 +79,11 @@ impl AggregateUDFImpl for ApproxMedian {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
-            Field::new(
-                format_state_name(args.name, "max_size"),
-                UInt64,
-                false,
-            ),
-            Field::new(
-                format_state_name(args.name, "sum"),
-                Float64,
-                false,
-            ),
-            Field::new(
-                format_state_name(args.name, "count"),
-                Float64,
-                false,
-            ),
-            Field::new(
-                format_state_name(args.name, "max"),
-                Float64,
-                false,
-            ),
-            Field::new(
-                format_state_name(args.name, "min"),
-                Float64,
-                false,
-            ),
+            Field::new(format_state_name(args.name, "max_size"), UInt64, false),
+            Field::new(format_state_name(args.name, "sum"), Float64, false),
+            Field::new(format_state_name(args.name, "count"), Float64, false),
+            Field::new(format_state_name(args.name, "max"), Float64, false),
+            Field::new(format_state_name(args.name, "min"), Float64, false),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
                 Field::new("item", Float64, true),
@@ -138,7 +118,10 @@ impl AggregateUDFImpl for ApproxMedian {
             );
         }
 
-        Ok(Box::new(ApproxPercentileAccumulator::new(0.5_f64, acc_args.input_type.clone())))
+        Ok(Box::new(ApproxPercentileAccumulator::new(
+            0.5_f64,
+            acc_args.input_type.clone(),
+        )))
     }
 }
 
