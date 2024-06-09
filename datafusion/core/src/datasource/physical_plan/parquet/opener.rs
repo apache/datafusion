@@ -219,9 +219,9 @@ impl FileOpener for ParquetOpener {
 /// If the user has supplied one as an extension, use that
 /// otherwise return a plan that scans all row groups
 ///
-/// Returns an error is an invalid `ParquetAccessPlan` is provided
+/// Returns an error if an invalid `ParquetAccessPlan` is provided
 ///
-/// Note: path is only used for error messages
+/// Note: file_name is only used for error messages
 fn create_initial_plan(
     file_name: &str,
     extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,

@@ -185,8 +185,8 @@ impl ParquetAccessPlan {
     ///
     /// # Errors
     ///
-    /// Returns an error if the specified row selection does not specify
-    /// the same number of rows as in `row_group_metadata`.
+    /// Returns an error if any specified row selection does not specify
+    /// the same number of rows as in it's corresponding `row_group_metadata`.
     ///
     /// # Example: No Selections
     ///
