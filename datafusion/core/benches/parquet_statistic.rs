@@ -24,9 +24,7 @@ use arrow_schema::{
     Field, Schema,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion::datasource::physical_plan::parquet::{
-    RequestedStatistics, StatisticsConverter,
-};
+use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use parquet::arrow::{arrow_reader::ArrowReaderBuilder, ArrowWriter};
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
@@ -159,6 +157,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let file = file.reopen().unwrap();
         let reader = ArrowReaderBuilder::try_new(file).unwrap();
         let metadata = reader.metadata();
+        let row_groups = metadata.row_groups();
 
         let mut group =
             c.benchmark_group(format!("Extract statistics for {}", dtype.clone()));
@@ -166,34 +165,18 @@ fn criterion_benchmark(c: &mut Criterion) {
             BenchmarkId::new("extract_statistics", dtype.clone()),
             |b| {
                 b.iter(|| {
-                    let _ = StatisticsConverter::try_new(
+                    let converter = StatisticsConverter::try_new(
                         "col",
-                        RequestedStatistics::Min,
                         reader.schema(),
+                        reader.parquet_schema(),
                     )
-                    .unwrap()
-                    .extract(metadata)
                     .unwrap();
 
-                    let _ = StatisticsConverter::try_new(
-                        "col",
-                        RequestedStatistics::Max,
-                        reader.schema(),
-                    )
-                    .unwrap()
-                    .extract(reader.metadata())
-                    .unwrap();
-
-                    let _ = StatisticsConverter::try_new(
-                        "col",
-                        RequestedStatistics::NullCount,
-                        reader.schema(),
-                    )
-                    .unwrap()
-                    .extract(reader.metadata())
-                    .unwrap();
-
-                    let _ = StatisticsConverter::row_counts(reader.metadata()).unwrap();
+                    let _ = converter.row_group_mins(row_groups.iter()).unwrap();
+                    let _ = converter.row_group_maxes(row_groups.iter()).unwrap();
+                    let _ = converter.row_group_null_counts(row_groups.iter()).unwrap();
+                    let _ = StatisticsConverter::row_group_row_counts(row_groups.iter())
+                        .unwrap();
                 })
             },
         );

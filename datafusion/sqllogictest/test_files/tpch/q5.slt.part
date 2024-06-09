@@ -44,8 +44,8 @@ order by
 ----
 logical_plan
 01)Sort: revenue DESC NULLS FIRST
-02)--Projection: nation.n_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue
-03)----Aggregate: groupBy=[[nation.n_name]], aggr=[[SUM(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
+02)--Projection: nation.n_name, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue
+03)----Aggregate: groupBy=[[nation.n_name]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
 04)------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name
 05)--------Inner Join: nation.n_regionkey = region.r_regionkey
 06)----------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name, nation.n_regionkey
@@ -69,11 +69,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [revenue@1 DESC]
 02)--SortExec: expr=[revenue@1 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[n_name@0 as n_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as revenue]
-04)------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+03)----ProjectionExec: expr=[n_name@0 as n_name, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as revenue]
+04)------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([n_name@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[n_name@2 as n_name], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+07)------------AggregateExec: mode=Partial, gby=[n_name@2 as n_name], aggr=[sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
 09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@3, r_regionkey@0)], projection=[l_extendedprice@0, l_discount@1, n_name@2]
 10)------------------CoalesceBatchesExec: target_batch_size=8192

@@ -206,7 +206,9 @@ mod tests {
     use crate::physical_plan::{displayable, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_physical_expr::expressions::{col, Count, Sum};
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::expressions::{col, Count};
+    use datafusion_physical_plan::udaf::create_aggregate_expr;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -391,12 +393,17 @@ mod tests {
     #[test]
     fn aggregations_with_group_combined() -> Result<()> {
         let schema = schema();
-        let aggr_expr = vec![Arc::new(Sum::new(
-            col("b", &schema)?,
-            "Sum(b)".to_string(),
-            DataType::Int64,
-        )) as _];
 
+        let aggr_expr = vec![create_aggregate_expr(
+            &sum_udaf(),
+            &[col("b", &schema)?],
+            &[],
+            &[],
+            &schema,
+            "Sum(b)",
+            false,
+            false,
+        )?];
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("c", &schema)?, "c".to_string())];
 

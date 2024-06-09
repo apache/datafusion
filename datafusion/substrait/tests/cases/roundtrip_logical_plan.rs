@@ -366,8 +366,8 @@ async fn implicit_cast() -> Result<()> {
 #[tokio::test]
 async fn aggregate_case() -> Result<()> {
     assert_expected_plan(
-        "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
-        "Aggregate: groupBy=[[]], aggr=[[SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
+        "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
+        "Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
          \n  TableScan: data projection=[a]",
         false // NULL vs Int64(NULL)
     )
@@ -619,7 +619,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
 
 #[tokio::test]
 async fn simple_window_function() -> Result<()> {
-    roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, SUM(b) OVER (PARTITION BY a) FROM data;").await
+    roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, sum(b) OVER (PARTITION BY a) FROM data;").await
 }
 
 #[tokio::test]
@@ -1102,11 +1102,16 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let state = SessionState::new_with_config_rt(
+    let mut state = SessionState::new_with_config_rt(
         SessionConfig::default(),
         Arc::new(RuntimeEnv::default()),
     )
     .with_serializer_registry(Arc::new(MockSerializerRegistry));
+
+    // register udaf for test, e.g. `sum()`
+    datafusion_functions_aggregate::register_all(&mut state)
+        .expect("can not register aggregate functions");
+
     let ctx = SessionContext::new_with_state(state);
     let mut explicit_options = CsvReadOptions::new();
     let fields = vec![
@@ -1124,6 +1129,7 @@ async fn create_context() -> Result<SessionContext> {
         .await?;
     ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
         .await?;
+
     Ok(ctx)
 }
 
