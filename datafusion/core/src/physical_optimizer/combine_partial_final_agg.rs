@@ -208,7 +208,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::expressions::{col, Count};
+    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_plan::udaf::create_aggregate_expr;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected

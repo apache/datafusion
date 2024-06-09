@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
@@ -340,7 +340,7 @@ mod tests {
     use super::*;
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
-        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, DistinctArrayAgg, Max, Min, Stddev,
+        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, DistinctArrayAgg, Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
