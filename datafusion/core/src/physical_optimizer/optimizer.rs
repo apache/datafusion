@@ -31,6 +31,7 @@ use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
@@ -124,6 +125,10 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // SanityChecker rule checks whether the order and the
+            // partition requirements of each execution plan is
+            // satisfied by its children or not.
+            Arc::new(SanityCheckPlan::new()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
             // diagnostic error message when this happens. It makes no changes to the
