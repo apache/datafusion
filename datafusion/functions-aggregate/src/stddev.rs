@@ -115,13 +115,6 @@ impl AggregateUDFImpl for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        self.accumulator(args)
-    }
-
     fn aliases(&self) -> &[String] {
         &self.alias
     }
@@ -199,13 +192,6 @@ impl AggregateUDFImpl for StddevPop {
             return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
         }
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
-    }
-
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        self.accumulator(args)
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
