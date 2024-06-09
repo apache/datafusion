@@ -40,7 +40,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
-use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
@@ -159,7 +161,10 @@ impl TestReader {
 
         // open the file & get the reader
         let file = file.reopen().unwrap();
-        ArrowReaderBuilder::try_new(file).unwrap()
+
+        // tell the reader to read the page index, if it exists
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
     }
 }
 
@@ -306,13 +311,17 @@ fn run_test(
 
     if test_data_page_statistics {
         // one Vec<Index> for each row group
-        let column_index = reader.metadata().column_index()
+        let column_index = reader
+            .metadata()
+            .column_index()
             .expect("File should have column indexes");
 
-        let row_group_indexes: Vec<usize> = row_groups.iter().enumerate().map(|(i, _)| i).collect();
+        let row_group_indexes: Vec<usize> =
+            row_groups.iter().enumerate().map(|(i, _)| i).collect();
 
-        let mins  =   converter.data_page_mins(column_index, &row_group_indexes).unwrap();
-
+        let mins = converter
+            .data_page_mins(column_index, &row_group_indexes)
+            .unwrap();
 
         assert_eq!(
             &mins, &expected_min,

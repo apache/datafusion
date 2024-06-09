@@ -31,9 +31,12 @@ use arrow_array::{
     UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
-use datafusion_common::{internal_datafusion_err, internal_err, plan_err, not_impl_err, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
+};
 use half::f16;
 use parquet::file::metadata::{ParquetColumnIndex, RowGroupMetaData};
+use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -578,7 +581,7 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
     /// the index of the matched column in the parquet schema
-    parquet_index: Option<usize>,
+    parquet_column_index: Option<usize>,
     /// The field (with data type) of the column in the arrow schema
     arrow_field: &'a Field,
 }
@@ -666,7 +669,7 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         Ok(Self {
-            parquet_index,
+            parquet_column_index: parquet_index,
             arrow_field,
         })
     }
@@ -717,7 +720,7 @@ impl<'a> StatisticsConverter<'a> {
     {
         let data_type = self.arrow_field.data_type();
 
-        let Some(parquet_index) = self.parquet_index else {
+        let Some(parquet_index) = self.parquet_column_index else {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
@@ -736,7 +739,7 @@ impl<'a> StatisticsConverter<'a> {
     {
         let data_type = self.arrow_field.data_type();
 
-        let Some(parquet_index) = self.parquet_index else {
+        let Some(parquet_index) = self.parquet_column_index else {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
@@ -755,7 +758,7 @@ impl<'a> StatisticsConverter<'a> {
     {
         let data_type = self.arrow_field.data_type();
 
-        let Some(parquet_index) = self.parquet_index else {
+        let Some(parquet_index) = self.parquet_column_index else {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
@@ -815,36 +818,53 @@ impl<'a> StatisticsConverter<'a> {
     /// ```no_run
     /// tood
     /// ```
-    pub fn data_page_mins<I>(&self, page_index: &ParquetColumnIndex, row_group_indexes: I) -> Result<ArrayRef>
+    pub fn data_page_mins<I>(
+        &self,
+        page_index: &ParquetColumnIndex,
+        row_group_indexes: I,
+    ) -> Result<ArrayRef>
     where
         I: IntoIterator<Item = &'a usize>,
     {
         let data_type = self.arrow_field.data_type();
 
-        let Some(parquet_index) = self.parquet_index else {
+        let Some(parquet_column_index) = self.parquet_column_index else {
             return Ok(self.make_null_array(data_type, row_group_indexes));
         };
 
         // iterator over &Index
-        let indexes = row_group_indexes.into_iter()
-            .map(|idx| &page_index[*idx]);
+        let indexes = row_group_indexes
+            .into_iter()
+            .map(|rg_index| &page_index[*rg_index][parquet_column_index]);
 
         // Get an iterator of the native index type depending on data type
         match data_type {
-            DataType::Boolean => {},
-            _ => return not_impl_err!("Datatype not yet implemented")
+            DataType::Boolean => {
+                // get an interator of Option<bool> across all indexes / pages
+                let iter = indexes
+                    // flat map flattens the iterator over iterators into a single iterator over bools
+                    .flat_map(|index| {
+                        let page_indexes: &[PageIndex<bool>] =
+                            if let Index::BOOLEAN(native_index) = index {
+                                &native_index.indexes
+                            } else {
+                                &[]
+                            };
+                        page_indexes.iter().map(|v| v.min.clone())
+                    });
+                // can't call this directly because the iterator above is not sized!
+                //Ok(Arc::new(BooleanArray::from_iter(iter)))
+                let mut builder = BooleanArray::builder(10);
+                for v in iter {
+                    match v {
+                        Some(v) => builder.append_value(v),
+                        None => builder.append_null(),
+                    };
+                }
+                Ok(Arc::new(builder.finish()))
+            }
+            _ => not_impl_err!("Datatype not yet implemented"),
         }
-
-
-
-        // then convert the iterator of NativeIndex to an ArrowArrayRef
-
-        todo!()
-        /*        let iter = metadatas
-                .into_iter()
-                .map(|x| x.column(parquet_index).statistics());
-                min_statistics(data_type, iter)
-        */
     }
 
     /// Returns a null array of data_type with one element per entry in the metadatas
@@ -856,7 +876,6 @@ impl<'a> StatisticsConverter<'a> {
         let num_row_groups = metadatas.into_iter().count();
         new_null_array(data_type, num_row_groups)
     }
-
 }
 
 #[cfg(test)]
