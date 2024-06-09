@@ -16,12 +16,14 @@
 // under the License.
 
 use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
-use crate::aggregate::tdigest::{Centroid, TDigest, DEFAULT_MAX_SIZE};
 use crate::expressions::ApproxPercentileCont;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
+};
+use datafusion_physical_expr_common::aggregate::tdigest::{
+    Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
 
 use datafusion_common::Result;

@@ -18,7 +18,6 @@
 pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 
 mod hyperloglog;
-mod tdigest;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::tdigest::TryIntoF64;
-use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -34,6 +32,8 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr_common::aggregate::tdigest::TryIntoF64;
+use datafusion_physical_expr_common::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use std::{any::Any, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -444,8 +444,8 @@ impl Accumulator for ApproxPercentileAccumulator {
 #[cfg(test)]
 mod tests {
     use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
-    use crate::aggregate::tdigest::TDigest;
     use arrow_schema::DataType;
+    use datafusion_physical_expr_common::aggregate::tdigest::TDigest;
 
     #[test]
     fn test_combine_approx_percentile_accumulator() {
