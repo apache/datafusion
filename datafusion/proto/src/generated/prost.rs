@@ -1931,7 +1931,7 @@ pub enum AggregateFunction {
     /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
-    /// ApproxMedian = 15,
+    /// APPROX_MEDIAN = 15;
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     /// MEDIAN = 18;

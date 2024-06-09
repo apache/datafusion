@@ -228,7 +228,7 @@ impl TDigest {
         v.clamp(lo, hi)
     }
 
-    #[cfg(test)]
+    // public for testing in other modules
     pub fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
         values.sort_by(|a, b| a.total_cmp(b));

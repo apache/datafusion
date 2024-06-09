@@ -332,9 +332,8 @@ mod tests {
 
     use super::*;
     use crate::expressions::{
-        try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
-        BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount,
-        Max, Min,
+        try_cast, ApproxDistinct, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr,
+        BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount, Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};

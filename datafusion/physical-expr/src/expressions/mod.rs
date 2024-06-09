@@ -38,7 +38,6 @@ pub mod helpers {
 }
 
 pub use crate::aggregate::approx_distinct::ApproxDistinct;
-pub use crate::aggregate::approx_median::ApproxMedian;
 pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
