@@ -1133,15 +1133,6 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
-    /// Removes existing Alias if exists
-    ///
-    /// # Example
-    /// ```
-    /// # use datafusion_expr::col;
-    /// // `foo as "bar" as "baz"` is resolved to `foo as "baz"`
-    /// let expr = col("foo").alias("bar").alias("baz");
-    /// assert_eq!(expr, col("foo").alias("baz"));
-    /// ```
     pub fn alias(self, name: impl Into<String>) -> Expr {
         match self {
             Expr::Sort(Sort {
@@ -1149,7 +1140,7 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self.unalias(), None::<&str>, name.into())),
+            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
         }
     }
 
@@ -1188,6 +1179,10 @@ impl Expr {
     /// // `foo as "bar" + baz` is not unaliased
     /// let expr = col("foo").alias("bar") + col("baz");
     /// assert_eq!(expr.clone().unalias(), expr);
+    ///
+    /// // `foo as "bar" as "baz" is unalaised to foo as "bar"
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.unalias(), col("foo").alias("bar"));
     /// ```
     pub fn unalias(self) -> Expr {
         match self {
