@@ -580,55 +580,59 @@ where
     }
 }
 
-// TODO: Prototype
-// This should be extracted and abstracted into
-// macro (similar to make_stats_iterator)
-struct MinInt64DataPageStatsIterator<'a, I>
-where
-    I: Iterator<Item = &'a Index>,
-{
-    iter: I,
-}
-
-impl<'a, I> MinInt64DataPageStatsIterator<'a, I>
-where
-    I: Iterator<Item = &'a Index>,
-{
-    fn new(iter: I) -> Self {
-        Self { iter }
-    }
-}
-
-impl<'a, I> Iterator for MinInt64DataPageStatsIterator<'a, I>
-where
-    I: Iterator<Item = &'a Index>,
-{
-    type Item = Vec<Option<i64>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.iter.next();
-        match next {
-            Some(index) => match index {
-                Index::INT64(native_index) => Some(
-                    native_index
-                        .indexes
-                        .iter()
-                        .map(|x| x.min)
-                        .collect::<Vec<_>>(),
-                ),
-                // No matching `Index` found. Thus no statistics
-                // that can be extracted. We return vec![None] to effectively
-                // create an arrow null-array.
-                _ => Some(vec![None]),
-            },
-            _ => None,
+macro_rules! make_data_page_stats_iterator {
+    ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = &'a Index>,
+        {
+            iter: I,
         }
-    }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = &'a Index>,
+        {
+            fn new(iter: I) -> Self {
+                Self { iter }
+            }
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = &'a Index>,
+        {
+            type Item = Vec<Option<$stat_value_type>>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.iter.next();
+                match next {
+                    Some(index) => match index {
+                        $index_type(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| x.$func)
+                                .collect::<Vec<_>>(),
+                        ),
+                        // No matching `Index` found.
+                        // Thus no statistics that can be extracted.
+                        // We return vec![None] to effectively
+                        // create an arrow null-array.
+                        _ => Some(vec![None]),
+                    },
+                    _ => None,
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
+            }
+        }
+    };
 }
+
+make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
 
 /// Extracts Parquet statistics as Arrow arrays
 ///
