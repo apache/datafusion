@@ -568,19 +568,66 @@ pub(crate) fn min_page_statistics<'a, I>(
 where
     I: Iterator<Item = &'a Index>,
 {
-    let iter = iterator.flat_map(|index| match data_type {
-        Some(DataType::Int64) => match index {
-            Index::INT64(native_index) => native_index
-                .indexes
-                .iter()
-                .map(|x| x.min)
-                .collect::<Vec<_>>(),
-            _ => vec![None],
-        },
+    // TODO: Prototype
+    // This should be extracted and abstracted into
+    // macro (similar to get_statistics)
+    match data_type {
+        Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter(
+            MinInt64DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        // TODO: Implement missing data_types
         _ => unimplemented!(),
-    });
+    }
+}
 
-    Ok(Arc::new(Int64Array::from_iter(iter)))
+// TODO: Prototype
+// This should be extracted and abstracted into
+// macro (similar to make_stats_iterator)
+struct MinInt64DataPageStatsIterator<'a, I>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    iter: I,
+}
+
+impl<'a, I> MinInt64DataPageStatsIterator<'a, I>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    fn new(iter: I) -> Self {
+        Self { iter }
+    }
+}
+
+impl<'a, I> Iterator for MinInt64DataPageStatsIterator<'a, I>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    type Item = Vec<Option<i64>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next();
+        match next {
+            Some(index) => match index {
+                Index::INT64(native_index) => Some(
+                    native_index
+                        .indexes
+                        .iter()
+                        .map(|x| x.min)
+                        .collect::<Vec<_>>(),
+                ),
+                // No matching `Index` found. Thus no statistics
+                // that can be extracted. We return vec![None] to effectively
+                // create an arrow null-array.
+                _ => Some(vec![None]),
+            },
+            _ => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
 
 /// Extracts Parquet statistics as Arrow arrays
