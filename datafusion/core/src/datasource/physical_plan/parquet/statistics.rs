@@ -33,7 +33,7 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
-use parquet::file::metadata::{ParquetColumnIndex, RowGroupMetaData};
+use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
 use parquet::file::page_index::index::Index;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
@@ -943,6 +943,49 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
         null_counts_page_statistics(iter)
+    }
+
+    /// TODO: docstring
+    pub fn data_page_row_counts<I>(
+        &self,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_metadatas: &[RowGroupMetaData],
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        // `offset_index[row_group_number][column_number][page_number]` holds
+        // the [`PageLocation`] corresponding to page `page_number` of column
+        // `column_number`of row group `row_group_number`.
+        let mut row_count_total = Vec::new();
+        for rg_idx in row_group_indices {
+            let page_locations = &column_offset_index[*rg_idx][parquet_index];
+
+            let row_count_per_page = page_locations.windows(2).map(|loc| {
+                Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64)
+            });
+
+            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
+
+            // append the last page row count
+            let row_count_per_page = row_count_per_page
+                .chain(std::iter::once(Some(
+                    *num_rows_in_row_group as u64
+                        - page_locations.last().unwrap().first_row_index as u64,
+                )))
+                .collect::<Vec<_>>();
+
+            row_count_total.extend(row_count_per_page);
+        }
+
+        Ok(Arc::new(UInt64Array::from_iter(row_count_total)))
     }
 
     /// Returns a null array of data_type with one element per row group

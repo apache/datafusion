@@ -237,6 +237,11 @@ impl<'a> Test<'a> {
                 .column_index()
                 .expect("File should have column indices");
 
+            let column_offset_index = reader
+                .metadata()
+                .offset_index()
+                .expect("File should have column indices");
+
             let row_group_indices = row_groups
                 .iter()
                 .enumerate()
@@ -262,11 +267,20 @@ impl<'a> Test<'a> {
             let null_counts = converter
                 .data_page_null_counts(column_page_index, &row_group_indices)
                 .unwrap();
-
             assert_eq!(
                 &null_counts, &expected_null_counts,
                 "{column_name}: Mismatch with expected data page null counts. \
                 Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
+            );
+
+            let row_counts = converter
+                .data_page_row_counts(column_offset_index, row_groups, &row_group_indices)
+                .unwrap();
+            let expected_row_counts = Arc::new(expected_row_counts) as ArrayRef;
+            assert_eq!(
+                &row_counts, &expected_row_counts,
+                "{column_name}: Mismatch with expected row counts. \
+                Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
             );
         }
     }
