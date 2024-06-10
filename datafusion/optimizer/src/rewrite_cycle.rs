@@ -306,6 +306,7 @@ mod test {
     }
 
     ///Rewrites a BinaryExpr with operator `op` using a function `f`
+    #[allow(clippy::type_complexity)]
     struct ConstBinaryExprRewriter {
         op: Operator,
         f: Box<dyn Fn(&ScalarValue, &ScalarValue) -> Result<Transformed<Expr>>>,
