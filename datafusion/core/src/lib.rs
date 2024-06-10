@@ -170,7 +170,7 @@
 //! You can find a formal description of DataFusion's architecture in our
 //! [SIGMOD 2024 Paper].
 //!
-//! [SIGMOD 2024 Paper]: https://github.com/apache/datafusion/files/14789704/DataFusion_Query_Engine___SIGMOD_2024-FINAL.pdf
+//! [SIGMOD 2024 Paper]: https://dl.acm.org/doi/10.1145/3626246.3653368
 //!
 //! ## Overview  Presentations
 //!
@@ -447,6 +447,20 @@
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
 //! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
+//!
+//! ## Citing DataFusion in Academic Papers
+//!
+//! You can use the following citation to reference DataFusion in academic papers:
+//!
+//! ```text
+//! @inproceedings{lamb2024apache
+//!   title={Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine},
+//!   author={Lamb, Andrew and Shen, Yijie and Heres, Dani{\"e}l and Chakraborty, Jayjeet and Kabak, Mehmet Ozan and Hsieh, Liang-Chi and Sun, Chao},
+//!   booktitle={Companion of the 2024 International Conference on Management of Data},
+//!   pages={5--17},
+//!   year={2024}
+//! }
+//! ```
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
 //! [`SqlToRel`]: sql::planner::SqlToRel
