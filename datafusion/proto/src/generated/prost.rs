@@ -1530,6 +1530,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+    #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_scan_exec_node::OptionalComment>,
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
@@ -1538,6 +1540,12 @@ pub mod csv_scan_exec_node {
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1924,14 +1932,14 @@ pub enum AggregateFunction {
     ApproxDistinct = 5,
     ArrayAgg = 6,
     /// VARIANCE = 7;
-    VariancePop = 8,
+    /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
-    ApproxMedian = 15,
+    /// APPROX_MEDIAN = 15;
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     /// MEDIAN = 18;
@@ -1965,10 +1973,8 @@ impl AggregateFunction {
             AggregateFunction::Count => "COUNT",
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::VariancePop => "VARIANCE_POP",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxMedian => "APPROX_MEDIAN",
             AggregateFunction::ApproxPercentileContWithWeight => {
                 "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
             }
@@ -2000,10 +2006,8 @@ impl AggregateFunction {
             "COUNT" => Some(Self::Count),
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "VARIANCE_POP" => Some(Self::VariancePop),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_MEDIAN" => Some(Self::ApproxMedian),
             "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
                 Some(Self::ApproxPercentileContWithWeight)
             }

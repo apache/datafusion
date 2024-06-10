@@ -2302,13 +2302,33 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
-        Ok(Window {
-            input,
+        Self::try_new_with_schema(
             window_expr,
-            schema: Arc::new(
+            input,
+            Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
+        )
+    }
+
+    pub fn try_new_with_schema(
+        window_expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        if window_expr.len() != schema.fields().len() - input.schema().fields().len() {
+            return plan_err!(
+                "Window has mismatch between number of expressions ({}) and number of fields in schema ({})",
+                window_expr.len(),
+                schema.fields().len() - input.schema().fields().len()
+            );
+        }
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema,
         })
     }
 }

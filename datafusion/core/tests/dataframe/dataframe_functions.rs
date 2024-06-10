@@ -33,6 +33,7 @@ use datafusion::assert_batches_eq;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
+use datafusion_functions_aggregate::expr_fn::approx_median;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -342,7 +343,7 @@ async fn test_fn_approx_median() -> Result<()> {
 
     let expected = [
         "+-----------------------+",
-        "| APPROX_MEDIAN(test.b) |",
+        "| approx_median(test.b) |",
         "+-----------------------+",
         "| 10                    |",
         "+-----------------------+",

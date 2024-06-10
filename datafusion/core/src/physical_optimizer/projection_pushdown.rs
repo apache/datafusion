@@ -185,6 +185,7 @@ fn try_swapping_with_csv(
             csv.delimiter(),
             csv.quote(),
             csv.escape(),
+            csv.comment(),
             csv.file_compression_type,
         )) as _
     })
@@ -1686,6 +1687,7 @@ mod tests {
             0,
             0,
             None,
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1707,6 +1709,7 @@ mod tests {
             false,
             0,
             0,
+            None,
             None,
             FileCompressionType::UNCOMPRESSED,
         ))
