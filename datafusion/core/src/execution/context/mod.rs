@@ -75,6 +75,7 @@ use url::Url;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_optimizer::AnalyzerRule;
 
 mod avro;
 mod csv;
@@ -328,6 +329,15 @@ impl SessionContext {
         function_factory: Arc<dyn FunctionFactory>,
     ) -> Self {
         self.state.write().set_function_factory(function_factory);
+        self
+    }
+
+    /// Adds an analyzer rule to the `SessionState` in the current `SessionContext`.
+    pub fn add_analyzer_rule(
+        self,
+        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    ) -> Self {
+        self.state.write().add_analyzer_rule(analyzer_rule);
         self
     }
 
