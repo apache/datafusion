@@ -1249,8 +1249,18 @@ impl SessionContext {
         Arc::new(TaskContext::from(self))
     }
 
-    /// Snapshots the [`SessionState`] of this [`SessionContext`] setting the
-    /// `query_execution_start_time` to the current time
+    /// Return a new  [`SessionState`] suitable for executing a single query.
+    ///
+    /// Notes:
+    ///
+    /// 1. `query_execution_start_time` is set to the current time for the
+    /// returned state.
+    ///
+    /// 2. The returned state is not shared with the current session state
+    /// and this changes to the returned `SessionState` such as changing
+    /// [`ConfigOptions`] will not be reflected in this `SessionContext`.
+    ///
+    /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
         state.execution_props_mut().start_execution();
