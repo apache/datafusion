@@ -96,7 +96,7 @@ async fn setup_files(store: Arc<dyn ObjectStore>) {
                 let location = Path::from(format!(
                     "{table_name}/partition={partition}/{file}.parquet"
                 ));
-                store.put(&location, data).await.unwrap();
+                store.put(&location, data.into()).await.unwrap();
             }
         }
     }

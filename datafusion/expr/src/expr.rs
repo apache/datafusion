@@ -255,19 +255,23 @@ pub enum Expr {
     /// can be used. The first form consists of a series of boolean "when" expressions with
     /// corresponding "then" expressions, and an optional "else" expression.
     ///
+    /// ```text
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
     ///      [ELSE result]
     /// END
+    /// ```
     ///
     /// The second form uses a base expression and then a series of "when" clauses that match on a
     /// literal value.
     ///
+    /// ```text
     /// CASE expression
     ///     WHEN value THEN result
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
+    /// ```
     Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
@@ -279,7 +283,12 @@ pub enum Expr {
     Sort(Sort),
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
-    /// Represents the call of an aggregate built-in function with arguments.
+    /// Calls an aggregate function with arguments, and optional
+    /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
+    ///
+    /// See also [`AggregateExt`] to set these fields.
+    ///
+    /// [`AggregateExt`]: crate::udaf::AggregateExt
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
@@ -623,6 +632,10 @@ impl AggregateFunctionDefinition {
 }
 
 /// Aggregate function
+///
+/// See also  [`AggregateExt`] to set these fields on `Expr`
+///
+/// [`AggregateExt`]: crate::udaf::AggregateExt
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
@@ -2239,7 +2252,6 @@ mod test {
             "max",
             "count",
             "avg",
-            "sum",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();

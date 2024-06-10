@@ -367,7 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
-            | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type)) => {
+            | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type, _)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
                 Ok(DataType::new_list(inner_data_type, true))

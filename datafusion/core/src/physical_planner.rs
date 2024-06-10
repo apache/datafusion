@@ -2586,7 +2586,7 @@ mod tests {
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
-            "SUM(aggregate_test_100.c2)",
+            "sum(aggregate_test_100.c2)",
             final_hash_agg.schema().field(1).name()
         );
         // we need access to the input to the partial aggregate so that other projects can
@@ -2614,7 +2614,7 @@ mod tests {
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
-            "SUM(aggregate_test_100.c3)",
+            "sum(aggregate_test_100.c3)",
             final_hash_agg.schema().field(2).name()
         );
         // we need access to the input to the partial aggregate so that other projects can

@@ -105,28 +105,6 @@ pub fn coerce_types(
             // unpack the dictionary to get the value
             get_min_max_result_type(input_types)
         }
-        AggregateFunction::Sum => {
-            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-            // smallint, int, bigint, real, double precision, decimal, or interval.
-            let v = match &input_types[0] {
-                Decimal128(p, s) => Decimal128(*p, *s),
-                Decimal256(p, s) => Decimal256(*p, *s),
-                d if d.is_signed_integer() => Int64,
-                d if d.is_unsigned_integer() => UInt64,
-                d if d.is_floating() => Float64,
-                Dictionary(_, v) => {
-                    return coerce_types(agg_fun, &[v.as_ref().clone()], signature)
-                }
-                _ => {
-                    return plan_err!(
-                        "The function {:?} does not support inputs of type {:?}.",
-                        agg_fun,
-                        input_types[0]
-                    )
-                }
-            };
-            Ok(vec![v])
-        }
         AggregateFunction::Avg => {
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval
@@ -172,26 +150,6 @@ pub fn coerce_types(
                 );
             }
             Ok(input_types.to_vec())
-        }
-        AggregateFunction::VariancePop => {
-            if !is_variance_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64, Float64])
-        }
-        AggregateFunction::Stddev | AggregateFunction::StddevPop => {
-            if !is_stddev_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64])
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
@@ -430,15 +388,6 @@ pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
-/// function return type of standard deviation
-pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
-    if NUMERICS.contains(arg_type) {
-        Ok(DataType::Float64)
-    } else {
-        plan_err!("STDDEV does not support {arg_type:?}")
-    }
-}
-
 /// function return type of an average
 pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
@@ -533,13 +482,6 @@ pub fn is_covariance_support_arg_type(arg_type: &DataType) -> bool {
     )
 }
 
-pub fn is_stddev_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        arg_type if NUMERICS.contains(arg_type)
-    )
-}
-
 pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
@@ -582,16 +524,9 @@ mod tests {
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!("Error during planning: The function MIN expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
 
-        // test input args is invalid data type for sum or avg
-        let fun = AggregateFunction::Sum;
-        let input_types = vec![DataType::Utf8];
-        let signature = fun.signature();
-        let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!(
-            "Error during planning: The function Sum does not support inputs of type Utf8.",
-            result.unwrap_err().strip_backtrace()
-        );
         let fun = AggregateFunction::Avg;
+        // test input args is invalid data type for avg
+        let input_types = vec![DataType::Utf8];
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
@@ -621,17 +556,6 @@ mod tests {
                 assert_eq!(*input_type, result.unwrap());
             }
         }
-        // test sum
-        let fun = AggregateFunction::Sum;
-        let signature = fun.signature();
-        let r = coerce_types(&fun, &[DataType::Int32], &signature).unwrap();
-        assert_eq!(r[0], DataType::Int64);
-        let r = coerce_types(&fun, &[DataType::Float32], &signature).unwrap();
-        assert_eq!(r[0], DataType::Float64);
-        let r = coerce_types(&fun, &[DataType::Decimal128(20, 3)], &signature).unwrap();
-        assert_eq!(r[0], DataType::Decimal128(20, 3));
-        let r = coerce_types(&fun, &[DataType::Decimal256(20, 3)], &signature).unwrap();
-        assert_eq!(r[0], DataType::Decimal256(20, 3));
 
         // test avg
         let fun = AggregateFunction::Avg;
@@ -701,17 +625,6 @@ mod tests {
         let data_type = DataType::Decimal128(36, 10);
         let result_type = sum_return_type(&data_type)?;
         assert_eq!(DataType::Decimal128(38, 10), result_type);
-        Ok(())
-    }
-
-    #[test]
-    fn test_stddev_return_data_type() -> Result<()> {
-        let data_type = DataType::Float64;
-        let result_type = stddev_return_type(&data_type)?;
-        assert_eq!(DataType::Float64, result_type);
-
-        let data_type = DataType::Decimal128(36, 10);
-        assert!(stddev_return_type(&data_type).is_err());
         Ok(())
     }
 

@@ -22,7 +22,9 @@ use arrow::array::{Array, ArrayRef, Int64Array, ListArray};
 use arrow::datatypes::{DataType, Field};
 use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
 use arrow_array::{Date32Array, NullArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{
+    BooleanBufferBuilder, IntervalMonthDayNano, NullBuffer, OffsetBuffer,
+};
 use arrow_schema::DataType::{Date32, Int64, Interval, List};
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
@@ -314,7 +316,13 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     for (idx, stop) in stop_array.iter().enumerate() {
         let mut stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|x| x.value(idx)).unwrap_or(0);
-        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(
+            IntervalMonthDayNano {
+                months: 0,
+                days: 0,
+                nanoseconds: 1,
+            },
+        );
         let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
         let neg = months < 0 || days < 0;
         if !include_upper {

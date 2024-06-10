@@ -168,20 +168,6 @@ pub fn max(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the sum() aggregate function
-///
-/// TODO: Remove this function and use `sum` from `datafusion_functions_aggregate::expr_fn` instead
-pub fn sum(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Sum,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an expression to represent the array_agg() aggregate function
 pub fn array_agg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -395,18 +381,6 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
         subquery,
         outer_ref_columns,
     })
-}
-
-/// Create an expression to represent the stddev() aggregate function
-pub fn stddev(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Stddev,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Create a grouping set

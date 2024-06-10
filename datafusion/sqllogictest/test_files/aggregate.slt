@@ -194,7 +194,7 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
-statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
 
@@ -231,8 +231,8 @@ explain with A as (
 ) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
 ----
 logical_plan
-01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))
-02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]]
+01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
 03)----SubqueryAlias: a
 04)------SubqueryAlias: a
 05)--------Union
@@ -247,11 +247,11 @@ logical_plan
 14)----------Projection: Int64(1) AS id, Int64(2) AS foo
 15)------------EmptyRelation
 physical_plan
-01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))@2 as SUM(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 06)----------UnionExec
 07)------------ProjectionExec: expr=[1 as id, 2 as foo]
 08)--------------PlaceholderRowExec
@@ -448,6 +448,15 @@ SELECT var(distinct c2) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
 SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+
+# csv_query_distinct_variance_population
+query R
+SELECT var_pop(distinct c2) FROM aggregate_test_100
+----
+2
+
+statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
 
 # csv_query_variance_5
 query R
@@ -5334,3 +5343,34 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+
+# test building plan with aggreagte sum
+
+statement ok
+create table employee_csv(id int, first_name string, last_name varchar, state varchar, salary bigint) as values (1, 'jenson', 'huang', 'unemployed', 10);
+
+query TI
+select state, sum(salary) total_salary from employee_csv group by state;
+----
+unemployed 10
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select state, sum(salary) as total_salary from employee_csv group by state;
+----
+logical_plan
+01)Projection: employee_csv.state, sum(employee_csv.salary) AS total_salary
+02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
+03)----TableScan: employee_csv projection=[state, salary]
+
+# fail if there is duplicate name
+query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+select state, sum(salary) as state from employee_csv group by state;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table employee_csv;

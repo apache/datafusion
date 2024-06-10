@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::pretty::pretty_format_columns;
+use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use arrow_array::builder::{ListBuilder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch, StringArray, StructArray};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{assert_contains, DFSchema, ScalarValue};
+use datafusion_expr::AggregateExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions_aggregate::first_last::first_value_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
+use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
 
@@ -162,6 +166,183 @@ fn test_list_range() {
     );
 }
 
+#[tokio::test]
+async fn test_aggregate_error() {
+    let err = first_value_udaf()
+        .call(vec![col("props")])
+        // not a sort column
+        .order_by(vec![col("id")])
+        .build()
+        .unwrap_err()
+        .to_string();
+    assert_contains!(
+        err,
+        "Error during planning: ORDER BY expressions must be Expr::Sort"
+    );
+}
+
+#[tokio::test]
+async fn test_aggregate_ext_order_by() {
+    let agg = first_value_udaf().call(vec![col("props")]);
+
+    // ORDER BY id ASC
+    let agg_asc = agg
+        .clone()
+        .order_by(vec![col("id").sort(true, true)])
+        .build()
+        .unwrap()
+        .alias("asc");
+
+    // ORDER BY id DESC
+    let agg_desc = agg
+        .order_by(vec![col("id").sort(false, true)])
+        .build()
+        .unwrap()
+        .alias("desc");
+
+    evaluate_agg_test(
+        agg_asc,
+        vec![
+            "+-----------------+",
+            "| asc             |",
+            "+-----------------+",
+            "| {a: 2021-02-01} |",
+            "+-----------------+",
+        ],
+    )
+    .await;
+
+    evaluate_agg_test(
+        agg_desc,
+        vec![
+            "+-----------------+",
+            "| desc            |",
+            "+-----------------+",
+            "| {a: 2021-02-03} |",
+            "+-----------------+",
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_aggregate_ext_filter() {
+    let agg = first_value_udaf()
+        .call(vec![col("i")])
+        .order_by(vec![col("i").sort(true, true)])
+        .filter(col("i").is_not_null())
+        .build()
+        .unwrap()
+        .alias("val");
+
+    #[rustfmt::skip]
+    evaluate_agg_test(
+        agg,
+        vec![
+            "+-----+",
+            "| val |",
+            "+-----+",
+            "| 5   |",
+            "+-----+",
+        ],
+    )
+        .await;
+}
+
+#[tokio::test]
+async fn test_aggregate_ext_distinct() {
+    let agg = sum_udaf()
+        .call(vec![lit(5)])
+        // distinct sum should be 5, not 15
+        .distinct()
+        .build()
+        .unwrap()
+        .alias("distinct");
+
+    evaluate_agg_test(
+        agg,
+        vec![
+            "+----------+",
+            "| distinct |",
+            "+----------+",
+            "| 5        |",
+            "+----------+",
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_aggregate_ext_null_treatment() {
+    let agg = first_value_udaf()
+        .call(vec![col("i")])
+        .order_by(vec![col("i").sort(true, true)]);
+
+    let agg_respect = agg
+        .clone()
+        .null_treatment(NullTreatment::RespectNulls)
+        .build()
+        .unwrap()
+        .alias("respect");
+
+    let agg_ignore = agg
+        .null_treatment(NullTreatment::IgnoreNulls)
+        .build()
+        .unwrap()
+        .alias("ignore");
+
+    evaluate_agg_test(
+        agg_respect,
+        vec![
+            "+---------+",
+            "| respect |",
+            "+---------+",
+            "|         |",
+            "+---------+",
+        ],
+    )
+    .await;
+
+    evaluate_agg_test(
+        agg_ignore,
+        vec![
+            "+--------+",
+            "| ignore |",
+            "+--------+",
+            "| 5      |",
+            "+--------+",
+        ],
+    )
+    .await;
+}
+
+/// Evaluates the specified expr as an aggregate and compares the result to the
+/// expected result.
+async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
+    let batch = test_batch();
+
+    let ctx = SessionContext::new();
+    let group_expr = vec![];
+    let agg_expr = vec![expr];
+    let result = ctx
+        .read_batch(batch)
+        .unwrap()
+        .aggregate(group_expr, agg_expr)
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = pretty_format_batches(&result).unwrap().to_string();
+    let actual_lines = result.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        expected_lines, actual_lines,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected_lines, actual_lines
+    );
+}
+
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
@@ -189,6 +370,8 @@ fn test_batch() -> RecordBatch {
     TEST_BATCH
         .get_or_init(|| {
             let string_array: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
+            let int_array: ArrayRef =
+                Arc::new(Int64Array::from_iter(vec![Some(10), None, Some(5)]));
 
             // { a: "2021-02-01" } { a: "2021-02-02" } { a: "2021-02-03" }
             let struct_array: ArrayRef = Arc::from(StructArray::from(vec![(
@@ -209,6 +392,7 @@ fn test_batch() -> RecordBatch {
 
             RecordBatch::try_from_iter(vec![
                 ("id", string_array),
+                ("i", int_array),
                 ("props", struct_array),
                 ("list", list_array),
             ])

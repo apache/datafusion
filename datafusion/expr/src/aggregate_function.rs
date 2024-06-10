@@ -35,8 +35,6 @@ use strum_macros::EnumIter;
 pub enum AggregateFunction {
     /// Count
     Count,
-    /// Sum
-    Sum,
     /// Minimum
     Min,
     /// Maximum
@@ -49,12 +47,6 @@ pub enum AggregateFunction {
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
-    /// Variance (Population)
-    VariancePop,
-    /// Standard Deviation (Sample)
-    Stddev,
-    /// Standard Deviation (Population)
-    StddevPop,
     /// Correlation
     Correlation,
     /// Slope from linear regression
@@ -102,16 +94,12 @@ impl AggregateFunction {
         use AggregateFunction::*;
         match self {
             Count => "COUNT",
-            Sum => "SUM",
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
             ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
-            VariancePop => "VAR_POP",
-            Stddev => "STDDEV",
-            StddevPop => "STDDEV_POP",
             Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
             RegrIntercept => "REGR_INTERCEPT",
@@ -157,16 +145,11 @@ impl FromStr for AggregateFunction {
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
-            "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "stddev" => AggregateFunction::Stddev,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "stddev_samp" => AggregateFunction::Stddev,
-            "var_pop" => AggregateFunction::VariancePop,
             "regr_slope" => AggregateFunction::RegrSlope,
             "regr_intercept" => AggregateFunction::RegrIntercept,
             "regr_count" => AggregateFunction::RegrCount,
@@ -223,21 +206,15 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
             AggregateFunction::BitAnd
             | AggregateFunction::BitOr
             | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Ok(DataType::Boolean)
             }
-            AggregateFunction::VariancePop => {
-                variance_return_type(&coerced_data_types[0])
-            }
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
             }
-            AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
-            AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
             AggregateFunction::RegrSlope
             | AggregateFunction::RegrIntercept
             | AggregateFunction::RegrCount
@@ -307,12 +284,7 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
-            AggregateFunction::Avg
-            | AggregateFunction::Sum
-            | AggregateFunction::VariancePop
-            | AggregateFunction::Stddev
-            | AggregateFunction::StddevPop
-            | AggregateFunction::ApproxMedian => {
+            AggregateFunction::Avg | AggregateFunction::ApproxMedian => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),

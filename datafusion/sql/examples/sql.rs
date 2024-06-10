@@ -18,6 +18,7 @@
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
@@ -33,8 +34,8 @@ fn main() {
     let sql = "SELECT \
             c.id, c.first_name, c.last_name, \
             COUNT(*) as num_orders, \
-            SUM(o.price) AS total_price, \
-            SUM(o.price * s.sales_tax) AS state_tax \
+            sum(o.price) AS total_price, \
+            sum(o.price * s.sales_tax) AS state_tax \
         FROM customer c \
         JOIN state s ON c.state = s.id \
         JOIN orders o ON c.id = o.customer_id \
@@ -49,7 +50,7 @@ fn main() {
     let statement = &ast[0];
 
     // create a logical query plan
-    let context_provider = MyContextProvider::new();
+    let context_provider = MyContextProvider::new().with_udaf(sum_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -60,9 +61,15 @@ fn main() {
 struct MyContextProvider {
     options: ConfigOptions,
     tables: HashMap<String, Arc<dyn TableSource>>,
+    udafs: HashMap<String, Arc<AggregateUDF>>,
 }
 
 impl MyContextProvider {
+    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+        self.udafs.insert(udaf.name().to_string(), udaf);
+        self
+    }
+
     fn new() -> Self {
         let mut tables = HashMap::new();
         tables.insert(
@@ -94,6 +101,7 @@ impl MyContextProvider {
         Self {
             tables,
             options: Default::default(),
+            udafs: Default::default(),
         }
     }
 }
@@ -116,8 +124,8 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-        None
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
