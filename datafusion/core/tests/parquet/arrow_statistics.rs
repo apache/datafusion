@@ -405,6 +405,34 @@ async fn test_int_64() {
 }
 
 #[tokio::test]
+async fn test_int_64_with_nulls() {
+    // This creates a parquet files of 4 columns
+    // named "i8", "i16", "i32", "i64"
+    // creates 3 row groups of 5 rows each
+    let reader = TestReader {
+        scenario: Scenario::WithNullValues,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Int64Array::from(vec![None, Some(1), None])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int64Array::from(vec![None, Some(5), None])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![5, 0, 5]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
+        column_name: "i64",
+        test_data_page_statistics: false,
+    }
+    .run();
+}
+
+#[tokio::test]
 async fn test_int_32() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
     let reader = TestReader {
