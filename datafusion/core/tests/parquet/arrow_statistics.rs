@@ -196,8 +196,28 @@ impl<'a> Test<'a> {
         )
         .unwrap();
 
+        let colum_index = reader
+            .metadata()
+            .column_index()
+            .expect("File should have column indices");
+
         let row_groups = reader.metadata().row_groups();
+        let row_group_indices = row_groups
+            .iter()
+            .enumerate()
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+
         let min = converter.row_group_mins(row_groups).unwrap();
+
+        assert_eq!(
+            &min, &expected_min,
+            "{column_name}: Mismatch with expected minimums"
+        );
+
+        let min = converter
+            .data_page_mins(colum_index, &row_group_indices)
+            .unwrap();
 
         assert_eq!(
             &min, &expected_min,

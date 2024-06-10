@@ -33,7 +33,8 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::{ParquetColumnIndex, RowGroupMetaData};
+use parquet::file::page_index::index::Index;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -558,6 +559,30 @@ pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
     get_statistics!(Max, data_type, iterator)
 }
 
+/// Extracts the min statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn min_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    let iter = iterator.flat_map(|index| match data_type {
+        Some(DataType::Int64) => match index {
+            Index::INT64(native_index) => native_index
+                .indexes
+                .iter()
+                .map(|x| x.min)
+                .collect::<Vec<_>>(),
+            _ => vec![None],
+        },
+        _ => unimplemented!(),
+    });
+
+    Ok(Arc::new(Int64Array::from_iter(iter)))
+}
+
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow arrays, with proper type
@@ -766,10 +791,37 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Arc::new(UInt64Array::from_iter(null_counts)))
     }
 
-    /// Returns a null array of data_type with one element per row group
-    fn make_null_array<I>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    /// TODO: Docstring
+    pub fn data_page_mins<I>(
+        &self,
+        column_index: &ParquetColumnIndex,
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
     where
-        I: IntoIterator<Item = &'a RowGroupMetaData>,
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        // TODO: Move into docstring
+        // Creates an iterator over each row group index
+        // that yields a `page_index::index::Index`.
+        // An `Index` contains a `NativeIndex` with a `Vec<PageIndex>`,
+        // where each `PageIndex` contains information about the page's
+        // statistics (e.g. min, max, or null_count).
+        let iter = row_group_indices
+            .into_iter()
+            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+        min_page_statistics(Some(data_type), iter)
+    }
+
+    /// Returns a null array of data_type with one element per row group
+    fn make_null_array<I, A>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    where
+        I: IntoIterator<Item = A>,
     {
         // column was in the arrow schema but not in the parquet schema, so return a null array
         let num_row_groups = metadatas.into_iter().count();
