@@ -232,7 +232,7 @@ impl<'a> Test<'a> {
         );
 
         if test_data_page_statistics {
-            let column_index = reader
+            let column_page_index = reader
                 .metadata()
                 .column_index()
                 .expect("File should have column indices");
@@ -244,7 +244,7 @@ impl<'a> Test<'a> {
                 .collect::<Vec<_>>();
 
             let min = converter
-                .data_page_mins(column_index, &row_group_indices)
+                .data_page_mins(column_page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &min, &expected_min,
@@ -252,7 +252,7 @@ impl<'a> Test<'a> {
             );
 
             let max = converter
-                .data_page_maxes(column_index, &row_group_indices)
+                .data_page_maxes(column_page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &max, &expected_max,
@@ -260,7 +260,7 @@ impl<'a> Test<'a> {
             );
 
             let null_counts = converter
-                .data_page_null_counts(column_index, &row_group_indices)
+                .data_page_null_counts(column_page_index, &row_group_indices)
                 .unwrap();
 
             assert_eq!(

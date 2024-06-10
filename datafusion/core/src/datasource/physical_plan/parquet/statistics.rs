@@ -879,7 +879,7 @@ impl<'a> StatisticsConverter<'a> {
     /// TODO: Docstring
     pub fn data_page_mins<I>(
         &self,
-        column_index: &ParquetColumnIndex,
+        column_page_index: &ParquetColumnIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -899,14 +899,14 @@ impl<'a> StatisticsConverter<'a> {
         // statistics (e.g. min, max, or null_count).
         let iter = row_group_indices
             .into_iter()
-            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
         min_page_statistics(Some(data_type), iter)
     }
 
     /// TODO: docstring
     pub fn data_page_maxes<I>(
         &self,
-        column_index: &ParquetColumnIndex,
+        column_page_index: &ParquetColumnIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -920,14 +920,14 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices
             .into_iter()
-            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
         max_page_statistics(Some(data_type), iter)
     }
 
     /// TODO: docstring
     pub fn data_page_null_counts<I>(
         &self,
-        column_index: &ParquetColumnIndex,
+        column_page_index: &ParquetColumnIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -941,7 +941,7 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices
             .into_iter()
-            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
         null_counts_page_statistics(iter)
     }
 
