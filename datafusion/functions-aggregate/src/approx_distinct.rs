@@ -241,14 +241,12 @@ impl Default for ApproxDistinct {
 
 pub struct ApproxDistinct {
     signature: Signature,
-    alias: Vec<String>,
 }
 
 impl ApproxDistinct {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            alias: vec![],
         }
     }
 }
@@ -302,9 +300,5 @@ impl AggregateUDFImpl for ApproxDistinct {
             }
         };
         Ok(accumulator)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.alias
     }
 }

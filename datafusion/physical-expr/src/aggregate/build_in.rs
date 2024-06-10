@@ -30,13 +30,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
-use datafusion_expr::AggregateFunction;
-
+use crate::aggregate::average::Avg;
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-
+use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_expr::AggregateFunction;
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
@@ -146,11 +145,9 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
+        (AggregateFunction::Avg, false) => {
+            Arc::new(Avg::new(input_phy_exprs[0].clone(), name, data_type))
+        }
         (AggregateFunction::Avg, true) => {
             return not_impl_err!("AVG(DISTINCT) aggregations are not available");
         }

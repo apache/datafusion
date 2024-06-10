@@ -30,7 +30,6 @@ pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
 pub(crate) mod grouping;
-mod hyperloglog;
 pub(crate) mod nth_value;
 pub(crate) mod string_agg;
 #[macro_use]
