@@ -608,6 +608,9 @@ pub struct CsvOptions {
     /// Optional representation of null value
     #[prost(string, tag = "12")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional comment character as a byte
+    #[prost(bytes = "vec", tag = "13")]
+    pub comment: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]

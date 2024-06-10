@@ -1530,6 +1530,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+    #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_scan_exec_node::OptionalComment>,
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
@@ -1538,6 +1540,12 @@ pub mod csv_scan_exec_node {
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
