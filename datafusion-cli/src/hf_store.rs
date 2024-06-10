@@ -17,8 +17,7 @@
 
 use arrow::datatypes::ToByteSlice;
 use async_trait::async_trait;
-use bytes::Bytes;
-use datafusion::common::{config_err, Result};
+use datafusion::common::Result;
 use datafusion::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
 };
@@ -26,13 +25,13 @@ use datafusion::error::DataFusionError;
 use futures::future::join_all;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use http::{header, HeaderMap};
+use http::{header, HeaderMap, HeaderValue};
 use object_store::http::{HttpBuilder, HttpStore};
 use object_store::path::Path;
 use object_store::{
     ClientOptions, Error as ObjectStoreError, GetOptions, GetResult, ListResult,
-    MultipartId, ObjectMeta, ObjectStore, PutOptions, PutResult,
-    Result as ObjectStoreResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload,
+    PutResult, Result as ObjectStoreResult,
 };
 use serde::Deserialize;
 use serde_json;
@@ -42,7 +41,6 @@ use std::env;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 use url::Url;
 
 pub const STORE: &str = "hf";
@@ -295,7 +293,7 @@ impl ExtensionOptions for HFOptions {
         Box::new(self.clone())
     }
 
-    fn set(&mut self, key: &str, value: &str) -> datafusion::common::Result<()> {
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (_key, rem) = key.split_once('.').unwrap_or((key, ""));
         match rem {
             "endpoint" => {
@@ -305,7 +303,7 @@ impl ExtensionOptions for HFOptions {
                 self.user_access_token.set(rem, value)?;
             }
             _ => {
-                return config_err!("Config value \"{}\" not found on HFOptions", rem);
+                return Err(UnknownConfigurationKeySnafu { key }.build().into());
             }
         }
         Ok(())
@@ -452,7 +450,11 @@ impl HFStoreBuilder {
         inner_builder = inner_builder.with_url(ep.clone());
 
         if let Some(user_access_token) = &self.user_access_token {
-            if let Ok(token) = format!("Bearer {}", user_access_token).parse() {
+            if let Ok(mut token) =
+                HeaderValue::from_str(format!("Bearer {user_access_token}").as_str())
+            {
+                token.set_sensitive(true);
+
                 let mut header_map = HeaderMap::new();
                 header_map.insert(header::AUTHORIZATION, token);
                 let options = ClientOptions::new().with_default_headers(header_map);
@@ -540,24 +542,17 @@ impl ObjectStore for HFStore {
     async fn put_opts(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _payload: PutPayload,
         _opts: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         Err(ObjectStoreError::NotImplemented)
     }
 
-    async fn put_multipart(
+    async fn put_multipart_opts(
         &self,
         _location: &Path,
-    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        Err(ObjectStoreError::NotImplemented)
-    }
-
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> ObjectStoreResult<()> {
+        _opts: PutMultipartOpts,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         Err(ObjectStoreError::NotImplemented)
     }
 
@@ -572,6 +567,7 @@ impl ObjectStore for HFStore {
         )?;
 
         let file_path = Path::parse(parsed_url.to_location())?;
+
         let mut res = self.store.get_opts(&file_path, options).await?;
 
         res.meta.location = location.clone();
@@ -929,13 +925,10 @@ mod tests {
             .with_endpoint(endpoint)
             .with_user_access_token(user_access_token);
 
-        assert_eq!(
-            builder.endpoint,
-            builder.get_config_key(HFConfigKey::Endpoint)
-        );
+        assert_eq!(builder.endpoint, Some(endpoint.to_string()));
         assert_eq!(
             builder.user_access_token,
-            builder.get_config_key(HFConfigKey::UserAccessToken)
+            Some(user_access_token.to_string())
         );
     }
 
@@ -956,13 +949,10 @@ mod tests {
             .with_config_key(HFConfigKey::Endpoint, endpoint)
             .with_config_key(HFConfigKey::UserAccessToken, user_access_token);
 
-        assert_eq!(
-            builder.endpoint,
-            builder.get_config_key(HFConfigKey::Endpoint)
-        );
+        assert_eq!(builder.endpoint, Some(endpoint.to_string()));
         assert_eq!(
             builder.user_access_token,
-            builder.get_config_key(HFConfigKey::UserAccessToken)
+            Some(user_access_token.to_string())
         );
     }
 
@@ -976,13 +966,26 @@ mod tests {
 
         let builder = HFStoreBuilder::from_env();
 
-        assert_eq!(
-            builder.endpoint,
-            builder.get_config_key(HFConfigKey::Endpoint)
-        );
+        assert_eq!(builder.endpoint, Some(endpoint.to_string()));
         assert_eq!(
             builder.user_access_token,
-            builder.get_config_key(HFConfigKey::UserAccessToken)
+            Some(user_access_token.to_string())
+        );
+    }
+
+    #[test]
+    fn test_hf_store_builder_preserve_case() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "AbcD231_!@#";
+
+        let builder = HFStoreBuilder::new()
+            .with_config_key(HFConfigKey::Endpoint, endpoint)
+            .with_config_key(HFConfigKey::UserAccessToken, user_access_token);
+
+        assert_eq!(builder.endpoint, Some(endpoint.to_string()));
+        assert_eq!(
+            builder.user_access_token,
+            Some(user_access_token.to_string())
         );
     }
 

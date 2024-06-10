@@ -34,7 +34,6 @@ arrow = { version = "52.0.0" }
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
-bytes = "1.0"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "39.0.0", features = [
     "avro",
@@ -49,7 +48,7 @@ datafusion = { path = "../datafusion/core", version = "39.0.0", features = [
 dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"
-http= "0.2.12"
+http= "1.1.0"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.10.1", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
