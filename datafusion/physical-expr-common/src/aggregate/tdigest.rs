@@ -28,7 +28,7 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
-use arrow_array::types::Float64Type;
+use arrow::datatypes::Float64Type;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
