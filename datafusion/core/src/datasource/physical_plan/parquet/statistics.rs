@@ -518,68 +518,6 @@ macro_rules! get_statistics {
         }}}
 }
 
-/// Lookups up the parquet column by name
-///
-/// Returns the parquet column index and the corresponding arrow field
-pub(crate) fn parquet_column<'a>(
-    parquet_schema: &SchemaDescriptor,
-    arrow_schema: &'a Schema,
-    name: &str,
-) -> Option<(usize, &'a FieldRef)> {
-    let (root_idx, field) = arrow_schema.fields.find(name)?;
-    if field.data_type().is_nested() {
-        // Nested fields are not supported and require non-trivial logic
-        // to correctly walk the parquet schema accounting for the
-        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
-        //
-        // For example a ListArray could correspond to anything from 1 to 3 levels
-        // in the parquet schema
-        return None;
-    }
-
-    // This could be made more efficient (#TBD)
-    let parquet_idx = (0..parquet_schema.columns().len())
-        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
-    Some((parquet_idx, field))
-}
-
-/// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
-    data_type: &DataType,
-    iterator: I,
-) -> Result<ArrayRef> {
-    get_statistics!(Min, data_type, iterator)
-}
-
-/// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
-    data_type: &DataType,
-    iterator: I,
-) -> Result<ArrayRef> {
-    get_statistics!(Max, data_type, iterator)
-}
-
-/// Extracts the min statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
-pub(crate) fn min_page_statistics<'a, I>(
-    data_type: Option<&DataType>,
-    iterator: I,
-) -> Result<ArrayRef>
-where
-    I: Iterator<Item = &'a Index>,
-{
-    // TODO: Prototype
-    // This should be extracted and abstracted into
-    // macro (similar to get_statistics)
-    match data_type {
-        Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter(
-            MinInt64DataPageStatsIterator::new(iterator).flatten(),
-        ))),
-        // TODO: Implement missing data_types
-        _ => unimplemented!(),
-    }
-}
-
 macro_rules! make_data_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
@@ -633,6 +571,70 @@ macro_rules! make_data_page_stats_iterator {
 }
 
 make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
+
+macro_rules! get_data_page_statistics {
+    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
+        paste! {
+            match $data_type {
+                Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                _ => unimplemented!()
+            }
+        }
+    }
+}
+
+/// Lookups up the parquet column by name
+///
+/// Returns the parquet column index and the corresponding arrow field
+pub(crate) fn parquet_column<'a>(
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &'a Schema,
+    name: &str,
+) -> Option<(usize, &'a FieldRef)> {
+    let (root_idx, field) = arrow_schema.fields.find(name)?;
+    if field.data_type().is_nested() {
+        // Nested fields are not supported and require non-trivial logic
+        // to correctly walk the parquet schema accounting for the
+        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+        //
+        // For example a ListArray could correspond to anything from 1 to 3 levels
+        // in the parquet schema
+        return None;
+    }
+
+    // This could be made more efficient (#TBD)
+    let parquet_idx = (0..parquet_schema.columns().len())
+        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
+    Some((parquet_idx, field))
+}
+
+/// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
+pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+    data_type: &DataType,
+    iterator: I,
+) -> Result<ArrayRef> {
+    get_statistics!(Min, data_type, iterator)
+}
+
+/// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
+pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+    data_type: &DataType,
+    iterator: I,
+) -> Result<ArrayRef> {
+    get_statistics!(Max, data_type, iterator)
+}
+
+/// Extracts the min statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn min_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    get_data_page_statistics!(Min, data_type, iterator)
+}
 
 /// Extracts Parquet statistics as Arrow arrays
 ///
