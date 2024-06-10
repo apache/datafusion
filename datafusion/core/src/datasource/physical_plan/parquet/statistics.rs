@@ -571,6 +571,7 @@ macro_rules! make_data_page_stats_iterator {
 }
 
 make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
+make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
@@ -634,6 +635,18 @@ where
     I: Iterator<Item = &'a Index>,
 {
     get_data_page_statistics!(Min, data_type, iterator)
+}
+
+/// Extracts the max statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn max_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    get_data_page_statistics!(Max, data_type, iterator)
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -869,6 +882,27 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|rg_index| &column_index[*rg_index][parquet_index]);
         min_page_statistics(Some(data_type), iter)
+    }
+
+    /// TODO: docstring
+    pub fn data_page_maxes<I>(
+        &self,
+        column_index: &ParquetColumnIndex,
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        let iter = row_group_indices
+            .into_iter()
+            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+        max_page_statistics(Some(data_type), iter)
     }
 
     /// Returns a null array of data_type with one element per row group

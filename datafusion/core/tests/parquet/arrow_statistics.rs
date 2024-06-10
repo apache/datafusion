@@ -196,7 +196,7 @@ impl<'a> Test<'a> {
         )
         .unwrap();
 
-        let colum_index = reader
+        let column_index = reader
             .metadata()
             .column_index()
             .expect("File should have column indices");
@@ -216,18 +216,28 @@ impl<'a> Test<'a> {
         );
 
         let min = converter
-            .data_page_mins(colum_index, &row_group_indices)
+            .data_page_mins(column_index, &row_group_indices)
             .unwrap();
 
         assert_eq!(
             &min, &expected_min,
-            "{column_name}: Mismatch with expected minimums"
+            "{column_name}: Mismatch with expected data page minimums"
         );
 
         let max = converter.row_group_maxes(row_groups).unwrap();
+
         assert_eq!(
             &max, &expected_max,
             "{column_name}: Mismatch with expected maximum"
+        );
+
+        let max = converter
+            .data_page_maxes(column_index, &row_group_indices)
+            .unwrap();
+
+        assert_eq!(
+            &max, &expected_max,
+            "{column_name}: Mismatch with expected data page maximum"
         );
 
         let null_counts = converter.row_group_null_counts(row_groups).unwrap();
