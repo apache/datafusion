@@ -649,6 +649,25 @@ where
     get_data_page_statistics!(Max, data_type, iterator)
 }
 
+/// Extracts the null count statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef>
+where
+    I: Iterator<Item = &'a Index>,
+{
+    let iter = iterator.flat_map(|index| match index {
+        Index::NONE => vec![None],
+        Index::INT64(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.and_then(|x| Some(x as u64)))
+            .collect::<Vec<_>>(),
+        _ => unimplemented!(),
+    });
+
+    Ok(Arc::new(UInt64Array::from_iter(iter)))
+}
+
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow arrays, with proper type
@@ -903,6 +922,27 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|rg_index| &column_index[*rg_index][parquet_index]);
         max_page_statistics(Some(data_type), iter)
+    }
+
+    /// TODO: docstring
+    pub fn data_page_null_counts<I>(
+        &self,
+        column_index: &ParquetColumnIndex,
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        let iter = row_group_indices
+            .into_iter()
+            .map(|rg_index| &column_index[*rg_index][parquet_index]);
+        null_counts_page_statistics(iter)
     }
 
     /// Returns a null array of data_type with one element per row group

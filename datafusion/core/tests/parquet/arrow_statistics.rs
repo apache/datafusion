@@ -258,6 +258,16 @@ impl<'a> Test<'a> {
                 &max, &expected_max,
                 "{column_name}: Mismatch with expected data page maximum"
             );
+
+            let null_counts = converter
+                .data_page_null_counts(column_index, &row_group_indices)
+                .unwrap();
+
+            assert_eq!(
+                &null_counts, &expected_null_counts,
+                "{column_name}: Mismatch with expected data page null counts. \
+                Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
+            );
         }
     }
 
@@ -427,7 +437,7 @@ async fn test_int_64_with_nulls() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5]),
         column_name: "i64",
-        test_data_page_statistics: false,
+        test_data_page_statistics: true,
     }
     .run();
 }
