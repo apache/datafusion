@@ -36,14 +36,11 @@ mod try_cast;
 pub mod helpers {
     pub use crate::aggregate::min_max::{max, min};
 }
-
-pub use crate::aggregate::approx_distinct::ApproxDistinct;
 pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
 pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
-pub use crate::aggregate::average::{Avg, AvgAccumulator};
 pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor};
 pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};
 pub use crate::aggregate::build_in::create_aggregate_expr;
@@ -63,6 +60,7 @@ pub use crate::window::ntile::Ntile;
 pub use crate::window::rank::{dense_rank, percent_rank, rank, Rank, RankType};
 pub use crate::window::row_number::RowNumber;
 pub use crate::PhysicalSortExpr;
+pub use datafusion_functions_aggregate::approx_distinct::ApproxDistinct;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};

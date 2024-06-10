@@ -20,7 +20,7 @@
 //! `hyperloglog` is a module that contains a modified version
 //! of [redis's implementation](https://github.com/redis/redis/blob/4930d19e70c391750479951022e207e19111eb55/src/hyperloglog.c)
 //! with some modification based on strong assumption of usage
-//! within datafusion, so that [`datafusion_functions_aggregate::approx_distinct`] function can
+//! within datafusion, so that function can
 //! be efficiently implemented.
 //!
 //! Specifically, like Redis's version, this HLL structure uses
@@ -115,7 +115,6 @@ where
 
     /// Get the register histogram (each value in register index into
     /// the histogram; u32 is enough because we only have 2**14=16384 registers
-    #[allow(dead_code)]
     #[inline]
     fn get_histogram(&self) -> [u32; HLL_Q + 2] {
         let mut histogram = [0; HLL_Q + 2];
@@ -127,7 +126,6 @@ where
     }
 
     /// Merge the other [`HyperLogLog`] into this one
-    #[allow(dead_code)]
     pub fn merge(&mut self, other: &HyperLogLog<T>) {
         assert!(
             self.registers.len() == other.registers.len(),
@@ -141,7 +139,6 @@ where
     }
 
     /// Guess the number of unique elements seen by the HyperLogLog.
-    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         let histogram = self.get_histogram();
         let m = NUM_REGISTERS as f64;
@@ -158,7 +155,6 @@ where
 /// Helper function sigma as defined in
 /// "New cardinality estimation algorithms for HyperLogLog sketches"
 /// Otmar Ertl, arXiv:1702.01284
-#[allow(dead_code)]
 #[inline]
 fn hll_sigma(x: f64) -> f64 {
     if x == 1. {
@@ -183,7 +179,6 @@ fn hll_sigma(x: f64) -> f64 {
 /// Helper function tau as defined in
 /// "New cardinality estimation algorithms for HyperLogLog sketches"
 /// Otmar Ertl, arXiv:1702.01284
-#[allow(dead_code)]
 #[inline]
 fn hll_tau(x: f64) -> f64 {
     if x == 0.0 || x == 1.0 {

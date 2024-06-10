@@ -104,9 +104,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::ApproxDistinct, _) => Arc::new(
-            expressions::ApproxDistinct::new(input_phy_exprs[0].clone(), name, data_type),
-        ),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
             let nullable = expr.nullable(input_schema)?;
@@ -325,8 +322,8 @@ mod tests {
 
     use super::*;
     use crate::expressions::{
-        try_cast, ApproxDistinct, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr,
-        BitXor, BoolAnd, BoolOr, Count, DistinctArrayAgg, DistinctCount, Max, Min,
+        try_cast, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd,
+        BoolOr, Count, DistinctArrayAgg, DistinctCount, Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
@@ -335,11 +332,7 @@ mod tests {
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {
-        let funcs = vec![
-            AggregateFunction::Count,
-            AggregateFunction::ArrayAgg,
-            AggregateFunction::ApproxDistinct,
-        ];
+        let funcs = vec![AggregateFunction::Count, AggregateFunction::ArrayAgg];
         let data_types = vec![
             DataType::UInt32,
             DataType::Int32,
@@ -371,14 +364,6 @@ mod tests {
                             result_agg_phy_exprs.field().unwrap()
                         );
                     }
-                    AggregateFunction::ApproxDistinct => {
-                        assert!(result_agg_phy_exprs.as_any().is::<ApproxDistinct>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::UInt64, false),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
                     AggregateFunction::ArrayAgg => {
                         assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
@@ -407,14 +392,6 @@ mod tests {
                         assert_eq!("c1", result_distinct.name());
                         assert_eq!(
                             Field::new("c1", DataType::Int64, true),
-                            result_distinct.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::ApproxDistinct => {
-                        assert!(result_distinct.as_any().is::<ApproxDistinct>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::UInt64, false),
                             result_distinct.field().unwrap()
                         );
                     }

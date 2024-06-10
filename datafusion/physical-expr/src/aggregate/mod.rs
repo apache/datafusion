@@ -17,9 +17,6 @@
 
 pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 
-mod hyperloglog;
-
-pub(crate) mod approx_distinct;
 pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
@@ -33,6 +30,7 @@ pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
 pub(crate) mod grouping;
+mod hyperloglog;
 pub(crate) mod nth_value;
 pub(crate) mod string_agg;
 #[macro_use]
