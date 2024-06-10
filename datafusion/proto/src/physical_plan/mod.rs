@@ -203,6 +203,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 } else {
                     None
                 },
+                if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                    comment,
+                )) = &scan.optional_comment
+                {
+                    Some(str_to_byte(comment, "comment")?)
+                } else {
+                    None
+                },
                 FileCompressionType::UNCOMPRESSED,
             ))),
             #[cfg(feature = "parquet")]
@@ -1554,6 +1562,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         optional_escape: if let Some(escape) = exec.escape() {
                             Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
                                 byte_to_string(escape, "escape")?,
+                            ))
+                        } else {
+                            None
+                        },
+                        optional_comment: if let Some(comment) = exec.comment() {
+                            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                                byte_to_string(comment, "comment")?,
                             ))
                         } else {
                             None

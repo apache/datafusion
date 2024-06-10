@@ -894,6 +894,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
             time_format: opts.time_format.clone().unwrap_or_default(),
             null_value: opts.null_value.clone().unwrap_or_default(),
+            comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
         })
     }
 }
