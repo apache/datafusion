@@ -148,7 +148,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
-            protobuf::AggregateFunction::VariancePop => Self::VariancePop,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
             protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
             protobuf::AggregateFunction::RegrIntercept => Self::RegrIntercept,
