@@ -62,8 +62,8 @@ pub enum Error {
     #[snafu(display("Unsupported repository type: {}, currently only 'datasets' or 'spaces' are supported", repo_type))]
     UnsupportedRepoType { repo_type: String },
 
-    #[snafu(display("Unable to parse location {} into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'", location))]
-    InvalidLocation { location: String },
+    #[snafu(display("Unable to parse location {} into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'", url))]
+    InvalidLocation { url: String },
 }
 
 impl From<Error> for ObjectStoreError {
@@ -124,12 +124,12 @@ impl Default for ParsedHFUrl {
 
 impl ParsedHFUrl {
     /// Parse a HuggingFace URL into a ParsedHFUrl struct.
-    /// The URL should be in the format `hf://<repo_type>/<repository>[@revision]/<path>`
+    /// The URL should be in the format `hf://<repo_type>/<user|org>/<repository>[@revision]/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
     /// If the revision is not provided, it defaults to `main`.
     ///
     /// url: The HuggingFace URL to parse.
-    pub fn parse_hf_style_url(url: String) -> ObjectStoreResult<Self> {
+    pub fn parse_hf_style_url(url: &str) -> ObjectStoreResult<Self> {
         let url = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
 
         if url.scheme() != "hf" {
@@ -148,12 +148,14 @@ impl ParsedHFUrl {
     }
 
     /// Parse a HuggingFace path into a ParsedHFUrl struct.
-    /// The path should be in the format `<repository>/resolve/<revision>/<path>` with given `repo_type`.
+    /// The path should be in the format `<user|org>/<repository>[@revision]/<path>` with given `repo_type`.
     /// where `repo_type` is either `datasets` or `spaces`.
     /// 
     /// repo_type: The repository type, either `datasets` or `spaces`.
     /// path: The HuggingFace path to parse.
     fn parse_hf_style_path(repo_type: &str, mut path: &str) -> ObjectStoreResult<Self> {
+        static EXPECTED_PARTS: usize = 3;
+
         let mut parsed_url = Self::default();
 
         if (repo_type != "datasets") && (repo_type != "spaces") {
@@ -168,38 +170,48 @@ impl ParsedHFUrl {
         // parse the repository and revision.
         // - case 1: <user|org>/<repo>/<path> where <user|org>/<repo> is the repository and <repo> defaults to main.
         // - case 2: <user|org>/<repo>@<revision>/<path> where <user|org>/<repo> is the repository and <revision> is the revision.
-        let pathes = path.splitn(3, '/').collect::<Vec<&str>>();
-        if pathes.len() != 3 {
-            return Err(InvalidHfUrlSnafu { url: path }.build().into());
+        let path_parts = path.splitn(EXPECTED_PARTS, '/').collect::<Vec<&str>>();
+        if path_parts.len() != EXPECTED_PARTS {
+            return Err(InvalidHfUrlSnafu { url: format!("hf://{}/{}", repo_type, path) }.build().into());
         }
 
-        let revision_parts = pathes[1].splitn(2, '@').collect::<Vec<&str>>();
+        let revision_parts = path_parts[1].splitn(2, '@').collect::<Vec<&str>>();
         if revision_parts.len() == 2 {
-            parsed_url.repository = Some(format!("{}/{}", pathes[0], revision_parts[0]));
+            parsed_url.repository = Some(format!("{}/{}", path_parts[0], revision_parts[0]));
             parsed_url.revision = Some(revision_parts[1].to_string());
         } else {
-            parsed_url.repository = Some(format!("{}/{}", pathes[0], pathes[1]));
+            parsed_url.repository = Some(format!("{}/{}", path_parts[0], path_parts[1]));
         }
 
-        parsed_url.path = Some(pathes[2].to_string());
+        parsed_url.path = Some(path_parts[2].to_string());
 
         Ok(parsed_url)
     }
 
     /// Parse a http style HuggingFace path into a ParsedHFUrl struct.
-    /// The path should be in the format `<repo_type>/<repository>/resolve/<revision>/<path>`
+    /// The path should be in the format `<repo_type>/<user|org>/<repo>/resolve/<revision>/<path>`
     /// where `repo_type` is either `datasets` or `spaces`.
     ///
     /// path: The HuggingFace path to parse.
-    fn parse_http_style_path(path: &Path) -> ObjectStoreResult<Self> {
+    fn parse_http_style_path(path: &str) -> ObjectStoreResult<Self> {
+        static EXPECTED_PARTS: usize = 6;
+
         let mut parsed_url = Self::default();
 
-        let parts = path.parts();
+        let path_parts = path.splitn(EXPECTED_PARTS, '/').collect::<Vec<&str>>();
+        if path_parts.len() != EXPECTED_PARTS || path_parts[3] != "resolve" {
+            return Err(InvalidLocationSnafu { url: path.to_string() }.build().into());
+        }
+        
+        parsed_url.repo_type = Some(path_parts[0].to_string());
+        parsed_url.repository = Some(format!("{}/{}", path_parts[1], path_parts[2]));
+        parsed_url.revision = Some(path_parts[4].to_string());
+        parsed_url.path = Some(path_parts[5].to_string());
 
-        parsed_url.repo_type = parts.next().map(|p| p.raw.to_string());
+        Ok(parsed_url)
     }
 
-    pub fn hf_path(&self) -> String {
+    fn as_hf_path(&self) -> String {
         let mut url = self.repository.as_deref().unwrap().to_string();
 
         if let Some(revision) = &self.revision {
@@ -215,15 +227,15 @@ impl ParsedHFUrl {
         url
     }
 
-    pub fn file_path(&self) -> String {
-        let mut url = self.file_path_prefix();
+    fn as_location(&self) -> String {
+        let mut url = self.as_location_dir();
         url.push('/');
         url.push_str(self.path.as_deref().unwrap());
 
         url
     }
 
-    pub fn file_path_prefix(&self) -> String {
+    pub fn as_location_dir(&self) -> String {
         let mut url = self.repo_type.clone().unwrap();
         url.push('/');
         url.push_str(self.repository.as_deref().unwrap());
@@ -233,7 +245,7 @@ impl ParsedHFUrl {
         url
     }
 
-    pub fn tree_path(&self) -> String {
+    pub fn as_tree_location(&self) -> String {
         let mut url = "api/".to_string();
         url.push_str(self.repo_type.as_deref().unwrap());
         url.push('/');
@@ -504,14 +516,14 @@ impl ObjectStore for HFStore {
     ) -> ObjectStoreResult<GetResult> {
         let formatted_location = format!("{}/{}", self.repo_type, location);
 
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location.as_str()) else {
             return Err(ObjectStoreError::Generic {
                 store: STORE,
                 source: format!("Unable to parse url {location}").into(),
             });
         };
 
-        let file_path = parsed_url.file_path();
+        let file_path = parsed_url.as_location();
 
         let Ok(file_path) = Path::parse(file_path.clone()) else {
             return Err(ObjectStoreError::Generic {
@@ -552,7 +564,7 @@ impl ObjectStore for HFStore {
         };
 
         let formatted_prefix = format!("{}/{}", self.repo_type, prefix);
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.clone()) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.as_str()) else {
             return futures::stream::once(async move {
                 Err(ObjectStoreError::Generic {
                     store: STORE,
@@ -563,8 +575,8 @@ impl ObjectStore for HFStore {
             .boxed();
         };
 
-        let tree_path = parsed_url.tree_path();
-        let file_path_prefix = parsed_url.file_path_prefix();
+        let tree_path = parsed_url.as_tree_location();
+        let file_path_prefix = parsed_url.as_location_dir();
 
         futures::stream::once(async move {
             let result = self.store.get(&Path::parse(tree_path)?).await?;
@@ -598,7 +610,7 @@ impl ObjectStore for HFStore {
             .map(|result| {
                 result.and_then(|mut meta| {
                     let Ok(location) =
-                        ParsedHFUrl::parse_http_style_path(meta.location)
+                        ParsedHFUrl::parse_http_style_path(meta.location.to_string().as_str())
                     else {
                         return Err(ObjectStoreError::Generic {
                             store: STORE,
@@ -607,7 +619,7 @@ impl ObjectStore for HFStore {
                         });
                     };
 
-                    meta.location = Path::from_url_path(location.hf_path())?;
+                    meta.location = Path::from_url_path(location.as_hf_path())?;
                     if let Some(e_tag) = meta.e_tag.as_deref() {
                         meta.e_tag = Some(e_tag.replace('"', ""));
                     }
@@ -648,7 +660,7 @@ mod tests {
         
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
 
-        let parsed_url = ParsedHFUrl::parse_hf_style_url(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
         
         assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
         assert_eq!(parsed_url.repository, Some(repository.to_string()));
@@ -672,7 +684,7 @@ mod tests {
         let path = "data.csv";
 
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
-        let parsed_url = ParsedHFUrl::parse_hf_style_url(url).unwrap();
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
         
         assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
         assert_eq!(parsed_url.repository, Some(repository.to_string()));
@@ -689,39 +701,168 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_hf_url_error() {
+        test_parse_hf_url_error_matches(
+            "abc",
+            "Generic hf error: Unable parse source url. Url: abc, Error: relative URL without a base"
+        );
+
+        test_parse_hf_url_error_matches(
+            "hf://",
+            "Generic hf error: Invalid huggingface url: hf://, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'"
+        );
+
+        test_parse_hf_url_error_matches(
+            "df://datasets/datasets-examples/doc-formats-csv-1",
+            "Generic hf error: Unsupported schema df in url df://datasets/datasets-examples/doc-formats-csv-1, only 'hf' is supported"
+        );
+
+        test_parse_hf_url_error_matches(
+            "hf://datadicts/datasets-examples/doc-formats-csv-1/data.csv",
+            "Generic hf error: Unsupported repository type: datadicts, currently only 'datasets' or 'spaces' are supported"
+        );
+
+        test_parse_hf_url_error_matches(
+            "hf://datasets/datasets-examples/doc-formats-csv-1",
+            "Generic hf error: Invalid huggingface url: hf://datasets/datasets-examples/doc-formats-csv-1, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'"
+        );
+    }
+
+    fn test_parse_hf_url_error_matches(url: &str, expected_error: &str) {
+        let parsed_url_result = ParsedHFUrl::parse_hf_style_url(url);
+
+        assert!(parsed_url_result.is_err());
+        assert_eq!(parsed_url_result.unwrap_err().to_string(), expected_error);
+    }
+
+    #[test]
     fn test_parse_http_url() {
-        let path = "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv";
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "main";
+        let path = "data.csv";
+
+        let url = format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_http_style_path(&url).unwrap();
+
+        assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
+        assert_eq!(parsed_url.repository, Some(repository.to_string()));
+        assert_eq!(parsed_url.revision, Some(revision.to_string()));
+        assert_eq!(parsed_url.path, Some(path.to_string()));
     }
 
     #[test]
-    fn test_file_path() {
-        let url = "hf://datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
+    fn test_parse_http_url_with_revision() {
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "~parquet";
+        let path = "data.csv";
 
-        let parsed_url = ParsedHFUrl::parse_hf_style_url(url);
+        let url = format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_http_style_path(&url).unwrap();
 
-        assert!(parsed_url.is_ok());
-
-        let file_path = parsed_url.unwrap().file_path();
-
-        assert_eq!(
-            file_path,
-            "datasets/datasets-examples/doc-formats-csv-1/resolve/main/data.csv"
-        );
+        assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
+        assert_eq!(parsed_url.repository, Some(repository.to_string()));
+        assert_eq!(parsed_url.revision, Some(revision.to_string()));
+        assert_eq!(parsed_url.path, Some(path.to_string()));
     }
 
     #[test]
-    fn test_tree_path() {
-        let url = "datasets/datasets-examples/doc-formats-csv-1/data.csv".to_string();
-
-        let parsed_url = ParsedHFUrl::parse_hf_style_url(url);
-
-        assert!(parsed_url.is_ok());
-
-        let tree_path = parsed_url.unwrap().tree_path();
-
-        assert_eq!(
-            tree_path,
-            "api/datasets/datasets-examples/doc-formats-csv-1/tree/main/data.csv"
+    fn test_parse_http_url_error() {
+        test_parse_http_url_error_matches(
+            "datasets/datasets-examples/doc-formats-csv-1",
+            "Generic hf error: Unable to parse location datasets/datasets-examples/doc-formats-csv-1 into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'"
         );
+
+        test_parse_http_url_error_matches(
+            "datasets/datasets-examples/doc-formats-csv-1/data.csv",
+            "Generic hf error: Unable to parse location datasets/datasets-examples/doc-formats-csv-1/data.csv into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'"
+        );
+
+        test_parse_http_url_error_matches(
+            "datasets/datasets-examples/doc-formats-csv-1/resolve/main",
+            "Generic hf error: Unable to parse location datasets/datasets-examples/doc-formats-csv-1/resolve/main into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'"
+        );
+    }
+
+    fn test_parse_http_url_error_matches(url: &str, expected_error: &str) {
+        let parsed_url_result = ParsedHFUrl::parse_http_style_path(url);        
+        assert!(parsed_url_result.is_err());
+        assert_eq!(parsed_url_result.unwrap_err().to_string(), expected_error);
+    }
+
+    #[test]
+    fn test_as_hf_path() {
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let path = "data.csv";
+
+        let url = format!("hf://{}/{}/{}", repo_type, repository, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_hf_path(), format!("{}/{}", repository, path));
+
+        let revision = "~parquet";
+        let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_hf_path(), format!("{}@{}/{}", repository, revision, path));
+    }
+
+    #[test]
+    fn test_as_location() {
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "main";
+        let path = "data.csv";
+
+        let url = format!("hf://{}/{}/{}", repo_type, repository, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_location(), format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path));
+
+        let revision = "~parquet";
+        let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_location(), format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path));
+    }
+
+    #[test]
+    fn test_as_location_dir() {
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "main";
+        let path = "data.csv";
+
+        let url = format!("hf://{}/{}/{}", repo_type, repository, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_location_dir(), format!("{}/{}/resolve/{}", repo_type, repository, revision));
+
+        let revision = "~parquet";
+        let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_location_dir(), format!("{}/{}/resolve/{}", repo_type, repository, revision));
+    }
+
+    #[test]
+    fn test_as_tree_location() {
+        let repo_type = "datasets";
+        let repository = "datasets-examples/doc-formats-csv-1";
+        let revision = "main";
+        let path = "data.csv";
+
+        let url = format!("hf://{}/{}/{}", repo_type, repository, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_tree_location(), format!("api/{}/{}/tree/{}/{}", repo_type, repository, revision, path));
+
+        let revision = "~parquet";
+        let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
+        let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
+
+        assert_eq!(parsed_url.as_tree_location(), format!("api/{}/{}/tree/{}/{}", repo_type, repository, revision, path));
     }
 }
