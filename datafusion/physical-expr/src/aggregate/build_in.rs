@@ -673,6 +673,7 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_min_max() -> Result<()> {
         let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
