@@ -360,7 +360,6 @@ impl CommonSubexprEliminate {
                         let out_name = qualified_name(qualifier.as_ref(), field.name());
 
                         agg_exprs.push(expr_rewritten.alias(&id));
-                        // TODO: I dislike the alias here, but can't remove it atm
                         proj_exprs
                             .push(Expr::Column(Column::from_name(id)).alias(out_name));
                     }
