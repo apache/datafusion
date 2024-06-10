@@ -1926,14 +1926,14 @@ pub enum AggregateFunction {
     ApproxDistinct = 5,
     ArrayAgg = 6,
     /// VARIANCE = 7;
-    VariancePop = 8,
+    /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
     Correlation = 13,
     ApproxPercentileCont = 14,
-    ApproxMedian = 15,
+    /// APPROX_MEDIAN = 15;
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     /// MEDIAN = 18;
@@ -1967,10 +1967,8 @@ impl AggregateFunction {
             AggregateFunction::Count => "COUNT",
             AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::VariancePop => "VARIANCE_POP",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxMedian => "APPROX_MEDIAN",
             AggregateFunction::ApproxPercentileContWithWeight => {
                 "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
             }
@@ -2002,10 +2000,8 @@ impl AggregateFunction {
             "COUNT" => Some(Self::Count),
             "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "VARIANCE_POP" => Some(Self::VariancePop),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_MEDIAN" => Some(Self::ApproxMedian),
             "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
                 Some(Self::ApproxPercentileContWithWeight)
             }

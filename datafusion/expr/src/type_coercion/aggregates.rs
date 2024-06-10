@@ -151,16 +151,6 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::VariancePop => {
-            if !is_variance_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64, Float64])
-        }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
                 return plan_err!(
@@ -237,16 +227,6 @@ pub fn coerce_types(
                     "The percentile argument for {:?} must be Float64, not {:?}.",
                     agg_fun,
                     input_types[2]
-                );
-            }
-            Ok(input_types.to_vec())
-        }
-        AggregateFunction::ApproxMedian => {
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
                 );
             }
             Ok(input_types.to_vec())

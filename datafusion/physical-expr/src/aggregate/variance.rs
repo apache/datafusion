@@ -17,102 +17,20 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::sync::Arc;
-
 use crate::aggregate::stats::StatsType;
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::Float64Array;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     compute::cast,
     datatypes::DataType,
-    datatypes::Field,
 };
 use datafusion_common::downcast_value;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-/// VAR_POP aggregate expression
-#[derive(Debug)]
-pub struct VariancePop {
-    name: String,
-    expr: Arc<dyn PhysicalExpr>,
-}
-
-impl VariancePop {
-    /// Create a new VAR_POP aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
-        // the result of variance just support FLOAT64 data type.
-        assert!(matches!(data_type, DataType::Float64));
-        Self {
-            name: name.into(),
-            expr,
-        }
-    }
-}
-
-impl AggregateExpr for VariancePop {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64, true))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(
-            StatsType::Population,
-        )?))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(
-            StatsType::Population,
-        )?))
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(&self.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(&self.name, "mean"),
-                DataType::Float64,
-                true,
-            ),
-            Field::new(format_state_name(&self.name, "m2"), DataType::Float64, true),
-        ])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl PartialEq<dyn Any> for VariancePop {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
-            .unwrap_or(false)
-    }
-}
+// TODO only holds the definition of `VarianceAccumulator` for use by `StddevAccumulator` in `physical-expr`,
+// which in turn only has it there for legacy `CorrelationAccumulator`, but this whole file should go away
+// once the latter is moved to `functions-aggregate`.
 
 /// An accumulator to compute variance
 /// The algrithm used is an online implementation and numerically stable. It is based on this paper:
@@ -254,101 +172,5 @@ impl Accumulator for VarianceAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::aggregate::utils::get_accum_scalar_values_as_arrays;
-    use crate::expressions::col;
-    use arrow::{array::*, datatypes::*};
-
-    #[test]
-    fn variance_f64_merge_1() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64]));
-
-        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-
-        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
-
-        let agg1 = Arc::new(VariancePop::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-
-        let agg2 = Arc::new(VariancePop::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-
-        let actual = merge(&batch1, &batch2, agg1, agg2)?;
-        assert!(actual == ScalarValue::from(2_f64));
-
-        Ok(())
-    }
-
-    #[test]
-    fn variance_f64_merge_2() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        let b = Arc::new(Float64Array::from(vec![None]));
-
-        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
-
-        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
-
-        let agg1 = Arc::new(VariancePop::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-
-        let agg2 = Arc::new(VariancePop::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-
-        let actual = merge(&batch1, &batch2, agg1, agg2)?;
-        assert!(actual == ScalarValue::from(2_f64));
-
-        Ok(())
-    }
-
-    fn merge(
-        batch1: &RecordBatch,
-        batch2: &RecordBatch,
-        agg1: Arc<dyn AggregateExpr>,
-        agg2: Arc<dyn AggregateExpr>,
-    ) -> Result<ScalarValue> {
-        let mut accum1 = agg1.create_accumulator()?;
-        let mut accum2 = agg2.create_accumulator()?;
-        let expr1 = agg1.expressions();
-        let expr2 = agg2.expressions();
-
-        let values1 = expr1
-            .iter()
-            .map(|e| {
-                e.evaluate(batch1)
-                    .and_then(|v| v.into_array(batch1.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let values2 = expr2
-            .iter()
-            .map(|e| {
-                e.evaluate(batch2)
-                    .and_then(|v| v.into_array(batch2.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        accum1.update_batch(&values1)?;
-        accum2.update_batch(&values2)?;
-        let state2 = get_accum_scalar_values_as_arrays(accum2.as_mut())?;
-        accum1.merge_batch(&state2)?;
-        accum1.evaluate()
     }
 }

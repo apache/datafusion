@@ -18,6 +18,7 @@
 pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod stats;
+pub mod tdigest;
 pub mod utils;
 
 use arrow::datatypes::{DataType, Field, Schema};
