@@ -869,7 +869,7 @@ mod test {
 
     use arrow::datatypes::Schema;
 
-    use datafusion_expr::logical_plan::table_scan;
+    use datafusion_expr::logical_plan::{table_scan, JoinType};
 
     use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_expr::{
@@ -1221,80 +1221,80 @@ mod test {
         Ok(())
     }
 
-    // #[test]
-    // fn redundant_project_fields() {
-    //     let table_scan = test_table_scan().unwrap();
-    //     let expr_stats_1 = ExprStats::from([
-    //         ("c+a".to_string(), (1, DataType::UInt32)),
-    //         ("b+a".to_string(), (1, DataType::UInt32)),
-    //     ]);
-    //     let common_exprs_1 = IndexMap::from([
-    //         ("c+a".to_string(), col("c") + col("a")),
-    //         ("b+a".to_string(), col("b") + col("a")),
-    //     ]);
-    //     let exprs_stats_2 = ExprStats::from([
-    //         ("c+a".to_string(), (1, DataType::UInt32)),
-    //         ("b+a".to_string(), (1, DataType::UInt32)),
-    //     ]);
-    //     let common_exprs_2 = IndexMap::from([
-    //         ("c+a".to_string(), col("c+a")),
-    //         ("b+a".to_string(), col("b+a")),
-    //     ]);
-    //     let project =
-    //         build_common_expr_project_plan(table_scan, common_exprs_1, &expr_stats_1)
-    //             .unwrap();
-    //     let project_2 =
-    //         build_common_expr_project_plan(project, common_exprs_2, &exprs_stats_2)
-    //             .unwrap();
-    //
-    //     let mut field_set = BTreeSet::new();
-    //     for name in project_2.schema().field_names() {
-    //         assert!(field_set.insert(name));
-    //     }
-    // }
-    //
-    // #[test]
-    // fn redundant_project_fields_join_input() {
-    //     let table_scan_1 = test_table_scan_with_name("test1").unwrap();
-    //     let table_scan_2 = test_table_scan_with_name("test2").unwrap();
-    //     let join = LogicalPlanBuilder::from(table_scan_1)
-    //         .join(table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
-    //         .unwrap()
-    //         .build()
-    //         .unwrap();
-    //     let expr_stats_1 = ExprStats::from([
-    //         ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
-    //         ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
-    //     ]);
-    //     let common_exprs_1 = IndexMap::from([
-    //         (
-    //             "test1.c+test1.a".to_string(),
-    //             col("test1.c") + col("test1.a"),
-    //         ),
-    //         (
-    //             "test1.b+test1.a".to_string(),
-    //             col("test1.b") + col("test1.a"),
-    //         ),
-    //     ]);
-    //     let expr_stats_2 = ExprStats::from([
-    //         ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
-    //         ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
-    //     ]);
-    //     let common_exprs_2 = IndexMap::from([
-    //         ("test1.c+test1.a".to_string(), col("test1.c+test1.a")),
-    //         ("test1.b+test1.a".to_string(), col("test1.b+test1.a")),
-    //     ]);
-    //     let project =
-    //         build_common_expr_project_plan(join, common_exprs_1, &expr_stats_1).unwrap();
-    //     let project_2 =
-    //         build_common_expr_project_plan(project, common_exprs_2, &expr_stats_2)
-    //             .unwrap();
-    //
-    //     let mut field_set = BTreeSet::new();
-    //     for name in project_2.schema().field_names() {
-    //         assert!(field_set.insert(name));
-    //     }
-    // }
+    #[test]
+    fn redundant_project_fields() {
+        let table_scan = test_table_scan().unwrap();
+        let expr_stats_1 = ExprStats::from([
+            ("c+a".to_string(), (1, DataType::UInt32)),
+            ("b+a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let common_exprs_1 = CommonExprs::from([
+            ("c+a".to_string(), col("c") + col("a")),
+            ("b+a".to_string(), col("b") + col("a")),
+        ]);
+        let exprs_stats_2 = ExprStats::from([
+            ("c+a".to_string(), (1, DataType::UInt32)),
+            ("b+a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let common_exprs_2 = CommonExprs::from([
+            ("c+a".to_string(), col("#1")),
+            ("b+a".to_string(), col("#2")),
+        ]);
+        let project =
+            build_common_expr_project_plan(table_scan, common_exprs_1, &expr_stats_1)
+                .unwrap();
+        let project_2 =
+            build_common_expr_project_plan(project, common_exprs_2, &exprs_stats_2)
+                .unwrap();
+
+        let mut field_set = BTreeSet::new();
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
+        }
+    }
+
+    #[test]
+    fn redundant_project_fields_join_input() {
+        let table_scan_1 = test_table_scan_with_name("test1").unwrap();
+        let table_scan_2 = test_table_scan_with_name("test2").unwrap();
+        let join = LogicalPlanBuilder::from(table_scan_1)
+            .join(table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr_stats_1 = ExprStats::from([
+            ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
+            ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let common_exprs_1 = CommonExprs::from([
+            (
+                "test1.c+test1.a".to_string(),
+                col("test1.c") + col("test1.a"),
+            ),
+            (
+                "test1.b+test1.a".to_string(),
+                col("test1.b") + col("test1.a"),
+            ),
+        ]);
+        let expr_stats_2 = ExprStats::from([
+            ("test1.c+test1.a".to_string(), (1, DataType::UInt32)),
+            ("test1.b+test1.a".to_string(), (1, DataType::UInt32)),
+        ]);
+        let common_exprs_2 = CommonExprs::from([
+            ("test1.c+test1.a".to_string(), col("#1")),
+            ("test1.b+test1.a".to_string(), col("#2")),
+        ]);
+        let project =
+            build_common_expr_project_plan(join, common_exprs_1, &expr_stats_1).unwrap();
+        let project_2 =
+            build_common_expr_project_plan(project, common_exprs_2, &expr_stats_2)
+                .unwrap();
+
+        let mut field_set = BTreeSet::new();
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
+        }
+    }
 
     #[test]
     fn eliminated_subexpr_datatype() {
