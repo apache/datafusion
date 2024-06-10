@@ -79,25 +79,29 @@ impl RewriteCycle {
     /// ```rust
     /// use datafusion_common::{
     ///     tree_node::{Transformed, TreeNodeRewriter},
-    ///     Result,
+    ///     Result, ScalarValue
     /// };
     /// use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
     ///
     /// use datafusion_optimizer::rewrite_cycle::RewriteCycle;
     ///
-    /// /// Evaluates addition of two constant literals
-    /// struct ConstAdditionRewriter {}
-    /// impl TreeNodeRewriter for ConstAdditionRewriter {
+    /// ///Rewrites a BinaryExpr with operator `op` using a function `f`
+    /// struct ConstBinaryExprRewriter {
+    ///     op: Operator,
+    ///     f: Box<dyn Fn(&ScalarValue, &ScalarValue) -> Result<Transformed<Expr>>>,
+    /// }
+    /// impl TreeNodeRewriter for ConstBinaryExprRewriter {
     ///     type Node = Expr;
+    ///     /// Rewrites BinaryExpr using the function
     ///     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
     ///         match node {
     ///             Expr::BinaryExpr(BinaryExpr {
     ///                 ref left,
     ///                 ref right,
-    ///                 op: Operator::Plus,
-    ///             }) => match (left.as_ref(), right.as_ref()) {
+    ///                 op,
+    ///             }) if op == self.op => match (left.as_ref(), right.as_ref()) {
     ///                 (Expr::Literal(left), Expr::Literal(right)) => {
-    ///                     Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
+    ///                     Ok((self.f)(left, right)?)
     ///                 }
     ///                 _ => Ok(Transformed::no(node)),
     ///             },
@@ -105,27 +109,21 @@ impl RewriteCycle {
     ///         }
     ///     }
     /// }
-    ///
-    /// /// Evaluates multiplication of two constant literals
-    /// struct ConstMultiplicationRewriter {}
-    /// impl TreeNodeRewriter for ConstMultiplicationRewriter {
-    ///     type Node = Expr;
-    ///     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-    ///         match node {
-    ///             Expr::BinaryExpr(BinaryExpr {
-    ///                 ref left,
-    ///                 ref right,
-    ///                 op: Operator::Multiply,
-    ///             }) => match (left.as_ref(), right.as_ref()) {
-    ///                 (Expr::Literal(left), Expr::Literal(right)) => {
-    ///                     Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
-    ///                 }
-    ///                 _ => Ok(Transformed::no(node)),
-    ///             },
-    ///             _ => Ok(Transformed::no(node)),
-    ///         }
-    ///     }
-    /// }
+    /// // create two rewriters for evaluating literals
+    /// // first rewriter evaluates addition expressions
+    /// let mut addition_rewriter = ConstBinaryExprRewriter {
+    ///     op: Operator::Plus,
+    ///     f: Box::new(|left, right| {
+    ///         Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
+    ///     }),
+    /// };
+    /// // second rewriter evaluates multiplication expression
+    /// let mut multiplication_rewriter = ConstBinaryExprRewriter {
+    ///     op: Operator::Multiply,
+    ///     f: Box::new(|left, right| {
+    ///         Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
+    ///     }),
+    /// };
     /// // Create an expression from constant literals
     /// let expr = lit(6) + (lit(4) * (lit(2) + (lit(3) * lit(5))));
     /// // Run rewriters in a loop until constant expression is fully evaluated
@@ -133,8 +131,8 @@ impl RewriteCycle {
     ///     .with_max_cycles(4)
     ///     .each_cycle(expr, |cycle_state| {
     ///         cycle_state
-    ///             .rewrite(&mut ConstAdditionRewriter {})?
-    ///             .rewrite(&mut ConstMultiplicationRewriter{})
+    ///             .rewrite(&mut addition_rewriter)?
+    ///             .rewrite(&mut multiplication_rewriter)
     ///     })
     ///     .unwrap();
     /// assert_eq!(evaluated_expr, lit(74));
@@ -283,7 +281,7 @@ pub type RewriteCycleControlFlow<T> = ControlFlow<Result<T>, T>;
 mod test {
     use datafusion_common::{
         tree_node::{Transformed, TreeNodeRewriter},
-        Result,
+        Result, ScalarValue,
     };
     use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 
@@ -307,40 +305,22 @@ mod test {
         }
     }
 
-    /// Evaluates addition of two constant literals
-    struct ConstAdditionRewriter {}
-    impl TreeNodeRewriter for ConstAdditionRewriter {
-        type Node = Expr;
-        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-            match node {
-                Expr::BinaryExpr(BinaryExpr {
-                    ref left,
-                    ref right,
-                    op: Operator::Plus,
-                }) => match (left.as_ref(), right.as_ref()) {
-                    (Expr::Literal(left), Expr::Literal(right)) => {
-                        Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
-                    }
-                    _ => Ok(Transformed::no(node)),
-                },
-                _ => Ok(Transformed::no(node)),
-            }
-        }
+    ///Rewrites a BinaryExpr with operator `op` using a function `f`
+    struct ConstBinaryExprRewriter {
+        op: Operator,
+        f: Box<dyn Fn(&ScalarValue, &ScalarValue) -> Result<Transformed<Expr>>>,
     }
-
-    /// Evaluates multiplication of two constant literals
-    struct ConstMultiplicationRewriter {}
-    impl TreeNodeRewriter for ConstMultiplicationRewriter {
+    impl TreeNodeRewriter for ConstBinaryExprRewriter {
         type Node = Expr;
         fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
             match node {
                 Expr::BinaryExpr(BinaryExpr {
                     ref left,
                     ref right,
-                    op: Operator::Multiply,
-                }) => match (left.as_ref(), right.as_ref()) {
+                    op,
+                }) if op == self.op => match (left.as_ref(), right.as_ref()) {
                     (Expr::Literal(left), Expr::Literal(right)) => {
-                        Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
+                        Ok((self.f)(left, right)?)
                     }
                     _ => Ok(Transformed::no(node)),
                 },
@@ -387,6 +367,18 @@ mod test {
     #[test]
     // test an example of const evaluation with two rewriters that depend on each other
     fn rewrite_cycle_const_evaluation() {
+        let mut addition_rewriter = ConstBinaryExprRewriter {
+            op: Operator::Plus,
+            f: Box::new(|left, right| {
+                Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
+            }),
+        };
+        let mut multiplication_rewriter = ConstBinaryExprRewriter {
+            op: Operator::Multiply,
+            f: Box::new(|left, right| {
+                Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
+            }),
+        };
         // Create an expression from constant literals
         let expr = lit(6) + (lit(4) * (lit(2) + (lit(3) * lit(5))));
         // Run rewriters in a loop until constant expression is fully evaluated
@@ -394,8 +386,8 @@ mod test {
             .with_max_cycles(4)
             .each_cycle(expr, |cycle_state| {
                 cycle_state
-                    .rewrite(&mut ConstAdditionRewriter {})?
-                    .rewrite(&mut ConstMultiplicationRewriter {})
+                    .rewrite(&mut addition_rewriter)?
+                    .rewrite(&mut multiplication_rewriter)
             })
             .unwrap();
         assert_eq!(evaluated_expr, lit(74));
@@ -409,8 +401,8 @@ mod test {
             .with_max_cycles(2)
             .each_cycle(expr, |cycle_state| {
                 cycle_state
-                    .rewrite(&mut ConstAdditionRewriter {})?
-                    .rewrite(&mut ConstMultiplicationRewriter {})
+                    .rewrite(&mut addition_rewriter)?
+                    .rewrite(&mut multiplication_rewriter)
             })
             .unwrap();
         assert_eq!(evaluated_expr, lit(6) + lit(68));
