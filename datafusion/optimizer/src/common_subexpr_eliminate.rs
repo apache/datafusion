@@ -329,8 +329,9 @@ impl CommonSubexprEliminate {
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
         } else {
+            let mut expr_number = common_exprs.len();
+
             let mut agg_exprs = common_exprs
-                .clone()
                 .into_iter()
                 .enumerate()
                 .map(|(index, (_, expr))| {
@@ -350,17 +351,12 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
-                        let expr_id = expr_identifier(&expr_rewritten, "".to_string());
-
-                        let expr_number =
-                            common_exprs.get_index_of(&expr_id).unwrap_or_else(|| {
-                                common_exprs.insert(expr_id, expr_rewritten.clone());
-                                common_exprs.len() - 1
-                            }) + 1;
-
+                        expr_number += 1;
                         let id = format!("#{}", expr_number);
+
                         let (qualifier, field) =
                             expr_rewritten.to_field(&new_input_schema)?;
+
                         let out_name = qualified_name(qualifier.as_ref(), field.name());
 
                         agg_exprs.push(expr_rewritten.alias(&id));
