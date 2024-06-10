@@ -51,11 +51,18 @@ pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
-    UnableToParseUrl { url: String, source: url::ParseError },
+    UnableToParseUrl {
+        url: String,
+        source: url::ParseError,
+    },
 
-    #[snafu(display("Unsupported schema {} in url {}, only 'hf' is supported", schema, url))]
+    #[snafu(display(
+        "Unsupported schema {} in url {}, only 'hf' is supported",
+        schema,
+        url
+    ))]
     UnsupportedUrlScheme { schema: String, url: String },
- 
+
     #[snafu(display("Invalid huggingface url: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'", url))]
     InvalidHfUrl { url: String },
 
@@ -64,42 +71,30 @@ pub enum Error {
 
     #[snafu(display("Unable to parse location {} into ParsedHFUrl, please format as '<repo_type>/<repository>/resolve/<revision>/<path>'", url))]
     InvalidLocation { url: String },
+
+    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    UnknownConfigurationKey { key: String },
 }
 
 impl From<Error> for ObjectStoreError {
     fn from(source: Error) -> Self {
         match source {
+            Error::UnknownConfigurationKey { key } => {
+                ObjectStoreError::UnknownConfigurationKey { store: STORE, key }
+            }
             _ => ObjectStoreError::Generic {
                 store: STORE,
-                source: Box::new(source)
+                source: Box::new(source),
             },
         }
     }
-} 
-
-pub enum HFConfigKey {
-    Endpoint,
-    UserAccessToken,
 }
 
-impl AsRef<str> for HFConfigKey {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Endpoint => "endpoint",
-            Self::UserAccessToken => "user_access_token",
-        }
-    }
-}
-
-impl FromStr for HFConfigKey {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "endpoint" => Ok(Self::Endpoint),
-            "user_access_token" => Ok(Self::UserAccessToken),
-            _ => config_err!("Invalid HuggingFace configuration key: {}", s),
-        }
+impl From<Error> for DataFusionError {
+    fn from(source: Error) -> Self {
+        // Only datafusion configuration errors are exposed in this mod.
+        // Other errors are aligned with generic object store errors.
+        DataFusionError::Configuration(source.to_string())
     }
 }
 
@@ -142,15 +137,17 @@ impl ParsedHFUrl {
         }
 
         // domain is the first part of the path, which are treated as the origin in the url.
-        let repo_type = url.domain().context(InvalidHfUrlSnafu { url: url.clone() })?;
-        
+        let repo_type = url
+            .domain()
+            .context(InvalidHfUrlSnafu { url: url.clone() })?;
+
         Ok(Self::parse_hf_style_path(repo_type, url.path())?)
     }
 
     /// Parse a HuggingFace path into a ParsedHFUrl struct.
     /// The path should be in the format `<user|org>/<repository>[@revision]/<path>` with given `repo_type`.
     /// where `repo_type` is either `datasets` or `spaces`.
-    /// 
+    ///
     /// repo_type: The repository type, either `datasets` or `spaces`.
     /// path: The HuggingFace path to parse.
     fn parse_hf_style_path(repo_type: &str, mut path: &str) -> ObjectStoreResult<Self> {
@@ -172,12 +169,17 @@ impl ParsedHFUrl {
         // - case 2: <user|org>/<repo>@<revision>/<path> where <user|org>/<repo> is the repository and <revision> is the revision.
         let path_parts = path.splitn(EXPECTED_PARTS, '/').collect::<Vec<&str>>();
         if path_parts.len() != EXPECTED_PARTS {
-            return Err(InvalidHfUrlSnafu { url: format!("hf://{}/{}", repo_type, path) }.build().into());
+            return Err(InvalidHfUrlSnafu {
+                url: format!("hf://{}/{}", repo_type, path),
+            }
+            .build()
+            .into());
         }
 
         let revision_parts = path_parts[1].splitn(2, '@').collect::<Vec<&str>>();
         if revision_parts.len() == 2 {
-            parsed_url.repository = Some(format!("{}/{}", path_parts[0], revision_parts[0]));
+            parsed_url.repository =
+                Some(format!("{}/{}", path_parts[0], revision_parts[0]));
             parsed_url.revision = Some(revision_parts[1].to_string());
         } else {
             parsed_url.repository = Some(format!("{}/{}", path_parts[0], path_parts[1]));
@@ -200,9 +202,13 @@ impl ParsedHFUrl {
 
         let path_parts = path.splitn(EXPECTED_PARTS, '/').collect::<Vec<&str>>();
         if path_parts.len() != EXPECTED_PARTS || path_parts[3] != "resolve" {
-            return Err(InvalidLocationSnafu { url: path.to_string() }.build().into());
+            return Err(InvalidLocationSnafu {
+                url: path.to_string(),
+            }
+            .build()
+            .into());
         }
-        
+
         parsed_url.repo_type = Some(path_parts[0].to_string());
         parsed_url.repository = Some(format!("{}/{}", path_parts[1], path_parts[2]));
         parsed_url.revision = Some(path_parts[4].to_string());
@@ -337,6 +343,34 @@ impl ExtensionOptions for HFOptions {
     }
 }
 
+pub enum HFConfigKey {
+    Endpoint,
+    UserAccessToken,
+}
+
+impl AsRef<str> for HFConfigKey {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Endpoint => "endpoint",
+            Self::UserAccessToken => "user_access_token",
+        }
+    }
+}
+
+impl FromStr for HFConfigKey {
+    type Err = ObjectStoreError;
+
+    fn from_str(s: &str) -> ObjectStoreResult<Self, Self::Err> {
+        match s {
+            "endpoint" => Ok(Self::Endpoint),
+            "user_access_token" => Ok(Self::UserAccessToken),
+            _ => Err(UnknownConfigurationKeySnafu { key: s.to_string() }
+                .build()
+                .into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HFStoreBuilder {
     endpoint: Option<String>,
@@ -368,6 +402,22 @@ impl HFStoreBuilder {
         self
     }
 
+    pub fn with_config_key(mut self, key: HFConfigKey, value: impl Into<String>) -> Self {
+        match key {
+            HFConfigKey::Endpoint => self.endpoint = Some(value.into()),
+            HFConfigKey::UserAccessToken => self.user_access_token = Some(value.into()),
+        }
+
+        self
+    }
+
+    pub fn get_config_key(&self, key: HFConfigKey) -> Option<String> {
+        match key {
+            HFConfigKey::Endpoint => self.endpoint.clone(),
+            HFConfigKey::UserAccessToken => self.user_access_token.clone(),
+        }
+    }
+
     pub fn from_env() -> Self {
         let mut builder = Self::new();
         if let Ok(endpoint) = env::var("HF_ENDPOINT") {
@@ -381,7 +431,7 @@ impl HFStoreBuilder {
         builder
     }
 
-    pub fn build(&self) -> Result<HFStore> {
+    pub fn build(&self) -> ObjectStoreResult<HFStore> {
         let mut inner_builder = HttpBuilder::new();
 
         let repo_type = self.repo_type.clone().unwrap_or("datasets".to_string());
@@ -405,9 +455,7 @@ impl HFStoreBuilder {
             }
         }
 
-        let builder = inner_builder.build().map_err(|e| {
-            DataFusionError::Execution(format!("Unable to build HFStore: {}", e))
-        })?;
+        let builder = inner_builder.build()?;
 
         Ok(HFStore::new(ep, repo_type, Arc::new(builder)))
     }
@@ -421,17 +469,15 @@ pub fn get_hf_object_store_builder(
 
     // The repo type is the first part of the path, which are treated as the origin in the process.
     let Some(repo_type) = url.domain() else {
-        return config_err!(
-            "Invalid HuggingFace URL: {}, please format as 'hf://<repo_type>/<repository>[@revision]/<path>'",
-            url
-        );
+        return Err(InvalidHfUrlSnafu {
+            url: url.to_string(),
+        }
+        .build()
+        .into());
     };
 
     if repo_type != "datasets" && repo_type != "spaces" {
-        return config_err!(
-            "Invalid HuggingFace URL: {}, currently only 'datasets' or 'spaces' are supported",
-            url
-        );
+        return Err(UnsupportedRepoTypeSnafu { repo_type }.build().into());
     }
 
     builder = builder.with_repo_type(repo_type);
@@ -516,7 +562,8 @@ impl ObjectStore for HFStore {
     ) -> ObjectStoreResult<GetResult> {
         let formatted_location = format!("{}/{}", self.repo_type, location);
 
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location.as_str()) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location.as_str())
+        else {
             return Err(ObjectStoreError::Generic {
                 store: STORE,
                 source: format!("Unable to parse url {location}").into(),
@@ -564,7 +611,8 @@ impl ObjectStore for HFStore {
         };
 
         let formatted_prefix = format!("{}/{}", self.repo_type, prefix);
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.as_str()) else {
+        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.as_str())
+        else {
             return futures::stream::once(async move {
                 Err(ObjectStoreError::Generic {
                     store: STORE,
@@ -609,9 +657,9 @@ impl ObjectStore for HFStore {
             .into_iter()
             .map(|result| {
                 result.and_then(|mut meta| {
-                    let Ok(location) =
-                        ParsedHFUrl::parse_http_style_path(meta.location.to_string().as_str())
-                    else {
+                    let Ok(location) = ParsedHFUrl::parse_http_style_path(
+                        meta.location.to_string().as_str(),
+                    ) else {
                         return Err(ObjectStoreError::Generic {
                             store: STORE,
                             source: format!("Unable to parse location {}", meta.location)
@@ -649,7 +697,7 @@ impl ObjectStore for HFStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::hf_store::ParsedHFUrl;
+    use crate::hf_store::{HFConfigKey, HFOptions, HFStoreBuilder, ParsedHFUrl};
 
     #[test]
     fn test_parse_hf_url() {
@@ -657,18 +705,19 @@ mod tests {
         let repository = "datasets-examples/doc-formats-csv-1";
         let revision = "main";
         let path = "data.csv";
-        
+
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
 
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
-        
+
         assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
         assert_eq!(parsed_url.repository, Some(repository.to_string()));
         assert_eq!(parsed_url.revision, Some(revision.to_string()));
         assert_eq!(parsed_url.path, Some(path.to_string()));
 
         let hf_path = format!("{}/{}", repository, path);
-        let parsed_path_url = ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
+        let parsed_path_url =
+            ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
 
         assert_eq!(parsed_path_url.repo_type, parsed_url.repo_type);
         assert_eq!(parsed_path_url.repository, parsed_url.repository);
@@ -685,17 +734,18 @@ mod tests {
 
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
-        
+
         assert_eq!(parsed_url.repo_type, Some(repo_type.to_string()));
         assert_eq!(parsed_url.repository, Some(repository.to_string()));
         assert_eq!(parsed_url.revision, Some(revision.to_string()));
         assert_eq!(parsed_url.path, Some(path.to_string()));
 
         let hf_path = format!("{}@{}/{}", repository, revision, path);
-        let parsed_path_url = ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
+        let parsed_path_url =
+            ParsedHFUrl::parse_hf_style_path(repo_type, &hf_path).unwrap();
 
         assert_eq!(parsed_path_url.repo_type, parsed_url.repo_type);
-        assert_eq!(parsed_path_url.repository, parsed_url.repository);        
+        assert_eq!(parsed_path_url.repository, parsed_url.repository);
         assert_eq!(parsed_path_url.revision, parsed_url.revision);
         assert_eq!(parsed_path_url.path, parsed_url.path);
     }
@@ -786,7 +836,7 @@ mod tests {
     }
 
     fn test_parse_http_url_error_matches(url: &str, expected_error: &str) {
-        let parsed_url_result = ParsedHFUrl::parse_http_style_path(url);        
+        let parsed_url_result = ParsedHFUrl::parse_http_style_path(url);
         assert!(parsed_url_result.is_err());
         assert_eq!(parsed_url_result.unwrap_err().to_string(), expected_error);
     }
@@ -806,7 +856,10 @@ mod tests {
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_hf_path(), format!("{}@{}/{}", repository, revision, path));
+        assert_eq!(
+            parsed_url.as_hf_path(),
+            format!("{}@{}/{}", repository, revision, path)
+        );
     }
 
     #[test]
@@ -819,13 +872,19 @@ mod tests {
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_location(), format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path));
+        assert_eq!(
+            parsed_url.as_location(),
+            format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path)
+        );
 
         let revision = "~parquet";
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_location(), format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path));
+        assert_eq!(
+            parsed_url.as_location(),
+            format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path)
+        );
     }
 
     #[test]
@@ -838,13 +897,19 @@ mod tests {
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_location_dir(), format!("{}/{}/resolve/{}", repo_type, repository, revision));
+        assert_eq!(
+            parsed_url.as_location_dir(),
+            format!("{}/{}/resolve/{}", repo_type, repository, revision)
+        );
 
         let revision = "~parquet";
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_location_dir(), format!("{}/{}/resolve/{}", repo_type, repository, revision));
+        assert_eq!(
+            parsed_url.as_location_dir(),
+            format!("{}/{}/resolve/{}", repo_type, repository, revision)
+        );
     }
 
     #[test]
@@ -857,12 +922,135 @@ mod tests {
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_tree_location(), format!("api/{}/{}/tree/{}/{}", repo_type, repository, revision, path));
+        assert_eq!(
+            parsed_url.as_tree_location(),
+            format!(
+                "api/{}/{}/tree/{}/{}",
+                repo_type, repository, revision, path
+            )
+        );
 
         let revision = "~parquet";
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_tree_location(), format!("api/{}/{}/tree/{}/{}", repo_type, repository, revision, path));
+        assert_eq!(
+            parsed_url.as_tree_location(),
+            format!(
+                "api/{}/{}/tree/{}/{}",
+                repo_type, repository, revision, path
+            )
+        );
+    }
+
+    #[test]
+    fn test_hf_store_builder() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "abc";
+
+        let builder = HFStoreBuilder::new()
+            .with_endpoint(endpoint)
+            .with_user_access_token(user_access_token);
+
+        assert_eq!(
+            builder.endpoint,
+            builder.get_config_key(HFConfigKey::Endpoint)
+        );
+        assert_eq!(
+            builder.user_access_token,
+            builder.get_config_key(HFConfigKey::UserAccessToken)
+        );
+    }
+
+    #[test]
+    fn test_hf_store_builder_default() {
+        let builder = HFStoreBuilder::new();
+
+        assert_eq!(builder.endpoint, None);
+        assert_eq!(builder.user_access_token, None);
+    }
+
+    #[test]
+    fn test_fn_store_from_config_key() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "abc";
+
+        let builder = HFStoreBuilder::new()
+            .with_config_key(HFConfigKey::Endpoint, endpoint)
+            .with_config_key(HFConfigKey::UserAccessToken, user_access_token);
+
+        assert_eq!(
+            builder.endpoint,
+            builder.get_config_key(HFConfigKey::Endpoint)
+        );
+        assert_eq!(
+            builder.user_access_token,
+            builder.get_config_key(HFConfigKey::UserAccessToken)
+        );
+    }
+
+    #[test]
+    fn test_hf_store_builder_from_env() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "abc";
+
+        let _ = std::env::set_var("HF_ENDPOINT", endpoint);
+        let _ = std::env::set_var("HF_USER_ACCESS_TOKEN", user_access_token);
+
+        let builder = HFStoreBuilder::from_env();
+
+        assert_eq!(
+            builder.endpoint,
+            builder.get_config_key(HFConfigKey::Endpoint)
+        );
+        assert_eq!(
+            builder.user_access_token,
+            builder.get_config_key(HFConfigKey::UserAccessToken)
+        );
+    }
+
+    #[test]
+    fn test_get_hf_object_store_builder() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "abc";
+
+        let url =
+            url::Url::parse("hf://datasets/datasets-examples/doc-formats-csv-1/data.csv")
+                .unwrap();
+        let options = HFOptions {
+            endpoint: Some(endpoint.to_string()),
+            user_access_token: Some(user_access_token.to_string()),
+        };
+
+        let builder = super::get_hf_object_store_builder(&url, &options).unwrap();
+
+        assert_eq!(builder.endpoint, Some(endpoint.to_string()));
+        assert_eq!(
+            builder.user_access_token,
+            Some(user_access_token.to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_hf_object_store_builder_error() {
+        let endpoint = "https://huggingface.co";
+        let user_access_token = "abc";
+
+        let url =
+            url::Url::parse("hf://datadicts/datasets-examples/doc-formats-csv-1/data.csv")
+                .unwrap();
+        let options = HFOptions {
+            endpoint: Some(endpoint.to_string()),
+            user_access_token: Some(user_access_token.to_string()),
+        };
+
+        let expected_error = super::get_hf_object_store_builder(&url, &options);
+        assert!(expected_error.is_err());
+
+        let expected_error = expected_error.unwrap_err();
+        assert_eq!(
+            expected_error.to_string(),
+            "Invalid or Unsupported Configuration: Unsupported repository type: datadicts, currently only 'datasets' or 'spaces' are supported"
+        );
     }
 }
