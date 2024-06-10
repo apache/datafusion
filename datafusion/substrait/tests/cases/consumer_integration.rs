@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! tests contains in <https://github.com/substrait-io/consumer-testing/tree/main/substrait_consumer/tests/integration/queries/tpch_substrait_plans>
+//! TPCH `substrait_consumer` tests
+//!
+//! This module tests that substrait plans as json encoded protobuf can be
+//! correctly read as DataFusion plans.
+//!
+//! The input data comes from  <https://github.com/substrait-io/consumer-testing/tree/main/substrait_consumer/tests/integration/queries/tpch_substrait_plans>
 
 #[cfg(test)]
 mod tests {
@@ -30,7 +35,7 @@ mod tests {
     #[tokio::test]
     async fn tpch_test_1() -> Result<()> {
         let ctx = create_context().await?;
-        let path = "tests/testdata/query_1.json";
+        let path = "tests/testdata/tpch_substrait_plans/query_1.json";
         let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
             File::open(path).expect("file not found"),
         ))
