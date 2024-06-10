@@ -82,6 +82,7 @@ pub mod expr_fn {
     pub use super::stddev::stddev;
     pub use super::stddev::stddev_pop;
     pub use super::sum::sum;
+    pub use super::variance::var_pop;
     pub use super::variance::var_sample;
 }
 
@@ -95,6 +96,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_pop_udaf(),
         median::median_udaf(),
         variance::var_samp_udaf(),
+        variance::var_pop_udaf(),
         stddev::stddev_udaf(),
         stddev::stddev_pop_udaf(),
         approx_median::approx_median_udaf(),

@@ -157,12 +157,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Avg, true) => {
             return not_impl_err!("AVG(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::VariancePop, false) => Arc::new(
-            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, data_type),
-        ),
-        (AggregateFunction::VariancePop, true) => {
-            return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::Correlation, false) => {
             Arc::new(expressions::Correlation::new(
                 input_phy_exprs[0].clone(),
@@ -328,7 +322,6 @@ pub fn create_aggregate_expr(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
-    use expressions::VariancePop;
 
     use super::*;
     use crate::expressions::{
@@ -680,45 +673,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_var_pop_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::VariancePop];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::VariancePop {
-                    assert!(result_agg_phy_exprs.as_any().is::<VariancePop>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    )
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_min_max() -> Result<()> {
         let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
