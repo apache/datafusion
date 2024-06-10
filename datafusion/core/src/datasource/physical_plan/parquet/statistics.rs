@@ -660,7 +660,7 @@ where
         Index::INT64(native_index) => native_index
             .indexes
             .iter()
-            .map(|x| x.null_count.and_then(|x| Some(x as u64)))
+            .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
         _ => unimplemented!(),
     });
