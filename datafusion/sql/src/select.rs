@@ -330,11 +330,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
             // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            LogicalPlanBuilder::from(input)
+            let plan = LogicalPlanBuilder::from(input)
                 .project(inner_projection_exprs)?
                 .unnest_columns_with_options(columns, unnest_options)?
                 .project(outer_projection_exprs)?
-                .build()
+                .build()?;
+            println!("plan after unnesting {}", plan.display_indent());
+            Ok(plan)
         }
     }
 

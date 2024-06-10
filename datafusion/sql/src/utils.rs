@@ -306,19 +306,31 @@ pub(crate) fn recursive_transform_unnest(
 
     // Specifically handle root level unnest expr, this is the only place
     // unnest on struct can be handled
-    if let Expr::Unnest(Unnest { expr: ref arg }) = original_expr {
-        return transform(&original_expr, arg);
-    }
+    // if let Expr::Unnest(Unnest { expr: ref arg }) = original_expr {
+    //     return transform(&original_expr, arg);
+    // }
+    let mut root_expr = vec![];
     let Transformed {
             data: transformed_expr,
             transformed,
             tnr: _,
-        } = original_expr.transform_up(|expr: Expr| {
+        } = original_expr.clone().transform_up(|expr: Expr| {
+            let is_root_expr = expr == original_expr;
+
+            println!("transforming expr: {:?}", expr);
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+                // TODO: why UDF is not transforming its input argument
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-                if let DataType::Struct(_) = data_type {
-                    return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                if is_root_expr{
+                    root_expr.extend(transform(&original_expr, arg)?);
+                    return Ok(Transformed::yes(expr));
                 }
+                if !is_root_expr {
+                    if let DataType::Struct(_) = data_type {
+                        return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                    }
+                }
+
                 let transformed_exprs = transform(&expr, arg)?;
                 Ok(Transformed::yes(transformed_exprs[0].clone()))
             } else {
@@ -338,7 +350,7 @@ pub(crate) fn recursive_transform_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
-        Ok(vec![transformed_expr])
+        Ok(root_expr)
     }
 }
 

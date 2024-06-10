@@ -136,8 +136,9 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Unnest(_)
             | Expr::Literal(_) => Transformed::no(self),
+            Expr::Unnest(Unnest { expr, .. }) => transform_box(expr, &mut f)?
+                .update_data(|be| Expr::Unnest(Unnest::new_boxed(be))),
             Expr::Alias(Alias {
                 expr,
                 relation,
@@ -272,6 +273,10 @@ impl TreeNode for Expr {
             }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                println!("transforming scalar functions {}", func.name());
+                for item in args.iter() {
+                    dbg!(&item);
+                }
                 transform_vec(args, &mut f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
                         func, new_args,
