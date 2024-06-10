@@ -2396,7 +2396,7 @@ CREATE TABLE doubles (
 ;
 
 # common subexpr with alias
-query RRR rowsort
+query RRR
 select f64, round(1.0 / f64) as i64_1, acos(round(1.0 / f64)) from doubles;
 ----
 10.1 0 1.570796326795

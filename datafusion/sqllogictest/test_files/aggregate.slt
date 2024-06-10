@@ -3781,11 +3781,21 @@ Y 2021-01-01 2021-01-01T00:00:00
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+statement error
 SELECT avg(date32), avg(date64) FROM t
+----
+DataFusion error: Error during planning: No function matches the given name and argument types 'AVG(Date32)'. You might need to add explicit type casts.
+	Candidate functions:
+	AVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+
+statement error
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+DataFusion error: Error during planning: No function matches the given name and argument types 'AVG(Date32)'. You might need to add explicit type casts.
+	Candidate functions:
+	AVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)
+
 
 
 statement ok
@@ -4142,27 +4152,27 @@ INSERT INTO test_table VALUES
   (3, 10, NULL)
 
 # query_group_by_with_filter
-query III rowsort
+query III
 SELECT
   c1,
   SUM(c2) FILTER (WHERE c2 >= 20),
   SUM(c2) FILTER (WHERE c2 < 1) -- no rows pass filter, so the output should be NULL
 FROM test_table GROUP BY c1
 ----
-1 20 NULL
 2 20 NULL
+1 20 NULL
 3 NULL NULL
 
 # query_group_by_avg_with_filter
-query IRR rowsort
+query IRR
 SELECT
   c1,
   AVG(c2) FILTER (WHERE c2 >= 20),
   AVG(c2) FILTER (WHERE c2 < 1)  -- no rows pass filter, so output should be null
 FROM test_table GROUP BY c1
 ----
-1 20 NULL
 2 20 NULL
+1 20 NULL
 3 NULL NULL
 
 # query_group_by_with_multiple_filters
@@ -4205,15 +4215,15 @@ FROM test_table
 2
 
 # query_with_and_without_filter
-query III rowsort
+query III
 SELECT
   c1,
   SUM(c2) FILTER (WHERE c2 >= 20) as result,
   SUM(c2) as result_no_filter
 FROM test_table GROUP BY c1;
 ----
-1 20 30
 2 20 30
+1 20 30
 3 NULL 10
 
 # query_filter_on_different_column_than_aggregate
@@ -4316,8 +4326,11 @@ select avg(distinct x_dict) from value_dict;
 ----
 3
 
-statement error DataFusion error: This feature is not implemented: AVG\(DISTINCT\) aggregations are not available
+statement error
 select avg(x_dict), avg(distinct x_dict) from value_dict;
+----
+DataFusion error: This feature is not implemented: AVG(DISTINCT) aggregations are not available
+
 
 query I
 select min(x_dict) from value_dict;
@@ -4758,7 +4771,7 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 ----
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
-query TRRRRRRRRR rowsort
+query TRRRRRRRRR
 select 
     column3, 
     regr_slope(column2, column1),
@@ -4773,9 +4786,9 @@ select
 from (values (1,2,'a'), (2,4,'a'), (1,3,'b'), (3,9,'b'), (1,10,'c'), (NULL,100,'c'))
 group by column3;
 ----
-a 2 0 2 1 1.5 3 0.5 2 1
-b 3 0 2 1 2 6 2 18 6
 c NULL NULL 1 NULL 1 10 0 0 0
+b 3 0 2 1 2 6 2 18 6
+a 2 0 2 1 1.5 3 0.5 2 1
 
 
 
