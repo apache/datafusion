@@ -1253,8 +1253,8 @@ impl SessionContext {
     ///
     /// Notes:
     ///
-    /// 1. `query_execution_start_time` us set to the current time for the
-    /// returned state
+    /// 1. `query_execution_start_time` is set to the current time for the
+    /// returned state.
     ///
     /// 2. The returned state is not shared with the current session state
     /// and this changes to the returned `SessionState` such as changing
