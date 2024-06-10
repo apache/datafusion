@@ -442,7 +442,7 @@ impl TreeNodeRewriter for Canonicalizer {
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
-pub struct ConstEvaluator<'a> {
+struct ConstEvaluator<'a> {
     /// `can_evaluate` is used during the depth-first-search of the
     /// `Expr` tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -463,7 +463,8 @@ pub struct ConstEvaluator<'a> {
 }
 
 /// The simplify result of ConstEvaluator
-pub enum ConstSimplifyResult {
+#[allow(dead_code)]
+enum ConstSimplifyResult {
     // Expr was simplifed and contains the new expression
     Simplified(ScalarValue),
     // Expr was not simplified and original value is returned
@@ -661,7 +662,7 @@ impl<'a> ConstEvaluator<'a> {
 /// * `false = true` and `true = false` to `false`
 /// * `!!expr` to `expr`
 /// * `expr = null` and `expr != null` to `null`
-pub struct Simplifier<'a, S> {
+struct Simplifier<'a, S> {
     info: &'a S,
 }
 

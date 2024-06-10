@@ -77,48 +77,70 @@ impl RewriteCycle {
     /// result, indicating whether the loop should break or continue.
     ///
     /// ```rust
+    /// use datafusion_common::{
+    ///     tree_node::{Transformed, TreeNodeRewriter},
+    ///     Result,
+    /// };
+    /// use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
     ///
-    /// use arrow::datatypes::{Schema, Field, DataType};
-    /// use datafusion_expr::{col, lit};
-    /// use datafusion_common::{DataFusionError, ToDFSchema};
-    /// use datafusion_expr::execution_props::ExecutionProps;
-    /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_optimizer::rewrite_cycle::RewriteCycle;
-    /// use datafusion_optimizer::simplify_expressions::{Simplifier, ConstEvaluator};
     ///
-    /// // Create the schema
-    /// let schema = Schema::new(vec![
-    ///     Field::new("c1", DataType::Int64, true),
-    ///     Field::new("c2", DataType::UInt32, true),
-    /// ]).to_dfschema_ref().unwrap();
+    /// /// Evaluates addition of two constant literals
+    /// struct ConstAdditionRewriter {}
+    /// impl TreeNodeRewriter for ConstAdditionRewriter {
+    ///     type Node = Expr;
+    ///     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+    ///         match node {
+    ///             Expr::BinaryExpr(BinaryExpr {
+    ///                 ref left,
+    ///                 ref right,
+    ///                 op: Operator::Plus,
+    ///             }) => match (left.as_ref(), right.as_ref()) {
+    ///                 (Expr::Literal(left), Expr::Literal(right)) => {
+    ///                     Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
+    ///                 }
+    ///                 _ => Ok(Transformed::no(node)),
+    ///             },
+    ///             _ => Ok(Transformed::no(node)),
+    ///         }
+    ///     }
+    /// }
     ///
-    /// // Create the rewriters
-    /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
-    /// let mut simplifier = Simplifier::new(&context);
-    /// let mut const_evaluator = ConstEvaluator::try_new(&props).unwrap();
-    ///
-    /// // ((c4 < 1 or c3 < 2) and c3 < 3) and false
-    /// let expr = col("c2")
-    ///     .lt(lit(1))
-    ///     .or(col("c1").lt(lit(2)))
-    ///     .and(col("c1").lt(lit(3)))
-    ///     .and(lit(false));
-    ///
-    /// // run the rewrite cycle loop
-    /// let (expr, info) = RewriteCycle::new()
+    /// /// Evaluates multiplication of two constant literals
+    /// struct ConstMultiplicationRewriter {}
+    /// impl TreeNodeRewriter for ConstMultiplicationRewriter {
+    ///     type Node = Expr;
+    ///     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+    ///         match node {
+    ///             Expr::BinaryExpr(BinaryExpr {
+    ///                 ref left,
+    ///                 ref right,
+    ///                 op: Operator::Multiply,
+    ///             }) => match (left.as_ref(), right.as_ref()) {
+    ///                 (Expr::Literal(left), Expr::Literal(right)) => {
+    ///                     Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
+    ///                 }
+    ///                 _ => Ok(Transformed::no(node)),
+    ///             },
+    ///             _ => Ok(Transformed::no(node)),
+    ///         }
+    ///     }
+    /// }
+    /// // Create an expression from constant literals
+    /// let expr = lit(6) + (lit(4) * (lit(2) + (lit(3) * lit(5))));
+    /// // Run rewriters in a loop until constant expression is fully evaluated
+    /// let (evaluated_expr, info) = RewriteCycle::new()
     ///     .with_max_cycles(4)
     ///     .each_cycle(expr, |cycle_state| {
     ///         cycle_state
-    ///             .rewrite(&mut const_evaluator)?
-    ///             .rewrite(&mut simplifier)
-    ///     }).unwrap();
-    /// assert_eq!(expr, lit(false));
-    /// assert_eq!(info.completed_cycles(), 2);
-    /// assert_eq!(info.total_iterations(), 4);
+    ///             .rewrite(&mut ConstAdditionRewriter {})?
+    ///             .rewrite(&mut ConstMultiplicationRewriter{})
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(evaluated_expr, lit(74));
+    /// assert_eq!(info.completed_cycles(), 3);
+    /// assert_eq!(info.total_iterations(), 7);
     /// ```
-    ///
     pub fn each_cycle<
         Node: TreeNode,
         F: FnMut(
@@ -257,3 +279,142 @@ impl RewriteCycleInfo {
 }
 
 pub type RewriteCycleControlFlow<T> = ControlFlow<Result<T>, T>;
+#[cfg(test)]
+mod test {
+    use datafusion_common::{
+        tree_node::{Transformed, TreeNodeRewriter},
+        Result,
+    };
+    use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
+
+    use crate::rewrite_cycle::RewriteCycle;
+
+    /// Rewriter that does not make any change
+    struct IdentityRewriter {}
+    impl TreeNodeRewriter for IdentityRewriter {
+        type Node = Expr;
+        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            Ok(Transformed::no(node))
+        }
+    }
+
+    /// Rewriter that always sets transformed=true
+    struct AlwaysTransformedRewriter {}
+    impl TreeNodeRewriter for AlwaysTransformedRewriter {
+        type Node = Expr;
+        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            Ok(Transformed::yes(node))
+        }
+    }
+
+    /// Evaluates addition of two constant literals
+    struct ConstAdditionRewriter {}
+    impl TreeNodeRewriter for ConstAdditionRewriter {
+        type Node = Expr;
+        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            match node {
+                Expr::BinaryExpr(BinaryExpr {
+                    ref left,
+                    ref right,
+                    op: Operator::Plus,
+                }) => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(left), Expr::Literal(right)) => {
+                        Ok(Transformed::yes(Expr::Literal(left.add(right)?)))
+                    }
+                    _ => Ok(Transformed::no(node)),
+                },
+                _ => Ok(Transformed::no(node)),
+            }
+        }
+    }
+
+    /// Evaluates multiplication of two constant literals
+    struct ConstMultiplicationRewriter {}
+    impl TreeNodeRewriter for ConstMultiplicationRewriter {
+        type Node = Expr;
+        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            match node {
+                Expr::BinaryExpr(BinaryExpr {
+                    ref left,
+                    ref right,
+                    op: Operator::Multiply,
+                }) => match (left.as_ref(), right.as_ref()) {
+                    (Expr::Literal(left), Expr::Literal(right)) => {
+                        Ok(Transformed::yes(Expr::Literal(left.mul(right)?)))
+                    }
+                    _ => Ok(Transformed::no(node)),
+                },
+                _ => Ok(Transformed::no(node)),
+            }
+        }
+    }
+
+    #[test]
+    // cycle that makes no changes should complete exactly one cycle
+    fn rewrite_cycle_identity() {
+        let expr = lit(true);
+        let (expr, info) = RewriteCycle::new()
+            .with_max_cycles(50)
+            .each_cycle(expr, |cycle_state| {
+                cycle_state
+                    .rewrite(&mut IdentityRewriter {})?
+                    .rewrite(&mut IdentityRewriter {})?
+                    .rewrite(&mut IdentityRewriter {})
+            })
+            .unwrap();
+        assert_eq!(expr, lit(true));
+        assert_eq!(info.completed_cycles(), 1);
+        assert_eq!(info.total_iterations(), 3);
+    }
+
+    // rewriter that always transforms should complete all cycles
+    #[test]
+    fn rewrite_cycle_always_transforms() {
+        let expr = lit(true);
+        let (expr, info) = RewriteCycle::new()
+            .with_max_cycles(10)
+            .each_cycle(expr, |cycle_state| {
+                cycle_state
+                    .rewrite(&mut IdentityRewriter {})?
+                    .rewrite(&mut AlwaysTransformedRewriter {})
+            })
+            .unwrap();
+        assert_eq!(expr, lit(true));
+        assert_eq!(info.completed_cycles(), 10);
+        assert_eq!(info.total_iterations(), 20);
+    }
+
+    #[test]
+    // test an example of const evaluation with two rewriters that depend on each other
+    fn rewrite_cycle_const_evaluation() {
+        // Create an expression from constant literals
+        let expr = lit(6) + (lit(4) * (lit(2) + (lit(3) * lit(5))));
+        // Run rewriters in a loop until constant expression is fully evaluated
+        let (evaluated_expr, info) = RewriteCycle::new()
+            .with_max_cycles(4)
+            .each_cycle(expr, |cycle_state| {
+                cycle_state
+                    .rewrite(&mut ConstAdditionRewriter {})?
+                    .rewrite(&mut ConstMultiplicationRewriter {})
+            })
+            .unwrap();
+        assert_eq!(evaluated_expr, lit(74));
+        assert_eq!(info.completed_cycles(), 3);
+        assert_eq!(info.total_iterations(), 7);
+
+        // Same expression as before
+        let expr = lit(6) + (lit(4) * (lit(2) + (lit(3) * lit(5))));
+        // Use `with_max_cycles` to end rewriting earlier
+        let (evaluated_expr, info) = RewriteCycle::new()
+            .with_max_cycles(2)
+            .each_cycle(expr, |cycle_state| {
+                cycle_state
+                    .rewrite(&mut ConstAdditionRewriter {})?
+                    .rewrite(&mut ConstMultiplicationRewriter {})
+            })
+            .unwrap();
+        assert_eq!(evaluated_expr, lit(6) + lit(68));
+        assert_eq!(info.completed_cycles(), 2);
+        assert_eq!(info.total_iterations(), 4);
+    }
+}
