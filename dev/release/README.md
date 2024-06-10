@@ -274,6 +274,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/core && cargo publish)
+(cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
 ```
