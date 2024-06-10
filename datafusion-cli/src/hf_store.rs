@@ -74,6 +74,12 @@ pub enum Error {
 
     #[snafu(display("Configuration key: '{}' is not known.", key))]
     UnknownConfigurationKey { key: String },
+
+    #[snafu(display("Unable to parse tree result body, this is likely a change in the API side or a network issue, Error: {}", inner))]
+    UnableToParseTreeResult { inner: serde_json::Error },
+
+    #[snafu(display("Prefix is required for HuggingFace store"))]
+    PrefixRequired,
 }
 
 impl From<Error> for ObjectStoreError {
@@ -125,7 +131,7 @@ impl ParsedHFUrl {
     ///
     /// url: The HuggingFace URL to parse.
     pub fn parse_hf_style_url(url: &str) -> ObjectStoreResult<Self> {
-        let url = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
+        let url = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
 
         if url.scheme() != "hf" {
             return Err(UnsupportedUrlSchemeSnafu {
@@ -141,7 +147,7 @@ impl ParsedHFUrl {
             .domain()
             .context(InvalidHfUrlSnafu { url: url.clone() })?;
 
-        Ok(Self::parse_hf_style_path(repo_type, url.path())?)
+        Self::parse_hf_style_path(repo_type, url.path())
     }
 
     /// Parse a HuggingFace path into a ParsedHFUrl struct.
@@ -217,7 +223,7 @@ impl ParsedHFUrl {
         Ok(parsed_url)
     }
 
-    fn as_hf_path(&self) -> String {
+    fn to_hf_path(&self) -> String {
         let mut url = self.repository.as_deref().unwrap().to_string();
 
         if let Some(revision) = &self.revision {
@@ -233,15 +239,15 @@ impl ParsedHFUrl {
         url
     }
 
-    fn as_location(&self) -> String {
-        let mut url = self.as_location_dir();
+    fn to_location(&self) -> String {
+        let mut url = self.to_location_dir();
         url.push('/');
         url.push_str(self.path.as_deref().unwrap());
 
         url
     }
 
-    pub fn as_location_dir(&self) -> String {
+    pub fn to_location_dir(&self) -> String {
         let mut url = self.repo_type.clone().unwrap();
         url.push('/');
         url.push_str(self.repository.as_deref().unwrap());
@@ -251,7 +257,7 @@ impl ParsedHFUrl {
         url
     }
 
-    pub fn as_tree_location(&self) -> String {
+    pub fn to_tree_location(&self) -> String {
         let mut url = "api/".to_string();
         url.push_str(self.repo_type.as_deref().unwrap());
         url.push('/');
@@ -560,25 +566,12 @@ impl ObjectStore for HFStore {
         location: &Path,
         options: GetOptions,
     ) -> ObjectStoreResult<GetResult> {
-        let formatted_location = format!("{}/{}", self.repo_type, location);
+        let parsed_url = ParsedHFUrl::parse_hf_style_path(
+            &self.repo_type,
+            location.to_string().as_str(),
+        )?;
 
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_location.as_str())
-        else {
-            return Err(ObjectStoreError::Generic {
-                store: STORE,
-                source: format!("Unable to parse url {location}").into(),
-            });
-        };
-
-        let file_path = parsed_url.as_location();
-
-        let Ok(file_path) = Path::parse(file_path.clone()) else {
-            return Err(ObjectStoreError::Generic {
-                store: STORE,
-                source: format!("Invalid file path {}", file_path).into(),
-            });
-        };
-
+        let file_path = Path::parse(parsed_url.to_location())?;
         let mut res = self.store.get_opts(&file_path, options).await?;
 
         res.meta.location = location.clone();
@@ -602,53 +595,37 @@ impl ObjectStore for HFStore {
     ) -> BoxStream<'_, ObjectStoreResult<ObjectMeta>> {
         let Some(prefix) = prefix else {
             return futures::stream::once(async {
-                Err(ObjectStoreError::Generic {
-                    store: STORE,
-                    source: "Prefix is required".into(),
-                })
+                Err(PrefixRequiredSnafu {}.build().into())
             })
             .boxed();
         };
 
-        let formatted_prefix = format!("{}/{}", self.repo_type, prefix);
-        let Ok(parsed_url) = ParsedHFUrl::parse_hf_style_url(formatted_prefix.as_str())
-        else {
-            return futures::stream::once(async move {
-                Err(ObjectStoreError::Generic {
-                    store: STORE,
-                    source: format!("Unable to parse url {}", formatted_prefix.clone())
-                        .into(),
-                })
-            })
-            .boxed();
-        };
+        let parsed_url_result = ParsedHFUrl::parse_hf_style_path(
+            &self.repo_type,
+            prefix.to_string().as_str(),
+        );
 
-        let tree_path = parsed_url.as_tree_location();
-        let file_path_prefix = parsed_url.as_location_dir();
+        if let Err(err) = parsed_url_result {
+            return futures::stream::once(async { Err(err) }).boxed();
+        }
+
+        let parsed_url = parsed_url_result.unwrap();
+        let tree_location = parsed_url.to_tree_location();
+        let file_location_dir = parsed_url.to_location_dir();
 
         futures::stream::once(async move {
-            let result = self.store.get(&Path::parse(tree_path)?).await?;
-            let Ok(bytes) = result.bytes().await else {
-                return Err(ObjectStoreError::Generic {
-                    store: STORE,
-                    source: "Unable to get list body".into(),
-                });
-            };
+            let result = self.store.get(&Path::parse(tree_location)?).await?;
+            let bytes = result.bytes().await?;
 
-            let Ok(tree_result) =
+            let tree_result =
                 serde_json::from_slice::<Vec<HFTreeEntry>>(bytes.to_byte_slice())
-            else {
-                return Err(ObjectStoreError::Generic {
-                    store: STORE,
-                    source: "Unable to parse list body".into(),
-                });
-            };
+                    .map_err(|err| UnableToParseTreeResultSnafu { inner: err }.build())?;
 
             let iter = join_all(
                 tree_result
                     .into_iter()
                     .filter(|entry| entry.is_file())
-                    .map(|entry| format!("{}/{}", file_path_prefix, entry.path.clone()))
+                    .map(|entry| format!("{}/{}", file_location_dir, entry.path.clone()))
                     .map(|meta_location| async {
                         self.store.head(&Path::parse(meta_location)?).await
                     }),
@@ -657,17 +634,17 @@ impl ObjectStore for HFStore {
             .into_iter()
             .map(|result| {
                 result.and_then(|mut meta| {
-                    let Ok(location) = ParsedHFUrl::parse_http_style_path(
+                    match ParsedHFUrl::parse_http_style_path(
                         meta.location.to_string().as_str(),
-                    ) else {
-                        return Err(ObjectStoreError::Generic {
-                            store: STORE,
-                            source: format!("Unable to parse location {}", meta.location)
-                                .into(),
-                        });
-                    };
+                    ) {
+                        Ok(parsed_url) => {
+                            meta.location = Path::from_url_path(parsed_url.to_hf_path())?;
+                        }
+                        Err(err) => {
+                            return Err(err);
+                        }
+                    }
 
-                    meta.location = Path::from_url_path(location.as_hf_path())?;
                     if let Some(e_tag) = meta.e_tag.as_deref() {
                         meta.e_tag = Some(e_tag.replace('"', ""));
                     }
@@ -842,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn test_as_hf_path() {
+    fn test_to_hf_path() {
         let repo_type = "datasets";
         let repository = "datasets-examples/doc-formats-csv-1";
         let path = "data.csv";
@@ -850,20 +827,20 @@ mod tests {
         let url = format!("hf://{}/{}/{}", repo_type, repository, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
-        assert_eq!(parsed_url.as_hf_path(), format!("{}/{}", repository, path));
+        assert_eq!(parsed_url.to_hf_path(), format!("{}/{}", repository, path));
 
         let revision = "~parquet";
         let url = format!("hf://{}/{}@{}/{}", repo_type, repository, revision, path);
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_hf_path(),
+            parsed_url.to_hf_path(),
             format!("{}@{}/{}", repository, revision, path)
         );
     }
 
     #[test]
-    fn test_as_location() {
+    fn test_to_location() {
         let repo_type = "datasets";
         let repository = "datasets-examples/doc-formats-csv-1";
         let revision = "main";
@@ -873,7 +850,7 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_location(),
+            parsed_url.to_location(),
             format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path)
         );
 
@@ -882,13 +859,13 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_location(),
+            parsed_url.to_location(),
             format!("{}/{}/resolve/{}/{}", repo_type, repository, revision, path)
         );
     }
 
     #[test]
-    fn test_as_location_dir() {
+    fn test_to_location_dir() {
         let repo_type = "datasets";
         let repository = "datasets-examples/doc-formats-csv-1";
         let revision = "main";
@@ -898,7 +875,7 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_location_dir(),
+            parsed_url.to_location_dir(),
             format!("{}/{}/resolve/{}", repo_type, repository, revision)
         );
 
@@ -907,13 +884,13 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_location_dir(),
+            parsed_url.to_location_dir(),
             format!("{}/{}/resolve/{}", repo_type, repository, revision)
         );
     }
 
     #[test]
-    fn test_as_tree_location() {
+    fn test_to_tree_location() {
         let repo_type = "datasets";
         let repository = "datasets-examples/doc-formats-csv-1";
         let revision = "main";
@@ -923,7 +900,7 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_tree_location(),
+            parsed_url.to_tree_location(),
             format!(
                 "api/{}/{}/tree/{}/{}",
                 repo_type, repository, revision, path
@@ -935,7 +912,7 @@ mod tests {
         let parsed_url = ParsedHFUrl::parse_hf_style_url(url.as_str()).unwrap();
 
         assert_eq!(
-            parsed_url.as_tree_location(),
+            parsed_url.to_tree_location(),
             format!(
                 "api/{}/{}/tree/{}/{}",
                 repo_type, repository, revision, path
@@ -1036,9 +1013,10 @@ mod tests {
         let endpoint = "https://huggingface.co";
         let user_access_token = "abc";
 
-        let url =
-            url::Url::parse("hf://datadicts/datasets-examples/doc-formats-csv-1/data.csv")
-                .unwrap();
+        let url = url::Url::parse(
+            "hf://datadicts/datasets-examples/doc-formats-csv-1/data.csv",
+        )
+        .unwrap();
         let options = HFOptions {
             endpoint: Some(endpoint.to_string()),
             user_access_token: Some(user_access_token.to_string()),
