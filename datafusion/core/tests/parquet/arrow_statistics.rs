@@ -40,7 +40,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
-use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
@@ -159,7 +161,8 @@ impl TestReader {
 
         // open the file & get the reader
         let file = file.reopen().unwrap();
-        ArrowReaderBuilder::try_new(file).unwrap()
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
     }
 }
 
