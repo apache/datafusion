@@ -62,6 +62,9 @@ pub mod stddev;
 pub mod sum;
 pub mod variance;
 
+pub mod approx_median;
+pub mod approx_percentile_cont;
+
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::AggregateUDF;
@@ -70,6 +73,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::approx_median::approx_median;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
@@ -95,6 +99,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         variance::var_pop_udaf(),
         stddev::stddev_udaf(),
         stddev::stddev_pop_udaf(),
+        approx_median::approx_median_udaf(),
     ]
 }
 
