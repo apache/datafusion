@@ -47,8 +47,6 @@ pub enum AggregateFunction {
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
-    /// Variance (Population)
-    VariancePop,
     /// Correlation
     Correlation,
     /// Slope from linear regression
@@ -102,7 +100,6 @@ impl AggregateFunction {
             ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
-            VariancePop => "VAR_POP",
             Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
             RegrIntercept => "REGR_INTERCEPT",
@@ -153,7 +150,6 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "var_pop" => AggregateFunction::VariancePop,
             "regr_slope" => AggregateFunction::RegrSlope,
             "regr_intercept" => AggregateFunction::RegrIntercept,
             "regr_count" => AggregateFunction::RegrCount,
@@ -215,9 +211,6 @@ impl AggregateFunction {
             | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Ok(DataType::Boolean)
-            }
-            AggregateFunction::VariancePop => {
-                variance_return_type(&coerced_data_types[0])
             }
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
@@ -291,9 +284,7 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
-            AggregateFunction::Avg
-            | AggregateFunction::VariancePop
-            | AggregateFunction::ApproxMedian => {
+            AggregateFunction::Avg | AggregateFunction::ApproxMedian => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
