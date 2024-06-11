@@ -48,7 +48,7 @@ datafusion = { path = "../datafusion/core", version = "39.0.0", features = [
 dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"
-http= "1.1.0"
+http = "1.1.0"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.10.1", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }

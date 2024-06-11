@@ -961,8 +961,8 @@ mod tests {
         let endpoint = "https://huggingface.co";
         let user_access_token = "abc";
 
-        let _ = std::env::set_var("HF_ENDPOINT", endpoint);
-        let _ = std::env::set_var("HF_USER_ACCESS_TOKEN", user_access_token);
+        std::env::set_var("HF_ENDPOINT", endpoint);
+        std::env::set_var("HF_USER_ACCESS_TOKEN", user_access_token);
 
         let builder = HFStoreBuilder::from_env();
 
