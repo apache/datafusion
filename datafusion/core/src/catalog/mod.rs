@@ -27,6 +27,7 @@ use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 /// Represent a list of named [`CatalogProvider`]s.
@@ -157,11 +158,11 @@ impl CatalogProviderList for MemoryCatalogProviderList {
 /// access required to read table details (e.g. statistics).
 ///
 /// The pattern that DataFusion itself uses to plan SQL queries is to walk over
-/// the query to [find all schema / table references in an `async` function],
+/// the query to [find all table references],
 /// performing required remote catalog in parallel, and then plans the query
 /// using that snapshot.
 ///
-/// [find all schema / table references in an `async` function]: crate::execution::context::SessionState::resolve_table_references
+/// [find all table references]: resolve_table_references
 ///
 /// # Example Catalog Implementations
 ///
@@ -293,6 +294,118 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(None)
         }
     }
+}
+
+/// Resolve all table references in the SQL statement.
+///
+/// ## Example
+///
+/// ```
+/// use datafusion_sql::parser::DFParser;
+/// use datafusion::catalog::resolve_table_references;
+///
+/// let query = "SELECT a FROM foo where x IN (SELECT y FROM bar)";
+/// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+/// let table_refs = resolve_table_references(&statement, true).unwrap();
+/// assert_eq!(table_refs.len(), 2);
+/// assert_eq!(table_refs[0].to_string(), "foo");
+/// assert_eq!(table_refs[1].to_string(), "bar");
+/// ```
+pub fn resolve_table_references(
+    statement: &datafusion_sql::parser::Statement,
+    enable_ident_normalization: bool,
+) -> datafusion_common::Result<Vec<TableReference>> {
+    use crate::sql::planner::object_name_to_table_reference;
+    use datafusion_sql::parser::{
+        CopyToSource, CopyToStatement, Statement as DFStatement,
+    };
+    use information_schema::INFORMATION_SCHEMA;
+    use information_schema::INFORMATION_SCHEMA_TABLES;
+    use sqlparser::ast::*;
+
+    // Getting `TableProviders` is async but planing is not -- thus pre-fetch
+    // table providers for all relations referenced in this query
+    let mut relations = hashbrown::HashSet::with_capacity(10);
+
+    struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
+
+    impl<'a> RelationVisitor<'a> {
+        /// Record that `relation` was used in this statement
+        fn insert(&mut self, relation: &ObjectName) {
+            self.0.get_or_insert_with(relation, |_| relation.clone());
+        }
+    }
+
+    impl<'a> Visitor for RelationVisitor<'a> {
+        type Break = ();
+
+        fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
+            self.insert(relation);
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+            if let Statement::ShowCreate {
+                obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                obj_name,
+            } = statement
+            {
+                self.insert(obj_name)
+            }
+
+            // SHOW statements will later be rewritten into a SELECT from the information_schema
+            let requires_information_schema = matches!(
+                statement,
+                Statement::ShowFunctions { .. }
+                    | Statement::ShowVariable { .. }
+                    | Statement::ShowStatus { .. }
+                    | Statement::ShowVariables { .. }
+                    | Statement::ShowCreate { .. }
+                    | Statement::ShowColumns { .. }
+                    | Statement::ShowTables { .. }
+                    | Statement::ShowCollation { .. }
+            );
+            if requires_information_schema {
+                for s in INFORMATION_SCHEMA_TABLES {
+                    self.0.insert(ObjectName(vec![
+                        Ident::new(INFORMATION_SCHEMA),
+                        Ident::new(*s),
+                    ]));
+                }
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut visitor = RelationVisitor(&mut relations);
+    fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor<'_>) {
+        match statement {
+            DFStatement::Statement(s) => {
+                let _ = s.as_ref().visit(visitor);
+            }
+            DFStatement::CreateExternalTable(table) => {
+                visitor
+                    .0
+                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+            }
+            DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
+                CopyToSource::Relation(table_name) => {
+                    visitor.insert(table_name);
+                }
+                CopyToSource::Query(query) => {
+                    query.visit(visitor);
+                }
+            },
+            DFStatement::Explain(explain) => visit_statement(&explain.statement, visitor),
+        }
+    }
+
+    visit_statement(statement, &mut visitor);
+
+    relations
+        .into_iter()
+        .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+        .collect::<datafusion_common::Result<_>>()
 }
 
 #[cfg(test)]
