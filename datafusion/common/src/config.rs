@@ -1559,6 +1559,7 @@ config_namespace! {
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
+        pub double_quote: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
         pub date_format: Option<String>, default = None
@@ -1624,6 +1625,20 @@ impl CsvOptions {
         self
     }
 
+    /// Set true to indicate that the CSV quotes should be doubled.
+    /// - default to true
+    pub fn with_double_quote(mut self, double_quote: bool) -> Self {
+        self.double_quote = Some(double_quote);
+        self
+    }
+
+    /// Returns true if the CSV quotes should be doubled. If format options does not
+    /// specify whether quotes should be doubled, returns `None` (indicating that the
+    /// configuration should be consulted).
+    pub fn has_header(&self) -> Option<bool> {
+        self.double_quote
+    }
+
     /// Set a `CompressionTypeVariant` of CSV
     /// - defaults to `CompressionTypeVariant::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -1668,6 +1683,7 @@ pub enum FormatOptions {
     AVRO,
     ARROW,
 }
+
 impl Display for FormatOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {
