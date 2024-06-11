@@ -41,8 +41,6 @@ pub enum AggregateFunction {
     Max,
     /// Average
     Avg,
-    /// Approximate distinct function
-    ApproxDistinct,
     /// Aggregation into an array
     ArrayAgg,
     /// N'th value in a group according to some ordering
@@ -71,8 +69,6 @@ pub enum AggregateFunction {
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
     ApproxPercentileContWithWeight,
-    /// ApproxMedian
-    ApproxMedian,
     /// Grouping
     Grouping,
     /// Bit And
@@ -97,7 +93,6 @@ impl AggregateFunction {
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
-            ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
@@ -112,7 +107,6 @@ impl AggregateFunction {
             RegrSXY => "REGR_SXY",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
-            ApproxMedian => "APPROX_MEDIAN",
             Grouping => "GROUPING",
             BitAnd => "BIT_AND",
             BitOr => "BIT_OR",
@@ -160,8 +154,6 @@ impl FromStr for AggregateFunction {
             "regr_syy" => AggregateFunction::RegrSYY,
             "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
-            "approx_distinct" => AggregateFunction::ApproxDistinct,
-            "approx_median" => AggregateFunction::ApproxMedian,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
@@ -198,9 +190,7 @@ impl AggregateFunction {
             })?;
 
         match self {
-            AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-                Ok(DataType::Int64)
-            }
+            AggregateFunction::Count => Ok(DataType::Int64),
             AggregateFunction::Max | AggregateFunction::Min => {
                 // For min and max agg function, the returned type is same as input type.
                 // The coerced_data_types is same with input_types.
@@ -234,7 +224,6 @@ impl AggregateFunction {
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
@@ -261,9 +250,9 @@ impl AggregateFunction {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
             AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
-            AggregateFunction::ApproxDistinct
-            | AggregateFunction::Grouping
-            | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+            AggregateFunction::Grouping | AggregateFunction::ArrayAgg => {
+                Signature::any(1, Volatility::Immutable)
+            }
             AggregateFunction::Min | AggregateFunction::Max => {
                 let valid = STRINGS
                     .iter()
@@ -284,7 +273,8 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
-            AggregateFunction::Avg | AggregateFunction::ApproxMedian => {
+
+            AggregateFunction::Avg => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),

@@ -127,7 +127,13 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let arr = match part.to_lowercase().as_str() {
+        // to remove quotes at most 2 characters
+        let part_trim = part.trim_matches(|c| c == '\'' || c == '\"');
+        if ![2, 0].contains(&(part.len() - part_trim.len())) {
+            return exec_err!("Date part '{part}' not supported");
+        }
+
+        let arr = match part_trim.to_lowercase().as_str() {
             "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
             "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
             "month" => date_part_f64(array.as_ref(), DatePart::Month)?,

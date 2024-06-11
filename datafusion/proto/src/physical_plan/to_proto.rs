@@ -23,12 +23,12 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
-    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, Count, CumeDist, DistinctArrayAgg, DistinctBitXor,
-    DistinctCount, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min,
-    NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank,
-    RankType, Regr, RegrType, RowNumber, StringAgg, TryCastExpr, WindowShift,
+    ApproxPercentileCont, ApproxPercentileContWithWeight, ArrayAgg, Avg, BinaryExpr,
+    BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
+    Count, CumeDist, DistinctArrayAgg, DistinctBitXor, DistinctCount, Grouping,
+    InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
+    NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType,
+    RowNumber, StringAgg, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -260,8 +260,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::BoolAnd
     } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {
         protobuf::AggregateFunction::BoolOr
-    } else if aggr_expr.downcast_ref::<ApproxDistinct>().is_some() {
-        protobuf::AggregateFunction::ApproxDistinct
     } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
@@ -296,8 +294,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         .is_some()
     {
         protobuf::AggregateFunction::ApproxPercentileContWithWeight
-    } else if aggr_expr.downcast_ref::<ApproxMedian>().is_some() {
-        protobuf::AggregateFunction::ApproxMedian
     } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
         protobuf::AggregateFunction::StringAgg
     } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {

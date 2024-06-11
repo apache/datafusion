@@ -1850,6 +1850,9 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             len += 1;
         }
+        if !self.comment.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1894,6 +1897,10 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
         }
+        if !self.comment.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("comment", pbjson::private::base64::encode(&self.comment).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1924,6 +1931,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "comment",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1940,6 +1948,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             TimestampTzFormat,
             TimeFormat,
             NullValue,
+            Comment,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1973,6 +1982,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2004,6 +2014,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut comment__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2088,6 +2099,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             }
                             null_value__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Comment => {
+                            if comment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("comment"));
+                            }
+                            comment__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2103,6 +2122,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    comment: comment__.unwrap_or_default(),
                 })
             }
         }
