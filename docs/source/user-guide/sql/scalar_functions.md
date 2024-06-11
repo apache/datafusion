@@ -3524,7 +3524,6 @@ select named_struct('field_a', a, 'field_b', b) from t;
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
 
-
 ### `unnest (struct)`
 
 Unwraps struct fields into columns.
