@@ -119,7 +119,6 @@ async fn test_left_join_1k_filtered() {
     .await
 }
 
-#[ignore]
 #[tokio::test]
 async fn test_right_join_1k() {
     JoinFuzzTestCase::new(
