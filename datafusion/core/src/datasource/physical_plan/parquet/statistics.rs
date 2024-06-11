@@ -655,11 +655,10 @@ where
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef>
 where
-    I: Iterator<Item = &'a Index>,
+    I: Iterator<Item = (usize, &'a Index)>,
 {
-    // TODO: use len from col_offset_indexes
-    let iter = iterator.flat_map(|index| match index {
-        Index::NONE => vec![None],
+    let iter = iterator.flat_map(|(len, index)| match index {
+        Index::NONE => vec![None; len],
         Index::INT64(native_index) => native_index
             .indexes
             .iter()
@@ -991,6 +990,7 @@ impl<'a> StatisticsConverter<'a> {
     pub fn data_page_null_counts<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1002,9 +1002,13 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, row_group_indices));
         };
 
-        let iter = row_group_indices
-            .into_iter()
-            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
         null_counts_page_statistics(iter)
     }
 

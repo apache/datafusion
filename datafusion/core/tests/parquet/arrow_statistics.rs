@@ -273,7 +273,11 @@ impl<'a> Test<'a> {
             );
 
             let null_counts = converter
-                .data_page_null_counts(column_page_index, &row_group_indices)
+                .data_page_null_counts(
+                    column_page_index,
+                    column_offset_index,
+                    &row_group_indices,
+                )
                 .unwrap();
             assert_eq!(
                 &null_counts, &expected_null_counts,
