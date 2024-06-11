@@ -522,14 +522,14 @@ macro_rules! make_data_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = &'a Index>,
+            I: Iterator<Item = (usize, &'a Index)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = &'a Index>,
+            I: Iterator<Item = (usize, &'a Index)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -538,14 +538,14 @@ macro_rules! make_data_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = &'a Index>,
+            I: Iterator<Item = (usize, &'a Index)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 match next {
-                    Some(index) => match index {
+                    Some((len, index)) => match index {
                         $index_type(native_index) => Some(
                             native_index
                                 .indexes
@@ -553,11 +553,13 @@ macro_rules! make_data_page_stats_iterator {
                                 .map(|x| x.$func)
                                 .collect::<Vec<_>>(),
                         ),
-                        // No matching `Index` found.
-                        // Thus no statistics that can be extracted.
-                        // We return vec![None] to effectively
-                        // create an arrow null-array.
-                        _ => Some(vec![None]),
+                        // No matching `Index` found;
+                        // thus no statistics that can be extracted.
+                        // We return vec![None; len] to effectively
+                        // create an arrow null-array with the length
+                        // corresponding to the number of entries in
+                        // `ParquetOffsetIndex` per row group per column.
+                        _ => Some(vec![None; len]),
                     },
                     _ => None,
                 }
@@ -632,7 +634,7 @@ pub(crate) fn min_page_statistics<'a, I>(
     iterator: I,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = &'a Index>,
+    I: Iterator<Item = (usize, &'a Index)>,
 {
     get_data_page_statistics!(Min, data_type, iterator)
 }
@@ -644,7 +646,7 @@ pub(crate) fn max_page_statistics<'a, I>(
     iterator: I,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = &'a Index>,
+    I: Iterator<Item = (usize, &'a Index)>,
 {
     get_data_page_statistics!(Max, data_type, iterator)
 }
@@ -880,6 +882,7 @@ impl<'a> StatisticsConverter<'a> {
     pub fn data_page_mins<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -897,9 +900,13 @@ impl<'a> StatisticsConverter<'a> {
         // An `Index` contains a `NativeIndex` with a `Vec<PageIndex>`,
         // where each `PageIndex` contains information about the page's
         // statistics (e.g. min, max, or null_count).
-        let iter = row_group_indices
-            .into_iter()
-            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
         min_page_statistics(Some(data_type), iter)
     }
 
@@ -907,6 +914,7 @@ impl<'a> StatisticsConverter<'a> {
     pub fn data_page_maxes<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -918,9 +926,14 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, row_group_indices));
         };
 
-        let iter = row_group_indices
-            .into_iter()
-            .map(|rg_index| &column_page_index[*rg_index][parquet_index]);
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
+
         max_page_statistics(Some(data_type), iter)
     }
 

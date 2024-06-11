@@ -249,7 +249,11 @@ impl<'a> Test<'a> {
                 .collect::<Vec<_>>();
 
             let min = converter
-                .data_page_mins(column_page_index, &row_group_indices)
+                .data_page_mins(
+                    column_page_index,
+                    column_offset_index,
+                    &row_group_indices,
+                )
                 .unwrap();
             assert_eq!(
                 &min, &expected_min,
@@ -257,7 +261,11 @@ impl<'a> Test<'a> {
             );
 
             let max = converter
-                .data_page_maxes(column_page_index, &row_group_indices)
+                .data_page_maxes(
+                    column_page_index,
+                    column_offset_index,
+                    &row_group_indices,
+                )
                 .unwrap();
             assert_eq!(
                 &max, &expected_max,
