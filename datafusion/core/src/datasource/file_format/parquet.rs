@@ -462,11 +462,11 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    fetch_statistics_from_parqet_meta(&metadata, table_schema).await
+    fetch_statistics_from_parquet_meta(&metadata, table_schema).await
 }
 
 /// Read and parse the statistics of the ParquetMetaData
-async fn fetch_statistics_from_parqet_meta(
+pub async fn fetch_statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
@@ -1406,6 +1406,83 @@ mod tests {
             .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_statistics_from_parquet_metadata() -> Result<()> {
+        // Data for column c1: ["Foo", null, "bar"]
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
+
+        // Data for column c2: [1, 2, null]
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
+
+        // Use store_parquet to write each batch to its own file
+        // . batch1 written into first file and includes:
+        //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
+        // . batch2 written into second file and includes:
+        //    - column c2 that has 3 rows with one null. Stats min and max of int are avaialble and 1 and 2 respectively
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&ctx, &store, &files).await.unwrap();
+
+        // Fetch statistics for first file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let stats = fetch_statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        //
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        // column c1
+        let c1_stats = &stats.column_statistics[0];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c1_stats.max_value, Precision::Absent);
+        assert_eq!(c1_stats.min_value, Precision::Absent);
+        // column c2: missing from the file so the table treats all 3 rows as null
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
+        assert_eq!(
+            c2_stats.max_value,
+            Precision::Exact(ScalarValue::Int64(None))
+        );
+        assert_eq!(
+            c2_stats.min_value,
+            Precision::Exact(ScalarValue::Int64(None))
+        );
+
+        // Fetch statistics for second file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
+        let stats = fetch_statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        //
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        // column c1: missing from the file so the table treats all 3 rows as null
+        let c1_stats = &stats.column_statistics[0];
+        assert_eq!(c1_stats.null_count, Precision::Exact(3));
+        assert_eq!(
+            c1_stats.max_value,
+            Precision::Exact(ScalarValue::Utf8(None))
+        );
+        assert_eq!(
+            c1_stats.min_value,
+            Precision::Exact(ScalarValue::Utf8(None))
+        );
+        // column c2
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c2_stats.null_count, Precision::Exact(1));
+        assert_eq!(
+            c2_stats.max_value,
+            Precision::Exact(ScalarValue::Int64(Some(2)))
+        );
+        assert_eq!(
+            c2_stats.min_value,
+            Precision::Exact(ScalarValue::Int64(Some(1)))
+        );
 
         Ok(())
     }
