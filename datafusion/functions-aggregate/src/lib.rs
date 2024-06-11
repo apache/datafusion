@@ -55,8 +55,10 @@
 #[macro_use]
 pub mod macros;
 
+pub mod approx_distinct;
 pub mod covariance;
 pub mod first_last;
+pub mod hyperloglog;
 pub mod median;
 pub mod stddev;
 pub mod sum;
@@ -73,6 +75,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::approx_distinct;
     pub use super::approx_median::approx_median;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
@@ -100,6 +103,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         stddev::stddev_udaf(),
         stddev::stddev_pop_udaf(),
         approx_median::approx_median_udaf(),
+        approx_distinct::approx_distinct_udaf(),
     ]
 }
 

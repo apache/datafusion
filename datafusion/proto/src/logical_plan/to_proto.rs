@@ -117,7 +117,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::BoolAnd => Self::BoolAnd,
             AggregateFunction::BoolOr => Self::BoolOr,
             AggregateFunction::Count => Self::Count,
-            AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Correlation => Self::Correlation,
             AggregateFunction::RegrSlope => Self::RegrSlope,
@@ -392,9 +391,6 @@ pub fn serialize_expr(
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(fun) => {
                 let aggr_function = match fun {
-                    AggregateFunction::ApproxDistinct => {
-                        protobuf::AggregateFunction::ApproxDistinct
-                    }
                     AggregateFunction::ApproxPercentileCont => {
                         protobuf::AggregateFunction::ApproxPercentileCont
                     }
