@@ -235,12 +235,12 @@ impl<'a> Test<'a> {
             let column_page_index = reader
                 .metadata()
                 .column_index()
-                .expect("File should have column indices");
+                .expect("File should have column page indices");
 
             let column_offset_index = reader
                 .metadata()
                 .offset_index()
-                .expect("File should have column indices");
+                .expect("File should have column offset indices");
 
             let row_group_indices = row_groups
                 .iter()

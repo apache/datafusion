@@ -657,6 +657,7 @@ pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef
 where
     I: Iterator<Item = &'a Index>,
 {
+    // TODO: use len from col_offset_indexes
     let iter = iterator.flat_map(|index| match index {
         Index::NONE => vec![None],
         Index::INT64(native_index) => native_index
@@ -878,7 +879,57 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Arc::new(UInt64Array::from_iter(null_counts)))
     }
 
-    /// TODO: Docstring
+    /// Extract the minimum values from Data Page statistics.
+    ///
+    /// In Parquet files, in addition to the Column Chunk level statistics
+    /// (stored for each column for each row group) there are also
+    /// optional statistics stored for each data page, as part of
+    /// the [`ParquetColumnIndex`].
+    ///
+    /// Since a single Column Chunk is stored as one or more pages,
+    /// page level statistics can prune at a finer granularity.
+    ///
+    /// However since they are stored in a separate metadata
+    /// structure ([`Index`]) there is different code to extract them as
+    /// compared to arrow statistics.
+    ///
+    /// # Parameters:
+    ///
+    /// * `column_page_index`: The parquet column page indices, read from
+    /// [`ParquetMetadata::column_index()`]
+    ///
+    /// * `column_offset_index`: The parquet column offset indices, read from
+    /// [`ParquetMetadata::offset_index()`]
+    ///
+    /// * `row_group_indices`: The indices of the row groups, that are used to
+    /// extract the column page index and offset index on a per row group
+    /// per column basis.
+    ///
+    /// # Return Value
+    ///
+    /// The returned array contains 1 value for each `NativeIndex`
+    /// in the underlying `Index`es, in the same order as they appear
+    /// in `metadatas`.
+    ///
+    /// For example, if there are two `Index`es in `metadatas`:
+    /// 1. the first having `3` `PageIndex` entries
+    /// 2. the second having `2` `PageIndex` entries
+    ///
+    /// The returned array would have 5 rows.
+    ///
+    /// Each value is either:
+    /// * the minimum value for the page
+    /// * a null value, if the statistics can not be extracted
+    ///
+    /// Note that a null value does NOT mean the min value was actually
+    /// `null` it means it the requested statistic is unknown
+    ///
+    /// # Errors
+    ///
+    /// Reasons for not being able to extract the statistics include:
+    /// * the column is not present in the parquet file
+    /// * statistics for the pages are not present in the row group
+    /// * the stored statistic value can not be converted to the requested type
     pub fn data_page_mins<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
@@ -894,12 +945,6 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, row_group_indices));
         };
 
-        // TODO: Move into docstring
-        // Creates an iterator over each row group index
-        // that yields a `page_index::index::Index`.
-        // An `Index` contains a `NativeIndex` with a `Vec<PageIndex>`,
-        // where each `PageIndex` contains information about the page's
-        // statistics (e.g. min, max, or null_count).
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
@@ -907,10 +952,13 @@ impl<'a> StatisticsConverter<'a> {
 
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
+
         min_page_statistics(Some(data_type), iter)
     }
 
-    /// TODO: docstring
+    /// Extract the maximum values from Data Page statistics.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_maxes<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
@@ -937,7 +985,9 @@ impl<'a> StatisticsConverter<'a> {
         max_page_statistics(Some(data_type), iter)
     }
 
-    /// TODO: docstring
+    /// Extract the null counts from Data Page statistics.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
         &self,
         column_page_index: &ParquetColumnIndex,
@@ -958,7 +1008,23 @@ impl<'a> StatisticsConverter<'a> {
         null_counts_page_statistics(iter)
     }
 
-    /// TODO: docstring
+    /// Returns an [`ArrayRef`] with row counts for each row group.
+    ///
+    /// This function iterates over the given row group indexes and computes
+    /// the row count for each page in the specified column.
+    ///
+    /// # Parameters:
+    ///
+    /// * `column_offset_index`: The parquet column offset indices, read from
+    /// [`ParquetMetadata::offset_index()`]
+    ///
+    /// * `row_group_metadatas`: The metadata slice of the row groups, read
+    /// from [`ParquetMetadata::row_groups()`]
+    ///
+    /// * `row_group_indices`: The indices of the row groups, that are used to
+    /// extract the column offset index on a per row group per column basis.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_row_counts<I>(
         &self,
         column_offset_index: &ParquetOffsetIndex,
