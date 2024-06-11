@@ -582,7 +582,7 @@ impl ListingOptions {
 /// Given the hive style partitioning structure (e.g,. directories named
 /// `date=2024-06-01` and `date=2026-06-02`), `ListingTable` also adds a `date`
 /// column when reading the table:
-/// * The files in `table2/date=2024-06-01` will have the value `2024-06-02`
+/// * The files in `table2/date=2024-06-01` will have the value `2024-06-01`
 /// * The files in `table2/date=2024-06-02` will have the value `2024-06-02`.
 ///
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
