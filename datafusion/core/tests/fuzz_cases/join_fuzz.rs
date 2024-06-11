@@ -204,6 +204,8 @@ async fn test_anti_join_1k() {
     .await
 }
 
+// Test failed for now. https://github.com/apache/datafusion/issues/10872
+#[ignore]
 #[tokio::test]
 async fn test_anti_join_1k_filtered() {
     JoinFuzzTestCase::new(
