@@ -385,7 +385,7 @@ STORED AS parquet
 LOCATION "hf://datasets/cais/mmlu/astronomy/";
 ```
 
-or 
+or
 
 ```bash
 $ export HF_USER_ACCESS_TOKEN=******
@@ -400,7 +400,7 @@ LOCATION "hf://datasets/cais/mmlu/astronomy/";
 
 Supported configuration options are:
 
-| Environment Variable | Configuration Option | Description |
-| -------------------- | -------------------- | ----------- |
-| `HF_ENDPOINT` | `hf.endpoint` | Hugging Face endpoint |
+| Environment Variable   | Configuration Option   | Description                    |
+| ---------------------- | ---------------------- | ------------------------------ |
+| `HF_ENDPOINT`          | `hf.endpoint`          | Hugging Face endpoint          |
 | `HF_USER_ACCESS_TOKEN` | `hf.user_access_token` | Hugging Face user access token |
