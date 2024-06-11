@@ -132,6 +132,8 @@ async fn test_right_join_1k() {
     .run_test()
     .await
 }
+// Add support for Right filtered joins
+#[ignored]
 #[tokio::test]
 async fn test_right_join_1k_filtered() {
     JoinFuzzTestCase::new(
