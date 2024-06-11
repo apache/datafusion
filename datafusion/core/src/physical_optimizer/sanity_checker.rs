@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use itertools::izip;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -42,10 +43,7 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(|p| {
-            check_partition_requirements(check_sort_requirements(p)?.data)
-        })
-        .data()
+        plan.transform_down(|p| check_plan_sanity(p)).data()
     }
 
     fn name(&self) -> &str {
@@ -57,29 +55,39 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     }
 }
 
-pub fn check_sort_requirements(
+/// Ensures that the plan is pipeline friendly and the order and
+/// distribution requirements from its children are satisfied.
+pub fn check_plan_sanity(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let children = plan.children();
-    let sort_reqs = plan.required_input_ordering();
-    let children_len = children.len();
-    // TODO: Use izip!.
-    for i in 0..children_len {
-        let child = &children[i];
-        let child_sort_req = &sort_reqs[i];
+    if !plan.execution_mode().pipeline_friendly() {
+        return plan_err!("Plan {:?} is not pipeline friendly.", plan)
+    }
 
-        // No requirement for the child
-        if child_sort_req.is_none() {
-            continue;
-        }
+    for (child, child_sort_req, child_dist_req) in izip!(
+        plan.children().iter(),
+        plan.required_input_ordering().iter(),
+        plan.required_input_distribution().iter()
+    ) {
+        let child_eq_props = child.equivalence_properties();
+        match child_sort_req {
+            None => (),
+            Some(child_sort_req) => {
+                if !child_eq_props.ordering_satisfy_requirement(&child_sort_req) {
+                    return plan_err!(
+                        "Child: {:?} does not satisfy parent order requirements",
+                        child
+                    );
+                }
+            }
+        };
 
-        let child_sort_req = child_sort_req.as_ref().unwrap();
         if !child
-            .equivalence_properties()
-            .ordering_satisfy_requirement(&child_sort_req)
+            .output_partitioning()
+            .satisfy(&child_dist_req, child_eq_props)
         {
             return plan_err!(
-                "Child: {:?} does not satisfy parent order requirements",
+                "Child: {:?} does not satisfy parent distribution requirements",
                 child
             );
         }
@@ -88,18 +96,12 @@ pub fn check_sort_requirements(
     Ok(Transformed::no(plan))
 }
 
-pub fn check_partition_requirements(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    Ok(Transformed::no(plan))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::physical_optimizer::test_utils::{
-        bounded_window_exec, memory_exec, sort_exec, sort_expr_options
+        bounded_window_exec, memory_exec, sort_exec, sort_expr_options,
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
