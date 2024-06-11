@@ -3438,7 +3438,7 @@ are not allowed
 
 - [struct](#struct)
 - [named_struct](#named_struct)
-- [unnest](#id214)
+- [unnest](#unnest-struct)
 
 ### `struct`
 
@@ -3525,7 +3525,7 @@ select named_struct('field_a', a, 'field_b', b) from t;
   string operators.
 
 
-### `unnest`
+### `unnest (struct)`
 
 Unwraps struct fields into columns.
 
