@@ -826,12 +826,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(
-            column,
-            column_expr,
-            field,
-            StatisticsType::NullCount,
-        )
+        self.stat_column_expr(column, column_expr, field, StatisticsType::NullCount)
     }
 
     /// rewrite col --> col_row_count
@@ -841,12 +836,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(
-            column,
-            column_expr,
-            field,
-            StatisticsType::RowCount,
-        )
+        self.stat_column_expr(column, column_expr, field, StatisticsType::RowCount)
     }
 }
 
