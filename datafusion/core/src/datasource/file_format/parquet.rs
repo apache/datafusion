@@ -462,6 +462,14 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
+    fetch_statistics_from_parqet_meta(&metadata, table_schema).await
+}
+
+/// Read and parse the statistics of the ParquetMetaData
+async fn fetch_statistics_from_parqet_meta(
+    metadata: &ParquetMetaData,
+    table_schema: SchemaRef,
+) -> Result<Statistics> {
     let file_metadata = metadata.file_metadata();
 
     let file_schema = parquet_to_arrow_schema(
