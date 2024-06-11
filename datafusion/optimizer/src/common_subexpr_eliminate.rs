@@ -788,17 +788,18 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         if matches!(expr, Expr::Alias(_)) {
             self.alias_counter -= 1
         }
+
         Ok(Transformed::no(expr))
     }
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
-        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
-        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
         if matches!(expr, Expr::Alias(_)) {
             self.alias_counter += 1;
         }
 
+        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
+        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
+        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
         if expr.short_circuits() || expr.is_volatile()? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
