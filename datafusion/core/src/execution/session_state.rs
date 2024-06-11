@@ -531,6 +531,27 @@ impl SessionState {
                 {
                     self.insert(obj_name)
                 }
+
+                // SHOW statements will later be rewritten into a SELECT from the information_schema
+                let requires_information_schema = matches!(
+                    statement,
+                    Statement::ShowFunctions { .. }
+                        | Statement::ShowVariable { .. }
+                        | Statement::ShowStatus { .. }
+                        | Statement::ShowVariables { .. }
+                        | Statement::ShowCreate { .. }
+                        | Statement::ShowColumns { .. }
+                        | Statement::ShowTables { .. }
+                        | Statement::ShowCollation { .. }
+                );
+                if requires_information_schema {
+                    for s in INFORMATION_SCHEMA_TABLES {
+                        self.0.insert(ObjectName(vec![
+                            Ident::new(INFORMATION_SCHEMA),
+                            Ident::new(*s),
+                        ]));
+                    }
+                }
                 ControlFlow::Continue(())
             }
         }
@@ -561,16 +582,6 @@ impl SessionState {
         }
 
         visit_statement(statement, &mut visitor);
-
-        // Always include information_schema if available
-        if self.config.information_schema() {
-            for s in INFORMATION_SCHEMA_TABLES {
-                relations.insert(ObjectName(vec![
-                    Ident::new(INFORMATION_SCHEMA),
-                    Ident::new(*s),
-                ]));
-            }
-        }
 
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
