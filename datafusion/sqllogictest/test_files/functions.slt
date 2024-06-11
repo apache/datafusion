@@ -491,7 +491,7 @@ statement error Did you mean 'COUNT'?
 SELECT counter(*) from test;
 
 # Aggregate function
-statement error Did you mean 'STDDEV'?
+statement error Did you mean 'stddev'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function

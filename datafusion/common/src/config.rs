@@ -1567,6 +1567,7 @@ config_namespace! {
         pub timestamp_tz_format: Option<String>, default = None
         pub time_format: Option<String>, default = None
         pub null_value: Option<String>, default = None
+        pub comment: Option<u8>, default = None
     }
 }
 

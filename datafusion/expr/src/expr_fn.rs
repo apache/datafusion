@@ -266,36 +266,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
 }
 
-/// Returns the approximate number of distinct input values.
-/// This function provides an approximation of count(DISTINCT x).
-/// Zero is returned if all input values are null.
-/// This function should produce a standard error of 0.81%,
-/// which is the standard deviation of the (approximately normal)
-/// error distribution over all possible sets.
-/// It does not guarantee an upper bound on the error for any specific input set.
-pub fn approx_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxDistinct,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate an approximation of the median for `expr`.
-pub fn approx_median(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxMedian,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Calculate an approximation of the specified `percentile` for `expr`.
 pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -381,18 +351,6 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
         subquery,
         outer_ref_columns,
     })
-}
-
-/// Create an expression to represent the stddev() aggregate function
-pub fn stddev(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Stddev,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Create a grouping set

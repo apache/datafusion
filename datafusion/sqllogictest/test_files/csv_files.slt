@@ -202,3 +202,27 @@ select * from stored_table_with_necessary_quoting;
 2 f|f|f
 3 g|g|g
 4 h|h|h
+
+# Read CSV file with comments
+statement ok
+COPY (VALUES
+  ('column1,column2'),
+  ('#second line is a comment'),
+  ('2,3'))
+TO 'test_files/scratch/csv_files/file_with_comments.csv'
+OPTIONS ('format.delimiter' '|');
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_comments (
+  c1 VARCHAR,
+  c2 VARCHAR
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/file_with_comments.csv'
+OPTIONS ('format.comment' '#',
+         'format.delimiter' ',');
+
+query TT
+SELECT * from stored_table_with_comments;
+----
+column1 column2
+2 3

@@ -477,17 +477,17 @@ enum AggregateFunction {
   // SUM = 2;
   AVG = 3;
   COUNT = 4;
-  APPROX_DISTINCT = 5;
+  // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
   // VARIANCE = 7;
-  VARIANCE_POP = 8;
+  // VARIANCE_POP = 8;
   // COVARIANCE = 9;
   // COVARIANCE_POP = 10;
-  STDDEV = 11;
-  STDDEV_POP = 12;
+  // STDDEV = 11;
+  // STDDEV_POP = 12;
   CORRELATION = 13;
   APPROX_PERCENTILE_CONT = 14;
-  APPROX_MEDIAN = 15;
+  // APPROX_MEDIAN = 15;
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
   // MEDIAN = 18;
@@ -993,6 +993,9 @@ message CsvScanExecNode {
   string quote = 4;
   oneof optional_escape {
     string escape = 5;
+  }
+  oneof optional_comment {
+    string comment = 6;
   }
 }
 

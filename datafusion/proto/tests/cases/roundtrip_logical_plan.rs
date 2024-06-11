@@ -26,13 +26,17 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use prost::Message;
+
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
+use datafusion::functions_aggregate::approx_median::approx_median;
 use datafusion::functions_aggregate::expr_fn::{
-    covar_pop, covar_samp, first_value, median, sum, var_sample,
+    covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum, var_pop,
+    var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -63,8 +67,6 @@ use datafusion_proto::logical_plan::{
     from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
-
-use prost::Message;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -647,12 +649,17 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit(1),
         ),
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
-        first_value(vec![lit(1)], false, None, None, None),
+        first_value(lit(1), None),
+        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         sum(lit(1)),
         median(lit(2)),
         var_sample(lit(2.2)),
+        var_pop(lit(2.2)),
+        stddev(lit(2.2)),
+        stddev_pop(lit(2.2)),
+        approx_median(lit(2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
