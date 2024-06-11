@@ -64,7 +64,7 @@ use std::sync::Arc;
 /// 1. The column must be one the values for the predicate to be `true`. If the
 /// column takes on any other value, the predicate can not evaluate to `true`.
 /// For example,
-/// `(a = 1)`, `(a = 1 OR a = 2) or `a IN (1, 2, 3)`
+/// `(a = 1)`, `(a = 1 OR a = 2)` or `a IN (1, 2, 3)`
 ///
 /// 2. The column must NOT be one of the values for the predicate to be `true`.
 /// If the column can ONLY take one of these values, the predicate can not
