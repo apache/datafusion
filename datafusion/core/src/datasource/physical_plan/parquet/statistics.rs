@@ -895,10 +895,10 @@ impl<'a> StatisticsConverter<'a> {
     /// # Parameters:
     ///
     /// * `column_page_index`: The parquet column page indices, read from
-    /// [`ParquetMetadata::column_index()`]
+    /// `ParquetMetaData` column_index
     ///
     /// * `column_offset_index`: The parquet column offset indices, read from
-    /// [`ParquetMetadata::offset_index()`]
+    /// `ParquetMetaData` offset_index
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
     /// extract the column page index and offset index on a per row group
@@ -1020,10 +1020,10 @@ impl<'a> StatisticsConverter<'a> {
     /// # Parameters:
     ///
     /// * `column_offset_index`: The parquet column offset indices, read from
-    /// [`ParquetMetadata::offset_index()`]
+    /// `ParquetMetaData` offset_index
     ///
     /// * `row_group_metadatas`: The metadata slice of the row groups, read
-    /// from [`ParquetMetadata::row_groups()`]
+    /// from `ParquetMetaData` row_groups
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
     /// extract the column offset index on a per row group per column basis.
