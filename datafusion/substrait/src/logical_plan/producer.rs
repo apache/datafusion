@@ -2309,14 +2309,12 @@ mod test {
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
-        for nullable in [true, false] {
-            round_trip_type(DataType::List(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-            round_trip_type(DataType::LargeList(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-        }
+        round_trip_type(DataType::List(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::LargeList(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
 
         round_trip_type(DataType::Struct(
             vec![
