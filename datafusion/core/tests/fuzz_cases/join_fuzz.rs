@@ -284,8 +284,16 @@ impl JoinFuzzTestCase {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
         Schema::new(vec![
-            schema1.field_with_name("a").unwrap().to_owned().with_nullable(true),
-            schema1.field_with_name("b").unwrap().to_owned().with_nullable(true),
+            schema1
+                .field_with_name("a")
+                .unwrap()
+                .to_owned()
+                .with_nullable(true),
+            schema1
+                .field_with_name("b")
+                .unwrap()
+                .to_owned()
+                .with_nullable(true),
             schema2.field_with_name("a").unwrap().to_owned(),
             schema2.field_with_name("b").unwrap().to_owned(),
         ])
