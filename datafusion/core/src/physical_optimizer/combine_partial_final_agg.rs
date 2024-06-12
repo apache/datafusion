@@ -399,6 +399,7 @@ mod tests {
             &[col("b", &schema)?],
             &[],
             &[],
+            &[],
             &schema,
             "Sum(b)",
             false,

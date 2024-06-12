@@ -126,7 +126,6 @@ pub fn parse_physical_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     let window_node_expr =
         parse_physical_exprs(&proto.args, registry, input_schema, codec)?;
-
     let partition_by =
         parse_physical_exprs(&proto.partition_by, registry, input_schema, codec)?;
 
@@ -178,10 +177,13 @@ pub fn parse_physical_window_expr(
     // TODO: Remove extended_schema if functions are all UDAF
     let extended_schema =
         schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
+    // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
+    let logical_exprs = &[];
     create_window_expr(
         &fun,
         name,
         &window_node_expr,
+        logical_exprs,
         &partition_by,
         &order_by,
         Arc::new(window_frame),

@@ -1780,6 +1780,7 @@ mod tests {
             &args,
             &[],
             &[],
+            &[],
             schema,
             "MEDIAN(a)",
             false,
@@ -1968,10 +1969,12 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
+        let logical_args = vec![datafusion_expr::col("b")?];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
         datafusion_physical_expr_common::aggregate::create_aggregate_expr(
             &func,
             &args,
+            &logical_args,
             &sort_exprs,
             &ordering_req,
             schema,
@@ -1998,10 +2001,12 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
+        let logical_args = vec![datafusion_expr::col("b")?];
         let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
         datafusion_physical_expr_common::aggregate::create_aggregate_expr(
             &func,
             &args,
+            &logical_args,
             &sort_exprs,
             &ordering_req,
             schema,
