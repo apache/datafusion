@@ -193,6 +193,7 @@ pub fn avg(expr: Expr) -> Expr {
 }
 
 /// Create an expression to represent the count() aggregate function
+// TODO: Remove this and use `expr_fn::count` instead
 pub fn count(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Count,
@@ -250,6 +251,7 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
 }
 
 /// Create an expression to represent the count(distinct) aggregate function
+// TODO: Remove this and use `expr_fn::count_distinct` instead
 pub fn count_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Count,

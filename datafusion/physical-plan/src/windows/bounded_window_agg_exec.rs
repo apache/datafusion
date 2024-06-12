@@ -1194,9 +1194,9 @@ mod tests {
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
     };
     use datafusion_expr::{
-        AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-        WindowFunctionDefinition,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::{col, Column, NthValue};
     use datafusion_physical_expr::window::{
         BuiltInWindowExpr, BuiltInWindowFunctionExpr,
@@ -1298,8 +1298,7 @@ mod tests {
         order_by: &str,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
-        let window_fn =
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
+        let window_fn = WindowFunctionDefinition::AggregateUDF(count_udaf());
         let col_expr =
             Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
         let args = vec![col_expr];

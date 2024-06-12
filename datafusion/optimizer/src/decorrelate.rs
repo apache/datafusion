@@ -441,8 +441,14 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                                 Transformed::yes(Expr::Literal(ScalarValue::Null))
                             }
                         }
-                        AggregateFunctionDefinition::UDF { .. } => {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                        AggregateFunctionDefinition::UDF(fun) => {
+                            if fun.name() == "COUNT" {
+                                Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
+                                    0,
+                                ))))
+                            } else {
+                                Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            }
                         }
                     },
                     _ => Transformed::no(expr),

@@ -361,8 +361,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr;
-    use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::expr::{self, GroupingSet};
     use datafusion_expr::test::function_stub::{sum, sum_udaf};
     use datafusion_expr::{
         count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,

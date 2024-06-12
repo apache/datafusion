@@ -38,7 +38,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::{Count, Max, NthValueAgg};
+use datafusion::physical_expr::expressions::{Max, NthValueAgg};
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -47,8 +47,8 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    NotExpr, NthValue, PhysicalSortExpr, StringAgg,
+    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, NotExpr, NthValue,
+    PhysicalSortExpr, StringAgg,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -806,7 +806,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
-        vec![Arc::new(Count::new(udf_expr, "count", DataType::Int64))],
+        vec![Arc::new(Max::new(udf_expr, "max", DataType::Int64))],
         vec![None],
         window,
         schema.clone(),
@@ -816,31 +816,6 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let codec = ScalarUDFExtensionCodec {};
     roundtrip_test_and_return(aggregate, &ctx, &codec)?;
     Ok(())
-}
-
-#[test]
-fn roundtrip_distinct_count() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
-        DataType::Int64,
-        col("b", &schema)?,
-        "COUNT(DISTINCT b)".to_string(),
-    ))];
-
-    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        vec![(col("a", &schema)?, "unused".to_string())];
-
-    roundtrip_test(Arc::new(AggregateExec::try_new(
-        AggregateMode::Final,
-        PhysicalGroupBy::new_single(groups),
-        aggregates.clone(),
-        vec![None],
-        Arc::new(EmptyExec::new(schema.clone())),
-        schema,
-    )?))
 }
 
 #[test]

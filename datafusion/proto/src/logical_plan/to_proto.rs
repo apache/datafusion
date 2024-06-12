@@ -456,6 +456,7 @@ pub fn serialize_expr(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name().to_string(),
                         args: serialize_exprs(args, codec)?,
+                        distinct: *distinct,
                         filter: match filter {
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,

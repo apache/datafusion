@@ -30,12 +30,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
+use datafusion_expr::AggregateFunction;
+
 use crate::aggregate::average::Avg;
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-use datafusion_common::{exec_err, not_impl_err, Result};
-use datafusion_expr::AggregateFunction;
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
@@ -60,14 +61,9 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(
-            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
-        ),
-        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
-            data_type,
-            input_phy_exprs[0].clone(),
-            name,
-        )),
+        (AggregateFunction::Count, _) => {
+            return internal_err!("Builtin Count will be removed");
+        }
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
@@ -320,7 +316,7 @@ mod tests {
     use super::*;
     use crate::expressions::{
         try_cast, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd,
-        BoolOr, Count, DistinctArrayAgg, DistinctCount, Max, Min,
+        BoolOr, DistinctArrayAgg, Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
@@ -328,8 +324,8 @@ mod tests {
     use datafusion_expr::{type_coercion, Signature};
 
     #[test]
-    fn test_count_arragg_approx_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Count, AggregateFunction::ArrayAgg];
+    fn test_approx_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::ArrayAgg];
         let data_types = vec![
             DataType::UInt32,
             DataType::Int32,
@@ -352,29 +348,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_agg_phy_exprs.as_any().is::<Count>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
 
                 let result_distinct = create_physical_agg_expr_for_test(
                     &fun,
@@ -383,29 +368,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_distinct.as_any().is::<DistinctCount>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_distinct.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
+                    assert_eq!("c1", result_distinct.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
             }
         }
         Ok(())
