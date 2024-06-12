@@ -21,10 +21,9 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{internal_err, Column, Result};
-use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{col, LogicalPlanBuilder};
+use datafusion_expr::{col, AggregateExt, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
@@ -95,17 +94,19 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let expr_cnt = on_expr.len();
 
                 // Construct the aggregation expression to be used to fetch the selected expressions.
-                let first_value_udaf =
+                let first_value_udaf: std::sync::Arc<datafusion_expr::AggregateUDF> =
                     config.function_registry().unwrap().udaf("first_value")?;
                 let aggr_expr = select_expr.into_iter().map(|e| {
-                    Expr::AggregateFunction(AggregateFunction::new_udf(
-                        first_value_udaf.clone(),
-                        vec![e],
-                        false,
-                        None,
-                        sort_expr.clone(),
-                        None,
-                    ))
+                    if let Some(order_by) = &sort_expr {
+                        first_value_udaf
+                            .call(vec![e])
+                            .order_by(order_by.clone())
+                            .build()
+                            // guaranteed to be `Expr::AggregateFunction`
+                            .unwrap()
+                    } else {
+                        first_value_udaf.call(vec![e])
+                    }
                 });
 
                 let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;

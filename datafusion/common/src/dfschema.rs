@@ -666,7 +666,7 @@ impl DFSchema {
     /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
     /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
     /// logically equal to Dictionary<K2, V1>.
-    fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+    pub fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {

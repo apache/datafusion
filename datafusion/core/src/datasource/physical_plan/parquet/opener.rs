@@ -28,6 +28,7 @@ use crate::datasource::physical_plan::{
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::physical_optimizer::pruning::PruningPredicate;
 use arrow_schema::{ArrowError, SchemaRef};
+use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
@@ -60,11 +61,10 @@ pub(super) struct ParquetOpener {
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta) -> datafusion_common::Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
-        let file_metrics = ParquetFileMetrics::new(
-            self.partition_index,
-            file_meta.location().as_ref(),
-            &self.metrics,
-        );
+        let extensions = file_meta.extensions.clone();
+        let file_name = file_meta.location().to_string();
+        let file_metrics =
+            ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
         let reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
@@ -139,7 +139,8 @@ impl FileOpener for ParquetOpener {
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
-            let access_plan = ParquetAccessPlan::new_all(rg_metadata.len());
+            let access_plan =
+                create_initial_plan(&file_name, extensions, rg_metadata.len())?;
             let mut row_groups = RowGroupAccessPlanFilter::new(access_plan);
             // if there is a range restricting what parts of the file to read
             if let Some(range) = file_range.as_ref() {
@@ -186,7 +187,7 @@ impl FileOpener for ParquetOpener {
 
             let row_group_indexes = access_plan.row_group_indexes();
             if let Some(row_selection) =
-                access_plan.into_overall_row_selection(rg_metadata)
+                access_plan.into_overall_row_selection(rg_metadata)?
             {
                 builder = builder.with_row_selection(row_selection);
             }
@@ -211,4 +212,35 @@ impl FileOpener for ParquetOpener {
             Ok(adapted.boxed())
         }))
     }
+}
+
+/// Return the initial [`ParquetAccessPlan`]
+///
+/// If the user has supplied one as an extension, use that
+/// otherwise return a plan that scans all row groups
+///
+/// Returns an error if an invalid `ParquetAccessPlan` is provided
+///
+/// Note: file_name is only used for error messages
+fn create_initial_plan(
+    file_name: &str,
+    extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    row_group_count: usize,
+) -> Result<ParquetAccessPlan> {
+    if let Some(extensions) = extensions {
+        if let Some(access_plan) = extensions.downcast_ref::<ParquetAccessPlan>() {
+            let plan_len = access_plan.len();
+            if plan_len != row_group_count {
+                return exec_err!(
+                    "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
+                );
+            }
+
+            // check row group count matches the plan
+            return Ok(access_plan.clone());
+        }
+    }
+
+    // default to scanning all row groups
+    Ok(ParquetAccessPlan::new_all(row_group_count))
 }

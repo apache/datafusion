@@ -28,7 +28,7 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
-use arrow_array::types::Float64Type;
+use arrow::datatypes::Float64Type;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -50,7 +50,7 @@ macro_rules! cast_scalar_f64 {
 /// This trait is implemented for each type a [`TDigest`] can operate on,
 /// allowing it to support both numerical rust types (obtained from
 /// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub(crate) trait TryIntoF64 {
+pub trait TryIntoF64 {
     /// A fallible conversion of a possibly null `self` into a [`f64`].
     ///
     /// If `self` is null, this method must return `Ok(None)`.
@@ -84,7 +84,7 @@ impl_try_ordered_f64!(u8);
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Centroid {
+pub struct Centroid {
     mean: f64,
     weight: f64,
 }
@@ -104,21 +104,21 @@ impl Ord for Centroid {
 }
 
 impl Centroid {
-    pub(crate) fn new(mean: f64, weight: f64) -> Self {
+    pub fn new(mean: f64, weight: f64) -> Self {
         Centroid { mean, weight }
     }
 
     #[inline]
-    pub(crate) fn mean(&self) -> f64 {
+    pub fn mean(&self) -> f64 {
         self.mean
     }
 
     #[inline]
-    pub(crate) fn weight(&self) -> f64 {
+    pub fn weight(&self) -> f64 {
         self.weight
     }
 
-    pub(crate) fn add(&mut self, sum: f64, weight: f64) -> f64 {
+    pub fn add(&mut self, sum: f64, weight: f64) -> f64 {
         let new_sum = sum + self.weight * self.mean;
         let new_weight = self.weight + weight;
         self.weight = new_weight;
@@ -138,7 +138,7 @@ impl Default for Centroid {
 
 /// T-Digest to be operated on.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TDigest {
+pub struct TDigest {
     centroids: Vec<Centroid>,
     max_size: usize,
     sum: f64,
@@ -148,7 +148,7 @@ pub(crate) struct TDigest {
 }
 
 impl TDigest {
-    pub(crate) fn new(max_size: usize) -> Self {
+    pub fn new(max_size: usize) -> Self {
         TDigest {
             centroids: Vec::new(),
             max_size,
@@ -159,7 +159,7 @@ impl TDigest {
         }
     }
 
-    pub(crate) fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
+    pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
         TDigest {
             centroids: vec![centroid.clone()],
             max_size,
@@ -171,27 +171,27 @@ impl TDigest {
     }
 
     #[inline]
-    pub(crate) fn count(&self) -> f64 {
+    pub fn count(&self) -> f64 {
         self.count
     }
 
     #[inline]
-    pub(crate) fn max(&self) -> f64 {
+    pub fn max(&self) -> f64 {
         self.max
     }
 
     #[inline]
-    pub(crate) fn min(&self) -> f64 {
+    pub fn min(&self) -> f64 {
         self.min
     }
 
     #[inline]
-    pub(crate) fn max_size(&self) -> usize {
+    pub fn max_size(&self) -> usize {
         self.max_size
     }
 
     /// Size in bytes including `Self`.
-    pub(crate) fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<Centroid>() * self.centroids.capacity())
     }
@@ -228,14 +228,14 @@ impl TDigest {
         v.clamp(lo, hi)
     }
 
-    #[cfg(test)]
-    pub(crate) fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
+    // public for testing in other modules
+    pub fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
         values.sort_by(|a, b| a.total_cmp(b));
         self.merge_sorted_f64(&values)
     }
 
-    pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
+    pub fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -370,9 +370,7 @@ impl TDigest {
     }
 
     // Merge multiple T-Digests
-    pub(crate) fn merge_digests<'a>(
-        digests: impl IntoIterator<Item = &'a TDigest>,
-    ) -> TDigest {
+    pub fn merge_digests<'a>(digests: impl IntoIterator<Item = &'a TDigest>) -> TDigest {
         let digests = digests.into_iter().collect::<Vec<_>>();
         let n_centroids: usize = digests.iter().map(|d| d.centroids.len()).sum();
         if n_centroids == 0 {
@@ -465,7 +463,7 @@ impl TDigest {
     }
 
     /// To estimate the value located at `q` quantile
-    pub(crate) fn estimate_quantile(&self, q: f64) -> f64 {
+    pub fn estimate_quantile(&self, q: f64) -> f64 {
         if self.centroids.is_empty() {
             return 0.0;
         }
@@ -569,7 +567,7 @@ impl TDigest {
     /// The [`TDigest::from_scalar_state()`] method reverses this processes,
     /// consuming the output of this method and returning an unpacked
     /// [`TDigest`].
-    pub(crate) fn to_scalar_state(&self) -> Vec<ScalarValue> {
+    pub fn to_scalar_state(&self) -> Vec<ScalarValue> {
         // Gather up all the centroids
         let centroids: Vec<ScalarValue> = self
             .centroids
@@ -598,7 +596,7 @@ impl TDigest {
     /// Providing input to this method that was not obtained from
     /// [`Self::to_scalar_state()`] results in undefined behaviour and may
     /// panic.
-    pub(crate) fn from_scalar_state(state: &[ScalarValue]) -> Self {
+    pub fn from_scalar_state(state: &[ScalarValue]) -> Self {
         assert_eq!(state.len(), 6, "invalid TDigest state");
 
         let max_size = match &state[0] {

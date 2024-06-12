@@ -397,6 +397,7 @@ message CsvOptions {
   string timestamp_tz_format = 10; // Optional timestamp with timezone format
   string time_format = 11; // Optional time format
   string null_value = 12; // Optional representation of null value
+  bytes comment = 13; // Optional comment character as a byte
 }
 
 // Options controlling CSV format
